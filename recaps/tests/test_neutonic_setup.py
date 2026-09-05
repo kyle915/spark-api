@@ -1,4 +1,4 @@
-"""Neutonic Event Activation: MAB/LD-mirrored template + additive walk-up."""
+"""Neutonic Event Activation: MAB/LD-mirrored template + two-program walk-up."""
 
 from __future__ import annotations
 
@@ -19,6 +19,8 @@ from recaps.management.commands.setup_neutonic_checkin import (
     ACTIVATION_BUCKETS,
     CODE_PREFIX,
     EVENT_LABEL,
+    RETAIL_LABEL,
+    WALKUP_PROGRAMS,
 )
 from tenants.tests.base import BaseGraphQLTestCase
 
@@ -107,6 +109,8 @@ class TestNeutonicPhotoBucketSpec:
         assert ACTIVATION_BUCKETS[1].get("min") == 8
         assert CODE_PREFIX == "NEU-"
         assert EVENT_LABEL == "Event Activation"
+        assert RETAIL_LABEL == "Retail Sampling"
+        assert WALKUP_PROGRAMS == ("Retail Sampling", "Event Activation")
 
 
 @pytest.mark.django_db(transaction=True)
@@ -132,7 +136,8 @@ class TestNeutonicSetupCommand(BaseGraphQLTestCase):
             name="On-Premise Sampling", tenant=self.tenant, created_by=self.user
         )
         self.tenant.checkin_event_type = self.retail
-        self.tenant.checkin_event_types.set([self.retail, self.event])
+        # Start with the old 4-style picker (minus Activation) so apply must trim.
+        self.tenant.checkin_event_types.set([self.retail, self.event, self.onprem])
         self.tenant.checkin_photo_buckets = {
             "Retail Sampling": [{"name": "Table Set Up"}, {"name": "Product Display"}],
         }
@@ -163,7 +168,7 @@ class TestNeutonicSetupCommand(BaseGraphQLTestCase):
         assert self.tenant.checkin_code == "NEU-EXIST1"
         assert "Event Activation" not in (self.tenant.checkin_photo_buckets or {})
 
-    def test_apply_adds_event_activation_without_removing_existing(self):
+    def test_apply_trims_walkup_to_retail_and_event_activation(self):
         from ambassadors import checkin_web
         from events.models import EventType
         from recaps.models import FileRecapCategory
@@ -173,12 +178,21 @@ class TestNeutonicSetupCommand(BaseGraphQLTestCase):
         self.tenant.refresh_from_db()
         assert self.tenant.checkin_code == "NEU-EXIST1"
         assert self.tenant.checkin_event_type_id == self.retail.id
-        offered = set(
-            self.tenant.checkin_event_types.values_list("name", flat=True)
+        offered = list(
+            self.tenant.checkin_event_types.order_by("id").values_list(
+                "name", flat=True
+            )
         )
-        assert "Retail Sampling" in offered
-        assert "Event" in offered
-        assert "Event Activation" in offered
+        assert offered == list(WALKUP_PROGRAMS)
+        assert "Event" not in offered
+        assert "On-Premise Sampling" not in offered
+        # Unused EventType rows remain in the tenant; only the picker M2M is trimmed.
+        assert EventType.objects.filter(
+            tenant=self.tenant, name="Event"
+        ).exists()
+        assert EventType.objects.filter(
+            tenant=self.tenant, name="On-Premise Sampling"
+        ).exists()
         buckets = self.tenant.checkin_photo_buckets
         assert [b["name"] for b in buckets["Retail Sampling"]] == [
             "Table Set Up",
@@ -190,7 +204,9 @@ class TestNeutonicSetupCommand(BaseGraphQLTestCase):
         activation = EventType.objects.get(
             tenant=self.tenant, name="Event Activation"
         )
-        assert activation in checkin_web.selectable_event_types(self.tenant)
+        selectable = checkin_web.selectable_event_types(self.tenant)
+        assert [et.name for et in selectable] == list(WALKUP_PROGRAMS)
+        assert activation in selectable
         for name in [b["name"] for b in ACTIVATION_BUCKETS]:
             assert FileRecapCategory.objects.filter(
                 tenant=self.tenant, name=name
@@ -209,6 +225,10 @@ class TestNeutonicSetupCommand(BaseGraphQLTestCase):
             ).count()
             == 1
         )
+        offered = set(
+            self.tenant.checkin_event_types.values_list("name", flat=True)
+        )
+        assert offered == set(WALKUP_PROGRAMS)
 
 
 @pytest.mark.django_db(transaction=True)

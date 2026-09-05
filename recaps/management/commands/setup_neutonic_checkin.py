@@ -1,10 +1,12 @@
-"""Add Event Activation to Neutonic's EXISTING standing check-in link.
+"""Wire Neutonic's EXISTING standing check-in to two walk-up programs.
 
-Additive only: keeps Neutonic's existing ``checkin_code``, pinned program,
-selectable event types, and photo-bucket keys. Creates the Event Activation
-event type + LD-style activation photo buckets, and adds that program to the
-walk-up picker alongside whatever is already there (Retail Sampling, Event,
-On-Premise Sampling, …).
+Keeps Neutonic's existing ``checkin_code`` and Retail Sampling photo buckets.
+Ensures the Event Activation event type + LD-style activation photo buckets,
+and sets the walk-up picker to **Retail Sampling** + **Event Activation** only.
+
+Unused Event / On-Premise Sampling ``EventType`` rows (and their templates)
+may remain in the DB — they are simply dropped from ``checkin_event_types``
+so they do not appear on ``NEU-N85ZE5``.
 
 Recap form is seeded by ``seed_neutonic_recap_template`` — this command
 creates NEITHER the template nor a new code when one already exists.
@@ -26,7 +28,11 @@ from django.db.models import Q
 CODE_PREFIX = "NEU-"
 ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 TENANT_SLUG = "neutonic"
+RETAIL_LABEL = "Retail Sampling"
 EVENT_LABEL = "Event Activation"
+
+# Exact set shown on the Neutonic walk-up program picker (order = display).
+WALKUP_PROGRAMS = (RETAIL_LABEL, EVENT_LABEL)
 
 CONSUMER_SAMPLING: dict = {
     "name": "Consumer Sampling Pictures",
@@ -43,13 +49,8 @@ ACTIVATION_BUCKETS: list[dict] = [
 
 SENTINEL_CATEGORY_NAMES = ("Sampling photos", "Receipts")
 
-# Prefer these as the pinned default when Neutonic has no pin yet.
-PIN_PREFERENCE = (
-    "Retail Sampling",
-    "Event",
-    "On-Premise Sampling",
-    EVENT_LABEL,
-)
+# Prefer these as the pinned default when Neutonic has no (or an invalid) pin.
+PIN_PREFERENCE = WALKUP_PROGRAMS
 
 
 def _norm(name: str | None) -> str:
@@ -59,8 +60,8 @@ def _norm(name: str | None) -> str:
 
 class Command(BaseCommand):
     help = (
-        "Add Event Activation to Neutonic's standing check-in link "
-        "(keeps existing code + programs; dry-run default)."
+        "Set Neutonic's standing check-in to Retail Sampling + Event "
+        "Activation only (keeps existing code; dry-run default)."
     )
 
     def add_arguments(self, parser):
@@ -237,7 +238,7 @@ class Command(BaseCommand):
         elif isinstance(current, list) and current:
             # Legacy flat list — keep under a generic key if any pin exists.
             pin = getattr(tenant, "checkin_event_type", None)
-            key = pin.name if pin is not None else "Retail Sampling"
+            key = pin.name if pin is not None else RETAIL_LABEL
             merged[key] = list(current)
 
         entries = []
@@ -265,67 +266,77 @@ class Command(BaseCommand):
         tenant.save(update_fields=["checkin_photo_buckets"])
         return merged
 
-    def _resolve_selectable(self, tenant, activation, apply: bool) -> list:
-        """Existing selectable programs + Event Activation (never drop any)."""
+    def _resolve_selectable(
+        self, tenant, retail, activation, apply: bool
+    ) -> list:
+        """Walk-up picker = Retail Sampling + Event Activation only.
+
+        Does not delete unused Event / On-Premise Sampling EventType rows —
+        only clears them from the link's selectable M2M.
+        """
         from events.models import EventType
 
-        current = list(
+        previously = list(
             tenant.checkin_event_types.filter(tenant_id=tenant.id).order_by("id")
         )
-        if not current:
-            # Nothing pinned on the link yet — offer Neutonic's existing
-            # program types so Retail / Event / On-Premise stay available.
-            named = list(
-                EventType.objects.filter(tenant_id=tenant.id)
-                .filter(
-                    name__in=[
-                        "Retail Sampling",
-                        "Event",
-                        "On-Premise Sampling",
-                        EVENT_LABEL,
-                    ]
-                )
-                .order_by("id")
-            )
-            current = named
+        wanted: list = []
+        for label, etype in (
+            (RETAIL_LABEL, retail),
+            (EVENT_LABEL, activation),
+        ):
+            if etype is not None and getattr(etype, "id", None):
+                wanted.append(etype)
+            else:
+                # Dry-run stand-in so logs still show the intended picker.
+                wanted.append(EventType(name=label, tenant=tenant, id=0))
 
-        by_id = {et.id: et for et in current}
-        if activation is not None and activation.id and activation.id not in by_id:
-            by_id[activation.id] = activation
-        selectable = list(by_id.values())
+        wanted_ids = {et.id for et in wanted if et.id}
+        dropped = [et for et in previously if et.id not in wanted_ids]
 
-        self.stdout.write("\nSelectable on the link:")
-        for et in selectable:
-            tag = "  ← NEW" if et.name == EVENT_LABEL else ""
+        self.stdout.write("\nSelectable on the link (Retail + Event Activation only):")
+        for et in wanted:
+            tag = "  ← walk-up" if et.name in WALKUP_PROGRAMS else ""
             self.stdout.write(f"  [{et.id}] {et.name!r}{tag}")
+        if dropped:
+            self.stdout.write("Dropped from walk-up picker (rows kept in DB):")
+            for et in dropped:
+                self.stdout.write(f"  - [{et.id}] {et.name!r}")
 
         if apply:
-            tenant.checkin_event_types.set(selectable)
-        return selectable
+            real = [et for et in wanted if et.id]
+            tenant.checkin_event_types.set(real)
+            return real
+        return wanted
 
     def _ensure_pin(self, tenant, selectable: list, apply: bool) -> None:
-        """Keep existing pin; if unset, prefer Retail Sampling among selectable."""
+        """Keep pin if it is still selectable; otherwise prefer Retail Sampling."""
         pin = getattr(tenant, "checkin_event_type", None)
-        if pin is not None:
+        selectable_ids = {et.id for et in selectable if et.id}
+        if pin is not None and pin.id in selectable_ids:
             self.stdout.write(f"\nPinned default : [{pin.id}] {pin.name!r} (unchanged)")
             return
 
-        by_name = {et.name: et for et in selectable}
+        by_name = {et.name: et for et in selectable if et.id}
         pick = None
         for name in PIN_PREFERENCE:
             if name in by_name:
                 pick = by_name[name]
                 break
         if pick is None and selectable:
-            pick = selectable[0]
+            pick = next((et for et in selectable if et.id), None)
         if pick is None:
             self.stdout.write(
                 self.style.WARNING("\nNo event type available to pin as default.")
             )
             return
 
+        reason = (
+            f"(was {pin.name!r} — not on walk-up set)"
+            if pin is not None
+            else "(none)"
+        )
         self.stdout.write(
-            f"\nPinned default : (none) → would pin [{pick.id}] {pick.name!r}"
+            f"\nPinned default : {reason} → would pin [{pick.id}] {pick.name!r}"
             if not apply
             else f"\nPinned default : [{pick.id}] {pick.name!r}"
         )
@@ -364,13 +375,16 @@ class Command(BaseCommand):
 
         if apply:
             with transaction.atomic():
+                retail = self._ensure_event_type(
+                    tenant, RETAIL_LABEL, creator, apply=True
+                )
                 activation = self._ensure_event_type(
                     tenant, EVENT_LABEL, creator, apply=True
                 )
                 self._ensure_activation_categories(tenant, creator, apply=True)
                 self._merge_photo_buckets(tenant, apply=True)
                 selectable = self._resolve_selectable(
-                    tenant, activation, apply=True
+                    tenant, retail, activation, apply=True
                 )
                 self._ensure_pin(tenant, selectable, apply=True)
 
@@ -381,9 +395,16 @@ class Command(BaseCommand):
                     tenant.checkin_code = self._mint_code(opts.get("prefix") or "")
                     tenant.save(update_fields=["checkin_code"])
         else:
+            retail = self._ensure_event_type(
+                tenant, RETAIL_LABEL, creator, apply=False
+            )
             activation = self._ensure_event_type(
                 tenant, EVENT_LABEL, creator, apply=False
             )
+            if retail is None:
+                from events.models import EventType
+
+                retail = EventType(name=RETAIL_LABEL, tenant=tenant, id=0)
             if activation is None:
                 from events.models import EventType
 
@@ -391,7 +412,7 @@ class Command(BaseCommand):
             self._ensure_activation_categories(tenant, creator, apply=False)
             self._merge_photo_buckets(tenant, apply=False)
             selectable = self._resolve_selectable(
-                tenant, activation if activation.id else None, apply=False
+                tenant, retail, activation, apply=False
             )
             self._ensure_pin(tenant, selectable, apply=False)
 
@@ -403,16 +424,16 @@ class Command(BaseCommand):
             self.stdout.write(f"Link          : {base}/checkin/{code}")
             self.stdout.write(
                 self.style.SUCCESS(
-                    "APPLIED — Event Activation added to Neutonic walk-up "
-                    "(existing programs preserved)."
+                    "APPLIED — Neutonic walk-up offers Retail Sampling + "
+                    "Event Activation only (code unchanged)."
                 )
             )
         else:
             self.stdout.write(
                 self.style.WARNING(
-                    "DRY-RUN — would add Event Activation + activation photo "
-                    "buckets without removing existing programs or rotating "
-                    "the check-in code. Re-run with --apply to write."
+                    "DRY-RUN — would set walk-up programs to Retail Sampling + "
+                    "Event Activation only (Event / On-Premise Sampling dropped "
+                    "from picker, not deleted). Re-run with --apply to write."
                 )
             )
             if existing_code:

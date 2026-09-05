@@ -1,9 +1,9 @@
 name: Setup Neutonic check-in
 
-# Adds Event Activation to Neutonic's existing standing walk-up link:
-# selectable event type + LD/MAB activation photo buckets. Preserves the
-# existing code and any already-configured programs (Retail Sampling, Event,
-# On-Premise Sampling, …). Recap template is seeded separately by
+# Sets Neutonic's standing walk-up (NEU-…) to Retail Sampling + Event
+# Activation only (drops Event / On-Premise Sampling from the picker; does
+# not delete those EventType rows). Keeps the existing code + LD/MAB
+# activation photo buckets. Recap template is seeded separately by
 # "Seed Neutonic recap template". Idempotent — never rotates the code.
 #
 # RUN apply=false FIRST AND READ THE LOG. Then apply=true (LD lesson).
