@@ -108,7 +108,9 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
-    "gqlauth.core.middlewares.django_jwt_middleware",
+    # Resilient wrapper: gqlauth's stock middleware 500s on stale Cloud SQL
+    # connections during JWT user load (OperationalError on /graphql/clients).
+    "utils.jwt_middleware.django_jwt_middleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
