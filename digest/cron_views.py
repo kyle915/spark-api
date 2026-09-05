@@ -3515,10 +3515,10 @@ class SeedNeutonicRecapTemplateView(View):
 class SetupNeutonicCheckinView(View):
     """GET/POST `/internal/cron/setup-neutonic-checkin`.
 
-    Adds **Event Activation** to Neutonic's existing standing check-in link:
-    selectable event type + LD-style activation photo buckets. Preserves the
-    existing code and any already-configured programs (Retail Sampling, Event,
-    On-Premise Sampling, …). Recap template is seeded separately by
+    Sets Neutonic's standing check-in to **Retail Sampling** + **Event
+    Activation** only (drops Event / On-Premise Sampling from the picker;
+    does not delete those EventType rows). Keeps the existing code +
+    LD-style activation photo buckets. Recap template is seeded separately by
     ``seed-neutonic-recap-template``.
 
     Idempotent: an existing checkin_code is left alone.
