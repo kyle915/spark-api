@@ -153,6 +153,46 @@ class TestThumbEndpoint:
         resp = client.get(self.URL, {"path": "recaps/notes.csv", "w": "400"})
         assert resp.status_code == 404
 
+    def test_heic_redirects_to_sibling_thumb_without_pillow(
+        self, client, gcs, monkeypatch
+    ):
+        gcs["recaps/IMG_1.heic"] = b"fake-heic-bytes"
+        gcs["recaps/IMG_1.jpg"] = _jpeg_bytes()
+        gcs["thumbs/w400/recaps/IMG_1.jpg.jpg"] = b"cached-sibling-thumb"
+
+        def boom(name):
+            raise AssertionError(f"must not download HEIC blob {name}")
+
+        monkeypatch.setattr(thumb_views, "download_blob_bytes", boom)
+        resp = client.get(self.URL, {"path": "recaps/IMG_1.heic", "w": "400"})
+        assert resp.status_code == 302
+        assert resp["Location"] == "https://gcs/thumbs/w400/recaps/IMG_1.jpg.jpg"
+
+    def test_heic_redirects_to_sibling_public_url_when_thumb_missing(
+        self, client, gcs, monkeypatch
+    ):
+        gcs["recaps/IMG_2.heic"] = b"fake-heic-bytes"
+        gcs["recaps/IMG_2.jpg"] = _jpeg_bytes()
+
+        def boom(name):
+            raise AssertionError(f"must not download HEIC blob {name}")
+
+        monkeypatch.setattr(thumb_views, "download_blob_bytes", boom)
+        resp = client.get(self.URL, {"path": "recaps/IMG_2.heic", "w": "400"})
+        assert resp.status_code == 302
+        assert resp["Location"] == "https://gcs/recaps/IMG_2.jpg"
+
+    def test_heic_without_sibling_skips_pillow(self, client, gcs, monkeypatch):
+        gcs["recaps/lonely.heic"] = b"fake-heic-bytes"
+
+        def boom(name):
+            raise AssertionError(f"must not download HEIC blob {name}")
+
+        monkeypatch.setattr(thumb_views, "download_blob_bytes", boom)
+        resp = client.get(self.URL, {"path": "recaps/lonely.heic", "w": "400"})
+        assert resp.status_code == 302
+        assert resp["Location"] == "https://gcs/recaps/lonely.heic"
+
     def test_small_original_is_not_upscaled(self, client, gcs):
         gcs["recaps/tiny.jpg"] = _jpeg_bytes(width=200, height=150)
         resp = client.get(self.URL, {"path": "recaps/tiny.jpg", "w": "400"})

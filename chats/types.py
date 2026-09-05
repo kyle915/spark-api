@@ -266,12 +266,18 @@ class ChatThread:
 
     @strawberry.field
     async def messages(
-        self, first: int = 50, before_uuid: Optional[str] = None
+        self,
+        first: int = 50,
+        before_uuid: Optional[str] = None,
+        after_uuid: Optional[str] = None,
     ) -> List[ChatMessage]:
-        """Paginated, newest-first message list. before_uuid is the
-        cursor for older pages — pass the oldest currently-loaded
-        message's uuid and you get the previous page. first capped at
-        500 to keep payloads bounded."""
+        """Paginated message list.
+
+        - ``before_uuid``: older page (cursor = oldest loaded message).
+        - ``after_uuid``: newer delta since the newest loaded message
+          (for polling without remounting the full thread).
+        Newest-first. ``first`` capped at 500.
+        """
         first = min(max(first, 1), 500)
 
         @sync_to_async
@@ -281,6 +287,17 @@ class ChatThread:
                 .filter(thread_id=self.id)
                 .order_by("-created_at")
             )
+            if after_uuid:
+                anchor = qs.filter(uuid=after_uuid).first()
+                if anchor is not None:
+                    # Newer than the newest we already have (ascending for merge).
+                    newer = list(
+                        models.ChatMessage.objects.select_related("sender")
+                        .filter(thread_id=self.id, created_at__gt=anchor.created_at)
+                        .order_by("created_at")[:first]
+                    )
+                    return newer
+                return []
             if before_uuid:
                 anchor = qs.filter(uuid=before_uuid).first()
                 if anchor is not None:
