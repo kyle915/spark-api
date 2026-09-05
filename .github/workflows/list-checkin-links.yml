@@ -1,0 +1,42 @@
+name: List check-in links
+
+# READ-ONLY: every live walk-up check-in link and what each is wired to.
+# Pass tenant_id to scope (e.g. Neutonic = 12). See list_checkin_links.py.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tenant_id:
+        description: "Optional tenant id (blank = every tenant with a code)"
+        required: false
+        default: ""
+
+jobs:
+  list-checkin-links:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire list-checkin-links cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/list-checkin-links
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          TENANT_ID: ${{ github.event.inputs.tenant_id }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          QS=""
+          if [ -n "$TENANT_ID" ]; then
+            QS="?tenant_id=$TENANT_ID"
+          fi
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL$QS" \
+            -H "X-Cron-Secret: $CRON_SECRET")
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          echo ""
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS — see body above."
+            exit 1
+          fi
