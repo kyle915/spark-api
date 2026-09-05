@@ -60,7 +60,7 @@ class TestMabRecapTemplateSpec:
             "Feedback & Account Notes",
             "Products Sampled",
         ]
-        assert sum(len(fields) for _, fields in ONPREM_SPEC) == 14
+        assert sum(len(fields) for _, fields in ONPREM_SPEC) == 15
         assert ONPREM_TEMPLATE_NAME == "Mark Anthony Brands-On-Premise"
         labels = [name for _, fields in ONPREM_SPEC for name, *_ in fields]
         assert "How many cans were purchased by consumers from the bar" in labels
