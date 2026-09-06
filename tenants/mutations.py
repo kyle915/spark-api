@@ -5,6 +5,8 @@ from datetime import timedelta
 from graphql import GraphQLError
 from django.contrib.auth import get_user_model
 from gqlauth.core.utils import get_token
+from gqlauth.jwt.types_ import TokenType
+from gqlauth.models import RefreshToken, UserStatus
 from asgiref.sync import sync_to_async
 import logging
 import random
@@ -13,7 +15,6 @@ import secrets
 import string
 from django.utils.text import slugify
 from django.utils import timezone
-from gqlauth.models import UserStatus
 from django.conf import settings
 from django.db import transaction
 
@@ -789,13 +790,16 @@ class SparkUserMutations:
         if not user.is_active:
             return MagicLinkLoginResponse(success=False, message="Account is inactive.")
 
-        # gqlauth.core.utils.get_token requires an action arg for v2+
-        jwt = get_token(user, "authentication")
+        # Mint a real gqlauth JWT (TokenType), same as Google SSO / tokenAuth.
+        # django.core.signing get_token() looks similar but Authorization:
+        # JWT <signed> fails auth, so magic-link bounced back to /login.
+        token = await sync_to_async(TokenType.from_user)(user)
+        refresh = await sync_to_async(RefreshToken.from_user)(user)
         return MagicLinkLoginResponse(
             success=True,
             message="Signed in.",
-            token=jwt,
-            refresh_token=None,
+            token=token.token,
+            refresh_token=refresh.token,
             user_id=strawberry.ID(str(user.id)),
             email=user.email,
             first_name=user.first_name or None,
