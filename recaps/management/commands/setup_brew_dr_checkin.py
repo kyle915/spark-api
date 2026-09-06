@@ -10,8 +10,9 @@ this command creates NEITHER. What's missing is only:
 3. labelled PHOTO BUCKETS per program (``Tenant.checkin_photo_buckets`` keyed
    by event type name + matching ``FileRecapCategory`` rows).
 
-Retail buckets stay Kyle's Brew Dr shot list (already live). Event Activation
-buckets mirror Liquid Death's activation dropzones.
+Retail buckets stay Kyle's Brew Dr shot list (already live) plus a Product
+Spend dropzone for product-purchase receipts. Event Activation buckets mirror
+Liquid Death's activation dropzones.
 
 DRY-RUN by default. Run via ``/internal/cron/setup-brew-dr-checkin`` (or the
 "Setup Brew Dr check-in" GitHub Action) so it executes against prod.
@@ -30,7 +31,9 @@ from django.db.models import Q
 CODE_PREFIX = "BD-"
 ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 
-# Kyle's retail sampling shot list (already live on BD-AQRACD).
+# Kyle's retail sampling shot list (already live on BD-AQRACD), plus Product
+# Spend for product-purchase receipt uploads (Torch-style label; not classic
+# "Receipts" / parking expense).
 RETAIL_BUCKETS: list[dict] = [
     {"name": "Set Before", "min": 1},
     {"name": "Set After", "min": 1},
@@ -38,6 +41,7 @@ RETAIL_BUCKETS: list[dict] = [
     {"name": "Demo Table (Close Up)", "min": 1},
     {"name": "Demo Table Area", "min": 1},
     {"name": "Displays (if applicable)"},
+    {"name": "Product Spend"},
 ]
 
 # LD Event Activation dropzones, brand-agnostic shot names.

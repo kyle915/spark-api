@@ -108,6 +108,7 @@ class TestBrewDrPhotoBucketSpec:
             "Demo Table (Close Up)",
             "Demo Table Area",
             "Displays (if applicable)",
+            "Product Spend",
         ]
         assert PHOTO_BUCKETS is RETAIL_BUCKETS
 
@@ -120,8 +121,11 @@ class TestBrewDrPhotoBucketSpec:
         assert ACTIVATION_BUCKETS[1].get("min") == 8
 
     def test_required_buckets_carry_min_one(self):
-        required = RETAIL_BUCKETS[:-1]
+        # Displays + Product Spend are optional; first five nudge min:1.
+        required = RETAIL_BUCKETS[:-2]
         assert all(b.get("min") == 1 for b in required)
+        assert "min" not in RETAIL_BUCKETS[-2]
+        assert RETAIL_BUCKETS[-1]["name"] == "Product Spend"
         assert "min" not in RETAIL_BUCKETS[-1]
 
     def test_code_prefix_is_brand_scoped(self):
@@ -157,6 +161,7 @@ class TestBrewDrSetupCommand(BaseGraphQLTestCase):
         log = self._run(tenant="brew")
         assert "DRY-RUN" in log
         assert "Set Before" in log
+        assert "Product Spend" in log
         assert "Activation Set Up" in log
         assert not FileRecapCategory.objects.filter(tenant=self.tenant).exists()
         self.tenant.refresh_from_db()
@@ -241,6 +246,7 @@ class TestBrewDrSetupCommand(BaseGraphQLTestCase):
         mins = {b["name"]: b["min"] for b in retail_buckets}
         assert mins["Set Before"] == 1
         assert mins["Displays (if applicable)"] == 0
+        assert mins["Product Spend"] == 0
         act_mins = {b["name"]: b["min"] for b in activation_buckets}
         assert act_mins["Consumer Sampling Pictures"] == 8
 
