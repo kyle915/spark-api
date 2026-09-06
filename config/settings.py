@@ -178,10 +178,14 @@ DATABASES["default"]["CONN_MAX_AGE"] = env.int("DB_CONN_MAX_AGE", default=60)
 # pooled connection can be silently dropped by Cloud SQL / the proxy between
 # requests; without health checks Django would hand that dead connection to
 # the next request and it would fail with an OperationalError. When enabled,
-# Django pings the connection at the start of each request and transparently
-# reconnects if it's broken — important on Cloud Run where instances idle
-# between bursts.
-CONN_HEALTH_CHECKS = True
+# Django pings the connection once per request (after request_started resets
+# health_check_done) and transparently reconnects if it's broken — important
+# on Cloud Run where instances idle between bursts.
+#
+# MUST live on DATABASES["default"], not as a top-level settings attribute.
+# A prior revision set `CONN_HEALTH_CHECKS = True` at module scope, which
+# Django ignores — health_check_enabled stayed False in production.
+DATABASES["default"]["CONN_HEALTH_CHECKS"] = True
 
 
 # Password validation
