@@ -33,6 +33,8 @@ from typing import Any
 from django.conf import settings
 from django.core.management import call_command
 from django.core.management.base import CommandError
+from django.db import close_old_connections
+from django.db.utils import InterfaceError, OperationalError
 from django.http import HttpRequest, HttpResponse, JsonResponse
 from django.utils.decorators import method_decorator
 from django.views import View
@@ -1645,7 +1647,20 @@ class SendOpenShiftAlertsView(View):
 
         out = io.StringIO()
         try:
-            call_command("send_open_shift_alerts", *cmd_args, stdout=out)
+            close_old_connections()
+            try:
+                call_command("send_open_shift_alerts", *cmd_args, stdout=out)
+            except (OperationalError, InterfaceError) as db_exc:
+                # Transient Cloud SQL / Auth Proxy drop during connect or an
+                # idle recycled connection. One reconnect is enough; the GHA
+                # workflow also retries the HTTP call for longer outages.
+                logger.warning(
+                    "Open-shift alerts hit DB disconnect (%s); retrying once",
+                    db_exc,
+                )
+                close_old_connections()
+                out = io.StringIO()
+                call_command("send_open_shift_alerts", *cmd_args, stdout=out)
         except Exception as exc:  # noqa: BLE001 — surface to caller
             logger.exception("Open-shift alerts cron failed")
             return JsonResponse(
