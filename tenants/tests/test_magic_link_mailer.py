@@ -61,7 +61,7 @@ class TestMagicLinkWebOnlyCta(BaseGraphQLTestCase):
         html = _render(mailer)
         assert _primary_cta_href(html) == WEB_LINK
         assert WEB_LINK in html
-        assert "Spark BA app" not in html
+        assert "Open in the Spark BA app" not in html
         assert "Open in the Spark app" not in html
         assert "spark://" not in html
 
@@ -73,7 +73,7 @@ class TestMagicLinkWebOnlyCta(BaseGraphQLTestCase):
         )
         html = _render(mailer)
         assert _primary_cta_href(html) == WEB_LINK
-        assert "Spark BA app" not in html
+        assert "Open in the Spark BA app" not in html
         assert "spark://" not in html
 
     def test_plain_text_alternative_has_no_ba_app_cta(self):
@@ -84,6 +84,6 @@ class TestMagicLinkWebOnlyCta(BaseGraphQLTestCase):
         )
         plain = mailer.envelope().render_text()
         assert WEB_LINK in plain
-        assert "Spark BA app" not in plain
+        assert "Open in the Spark BA app" not in plain
         assert "spark://" not in plain
 
