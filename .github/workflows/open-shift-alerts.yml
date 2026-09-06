@@ -66,13 +66,27 @@ jobs:
             exit 1
           fi
 
-          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
-            -X POST "$CRON_URL?radius_miles=$RADIUS_MILES&max_per_shift=$MAX_PER_SHIFT&dry_run=$DRY_RUN" \
-            -H "X-Cron-Secret: $CRON_SECRET")
+          # Cloud SQL Auth Proxy / idle Postgres can drop a handshake once in
+          # a while ("server closed the connection unexpectedly"). Retry a
+          # couple times — OpenShift.notified_at only stamps after a successful
+          # sweep, so a failed attempt is safe to re-fire.
+          ATTEMPTS=3
+          STATUS=""
+          for i in $(seq 1 "$ATTEMPTS"); do
+            STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+              -X POST "$CRON_URL?radius_miles=$RADIUS_MILES&max_per_shift=$MAX_PER_SHIFT&dry_run=$DRY_RUN" \
+              -H "X-Cron-Secret: $CRON_SECRET" || echo "000")
 
-          echo "HTTP $STATUS"
-          cat /tmp/cron-response.json
-          if [ "$STATUS" != "200" ]; then
-            echo "::error::Cron endpoint returned $STATUS — see body above."
-            exit 1
-          fi
+            echo "attempt $i/$ATTEMPTS → HTTP $STATUS"
+            cat /tmp/cron-response.json || true
+            echo
+            if [ "$STATUS" = "200" ]; then
+              exit 0
+            fi
+            if [ "$i" -lt "$ATTEMPTS" ]; then
+              sleep $((i * 5))
+            fi
+          done
+
+          echo "::error::Cron endpoint returned $STATUS after $ATTEMPTS attempts — see body above."
+          exit 1
