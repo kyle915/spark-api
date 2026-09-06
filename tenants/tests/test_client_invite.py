@@ -172,6 +172,10 @@ class TestClientInviteToken(BaseGraphQLTestCase):
         payload = result.data["loginWithMagicToken"]
         assert payload["success"] is True
         assert payload["token"]
+        # Real gqlauth JWTs are three base64 segments joined by dots —
+        # django.core.signing tokens (get_token) use colons and break
+        # Authorization: JWT <token> on the front-end.
+        assert payload["token"].count(".") == 2, payload["token"][:40]
         assert payload["email"] == "new@client.com"
 
     @pytest.mark.asyncio
