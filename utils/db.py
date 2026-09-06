@@ -9,10 +9,15 @@ reaches the pool thread. So a connection the database later closes (a Cloud SQL
 idle timeout, a proxy recycle) is reused on the next call and raises
 ``the connection is closed`` / ``InterfaceError: connection already closed``.
 
+The same trap hits ``thread_sensitive=True`` (asgiref's shared single-thread
+executor): gqlauth's JWT middleware and many resolvers run there under ASGI,
+and that immortal thread also never sees request-boundary cleanup. See
+``utils.jwt_middleware`` and ``ambassadors.push._db_sync``.
+
 This is also why ``close_old_connections()`` alone isn't enough here: with
 ``CONN_HEALTH_CHECKS`` the per-connection ``health_check_done`` flag is reset by
-the request-started signal, which never fires in the pool thread — so a stale
-connection can skip its health check and be reused regardless.
+the request-started signal, which never fires in the pool / executor thread —
+so a stale connection can skip its health check and be reused regardless.
 
 :func:`fresh_db_connection` wraps such a callable to **close the thread's
 connection before and after** it runs. Django reopens lazily on the next query,
@@ -26,9 +31,23 @@ from __future__ import annotations
 from functools import wraps
 from typing import Callable, TypeVar
 
-from django.db import connection
+from django.db import connections
 
 _T = TypeVar("_T")
+
+
+def close_thread_connections() -> None:
+    """Close every Django DB connection held by the CURRENT thread.
+
+    Use before ORM work on asgiref executor / pool threads that miss
+    Django's request_started/request_finished cleanup. Closing must never
+    raise into the caller.
+    """
+    for conn in connections.all(initialized_only=True):
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 def fresh_db_connection(fn: Callable[..., _T]) -> Callable[..., _T]:
@@ -44,11 +63,11 @@ def fresh_db_connection(fn: Callable[..., _T]) -> Callable[..., _T]:
     def _wrapped(*args, **kwargs) -> _T:
         # Drop any stale connection this pooled thread inherited from a prior
         # call; the next ORM access opens a fresh one.
-        connection.close()
+        close_thread_connections()
         try:
             return fn(*args, **kwargs)
         finally:
             # Don't leak a connection back into the pool thread.
-            connection.close()
+            close_thread_connections()
 
     return _wrapped

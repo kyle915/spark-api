@@ -11,10 +11,11 @@ Symptom in prod: ``OperationalError:django.request:log_response`` on
 ``/api/.../graphql/clients`` with the traceback ending in
 ``gqlauth`` → ``token.get_user_instance()`` → ``asgiref`` sync thread handler
 (x236 as of 2026-09). Same root class as the off-loop ``fresh_db_connection``
-helper in :mod:`utils.db`.
+helper in :mod:`utils.db` and ``ambassadors.push._db_sync``.
 
-This middleware mirrors gqlauth's API but forces a usability check (and one
-reconnect retry) before the JWT user ORM load.
+This middleware mirrors gqlauth's API but closes the thread's DB connection
+before the JWT user ORM load (and retries once on OperationalError) so a
+dead handle never 500s the GraphQL request.
 """
 
 from __future__ import annotations
@@ -29,17 +30,20 @@ from django.http import HttpRequest
 from django.utils.decorators import sync_and_async_middleware
 from gqlauth.core.middlewares import USER_OR_ERROR_KEY, UserOrError, get_user_or_error
 
+from utils.db import close_thread_connections
+
 
 def _ensure_usable_connection() -> None:
-    """Drop a dead connection on the current thread before ORM work.
+    """Drop any connection this asgiref executor thread may be holding.
 
-    With ``CONN_HEALTH_CHECKS``, Django only re-pings when ``health_check_done``
-    is False. That flag is cleared by ``request_started`` on the request thread,
-    not on asgiref's sync executor — so we clear it ourselves here.
+    Force-close (not just ``health_check_done = False``): until
+    ``DATABASES['default']['CONN_HEALTH_CHECKS']`` is True, Django skips
+    ``close_if_health_check_failed`` entirely, and even with it enabled the
+    request_started reset never reaches this thread. Closing is cheap —
+    Django reopens lazily on the next query — and matches the proven push
+    / ``fresh_db_connection`` pattern.
     """
-    if connection.connection is not None:
-        connection.health_check_done = False
-    connection.close_if_unusable_or_obsolete()
+    close_thread_connections()
 
 
 def _get_user_or_error_resilient(request: HttpRequest) -> UserOrError:
@@ -47,8 +51,8 @@ def _get_user_or_error_resilient(request: HttpRequest) -> UserOrError:
     try:
         return get_user_or_error(request)
     except (OperationalError, InterfaceError):
-        # Connection died between the health check and the query (or the
-        # health check itself was skipped). Close and retry once.
+        # Connection died between close and the query (race with proxy).
+        # Close again and retry once.
         connection.close()
         return get_user_or_error(request)
 
