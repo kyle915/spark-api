@@ -85,24 +85,9 @@ class MagicLinkMailer(_NoAttachedLogoMixin, Mailer):
         user: User,
         link: str,
         expires_minutes: int,
-        mobile_link: str | None = None,
-        app_primary: bool = False,
     ):
         self.user = user
         self.link = link
-        # Optional `spark://magic/<token>` URL the mobile app catches
-        # via expo-linking. Included as a CTA in the email so taps on a
-        # phone with the app installed open the app directly. None falls
-        # back to web-only.
-        self.mobile_link = mobile_link
-        # When True (set by the caller for ambassador/BA recipients), the
-        # app deep-link becomes the PRIMARY CTA and the web link drops to a
-        # smaller fallback — BAs live in the mobile app and there is no BA
-        # home on the admin web, so the big button must open the app.
-        # Admin/client recipients leave this False so the web link stays
-        # primary. Only takes effect when a `mobile_link` is also present
-        # (no app link → web stays primary, never strand the recipient).
-        self.app_primary = bool(app_primary and mobile_link)
         self.expires_minutes = expires_minutes
 
     def envelope(self) -> Envelope:
@@ -118,8 +103,6 @@ class MagicLinkMailer(_NoAttachedLogoMixin, Mailer):
                 "user": self.user,
                 "first_name": first,
                 "link": self.link,
-                "mobile_link": self.mobile_link,
-                "app_primary": self.app_primary,
                 "expires_minutes": self.expires_minutes,
             },
         )

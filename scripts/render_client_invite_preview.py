@@ -44,8 +44,6 @@ magic_ctx = {
     "user": FakeUser(),
     "first_name": "Ross",
     "link": f"{BASE}/magic/{TOK}",
-    "mobile_link": f"spark://magic/{TOK}",
-    "app_primary": False,
     "expires_minutes": 30,
 }
 

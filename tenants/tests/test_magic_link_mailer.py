@@ -1,17 +1,8 @@
-"""
-Coverage for the role-aware CTA in the magic-link email.
+"""Magic-link email must be web-only — no Spark BA app CTA.
 
-A new BA reads the sign-in email on their phone. The original template made
-the WEB link (`{{ link }}` → admin web) the big green button and the app
-deep-link (`spark://magic/<token>`) only a secondary button — so a BA tapping
-the obvious button landed on the admin web, which has no BA home.
-
-The fix is role-aware: the mailer takes an `app_primary` flag. When set (the
-caller passes it for ambassador/BA recipients), the PRIMARY green button is the
-app deep-link and the web link drops to a small "open in your browser"
-fallback. Admins/clients leave it off, so the web link stays primary. These
-tests assert the rendered HTML at the envelope level (no email is sent, no
-network) — the most direct check of the contract.
+There is no Spark BA app. Invite / sign-in emails should only offer the
+admin/client web magic link, never a ``spark://`` deep-link or copy that
+references a BA app.
 """
 
 from __future__ import annotations
@@ -24,7 +15,6 @@ from tenants.envelopes import MagicLinkMailer
 from tenants.tests.base import BaseGraphQLTestCase
 
 WEB_LINK = "https://admin.igniteproductions.co/magic/tok-abc123"
-APP_LINK = "spark://magic/tok-abc123"
 
 
 def _render(mailer: MagicLinkMailer) -> str:
@@ -33,14 +23,7 @@ def _render(mailer: MagicLinkMailer) -> str:
 
 
 def _primary_cta_href(html: str) -> str:
-    """Return the href of the PRIMARY (big green #c5f546) CTA button.
-
-    The primary button is the only <a> whose enclosing <td> carries the
-    bgcolor="#c5f546" brand-green background; the secondary app button (when
-    present) is on a dark pill, and the fallback link is plain text. We find
-    the green cell and pull the first href inside it.
-    """
-    # Grab the markup from the green CTA cell to the closing anchor.
+    """Return the href of the PRIMARY (big green #c5f546) CTA button."""
     cell = re.search(
         r'bgcolor="#c5f546".*?<a\s+href="([^"]+)"',
         html,
@@ -51,7 +34,7 @@ def _primary_cta_href(html: str) -> str:
 
 
 @pytest.mark.django_db
-class TestMagicLinkRoleAwareCta(BaseGraphQLTestCase):
+class TestMagicLinkWebOnlyCta(BaseGraphQLTestCase):
     @pytest.fixture(autouse=True)
     def setup(self):
         self.ambassador_role = self.create_role(name="Ambassador", slug="ambassador")
@@ -69,54 +52,38 @@ class TestMagicLinkRoleAwareCta(BaseGraphQLTestCase):
             first_name="Avery",
         )
 
-    # ── BA / ambassador: app deep-link is the PRIMARY CTA ───────────────
-
-    def test_ba_email_app_link_is_primary_cta(self):
+    def test_ba_email_web_link_is_primary_and_no_ba_app_cta(self):
         mailer = MagicLinkMailer(
             user=self.ba_user,
             link=WEB_LINK,
-            mobile_link=APP_LINK,
-            app_primary=True,
             expires_minutes=30,
         )
         html = _render(mailer)
-        # The big green button points at the APP, not the web admin.
-        assert _primary_cta_href(html) == APP_LINK
-        # The web link is still present as a fallback so a BA on a desktop or
-        # without the app installed is never stranded.
+        assert _primary_cta_href(html) == WEB_LINK
         assert WEB_LINK in html
-        assert "Open in your browser" in html
+        assert "Spark BA app" not in html
+        assert "Open in the Spark app" not in html
+        assert "spark://" not in html
 
-    # ── admin / client: web link stays the PRIMARY CTA ──────────────────
-
-    def test_admin_email_web_link_stays_primary_cta(self):
+    def test_admin_email_web_link_only(self):
         mailer = MagicLinkMailer(
             user=self.admin_user,
             link=WEB_LINK,
-            mobile_link=APP_LINK,
-            app_primary=False,
             expires_minutes=30,
         )
         html = _render(mailer)
-        # Big green button is the WEB link (admins/clients work on the web).
         assert _primary_cta_href(html) == WEB_LINK
-        # The app deep-link is still offered as the near-equal secondary CTA.
-        assert APP_LINK in html
-        assert "Open in the Spark BA app" in html
+        assert "Spark BA app" not in html
+        assert "spark://" not in html
 
-    # ── app_primary is a no-op without a mobile link (never strand) ─────
-
-    def test_app_primary_without_mobile_link_falls_back_to_web_primary(self):
-        # Even if a caller passes app_primary=True, with no mobile_link the
-        # envelope must keep the web link primary rather than render a broken
-        # primary button.
+    def test_plain_text_alternative_has_no_ba_app_cta(self):
         mailer = MagicLinkMailer(
-            user=self.ba_user,
+            user=self.admin_user,
             link=WEB_LINK,
-            mobile_link=None,
-            app_primary=True,
             expires_minutes=30,
         )
-        assert mailer.app_primary is False
-        html = _render(mailer)
-        assert _primary_cta_href(html) == WEB_LINK
+        plain = mailer.envelope().render_text()
+        assert WEB_LINK in plain
+        assert "Spark BA app" not in plain
+        assert "spark://" not in plain
+

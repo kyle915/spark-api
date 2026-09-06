@@ -657,18 +657,6 @@ def _build_magic_link(token: str, redirect: str | None) -> str:
     return f"{base}/magic/{token}{suffix}"
 
 
-def _build_magic_link_mobile(token: str) -> str:
-    """Custom-scheme URL that spark-mobile catches via expo-linking.
-
-    The scheme is registered in spark-mobile/app.json (`expo.scheme`).
-    When a user taps this link on a device with the app installed,
-    iOS / Android route it to the app — which then calls
-    loginWithMagicToken to swap the token for a JWT.
-    """
-    scheme = getattr(settings, "MOBILE_DEEP_LINK_SCHEME", "spark")
-    return f"{scheme}://magic/{token}"
-
-
 def _ensure_verified(user) -> None:
     """Mark the gqlauth UserStatus verified so password login works.
 
@@ -717,12 +705,6 @@ class SparkUserMutations:
             {"u": user.id, "e": user.email}, salt=MAGIC_LINK_SALT
         )
         link = _build_magic_link(token, input.redirect)
-        mobile_link = _build_magic_link_mobile(token)
-        # BAs (ambassadors) live in the mobile app — make the app deep-link
-        # the PRIMARY CTA for them so the big button opens the Spark app, not
-        # the admin web (which has no BA home). Admins/clients keep the web
-        # link primary.
-        is_ambassador = getattr(user, "role_id", None) == ROLE_ID.Ambassadors
 
         if getattr(user, "role_id", None) == ROLE_ID.Client:
             tenant_name = await sync_to_async(
@@ -743,8 +725,6 @@ class SparkUserMutations:
             mailer = MagicLinkMailer(
                 user=user,
                 link=link,
-                mobile_link=mobile_link,
-                app_primary=is_ambassador,
                 expires_minutes=MAGIC_LINK_TTL_SECONDS // 60,
             )
             # send_async_now bypasses the django-rq queue (Redis isn't
@@ -1079,20 +1059,10 @@ class SparkUserMutations:
             {"u": user.id, "e": user.email}, salt="spark.magic-link.v1",
         )
         link = f"{base}/magic/{token}"
-        # Also hand the mobile app deep-link so an invited BA can open the
-        # Spark app straight from the email instead of bouncing through the
-        # admin web. For BA (ambassador) recipients the app link is the
-        # PRIMARY CTA; admins/clients keep the web link primary. Keyed off the
-        # user's persisted role (an idempotent re-invite never overwrites an
-        # existing user's role, so this reflects who they actually are).
-        mobile_link = _build_magic_link_mobile(token)
-        is_ambassador = getattr(user, "role_id", None) == ROLE_ID.Ambassadors
         try:
             mailer = MagicLinkMailer(
                 user=user,
                 link=link,
-                mobile_link=mobile_link,
-                app_primary=is_ambassador,
                 expires_minutes=30,
             )
             await mailer.send_async_now()

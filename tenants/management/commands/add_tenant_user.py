@@ -245,23 +245,9 @@ class Command(BaseCommand):
         ).rstrip("/")
         link = f"{base}/magic/{token}"
 
-        mobile_link = None
-        try:
-            from tenants.mutations import _build_magic_link_mobile
-
-            mobile_link = _build_magic_link_mobile(token)
-        except Exception:  # noqa: BLE001 — web link alone is still usable
-            pass
-
-        # A client contact reads email on a laptop and wants the admin web, so
-        # the app link is never the primary CTA for them; only a BA gets that.
-        is_ambassador = getattr(user, "role_id", None) == ROLE_MAP["ambassador"]
-
         mailer = MagicLinkMailer(
             user=user,
             link=link,
-            mobile_link=mobile_link,
-            app_primary=is_ambassador,
             expires_minutes=30,
         )
         # Surfaced, not swallowed: the mutation logs and returns success on a
