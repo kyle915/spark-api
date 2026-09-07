@@ -13,9 +13,10 @@ crew and one URL.
    not the GPS address.
 
 2. A **Retail Sampling** twin of that template that ALSO asks Store Number,
-   Total Inventory Before Demo, and Total Inventory After Demo. Those three
-   are required on Retail and absent on Event, so Event recaps never require
-   or submit stale inventory values.
+   Total Inventory Before Demo, Total Inventory After Demo, and Account Spend
+   Amount. Those retail-only fields are required on Retail and absent on
+   Event, so Event recaps never require or submit stale inventory / spend
+   values.
 
 3. The tenant's **standing check-in code** — one durable ``/checkin/<code>``
    link. Start your shift asks **Retail Sampling vs Event Activation**
@@ -172,10 +173,28 @@ RETAIL_EXTRA: tuple[str, list[tuple[str, str, bool, list[str]]]] = (
     ],
 )
 
-RETAIL_SPEC: list[tuple[str, list[tuple[str, str, bool, list[str]]]]] = [
-    RETAIL_EXTRA,
-    *EVENT_SPEC,
-]
+# Torch / Brew Dr / MAB label — drives Account Spend export + audit matchers.
+ACCOUNT_SPEND_AMOUNT_FIELD: tuple[str, str, bool, list[str]] = (
+    "Account Spend Amount",
+    "number",
+    True,
+    [],
+)
+
+
+def _retail_spec() -> list[tuple[str, list[tuple[str, str, bool, list[str]]]]]:
+    """Retail = inventory extras + Event PDF fields, plus Account Spend Amount
+    on Expenses only (Event Activation keeps the PDF Expenses section as-is)."""
+    out: list[tuple[str, list[tuple[str, str, bool, list[str]]]]] = [RETAIL_EXTRA]
+    for section, fields in EVENT_SPEC:
+        if section == "Expenses":
+            out.append((section, [ACCOUNT_SPEND_AMOUNT_FIELD, *fields]))
+        else:
+            out.append((section, fields))
+    return out
+
+
+RETAIL_SPEC: list[tuple[str, list[tuple[str, str, bool, list[str]]]]] = _retail_spec()
 
 # Display order is tenant-wide (RecapSection is shared). Retail Inventory
 # sits first so a retail BA sees Store Number / inventory before the PDF
