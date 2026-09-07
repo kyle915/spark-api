@@ -1,0 +1,62 @@
+{
+  "_comment": [
+    "Single Drekker Brewing Retail Sampling recap for client layout/feedback.",
+    "Lorem ipsum text + fake metrics on purpose so ops never confuse it with a",
+    "real activation. Event title carries (TEST / CLIENT PREVIEW).",
+    "Standalone approved Event (no Request) → stays off Master Tracker.",
+    "After import, attach FPO photos via attach_fpo_recap_images --apply.",
+    "",
+    "Numbers are internally consistent:",
+    "  64 sampled ≈ 41 first-time + 23 already knew brand",
+    "  64 sampled = 47 would buy + 17 would not"
+  ],
+
+  "tenant_slug": "drekker-brewing",
+  "tenant_name": "Drekker Brewing",
+  "template_name": "Drekker Brewing-Retail Sampling",
+  "event_type_name": "Retail Sampling",
+  "event_status_slug": "approved",
+  "timezone_code": "CDT",
+  "state_code": "MN",
+  "external_ba_name": "Demo BA (TEST)",
+  "event_name_key": "Event Name",
+  "date_key": "Date",
+  "address_key": "Store/Location",
+  "local_hour": 14,
+  "approved": true,
+  "engagements_field": "Total number of consumers sampled",
+
+  "rows": [
+    {
+      "Event Name": "Total Wine & More — Maple Grove (TEST / CLIENT PREVIEW)",
+      "Date": "2026-09-05",
+      "Store/Location": "Total Wine & More, 12675 Elm Creek Blvd N, Maple Grove, MN 55369, USA",
+
+      "Total number of consumers sampled": 64,
+      "First Time consumers?": 41,
+      "How many consumers that were engaged with knew about Drekker Brewing product/brand?": 23,
+      "How many consumers would be willing to purchase the product after tasing it?": 47,
+      "How many consumers would NOT be willing to purchase the product after tasing it?": 17,
+      "How many single cans did consumers purchase?": 28,
+      "How many packs did consumers purchase?": 9,
+
+      "Demographics (general age, sex, ethnicities of consumers)": "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris.",
+
+      "Consumer Feedback": "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident.",
+
+      "Positive stories from your sampling today": "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Integer nec odio. Praesent libero. Sed cursus ante dapibus diam. Sed nisi. Nulla quis sem at nibh elementum imperdiet. Duis sagittis ipsum.",
+
+      "Reasons to decline to purchase?": "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Fusce nec tellus sed augue semper porta. Mauris massa. Vestibulum lacinia arcu eget nulla. Class aptent taciti sociosqu ad litora torquent.",
+
+      "Quotes from Consumers": "\"Lorem ipsum dolor sit amet.\" — demo consumer A\n\"Consectetur adipiscing elit, sed do eiusmod.\" — demo consumer B\n\"Ut enim ad minim veniam, quis nostrud.\" — demo consumer C",
+
+      "Anything you'd change or do differently?": "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Curabitur sodales ligula in libero. Sed dignissim lacinia nunc. Curabitur tortor. Pellentesque nibh. Aenean quam. In scelerisque sem at dolor.",
+
+      "Account Feedback": "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Morbi in dui quis est pulvinar ullamcorper. Nulla facilisi. Integer lacinia sollicitudin massa. Cras metus. Sed aliquet risus a tortor.",
+
+      "Account Spend Amount": 42.75,
+
+      "Products Sampled": "Ectogasm, Brunch Bubbz, SMoL Blue Razz, Saved by the Buoyancy of Citrus"
+    }
+  ]
+}
