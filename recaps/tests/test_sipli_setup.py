@@ -15,6 +15,7 @@ from django.core.management import call_command
 from django.test import Client, override_settings
 
 from recaps.management.commands.setup_sipli_checkin import (
+    ACCOUNT_SPEND_AMOUNT_FIELD,
     CODE_PREFIX,
     EVENT_PROGRAM,
     EVENT_SPEC,
@@ -71,7 +72,7 @@ class TestSipliSpec:
             assert not any(n == banned or n.startswith(banned + " ") for n in lowered)
         assert "sampling location" not in lowered
 
-    def test_retail_adds_store_and_inventory_only(self):
+    def test_retail_adds_store_inventory_and_account_spend(self):
         assert RETAIL_EXTRA_NAMES == [
             "Store Number",
             "Total Inventory Before Demo",
@@ -79,8 +80,19 @@ class TestSipliSpec:
         ]
         retail_names = [f[0] for _, fields in RETAIL_SPEC for f in fields]
         assert retail_names[:3] == RETAIL_EXTRA_NAMES
-        assert retail_names[3:] == EVENT_FIELD_NAMES
+        assert ACCOUNT_SPEND_AMOUNT_FIELD[0] == "Account Spend Amount"
+        assert ACCOUNT_SPEND_AMOUNT_FIELD[1] == "number"
+        assert ACCOUNT_SPEND_AMOUNT_FIELD[0] in retail_names
+        assert ACCOUNT_SPEND_AMOUNT_FIELD[0] not in EVENT_FIELD_NAMES
+        # Spend sits at the top of Expenses (after Feedback, before bill-backs).
+        expenses_idx = retail_names.index(
+            "Any expenses / bill-backs outside of product. (E.g. Tolls, Parking, etc)."
+        )
+        assert retail_names[expenses_idx - 1] == "Account Spend Amount"
         assert RETAIL_EXTRA_NAMES[0] not in EVENT_FIELD_NAMES
+        # Event fields appear in order; Account Spend is the only retail insert.
+        without_spend = [n for n in retail_names if n != "Account Spend Amount"]
+        assert without_spend == RETAIL_EXTRA_NAMES + EVENT_FIELD_NAMES
 
     def test_products_are_the_three_pdf_juices(self):
         products_field = next(
@@ -195,7 +207,10 @@ class TestSipliSetupCommand(BaseGraphQLTestCase):
             .values_list("name", flat=True)
         )
         assert event_names == EVENT_FIELD_NAMES
-        assert retail_names == RETAIL_EXTRA_NAMES + EVENT_FIELD_NAMES
+        assert "Account Spend Amount" not in event_names
+        assert "Account Spend Amount" in retail_names
+        without_spend = [n for n in retail_names if n != "Account Spend Amount"]
+        assert without_spend == RETAIL_EXTRA_NAMES + EVENT_FIELD_NAMES
         assert "Store Number" not in event_names
         assert "Total Inventory Before Demo" not in event_names
         assert event_tpl.event_type.name == EVENT_PROGRAM
