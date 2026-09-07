@@ -3471,6 +3471,171 @@ class SetupBrewDrCheckinView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class SeedDrekkerRecapTemplateView(View):
+    """GET/POST `/internal/cron/seed-drekker-recap-template`.
+
+    Builds/reconciles Drekker Brewing's LD-mirrored **Retail Sampling** recap
+    template (Drekker brand copy; Products Sampled from the live Product
+    catalog). Fires ``seed_drekker_recap_template``. DRY-RUN unless apply=true.
+
+    Params: tenant (default "drekker"), template_name, event_type, apply.
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _param(name: str) -> str | None:
+            return request.GET.get(name) or request.POST.get(name)
+
+        apply_raw = (_param("apply") or "").lower()
+        kwargs: dict = {
+            "tenant": _param("tenant") or "drekker",
+            "apply": apply_raw in ("1", "true", "yes", "on"),
+        }
+        if _param("template_name"):
+            kwargs["template_name"] = str(_param("template_name"))
+        if _param("event_type"):
+            kwargs["event_type"] = str(_param("event_type"))
+
+        out = io.StringIO()
+        try:
+            call_command("seed_drekker_recap_template", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("seed_drekker_recap_template cron failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "report": out.getvalue(),
+                },
+                status=500,
+            )
+        return JsonResponse(
+            {"ok": True, "applied": kwargs["apply"], "report": out.getvalue()}
+        )
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class SetupDrekkerCheckinView(View):
+    """GET/POST `/internal/cron/setup-drekker-checkin`.
+
+    Makes Drekker Brewing's standing ``DR-`` link serve **Retail Sampling**
+    (LD retail photo buckets). Recap template is seeded separately by
+    ``seed-drekker-recap-template``. Mints a ``DR-`` code only when the tenant
+    has none yet (never remints).
+
+    Params: tenant (default "drekker"), prefix, code, apply (default DRY RUN).
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        kwargs: dict = {}
+        for key in ("tenant", "prefix", "code"):
+            val = request.GET.get(key) or request.POST.get(key)
+            if val:
+                kwargs[key] = str(val)
+        raw = (request.GET.get("apply") or request.POST.get("apply") or "").lower()
+        apply_it = raw in ("1", "true", "yes", "on")
+        if apply_it:
+            kwargs["apply"] = True
+
+        out = io.StringIO()
+        try:
+            call_command("setup_drekker_checkin", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("setup-drekker-checkin cron failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "log": out.getvalue(),
+                },
+                status=500,
+            )
+        return JsonResponse({"ok": True, "apply": apply_it, "log": out.getvalue()})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class OnboardDrekkerProductsView(View):
+    """GET/POST `/internal/cron/onboard-drekker-products`.
+
+    Seeds Drekker Brewing's Product catalog (Beer / Seltzer + 8 SKUs).
+    Idempotent. DRY-RUN unless apply=true.
+
+    Params: owner_email (required), tenant, apply.
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _param(name: str) -> str | None:
+            return request.GET.get(name) or request.POST.get(name)
+
+        owner = (_param("owner_email") or _param("owner-email") or "").strip()
+        if not owner:
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "missing-owner-email",
+                    "detail": "Pass owner_email=kyle@igniteproductions.co",
+                },
+                status=400,
+            )
+        apply_raw = (_param("apply") or "").lower()
+        kwargs: dict = {
+            "owner_email": owner,
+            "apply": apply_raw in ("1", "true", "yes", "on"),
+        }
+        if _param("tenant"):
+            kwargs["tenant"] = str(_param("tenant"))
+
+        out = io.StringIO()
+        try:
+            call_command("onboard_drekker_products", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("onboard-drekker-products cron failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "report": out.getvalue(),
+                },
+                status=500,
+            )
+        return JsonResponse(
+            {"ok": True, "applied": kwargs["apply"], "report": out.getvalue()}
+        )
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class SeedNeutonicRecapTemplateView(View):
     """GET/POST `/internal/cron/seed-neutonic-recap-template`.
 
@@ -8890,12 +9055,15 @@ def _registered_views() -> dict[str, Any]:
         "set-tenant-event-types": SetTenantEventTypesView,
         "set-custom-recap-field": SetCustomRecapFieldView,
         "seed-brew-dr-recap-template": SeedBrewDrRecapTemplateView,
+        "seed-drekker-recap-template": SeedDrekkerRecapTemplateView,
         "seed-neutonic-recap-template": SeedNeutonicRecapTemplateView,
         "seed-mab-recap-template": SeedMabRecapTemplateView,
         "seed-ld-product-seeding-recap-template": SeedLdProductSeedingRecapTemplateView,
         "setup-brew-dr-checkin": SetupBrewDrCheckinView,
+        "setup-drekker-checkin": SetupDrekkerCheckinView,
         "setup-neutonic-checkin": SetupNeutonicCheckinView,
         "setup-mab-checkin": SetupMabCheckinView,
+        "onboard-drekker-products": OnboardDrekkerProductsView,
         "import-demo-recaps": ImportDemoRecapsView,
         "audit-client-submissions": AuditClientSubmissionsView,
         "dump-field-sampling": DumpFieldSamplingView,
