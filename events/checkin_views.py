@@ -58,9 +58,9 @@ _ALLOWED_UPLOAD_TYPES = {
     "image/webp",
 }
 
-# Signed-URL mints per IP. Feel Free-style batches can be ~50 shots; each may
+# Signed-URL mints per IP. Feel Free-style batches can be ~100 shots; each may
 # retry 2–3 times on LTE. Keep headroom above PHOTO_CAP × PHOTO_PUT_ATTEMPTS.
-CHECKIN_UPLOAD_URL_RATE_LIMIT = 250
+CHECKIN_UPLOAD_URL_RATE_LIMIT = 500
 CHECKIN_UPLOAD_URL_RATE_WINDOW_S = 300
 
 
@@ -709,8 +709,8 @@ _SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
 @csrf_exempt
 @require_http_methods(["POST"])
 def public_checkin_upload_url(request: HttpRequest, code: str) -> HttpResponse:
-    # BAs file up to ~50 photos; each shot may mint a signed URL 2–3 times on
-    # flaky LTE. 80/5min was tight enough to surface as "failed" mid-batch.
+    # BAs file up to ~100 photos; each shot may mint a signed URL 2–3 times on
+    # flaky LTE. 250/5min was tight once the walk-up photo cap moved past 50.
     if _over_limit(
         "upload-ip",
         _client_ip(request),
