@@ -99,21 +99,28 @@ class Command(BaseCommand):
         self._report.append(str(msg))
         self.stdout.write(msg)
 
-    def _send_alert(self, gap_count: int, foreign_count: int) -> None:
+    def _send_alert(self, gap_count: int, foreign_count: int) -> bool:
         """Best-effort regression alert to the Ignite team — reuses the same
-        recipient resolution the support-ticket notify uses. Never raises."""
+        recipient resolution the support-ticket notify uses. Never raises.
+
+        Uses the house Resend mailer, NOT django.core.mail: Cloud Run has no
+        SMTP on localhost:1025, so EmailMessage.send() dies with
+        ConnectionRefusedError (same class of bug as the unconfirmed-shift
+        alert, 2026-07-03). Soft-fails at WARNING so a mail blip cannot
+        page via ErrorEventLogHandler after the audit itself succeeded.
+        """
         try:
-            from django.conf import settings
-            from django.core.mail import EmailMessage
+            import html as _html
 
             from tenants.support import _resolve_ignite_recipients
+            from utils.mailer import Envelope, Mailer
 
             recipients = _resolve_ignite_recipients()
             if not recipients:
                 self.stdout.write(
                     "  [notify] No Ignite recipients resolved — alert skipped."
                 )
-                return
+                return False
             bits = []
             if gap_count:
                 bits.append(f"{gap_count} tenant(s) with seed gaps")
@@ -127,15 +134,33 @@ class Command(BaseCommand):
                 "onboarding (manual)' with dry_run=false and the relevant "
                 "seed/rehome inputs after reviewing the report above."
             )
-            EmailMessage(
-                subject, body, settings.DEFAULT_FROM_EMAIL, recipients
-            ).send(fail_silently=False)
+            body_html = (
+                '<pre style="font-family:inherit;white-space:pre-wrap;'
+                f'margin:0">{_html.escape(body)}</pre>'
+            )
+
+            class _OnboardingAuditAlertMailer(Mailer):
+                def envelope(self) -> Envelope:
+                    return Envelope(
+                        subject=subject,
+                        html=body_html,
+                        to_emails=recipients,
+                    )
+
+            _OnboardingAuditAlertMailer().send_now()
             self.stdout.write(
                 f"  [notify] Alert emailed to {len(recipients)} recipient(s)."
             )
+            return True
         except Exception:  # noqa: BLE001 — alerting must never fail the audit
-            logger.exception("Tenant onboarding audit alert email failed")
+            # WARNING (not exception/ERROR): audit findings already printed;
+            # paging on a soft mail failure was the ConnectionRefused spam.
+            logger.warning(
+                "Tenant onboarding audit alert email failed",
+                exc_info=True,
+            )
             self.stdout.write("  [notify] Alert email FAILED — see logs.")
+            return False
 
     def handle(self, *args, **opts):
         from ambassadors.models import Skill
