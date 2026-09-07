@@ -98,6 +98,17 @@ def _presets() -> dict[str, list[dict]]:
                 "note": "Torch Beverage Book — SKUs and sell sheets",
             },
         ],
+        # Drekker Brewing: BA Sampling Guide only (standing DR-BH435N).
+        # Same client host + confirmation-email path as Torch — checkin_resources
+        # render as labeled CTAs; Clock/Recap use Tenant.checkin_code.
+        "drekker": [
+            {
+                "label": "BA Sampling Guide",
+                "kind": "pdf",
+                "url": f"{base}/training/drekker/ba-sampling-guide.pdf",
+                "note": "Setup, talking points, and shift checklist",
+            },
+        ],
     }
 
 

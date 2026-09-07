@@ -296,6 +296,31 @@ class TestSetCheckinResourcesCommand(AmbassadorsGraphQLTestCase):
             assert "admin.igniteproductions.co" not in row["url"]
             assert "spark.igniteproductions.co" not in row["url"]
 
+    def test_apply_seeds_the_drekker_preset_and_email_url(self):
+        drekker = self.create_tenant(
+            name="Drekker Brewing",
+            slug="drekker-brewing",
+            checkin_code="DR-BH435N",
+        )
+        self._run(tenant="drekker", apply=True)
+        drekker.refresh_from_db()
+        assert [r["kind"] for r in drekker.checkin_resources] == ["pdf"]
+        assert [r["label"] for r in drekker.checkin_resources] == [
+            "BA Sampling Guide",
+        ]
+        assert drekker.checkin_resources[0]["url"] == (
+            "https://client.igniteproductions.co/training/drekker/"
+            "ba-sampling-guide.pdf"
+        )
+        assert drekker.checkin_training_url == (
+            "https://client.igniteproductions.co/training/drekker/"
+            "ba-sampling-guide.pdf"
+        )
+        assert drekker.checkin_code == "DR-BH435N"
+        for row in drekker.checkin_resources:
+            assert "admin.igniteproductions.co" not in row["url"]
+            assert "spark.igniteproductions.co" not in row["url"]
+
     def test_re_running_is_idempotent(self):
         self._run(tenant="Feel Free Command", apply=True)
         out = self._run(tenant="Feel Free Command", apply=True)
