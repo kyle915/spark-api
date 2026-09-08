@@ -3636,6 +3636,175 @@ class OnboardDrekkerProductsView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class SeedDaouRecapTemplateView(View):
+    """GET/POST `/internal/cron/seed-daou-recap-template`.
+
+    Builds/reconciles Treasury Wine Estates / DAOU **Event Activation** recap
+    template (LD Event Activation questions with DAOU brand copy; Products
+    Sampled from the live Product catalog). Fires ``seed_daou_recap_template``.
+    DRY-RUN unless apply=true.
+
+    Params: tenant (default "treasury"), template_name, event_type, apply.
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _param(name: str) -> str | None:
+            return request.GET.get(name) or request.POST.get(name)
+
+        apply_raw = (_param("apply") or "").lower()
+        kwargs: dict = {
+            "tenant": _param("tenant") or "treasury",
+            "apply": apply_raw in ("1", "true", "yes", "on"),
+        }
+        if _param("template_name"):
+            kwargs["template_name"] = str(_param("template_name"))
+        if _param("event_type"):
+            kwargs["event_type"] = str(_param("event_type"))
+
+        out = io.StringIO()
+        try:
+            call_command("seed_daou_recap_template", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("seed_daou_recap_template cron failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "report": out.getvalue(),
+                },
+                status=500,
+            )
+        return JsonResponse(
+            {"ok": True, "applied": kwargs["apply"], "report": out.getvalue()}
+        )
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class SetupDaouCheckinView(View):
+    """GET/POST `/internal/cron/setup-daou-checkin`.
+
+    Makes Treasury Wine Estates / DAOU standing ``DAOU-`` link serve **Event
+    Activation** (LD activation photo buckets). Recap template is seeded
+    separately by ``seed-daou-recap-template``. Mints a ``DAOU-`` code only
+    when the tenant has none yet (never remints).
+
+    Params: tenant (default "treasury"), prefix, code, apply (default DRY RUN).
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        kwargs: dict = {}
+        for key in ("tenant", "prefix", "code"):
+            val = request.GET.get(key) or request.POST.get(key)
+            if val:
+                kwargs[key] = str(val)
+        raw = (request.GET.get("apply") or request.POST.get("apply") or "").lower()
+        apply_it = raw in ("1", "true", "yes", "on")
+        if apply_it:
+            kwargs["apply"] = True
+
+        out = io.StringIO()
+        try:
+            call_command("setup_daou_checkin", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("setup-daou-checkin cron failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "log": out.getvalue(),
+                },
+                status=500,
+            )
+        return JsonResponse({"ok": True, "apply": apply_it, "log": out.getvalue()})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class OnboardDaouProductsView(View):
+    """GET/POST `/internal/cron/onboard-daou-products`.
+
+    Seeds Treasury Wine Estates / DAOU Discovery Product catalog (4 SKUs).
+    Optionally creates the tenant when create_tenant=true. Idempotent.
+    DRY-RUN unless apply=true.
+
+    Params: owner_email (required), tenant, create_tenant, apply.
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _param(name: str) -> str | None:
+            return request.GET.get(name) or request.POST.get(name)
+
+        owner = (_param("owner_email") or _param("owner-email") or "").strip()
+        if not owner:
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "missing-owner-email",
+                    "detail": "Pass owner_email=kyle@igniteproductions.co",
+                },
+                status=400,
+            )
+        apply_raw = (_param("apply") or "").lower()
+        create_raw = (_param("create_tenant") or _param("create-tenant") or "").lower()
+        kwargs: dict = {
+            "owner_email": owner,
+            "apply": apply_raw in ("1", "true", "yes", "on"),
+            "create_tenant": create_raw in ("1", "true", "yes", "on"),
+        }
+        if _param("tenant"):
+            kwargs["tenant"] = str(_param("tenant"))
+
+        out = io.StringIO()
+        try:
+            call_command("onboard_daou_products", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("onboard-daou-products cron failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "report": out.getvalue(),
+                },
+                status=500,
+            )
+        return JsonResponse(
+            {"ok": True, "applied": kwargs["apply"], "report": out.getvalue()}
+        )
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class SeedNeutonicRecapTemplateView(View):
     """GET/POST `/internal/cron/seed-neutonic-recap-template`.
 
@@ -9113,14 +9282,17 @@ def _registered_views() -> dict[str, Any]:
         "set-custom-recap-field": SetCustomRecapFieldView,
         "seed-brew-dr-recap-template": SeedBrewDrRecapTemplateView,
         "seed-drekker-recap-template": SeedDrekkerRecapTemplateView,
+        "seed-daou-recap-template": SeedDaouRecapTemplateView,
         "seed-neutonic-recap-template": SeedNeutonicRecapTemplateView,
         "seed-mab-recap-template": SeedMabRecapTemplateView,
         "seed-ld-product-seeding-recap-template": SeedLdProductSeedingRecapTemplateView,
         "setup-brew-dr-checkin": SetupBrewDrCheckinView,
         "setup-drekker-checkin": SetupDrekkerCheckinView,
+        "setup-daou-checkin": SetupDaouCheckinView,
         "setup-neutonic-checkin": SetupNeutonicCheckinView,
         "setup-mab-checkin": SetupMabCheckinView,
         "onboard-drekker-products": OnboardDrekkerProductsView,
+        "onboard-daou-products": OnboardDaouProductsView,
         "import-demo-recaps": ImportDemoRecapsView,
         "audit-client-submissions": AuditClientSubmissionsView,
         "dump-field-sampling": DumpFieldSamplingView,

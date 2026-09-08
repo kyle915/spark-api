@@ -109,6 +109,73 @@ def _presets() -> dict[str, list[dict]]:
                 "note": "Setup, talking points, and shift checklist",
             },
         ],
+        # Treasury Wine Estates / DAOU Event Activation (standing DAOU- link).
+        # Education session + Discovery tasting notes for table talking points.
+        # Keys "daou" and "treasury" both resolve (needle substring match).
+        "daou": [
+            {
+                "label": "DAOU Education Session",
+                "kind": "pdf",
+                "url": f"{base}/training/daou/education-session.pdf",
+                "note": "Brand story, Paso Robles, Discovery collection",
+            },
+            {
+                "label": "Discovery Sauvignon Blanc 2025",
+                "kind": "pdf",
+                "url": f"{base}/training/daou/tasting-note-sauvignon-blanc-2025.pdf",
+                "note": "Tasting note",
+            },
+            {
+                "label": "Discovery Rosé 2025",
+                "kind": "pdf",
+                "url": f"{base}/training/daou/tasting-note-rose-2025.pdf",
+                "note": "Tasting note",
+            },
+            {
+                "label": "Discovery Cabernet Sauvignon 2024",
+                "kind": "pdf",
+                "url": f"{base}/training/daou/tasting-note-cabernet-sauvignon-2024.pdf",
+                "note": "Tasting note",
+            },
+            {
+                "label": "Discovery Chardonnay 2025",
+                "kind": "pdf",
+                "url": f"{base}/training/daou/tasting-note-chardonnay-2025.pdf",
+                "note": "Tasting note",
+            },
+        ],
+        "treasury": [
+            {
+                "label": "DAOU Education Session",
+                "kind": "pdf",
+                "url": f"{base}/training/daou/education-session.pdf",
+                "note": "Brand story, Paso Robles, Discovery collection",
+            },
+            {
+                "label": "Discovery Sauvignon Blanc 2025",
+                "kind": "pdf",
+                "url": f"{base}/training/daou/tasting-note-sauvignon-blanc-2025.pdf",
+                "note": "Tasting note",
+            },
+            {
+                "label": "Discovery Rosé 2025",
+                "kind": "pdf",
+                "url": f"{base}/training/daou/tasting-note-rose-2025.pdf",
+                "note": "Tasting note",
+            },
+            {
+                "label": "Discovery Cabernet Sauvignon 2024",
+                "kind": "pdf",
+                "url": f"{base}/training/daou/tasting-note-cabernet-sauvignon-2024.pdf",
+                "note": "Tasting note",
+            },
+            {
+                "label": "Discovery Chardonnay 2025",
+                "kind": "pdf",
+                "url": f"{base}/training/daou/tasting-note-chardonnay-2025.pdf",
+                "note": "Tasting note",
+            },
+        ],
     }
 
 
