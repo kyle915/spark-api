@@ -1201,9 +1201,10 @@ def submit_checkin_recap(
             getattr(event, "name", "") or "", getattr(event, "address", "") or ""
         )
         typed_addr = (getattr(event, "address", "") or "").strip()
-        # Walk-up filings stay Needs review (approved=False) until an Ignite
-        # admin approves — including Feel Free. Client Recaps / approved
-        # notify only fire on the existing admin approve path.
+        # All tenants: walk-up filings stay Needs review (approved=False)
+        # until approveCustomRecap. Client Recaps / approved notify only
+        # fire on that explicit approve path (Girl Beer still skips client
+        # approved mail).
         if recap is None:
             recap = rmodels.CustomRecap.objects.create(
                 name=name,
