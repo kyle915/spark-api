@@ -1642,8 +1642,9 @@ class TestBaRecapEditGuards(JobsGraphQLTestCase):
         assert await self._notes_value() == "original"
 
     @pytest.mark.asyncio
-    async def test_admin_can_approve_via_update(self):
-        # Admins are unaffected by the BA gate — approval via update works.
+    async def test_admin_cannot_approve_via_update(self):
+        # Submit/update never flips approved — use approveCustomRecap so
+        # client visibility + approved notify stay on the explicit path.
         variables = {
             "input": {
                 "id": str(self.recap.id),
@@ -1663,7 +1664,7 @@ class TestBaRecapEditGuards(JobsGraphQLTestCase):
         assert result.errors is None
         assert result.data["updateCustomRecap"]["success"] is True
         recap = await self._refresh()
-        assert recap.approved is True
+        assert recap.approved is False
 
     CREATE_WEB = """
     mutation CreateCustomRecap($input: CreateCustomRecapInput!) {
