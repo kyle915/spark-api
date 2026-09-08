@@ -1,11 +1,9 @@
-"""Approve Feel Free walk-up recaps that landed unapproved after #996.
+"""One-shot backlog: approve filed Feel Free walk-up recaps (admin tool).
 
-#996 removed Feel Free auto-approve, so every standing-link filing sat in
-Needs review. Clients only see ``approved=True`` custom recaps, so Gloria's
-team looked at empty Recaps / event pages even when BAs had filed.
-
-This command stamps those filed Feel Free custom recaps approved (and
-logs booking hours the same way a human approve would). Dry-run by default.
+Feel Free walk-ups require Ignite admin approval before client send /
+visibility — do not re-enable submit-time auto-approve. This command exists
+only to stamp already-filed unapproved rows (e.g. after a mistaken
+auto-approve rollback). Dry-run by default; leave ``apply`` for a human.
 
     uv run python manage.py approve_feel_free_walkup_recaps --since=2026-08-23
     uv run python manage.py approve_feel_free_walkup_recaps --since=2026-08-23 --apply

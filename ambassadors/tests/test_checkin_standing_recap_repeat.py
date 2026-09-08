@@ -487,8 +487,8 @@ class TestStandingRecapRepeat(AmbassadorsGraphQLTestCase):
         assert body["event"]["uuid"] != str(leftover.uuid)
         assert body["event"]["date"].startswith(today.isoformat())
 
-    def test_feel_free_standing_recap_auto_approves(self):
-        """Feel Free walk-ups skip Needs review so clients see filings immediately."""
+    def test_feel_free_standing_recap_stays_unapproved(self):
+        """Feel Free walk-ups need Ignite admin approval before client visibility."""
         self.tenant.name = "Feel Free"
         self.tenant.request_url_name = "bl00-feel-free"
         self.tenant.save(update_fields=["name", "request_url_name"])
@@ -496,8 +496,7 @@ class TestStandingRecapRepeat(AmbassadorsGraphQLTestCase):
         event = self._event(name="Miami", address="Miami, FL", on_date=today)
         recap = self._submit(event, [{"blobName": self._blob(event, "ff")}])
         recap.refresh_from_db()
-        assert recap.approved is True
-        assert recap.approved_at is not None
+        assert recap.approved is False
 
     def test_other_brand_standing_recap_stays_unapproved(self):
         today = dj_tz.localdate()

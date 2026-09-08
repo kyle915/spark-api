@@ -1201,13 +1201,9 @@ def submit_checkin_recap(
             getattr(event, "name", "") or "", getattr(event, "address", "") or ""
         )
         typed_addr = (getattr(event, "address", "") or "").strip()
-        # Feel Free guerrilla sampling: walk-up filings auto-approve so they
-        # land on the client Recaps list / event pages immediately. #996
-        # required human review on every brand and broke that — clients only
-        # see approved custom recaps, so filed Feel Free shifts looked empty.
-        # Other standing brands stay Needs review.
-        auto_approve = is_feel_free_tenant(getattr(event, "tenant", None))
-        approved_at = dj_tz.now() if auto_approve else None
+        # Walk-up filings stay Needs review (approved=False) until an Ignite
+        # admin approves — including Feel Free. Client Recaps / approved
+        # notify only fire on the existing admin approve path.
         if recap is None:
             recap = rmodels.CustomRecap.objects.create(
                 name=name,
@@ -1234,9 +1230,6 @@ def submit_checkin_recap(
                     if third_party
                     else []
                 ),
-                approved=auto_approve,
-                approved_by=actor if auto_approve else None,
-                approved_at=approved_at,
             )
         else:
             recap.submitted_at = dj_tz.now()
@@ -1258,11 +1251,6 @@ def submit_checkin_recap(
             if resolved_shift_label and recap.name != name:
                 recap.name = name
                 update_fields.append("name")
-            if auto_approve:
-                recap.approved = True
-                recap.approved_by = actor
-                recap.approved_at = approved_at
-                update_fields.extend(["approved", "approved_by", "approved_at"])
             recap.save(update_fields=update_fields)
             rmodels.CustomFieldValue.objects.filter(custom_recap=recap).delete()
             rmodels.CustomRecapProductSample.objects.filter(
@@ -1470,7 +1458,6 @@ def _finalize_recap_offthread(recap_id: int) -> None:
         from recaps import models as rmodels
         from recaps.mutations import (
             _guard_recap_data_quality,
-            _kick_recap_approved_notify,
             _notify_recap_ready_for_review_to_admins,
         )
 
@@ -1482,20 +1469,10 @@ def _finalize_recap_offthread(recap_id: int) -> None:
             await _guard_recap_data_quality(recap)
         except Exception:  # noqa: BLE001
             logger.exception("checkin recap: data-quality guard failed id=%s", recap_id)
-        if recap.approved:
-            # Feel Free auto-approve: skip NEEDS REVIEW, send the same
-            # client mail a human approve would (Girl Beer still no-ops).
-            try:
-                await _kick_recap_approved_notify(recap, "custom")
-            except Exception:  # noqa: BLE001
-                logger.exception(
-                    "checkin recap: auto-approve notify failed id=%s", recap_id
-                )
-        else:
-            try:
-                await _notify_recap_ready_for_review_to_admins(recap, created_by)
-            except Exception:  # noqa: BLE001
-                logger.exception("checkin recap: notify-admins failed id=%s", recap_id)
+        try:
+            await _notify_recap_ready_for_review_to_admins(recap, created_by)
+        except Exception:  # noqa: BLE001
+            logger.exception("checkin recap: notify-admins failed id=%s", recap_id)
         # Field-ops crew for the check-in link specifically — nobody is
         # watching a queue for these, so the submission has to reach a person.
         try:

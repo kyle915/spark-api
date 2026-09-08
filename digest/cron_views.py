@@ -7014,10 +7014,9 @@ class ResendBaWelcomeView(View):
 class ApproveFeelFreeWalkupRecapsView(View):
     """POST `/internal/cron/approve-feel-free-walkup-recaps`.
 
-    Backfill: stamp filed Feel Free custom recaps approved after #996 removed
-    walk-up auto-approve. Clients only see approved rows, so Gloria's team
-    saw empty Recaps until these catch up. Dry-run by default.
-    Params: since (YYYY-MM-DD, required), apply, limit.
+    One-shot backlog tool only. Feel Free requires Ignite admin approval
+    before client send/visibility — do not treat this as ongoing auto-approve.
+    Dry-run by default. Params: since (YYYY-MM-DD, required), apply, limit.
     """
 
     def _run(self, request: HttpRequest) -> HttpResponse:
