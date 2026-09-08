@@ -1,0 +1,72 @@
+name: Approve Feel Free walk-up recaps
+
+# Fires `/internal/cron/approve-feel-free-walkup-recaps` — stamps filed Feel
+# Free custom recaps approved after #996 removed walk-up auto-approve.
+# Clients only see approved rows. Dry-run default. Manual dispatch only.
+
+on:
+  workflow_dispatch:
+    inputs:
+      since:
+        description: "Inclusive start date YYYY-MM-DD (America/Los_Angeles)."
+        required: true
+        default: "2026-08-23"
+        type: string
+      apply:
+        description: "Write approvals. Leave false for dry-run listing."
+        required: true
+        default: false
+        type: boolean
+      limit:
+        description: "Optional max rows (0 = no cap)."
+        required: false
+        default: "0"
+        type: string
+
+jobs:
+  fire-approve-feel-free-walkup-recaps:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Fire approve-feel-free-walkup-recaps cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/approve-feel-free-walkup-recaps
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          SINCE: ${{ github.event.inputs.since }}
+          APPLY: ${{ github.event.inputs.apply }}
+          LIMIT: ${{ github.event.inputs.limit }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          if [ "$APPLY" = "true" ]; then APPLY_FLAG="true"; else APPLY_FLAG="false"; fi
+          echo "since=$SINCE apply=$APPLY_FLAG limit=$LIMIT"
+          CURL_ARGS=(
+            -X POST "$CRON_URL"
+            -H "X-Cron-Secret: $CRON_SECRET"
+            --data-urlencode "since=$SINCE"
+            --data-urlencode "apply=$APPLY_FLAG"
+            --max-time 840
+          )
+          if [ -n "$LIMIT" ] && [ "$LIMIT" != "0" ]; then
+            CURL_ARGS+=(--data-urlencode "limit=$LIMIT")
+          fi
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' "${CURL_ARGS[@]}")
+          echo "HTTP $STATUS"
+          python3 - <<'ENDLOG'
+          import json
+          raw = open("/tmp/cron-response.json").read()
+          try:
+              data = json.loads(raw)
+          except json.JSONDecodeError:
+              print(raw[:4000])
+          else:
+              print("ok=", data.get("ok"), "apply=", data.get("apply"), "since=", data.get("since"))
+              log = data.get("log") or ""
+              print(log)
+              if data.get("error"):
+                  print("error=", data.get("error"), "detail=", data.get("detail"))
+          ENDLOG
+          [ "$STATUS" != "200" ] && exit 1 || exit 0
