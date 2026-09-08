@@ -6842,6 +6842,60 @@ class ResendBaWelcomeView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class ApproveFeelFreeWalkupRecapsView(View):
+    """POST `/internal/cron/approve-feel-free-walkup-recaps`.
+
+    Backfill: stamp filed Feel Free custom recaps approved after #996 removed
+    walk-up auto-approve. Clients only see approved rows, so Gloria's team
+    saw empty Recaps until these catch up. Dry-run by default.
+    Params: since (YYYY-MM-DD, required), apply, limit.
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _get(name: str) -> str:
+            return (request.GET.get(name) or request.POST.get(name) or "").strip()
+
+        since = _get("since")
+        if not since:
+            return JsonResponse({"ok": False, "error": "since-required"}, status=400)
+        apply_it = _get("apply").lower() in ("1", "true", "yes", "on")
+        limit = _get("limit")
+        kwargs: dict = {"since": since}
+        if apply_it:
+            kwargs["apply"] = True
+        if limit:
+            kwargs["limit"] = int(limit)
+
+        out = io.StringIO()
+        try:
+            call_command("approve_feel_free_walkup_recaps", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("approve-feel-free-walkup-recaps cron failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "log": out.getvalue(),
+                },
+                status=500,
+            )
+        return JsonResponse(
+            {"ok": True, "apply": apply_it, "since": since, "log": out.getvalue()}
+        )
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class ResendRecapApprovedSinceView(View):
     """POST `/internal/cron/resend-recap-approved-since`.
 
@@ -9139,6 +9193,7 @@ def _registered_views() -> dict[str, Any]:
         "fix-ld-orphan-log-rows": FixLdOrphanLogRowsView,
         "setup-total-wireless-checkin": SetupTotalWirelessCheckinView,
         "setup-feel-free-checkin": SetupFeelFreeCheckinView,
+        "approve-feel-free-walkup-recaps": ApproveFeelFreeWalkupRecapsView,
         "setup-krispy-krunchy-checkin": SetupKrispyKrunchyCheckinView,
         "setup-g7-entertainment-checkin": SetupG7EntertainmentCheckinView,
         "setup-grubhub-checkin": SetupGrubhubCheckinView,
