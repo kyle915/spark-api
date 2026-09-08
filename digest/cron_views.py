@@ -6105,6 +6105,63 @@ class DiagnoseTorchSheetView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class RecategorizeRecapFilesView(View):
+    """GET/POST `/internal/cron/recategorize-recap-files`.
+
+    Moves SPECIFIC recap files into another photo category — for receipts that
+    landed in a bucket the expense export can't see (it matches categories
+    containing "receipt"), leaving an invoice line unsubstantiated.
+
+    Takes explicit file ids rather than a source category, because a
+    tenant-wide source->target move would re-file genuine sampling photos as
+    receipts on every other recap. Ids come from `dump_tenant_receipts`.
+
+    DRY-RUN unless `execute`. Never deletes a file or moves a blob.
+
+    Params: file_ids (required), target (required), execute.
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _param(key: str) -> str:
+            return (request.GET.get(key) or request.POST.get(key) or "").strip()
+
+        file_ids = _param("file_ids")
+        target = _param("target")
+        if not file_ids or not target:
+            return JsonResponse(
+                {"ok": False, "error": "file_ids-and-target-required"}, status=400
+            )
+
+        kwargs: dict = {"file_ids": file_ids, "target": target}
+        if _param("execute").lower() in ("1", "true", "yes", "on"):
+            kwargs["execute"] = True
+
+        out = io.StringIO()
+        try:
+            call_command("recategorize_recap_files", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("recategorize-recap-files cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc),
+                 "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse(
+            {"ok": True, "execute": bool(kwargs.get("execute")), "log": out.getvalue()}
+        )
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class ListTenantRequestsView(View):
     """GET/POST `/internal/cron/list-tenant-requests`.
 
@@ -9107,6 +9164,7 @@ def _registered_views() -> dict[str, Any]:
         "list-checkin-links": ListCheckinLinksView,
         "count-user-events": CountUserEventsView,
         "list-tenant-requests": ListTenantRequestsView,
+        "recategorize-recap-files": RecategorizeRecapFilesView,
         "diagnose-torch-sheet": DiagnoseTorchSheetView,
         "reflow-torch-sheet": ReflowTorchSheetView,
         "flatten-torch-sheet": FlattenTorchSheetView,
