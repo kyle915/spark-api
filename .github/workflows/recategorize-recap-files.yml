@@ -1,0 +1,67 @@
+name: Recategorize recap files
+
+# Moves SPECIFIC recap files into another photo category.
+#
+# For receipts that landed in the wrong bucket. The expense export only sees
+# categories whose name contains "receipt", so a receipt uploaded through the
+# generic photo grid (filing under "Sampling photos") is invisible to it — the
+# recap looks complete, the spend is recorded, and the client invoice carries
+# an unsubstantiated line.
+#
+# Takes explicit FILE IDS, not a source category, on purpose: a tenant-wide
+# source->target move would re-file that tenant's genuine sampling photos as
+# receipts on every other recap. Get the ids from "Dump tenant receipts",
+# which prints every file with its category verbatim and an is_receipt hint.
+#
+# Never deletes a file, never moves a blob — it only repoints the category.
+# Leave execute=false first and read the plan.
+
+on:
+  workflow_dispatch:
+    inputs:
+      file_ids:
+        description: "Comma-separated CustomRecapFile ids (from Dump tenant receipts)"
+        required: true
+      target:
+        description: "Target category name — must already exist on that tenant"
+        required: true
+        default: "Expense Receipts"
+      execute:
+        description: "Actually move them (read the dry run first)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+jobs:
+  recategorize-recap-files:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire recategorize endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/recategorize-recap-files
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          FILE_IDS: ${{ github.event.inputs.file_ids }}
+          TARGET: ${{ github.event.inputs.target }}
+          EXECUTE: ${{ github.event.inputs.execute }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            --max-time 180 \
+            -X POST "$CRON_URL" \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            --data-urlencode "file_ids=$FILE_IDS" \
+            --data-urlencode "target=$TARGET" \
+            --data-urlencode "execute=$EXECUTE")
+          echo "HTTP $STATUS"
+          python3 -c "
+          import json, sys
+          d = json.load(open('/tmp/cron-response.json'))
+          print(d.get('log') or '(no log)')
+          if not d.get('ok'):
+              print('ERROR:', d.get('error'), d.get('detail', ''), file=sys.stderr)
+          " || cat /tmp/cron-response.json
+          [ "$STATUS" != "200" ] && exit 1 || exit 0
