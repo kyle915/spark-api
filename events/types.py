@@ -569,12 +569,88 @@ class Request(Node):
 
         return await sync_to_async(_go)()
 
+    @staticmethod
+    def _event_activation_key(ev) -> tuple:
+        """Sort key for canonical Tracker event — newest activation first.
+
+        Prefers ``date``, then ``start_time``, then highest id. Missing dates
+        sort last so a dated reschedule beats an undated shell.
+        """
+        from datetime import datetime as _dt
+
+        d = getattr(ev, "date", None)
+        st = getattr(ev, "start_time", None)
+        # date may be date or datetime depending on column; normalize.
+        if d is not None and not isinstance(d, _dt):
+            try:
+                d = _dt.combine(d, _dt.min.time())
+            except Exception:
+                d = None
+        if st is not None and not isinstance(st, _dt):
+            st = None
+        anchor = d or st
+        return (
+            1 if anchor is not None else 0,
+            anchor or _dt.min.replace(tzinfo=None),
+            int(getattr(ev, "id", 0) or 0),
+        )
+
+    @staticmethod
+    def _events_newest_first(events: list) -> list:
+        return sorted(events, key=Request._event_activation_key, reverse=True)
+
+    @staticmethod
+    def _norm_addr(value: str | None) -> str:
+        return " ".join((value or "").lower().split())
+
+    @staticmethod
+    def _pick_canonical_event(events: list):
+        """Primary activation for Tracker DATE / click — newest by date."""
+        ordered = Request._events_newest_first(events)
+        return ordered[0] if ordered else None
+
+    @staticmethod
+    def _pick_recap_event(events: list, *, request_address: str | None = None):
+        """Event that holds a filed recap matching this request's venue when possible.
+
+        Preference:
+        1. Newest event with filed recaps whose address matches the request
+        2. Newest event with any filed recaps
+        """
+        with_recaps = [
+            ev for ev in events if Request._recap_total_cached(ev) > 0
+        ]
+        if not with_recaps:
+            return None
+        req_addr = Request._norm_addr(request_address)
+        if req_addr:
+            matched = [
+                ev
+                for ev in with_recaps
+                if req_addr in Request._norm_addr(getattr(ev, "address", None))
+                or Request._norm_addr(getattr(ev, "address", None)) in req_addr
+            ]
+            if matched:
+                return Request._events_newest_first(matched)[0]
+        return Request._events_newest_first(with_recaps)[0]
+
     @strawberry.field
     async def event(self) -> Event | None:
+        """Canonical activation for this request — newest by date/id.
+
+        Master Tracker used to take ``event_set.first()`` (lowest PK). After
+        a reschedule or multi-day fork that pointed at the stale empty event
+        while recaps lived on the newer date / address.
+        """
         cached = getattr(self, "_prefetched_objects_cache", {}).get("event_set")
         if cached is not None:
-            return cached[0] if cached else None
-        return await sync_to_async(self.event_set.first)()
+            return Request._pick_canonical_event(list(cached))
+
+        def _go():
+            events = list(self.event_set.all())
+            return Request._pick_canonical_event(events)
+
+        return await sync_to_async(_go)()
 
     @strawberry.field
     async def events(self) -> List["Event"]:
@@ -583,12 +659,15 @@ class Request(Node):
         A request can spawn multiple events when an activation is
         scheduled across multiple days or venues. Front-end uses this
         to render the Field Reports panel — one section per event,
-        each with its recap(s).
+        each with its recap(s). Sorted by start_time/date ascending
+        regardless of prefetch order (list prefetch is newest-first).
         """
         cached = getattr(self, "_prefetched_objects_cache", {}).get("event_set")
         if cached is not None:
-            return list(cached)
-        return await sync_to_async(list)(self.event_set.order_by("start_time"))
+            return list(reversed(Request._events_newest_first(list(cached))))
+        return await sync_to_async(list)(
+            self.event_set.order_by("date", "start_time", "id")
+        )
 
     # --- Scalar recap rollups for the Master Tracker list ---
     #
@@ -672,21 +751,48 @@ class Request(Node):
 
     @strawberry.field
     async def recap_event_uuid(self) -> str | None:
-        """UUID of the first event that actually holds a recap, so a "N RECAP"
-        row click lands on a page that shows one (the primary `event` is the
-        lowest-id event, which may be recap-less)."""
+        """UUID of the event that holds the filed recap for this request.
+
+        Prefers an event whose address matches the request (same venue), then
+        the newest event with filed content — so a "N RECAP" row click lands
+        on the shift that matches the Tracker row, not the oldest empty shell.
+        """
         cached = getattr(self, "_prefetched_objects_cache", {}).get("event_set")
         if cached is not None:
-            for ev in cached:
-                if Request._recap_total_cached(ev) > 0:
-                    return str(getattr(ev, "uuid", "")) or None
-            return None
+            picked = Request._pick_recap_event(
+                list(cached),
+                request_address=getattr(self, "address", None),
+            )
+            return str(getattr(picked, "uuid", "")) or None if picked else None
 
         def _find():
-            for ev in self.event_set.all():
-                if Request._recap_total(ev) > 0:
-                    return str(getattr(ev, "uuid", "")) or None
-            return None
+            events = list(self.event_set.all())
+            with_recaps = [
+                ev for ev in events if Request._recap_total(ev) > 0
+            ]
+            if not with_recaps:
+                return None
+            req_addr = Request._norm_addr(getattr(self, "address", None))
+            if req_addr:
+                matched = [
+                    ev
+                    for ev in with_recaps
+                    if req_addr
+                    in Request._norm_addr(getattr(ev, "address", None))
+                    or Request._norm_addr(getattr(ev, "address", None))
+                    in req_addr
+                ]
+                if matched:
+                    return str(
+                        getattr(
+                            Request._events_newest_first(matched)[0], "uuid", ""
+                        )
+                    ) or None
+            return str(
+                getattr(
+                    Request._events_newest_first(with_recaps)[0], "uuid", ""
+                )
+            ) or None
 
         return await sync_to_async(_find)()
 

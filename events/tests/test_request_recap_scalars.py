@@ -121,6 +121,77 @@ class TestRequestRecapScalars(EventsGraphQLTestCase):
         assert row["eventsCount"] == 2
         assert row["recapEventUuid"] == str(self.ev_a.uuid)
 
+    def test_canonical_event_is_newest_by_date(self):
+        """Tracker primary event must be the newest activation, not lowest PK."""
+        from datetime import date, timedelta
+
+        older = self.ev_a
+        older.date = date.today() - timedelta(days=10)
+        older.address = "1 A St"
+        older.save(update_fields=["date", "address"])
+        newer = em.Event.objects.filter(request=self.req).exclude(id=older.id).first()
+        newer.date = date.today() - timedelta(days=1)
+        newer.address = "1 A St"
+        newer.save(update_fields=["date", "address"])
+        rm.Recap.objects.filter(event=older).delete()
+        rm.CustomRecap.objects.filter(event=older).delete()
+        rm.Recap.objects.create(
+            name="new-day",
+            event=newer,
+            created_by=self.sys,
+            updated_by=self.sys,
+            products_sold=3,
+        )
+        req = (
+            em.Request.objects.filter(id=self.req.id)
+            .prefetch_related(
+                "event_set", "event_set__recaps", "event_set__custom_recap"
+            )
+            .get()
+        )
+        events = list(req.event_set.all())
+        canonical = RequestGQL._pick_canonical_event(events)
+        assert canonical.id == newer.id
+        picked = RequestGQL._pick_recap_event(
+            events, request_address=req.address
+        )
+        assert picked is not None
+        assert picked.id == newer.id
+
+    def test_recap_event_prefers_matching_address(self):
+        """When two events have recaps, prefer the venue that matches the request."""
+        from datetime import date, timedelta
+
+        other = (
+            em.Event.objects.filter(request=self.req).exclude(id=self.ev_a.id).first()
+        )
+        self.ev_a.date = date.today() - timedelta(days=2)
+        self.ev_a.address = "999 Other Ave"
+        self.ev_a.save(update_fields=["date", "address"])
+        other.date = date.today() - timedelta(days=1)
+        other.address = self.req.address
+        other.save(update_fields=["date", "address"])
+        rm.Recap.objects.create(
+            name="on-venue",
+            event=other,
+            created_by=self.sys,
+            updated_by=self.sys,
+            products_sold=5,
+        )
+        req = (
+            em.Request.objects.filter(id=self.req.id)
+            .prefetch_related(
+                "event_set", "event_set__recaps", "event_set__custom_recap"
+            )
+            .get()
+        )
+        events = list(req.event_set.all())
+        picked = RequestGQL._pick_recap_event(
+            events, request_address=req.address
+        )
+        assert picked is not None
+        assert picked.id == other.id
+
     def test_recap_total_no_nplus1_off_prefetch(self):
         rows = list(
             em.Request.objects.filter(tenant=self.tenant).prefetch_related(
