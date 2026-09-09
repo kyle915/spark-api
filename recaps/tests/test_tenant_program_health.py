@@ -375,6 +375,7 @@ class TestMarketAndBaDateWindow(AmbassadorsGraphQLTestCase):
             event=ev_in,
             ambassador=self.ambassador,
             total_engagements=5,
+            approved=True,
             created_by=self.sys,
             updated_by=self.sys,
         )
@@ -403,6 +404,7 @@ class TestMarketAndBaDateWindow(AmbassadorsGraphQLTestCase):
             event=ev_old,
             ambassador=self.ambassador,
             total_engagements=99,
+            approved=True,
             created_by=self.sys,
             updated_by=self.sys,
         )

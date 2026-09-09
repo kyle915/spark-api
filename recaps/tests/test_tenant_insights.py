@@ -130,6 +130,7 @@ class TestTenantInsightBuckets(AmbassadorsGraphQLTestCase):
             products_sold=products_sold,
             total_cans_sold=cans,
             total_packs_sold=packs,
+            approved=True,
             created_by=self.system_user,
             updated_by=self.system_user,
         )
@@ -415,6 +416,7 @@ class TestTenantInsightBuckets(AmbassadorsGraphQLTestCase):
             event=event,
             total_engagements=0,
             products_sold=3,  # gives the tenant some non-zero KPI total
+            approved=True,
             created_by=self.system_user,
             updated_by=self.system_user,
         )

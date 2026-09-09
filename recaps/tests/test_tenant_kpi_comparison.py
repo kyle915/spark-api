@@ -227,6 +227,7 @@ class TestTenantKpiComparison(AmbassadorsGraphQLTestCase):
             products_sold=products_sold,
             total_cans_sold=cans,
             total_packs_sold=packs,
+            approved=True,
             created_by=self.system_user,
             updated_by=self.system_user,
         )
