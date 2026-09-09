@@ -41,7 +41,9 @@ from recaps.field_sampling_report import (
 from recaps.tenant_overview import (
     build_tenant_overview,
     tenant_activation_breakdown,
+    tenant_conversion_kpis,
     tenant_event_recap_counts,
+    tenant_field_cadence,
     tenant_kpi_comparison,
     tenant_kpi_totals,
     tenant_market_performance,
@@ -560,6 +562,98 @@ def _build_program_health(
         missing=int(data["missing"]),
         start_date=data.get("start_date"),
         end_date=data.get("end_date"),
+    )
+
+
+@strawberry.type
+class TenantConversionKpis:
+    """Retail + On-Premise conversion for Insights (sold ÷ engagements).
+
+    Event / Seeding / unclassified activations are excluded. ``pct`` is null
+    when either side is zero — never invent a rate. ``previous_*`` is the
+    equal-length window immediately before ``start_date``/``end_date``.
+    """
+
+    sold: int
+    engagements: int
+    pct: float | None
+    previous_sold: int
+    previous_engagements: int
+    previous_pct: float | None
+    current_label: str | None = None
+    previous_label: str | None = None
+    start_date: str | None = None
+    end_date: str | None = None
+
+
+@strawberry.type
+class TenantFieldCadence:
+    """This-week field pulse: scheduled next 7d vs approved recaps last 7d."""
+
+    scheduled_next_7: int
+    approved_recaps_last_7: int
+    schedule_start: str
+    schedule_end: str
+    approved_start: str
+    approved_end: str
+
+
+def _empty_conversion_kpis(
+    start_date: str | None = None, end_date: str | None = None
+) -> TenantConversionKpis:
+    return TenantConversionKpis(
+        sold=0,
+        engagements=0,
+        pct=None,
+        previous_sold=0,
+        previous_engagements=0,
+        previous_pct=None,
+        current_label=None,
+        previous_label=None,
+        start_date=start_date,
+        end_date=end_date,
+    )
+
+
+def _build_conversion_kpis(
+    tenant_id: int, start: date, end: date
+) -> TenantConversionKpis:
+    data = tenant_conversion_kpis(tenant_id, start=start, end=end)
+    return TenantConversionKpis(
+        sold=int(data["sold"]),
+        engagements=int(data["engagements"]),
+        pct=data.get("pct"),
+        previous_sold=int(data["previous_sold"]),
+        previous_engagements=int(data["previous_engagements"]),
+        previous_pct=data.get("previous_pct"),
+        current_label=data.get("current_label"),
+        previous_label=data.get("previous_label"),
+        start_date=data.get("start_date"),
+        end_date=data.get("end_date"),
+    )
+
+
+def _empty_field_cadence() -> TenantFieldCadence:
+    today = timezone.localdate()
+    return TenantFieldCadence(
+        scheduled_next_7=0,
+        approved_recaps_last_7=0,
+        schedule_start=today.isoformat(),
+        schedule_end=(today + timedelta(days=6)).isoformat(),
+        approved_start=(today - timedelta(days=6)).isoformat(),
+        approved_end=today.isoformat(),
+    )
+
+
+def _build_field_cadence(tenant_id: int) -> TenantFieldCadence:
+    data = tenant_field_cadence(tenant_id)
+    return TenantFieldCadence(
+        scheduled_next_7=int(data["scheduled_next_7"]),
+        approved_recaps_last_7=int(data["approved_recaps_last_7"]),
+        schedule_start=data["schedule_start"],
+        schedule_end=data["schedule_end"],
+        approved_start=data["approved_start"],
+        approved_end=data["approved_end"],
     )
 
 
@@ -2056,6 +2150,75 @@ class CampaignReportQueries:
             if not Tenant.objects.filter(id=target_tenant_id).exists():
                 return None
             return _build_program_health(target_tenant_id, start_d, end_d)
+
+        try:
+            data = await sync_to_async(_build, thread_sensitive=True)()
+        except Exception:
+            return empty
+
+        return data if data is not None else empty
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def tenant_conversion_kpis(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID,
+        start_date: str,
+        end_date: str,
+    ) -> TenantConversionKpis:
+        """Retail + On-Premise conversion (sold ÷ engagements) for a date window.
+
+        Returns current + previous equal-length windows. Tenant scoping matches
+        :meth:`tenant_kpis`. Never raises — degrades to zeros.
+        """
+        empty = _empty_conversion_kpis(start_date, end_date)
+        service = _CampaignReportService()
+        target_tenant_id = await service.resolve_target_tenant_id(info, tenant_id)
+        if target_tenant_id is None:
+            return empty
+
+        try:
+            start_d = datetime.fromisoformat(start_date).date()
+            end_d = datetime.fromisoformat(end_date).date()
+        except (ValueError, TypeError):
+            return empty
+
+        def _build():
+            from tenants.models import Tenant
+
+            if not Tenant.objects.filter(id=target_tenant_id).exists():
+                return None
+            return _build_conversion_kpis(target_tenant_id, start_d, end_d)
+
+        try:
+            data = await sync_to_async(_build, thread_sensitive=True)()
+        except Exception:
+            return empty
+
+        return data if data is not None else empty
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def tenant_field_cadence(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID,
+    ) -> TenantFieldCadence:
+        """Scheduled next 7 days vs approved recaps last 7 days.
+
+        Tenant scoping matches :meth:`tenant_kpis`. Never raises.
+        """
+        empty = _empty_field_cadence()
+        service = _CampaignReportService()
+        target_tenant_id = await service.resolve_target_tenant_id(info, tenant_id)
+        if target_tenant_id is None:
+            return empty
+
+        def _build():
+            from tenants.models import Tenant
+
+            if not Tenant.objects.filter(id=target_tenant_id).exists():
+                return None
+            return _build_field_cadence(target_tenant_id)
 
         try:
             data = await sync_to_async(_build, thread_sensitive=True)()

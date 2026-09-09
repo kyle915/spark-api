@@ -134,6 +134,7 @@ class TestScheduledClientReports(AmbassadorsGraphQLTestCase):
             event=event,
             total_engagements=engagements,
             products_sold=products_sold,
+            approved=True,
             created_by=self.system_user,
             updated_by=self.system_user,
         )

@@ -292,6 +292,18 @@ def _filter_event_window(queryset, prefix: str, window: tuple | None):
     return qs
 
 
+def _approved_only(queryset, approved_prefix: str):
+    """Keep only admin-approved recaps (or rows joined through them).
+
+    Insights / tenantKpis must not count Needs-review submits — clients only
+    see approved recaps, and Program KPIs should match that honesty bar.
+    ``approved_prefix`` is the ORM path to the Recap/CustomRecap ``approved``
+    flag (``""`` on Recap/CustomRecap itself, ``"recap__"`` /
+    ``"custom_recap__"`` on children).
+    """
+    return queryset.filter(**{f"{approved_prefix}approved": True})
+
+
 def _filter_event_year(queryset, prefix: str, year: int | None):
     """Narrow ``queryset`` to rows whose effective EVENT date is in ``year``.
 
@@ -323,18 +335,27 @@ def _legacy_kpis_window(tenant_id: int, window: tuple | None) -> dict[str, int]:
     quarter / year window here so its figures reconcile with
     :func:`tenant_kpi_totals` for the matching window.
     """
-    recaps = _filter_event_window(
-        Recap.objects.filter(event__tenant_id=tenant_id), "event__", window
+    recaps = _approved_only(
+        _filter_event_window(
+            Recap.objects.filter(event__tenant_id=tenant_id), "event__", window
+        ),
+        "",
     )
-    engagements = _filter_event_window(
-        ConsumerEngagements.objects.filter(recap__event__tenant_id=tenant_id),
-        "recap__event__",
-        window,
+    engagements = _approved_only(
+        _filter_event_window(
+            ConsumerEngagements.objects.filter(recap__event__tenant_id=tenant_id),
+            "recap__event__",
+            window,
+        ),
+        "recap__",
     )
-    samples = _filter_event_window(
-        ProductSamples.objects.filter(recap__event__tenant_id=tenant_id),
-        "recap__event__",
-        window,
+    samples = _approved_only(
+        _filter_event_window(
+            ProductSamples.objects.filter(recap__event__tenant_id=tenant_id),
+            "recap__event__",
+            window,
+        ),
+        "recap__",
     )
     consumers_reached = _sum(engagements, "total_consumer")
     return {
@@ -412,10 +433,13 @@ def _custom_kpis_window(tenant_id: int, window: tuple | None) -> dict[str, int]:
     """
     out = {
         "total_engagements": _sum(
-            _filter_event_window(
-                CustomRecap.objects.filter(tenant_id=tenant_id),
-                "event__",
-                window,
+            _approved_only(
+                _filter_event_window(
+                    CustomRecap.objects.filter(tenant_id=tenant_id),
+                    "event__",
+                    window,
+                ),
+                "",
             ),
             "total_engagements",
         ),
@@ -431,12 +455,15 @@ def _custom_kpis_window(tenant_id: int, window: tuple | None) -> dict[str, int]:
 
     # Structured custom samples sum cleanly in SQL.
     structured_samples = _sum(
-        _filter_event_window(
-            CustomRecapProductSample.objects.filter(
-                custom_recap__tenant_id=tenant_id
+        _approved_only(
+            _filter_event_window(
+                CustomRecapProductSample.objects.filter(
+                    custom_recap__tenant_id=tenant_id
+                ),
+                "custom_recap__event__",
+                window,
             ),
-            "custom_recap__event__",
-            window,
+            "custom_recap__",
         ),
         "quantity",
     )
@@ -445,13 +472,16 @@ def _custom_kpis_window(tenant_id: int, window: tuple | None) -> dict[str, int]:
     # the per-recap "consumers sampled" fallback (sold units + samples)
     # matches the campaign report's per-recap accumulation.
     rows = (
-        _filter_event_window(
-            CustomFieldValue.objects.filter(
-                custom_recap__tenant_id=tenant_id,
-                custom_field__name__iregex=_CUSTOM_KPI_NAME_RE.pattern,
+        _approved_only(
+            _filter_event_window(
+                CustomFieldValue.objects.filter(
+                    custom_recap__tenant_id=tenant_id,
+                    custom_field__name__iregex=_CUSTOM_KPI_NAME_RE.pattern,
+                ),
+                "custom_recap__event__",
+                window,
             ),
-            "custom_recap__event__",
-            window,
+            "custom_recap__",
         )
         .values_list("custom_recap_id", "custom_field__name", "value")
         .order_by("custom_recap_id")
@@ -582,11 +612,17 @@ def _tenant_event_recap_counts_window(
     and trend use), or ``None`` to leave every count unfiltered. The period
     comparison passes a month / quarter / year window here.
     """
-    legacy_recaps = _filter_event_window(
-        Recap.objects.filter(event__tenant_id=tenant_id), "event__", window
+    legacy_recaps = _approved_only(
+        _filter_event_window(
+            Recap.objects.filter(event__tenant_id=tenant_id), "event__", window
+        ),
+        "",
     )
-    custom_recaps = _filter_event_window(
-        CustomRecap.objects.filter(tenant_id=tenant_id), "event__", window
+    custom_recaps = _approved_only(
+        _filter_event_window(
+            CustomRecap.objects.filter(tenant_id=tenant_id), "event__", window
+        ),
+        "",
     )
     legacy_recap_count = legacy_recaps.count()
     custom_recap_count = custom_recaps.count()
@@ -988,19 +1024,33 @@ def tenant_monthly_trend(
             queryset = queryset.filter(_evtdate__lt=end)
         return queryset
 
-    legacy_recaps = _windowed(
-        Recap.objects.filter(event__tenant_id=tenant_id), "event__"
+    legacy_recaps = _approved_only(
+        _windowed(
+            Recap.objects.filter(event__tenant_id=tenant_id), "event__"
+        ),
+        "",
     )
-    custom_recaps = _windowed(
-        CustomRecap.objects.filter(tenant_id=tenant_id), "event__"
+    custom_recaps = _approved_only(
+        _windowed(
+            CustomRecap.objects.filter(tenant_id=tenant_id), "event__"
+        ),
+        "",
     )
-    legacy_samples = _windowed(
-        ProductSamples.objects.filter(recap__event__tenant_id=tenant_id),
-        "recap__event__",
+    legacy_samples = _approved_only(
+        _windowed(
+            ProductSamples.objects.filter(recap__event__tenant_id=tenant_id),
+            "recap__event__",
+        ),
+        "recap__",
     )
-    custom_samples = _windowed(
-        CustomRecapProductSample.objects.filter(custom_recap__tenant_id=tenant_id),
-        "custom_recap__event__",
+    custom_samples = _approved_only(
+        _windowed(
+            CustomRecapProductSample.objects.filter(
+                custom_recap__tenant_id=tenant_id
+            ),
+            "custom_recap__event__",
+        ),
+        "custom_recap__",
     )
 
     recap_counts: dict[str, int] = {}
@@ -1170,18 +1220,27 @@ def _legacy_market_kpis(
     """
     if window is None:
         window = _coerce_event_window(year=year)
-    recaps = _filter_event_window(
-        Recap.objects.filter(event__tenant_id=tenant_id), "event__", window
+    recaps = _approved_only(
+        _filter_event_window(
+            Recap.objects.filter(event__tenant_id=tenant_id), "event__", window
+        ),
+        "",
     )
-    engagements = _filter_event_window(
-        ConsumerEngagements.objects.filter(recap__event__tenant_id=tenant_id),
-        "recap__event__",
-        window,
+    engagements = _approved_only(
+        _filter_event_window(
+            ConsumerEngagements.objects.filter(recap__event__tenant_id=tenant_id),
+            "recap__event__",
+            window,
+        ),
+        "recap__",
     )
-    samples = _filter_event_window(
-        ProductSamples.objects.filter(recap__event__tenant_id=tenant_id),
-        "recap__event__",
-        window,
+    samples = _approved_only(
+        _filter_event_window(
+            ProductSamples.objects.filter(recap__event__tenant_id=tenant_id),
+            "recap__event__",
+            window,
+        ),
+        "recap__",
     )
 
     eng_path = f"recap__{_LEGACY_STATE_PATH}"
@@ -1243,13 +1302,21 @@ def _custom_market_kpis(
 
     if window is None:
         window = _coerce_event_window(year=year)
-    custom_recaps = _filter_event_window(
-        CustomRecap.objects.filter(tenant_id=tenant_id), "event__", window
+    custom_recaps = _approved_only(
+        _filter_event_window(
+            CustomRecap.objects.filter(tenant_id=tenant_id), "event__", window
+        ),
+        "",
     )
-    structured_samples_qs = _filter_event_window(
-        CustomRecapProductSample.objects.filter(custom_recap__tenant_id=tenant_id),
-        "custom_recap__event__",
-        window,
+    structured_samples_qs = _approved_only(
+        _filter_event_window(
+            CustomRecapProductSample.objects.filter(
+                custom_recap__tenant_id=tenant_id
+            ),
+            "custom_recap__event__",
+            window,
+        ),
+        "custom_recap__",
     )
 
     per_state: dict[str, dict] = {}
@@ -1282,13 +1349,16 @@ def _custom_market_kpis(
     # attribute the result to the right state. Bounded slice, never the full
     # recap tree.
     rows = (
-        _filter_event_window(
-            CustomFieldValue.objects.filter(
-                custom_recap__tenant_id=tenant_id,
-                custom_field__name__iregex=_CUSTOM_KPI_NAME_RE.pattern,
+        _approved_only(
+            _filter_event_window(
+                CustomFieldValue.objects.filter(
+                    custom_recap__tenant_id=tenant_id,
+                    custom_field__name__iregex=_CUSTOM_KPI_NAME_RE.pattern,
+                ),
+                "custom_recap__event__",
+                window,
             ),
-            "custom_recap__event__",
-            window,
+            "custom_recap__",
         )
         .values_list(
             "custom_recap_id",
@@ -1410,14 +1480,20 @@ def tenant_market_performance(
         "state__code",
     )
     legacy_recap_counts = _grouped_count(
-        _filter_event_window(
-            Recap.objects.filter(event__tenant_id=tenant_id), "event__", window
+        _approved_only(
+            _filter_event_window(
+                Recap.objects.filter(event__tenant_id=tenant_id), "event__", window
+            ),
+            "",
         ),
         _LEGACY_STATE_PATH,
     )
     custom_recap_counts = _grouped_count(
-        _filter_event_window(
-            CustomRecap.objects.filter(tenant_id=tenant_id), "event__", window
+        _approved_only(
+            _filter_event_window(
+                CustomRecap.objects.filter(tenant_id=tenant_id), "event__", window
+            ),
+            "",
         ),
         _CUSTOM_STATE_PATH,
     )
@@ -1829,6 +1905,168 @@ def tenant_program_health(
         "start_date": start.isoformat() if start else None,
         "end_date": end.isoformat() if end else None,
     }
+
+
+def _retail_onprem_type_q(name_field: str) -> Q:
+    """Match RequestType names that count toward Retail + On-Premise CONV.
+
+    Mirrors ``recaps.queries._activation_bucket_name_q(..., "retail")`` (which
+    folds on-prem into retail for the Recaps list) and excludes Product
+    Seeding so seeding never lands in the conversion rate.
+    """
+    retail_q = Q(**{f"{name_field}__icontains": "retail"})
+    onprem_q = (
+        Q(**{f"{name_field}__iregex": r"on[-\s]?prem"})
+        | Q(**{f"{name_field}__icontains": "bar"})
+        | Q(**{f"{name_field}__icontains": "venue"})
+    )
+    seeding_q = Q(**{f"{name_field}__iregex": r"product\s*seeding|\bseeding\b"})
+    return (retail_q | onprem_q) & ~seeding_q
+
+
+def _conversion_pct(sold: int, engagements: int) -> float | None:
+    """Honest CONV — both sides must be > 0 (same gate as Recaps list strip)."""
+    if sold <= 0 or engagements <= 0:
+        return None
+    return round((sold / engagements) * 100, 1)
+
+
+def tenant_conversion_kpis(
+    tenant_id: int,
+    start: date | None,
+    end: date | None,
+) -> dict:
+    """Retail + On-Premise conversion for an inclusive date window + prior twin.
+
+    Sold ÷ engagements on approved recaps whose Request type classifies as
+    Retail or On-Premise (Event / Seeding / unclassified excluded). Same
+    rule as Recaps list CONV. Returns current + previous equal-length windows
+    so Insights can show a period delta without a second round-trip.
+    """
+    if start is None or end is None:
+        return {
+            "sold": 0,
+            "engagements": 0,
+            "pct": None,
+            "previous_sold": 0,
+            "previous_engagements": 0,
+            "previous_pct": None,
+            "current_label": None,
+            "previous_label": None,
+            "start_date": None,
+            "end_date": None,
+        }
+
+    days = (end - start).days + 1
+    prev_end = start - timedelta(days=1)
+    prev_start = prev_end - timedelta(days=days - 1)
+
+    def _window_totals(w_start: date, w_end: date) -> tuple[int, int]:
+        window = _inclusive_dates_to_window(w_start, w_end)
+        type_q = _retail_onprem_type_q("event__request__request_type__name")
+
+        legacy = _approved_only(
+            _filter_event_window(
+                Recap.objects.filter(event__tenant_id=tenant_id).filter(type_q),
+                "event__",
+                window,
+            ),
+            "",
+        )
+        sold = _sum(legacy, "products_sold")
+        engagements = _sum(legacy, "total_engagements")
+
+        custom_type_q = _retail_onprem_type_q(
+            "custom_recap__event__request__request_type__name"
+        )
+        custom = _approved_only(
+            _filter_event_window(
+                CustomRecap.objects.filter(tenant_id=tenant_id).filter(
+                    _retail_onprem_type_q("event__request__request_type__name")
+                ),
+                "event__",
+                window,
+            ),
+            "",
+        )
+        engagements += _sum(custom, "total_engagements")
+
+        # Free-text sold units on retail/on-prem custom recaps only.
+        rows = (
+            _approved_only(
+                _filter_event_window(
+                    CustomFieldValue.objects.filter(
+                        custom_recap__tenant_id=tenant_id,
+                        custom_field__name__iregex=_CUSTOM_KPI_NAME_RE.pattern,
+                    ).filter(custom_type_q),
+                    "custom_recap__event__",
+                    window,
+                ),
+                "custom_recap__",
+            )
+            .values_list("custom_recap_id", "custom_field__name", "value")
+            .order_by("custom_recap_id")
+        )
+        per_recap: dict[int, list[tuple[str | None, str | None]]] = {}
+        for recap_id, name, value in rows.iterator():
+            per_recap.setdefault(recap_id, []).append((name, value))
+        for pairs in per_recap.values():
+            units = _sold_units_from_fields(pairs)
+            if units is not None:
+                sold += int(units)
+        return sold, engagements
+
+    cur_sold, cur_eng = _window_totals(start, end)
+    prev_sold, prev_eng = _window_totals(prev_start, prev_end)
+
+    def _label(a: date, b: date) -> str:
+        if a.year == b.year and a.month == b.month and a.day == b.day:
+            return a.strftime("%b %-d, %Y")
+        if a.year == b.year:
+            return f"{a.strftime('%b %-d')} – {b.strftime('%b %-d, %Y')}"
+        return f"{a.strftime('%b %-d, %Y')} – {b.strftime('%b %-d, %Y')}"
+
+    return {
+        "sold": int(cur_sold),
+        "engagements": int(cur_eng),
+        "pct": _conversion_pct(cur_sold, cur_eng),
+        "previous_sold": int(prev_sold),
+        "previous_engagements": int(prev_eng),
+        "previous_pct": _conversion_pct(prev_sold, prev_eng),
+        "current_label": _label(start, end),
+        "previous_label": _label(prev_start, prev_end),
+        "start_date": start.isoformat(),
+        "end_date": end.isoformat(),
+    }
+
+
+def tenant_field_cadence(tenant_id: int) -> dict:
+    """This-week field pulse: scheduled next 7d vs approved recaps last 7d.
+
+    Scheduled uses Tracker Request.date (confirmed/completed) for today→+6.
+    Approved recaps use the Insights event-date / approved-only count for
+    today-6→today — not the old 30D scheduled→filed funnel.
+    """
+    today = timezone.localdate()
+    schedule_start = today
+    schedule_end = today + timedelta(days=6)
+    approved_start = today - timedelta(days=6)
+    approved_end = today
+
+    scheduled = tenant_program_health(
+        tenant_id, start=schedule_start, end=schedule_end
+    )["scheduled"]
+    window = _inclusive_dates_to_window(approved_start, approved_end)
+    _, approved_recaps = _tenant_event_recap_counts_window(tenant_id, window)
+    return {
+        "scheduled_next_7": int(scheduled),
+        "approved_recaps_last_7": int(approved_recaps),
+        "schedule_start": schedule_start.isoformat(),
+        "schedule_end": schedule_end.isoformat(),
+        "approved_start": approved_start.isoformat(),
+        "approved_end": approved_end.isoformat(),
+    }
+
 
 def _recent_event_lines(tenant_id: int) -> list[str]:
     """Up to :data:`MAX_RECENT_EVENTS` recent events as 'name · date · city, ST'.

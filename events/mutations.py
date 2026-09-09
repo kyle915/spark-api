@@ -1071,6 +1071,24 @@ class EventMutations:
             }
             if relevant_fields_before != relevant_fields_after:
                 await _notify_assigned_ambassadors_for_event_update(event.id)
+            # Keep Request.date aligned with the activation date so Master
+            # Tracker Past-7 / DATE / DUE stay honest after reschedule.
+            if (
+                event.request_id
+                and relevant_fields_before.get("date")
+                != relevant_fields_after.get("date")
+                and event.date is not None
+            ):
+
+                def _sync_request_date():
+                    req = models.Request.objects.filter(id=event.request_id).first()
+                    if req is None:
+                        return
+                    if req.date != event.date:
+                        req.date = event.date
+                        req.save(update_fields=["date", "updated_at"])
+
+                await sync_to_async(_sync_request_date)()
             return build_mutation_response(
                 types.EventDetailResponse,
                 success=True,

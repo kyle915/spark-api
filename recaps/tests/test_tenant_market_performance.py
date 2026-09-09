@@ -78,6 +78,7 @@ class TestTenantMarketPerformance(AmbassadorsGraphQLTestCase):
             event=ca_event_legacy,
             total_engagements=10,
             products_sold=5,
+            approved=True,
             created_by=self.system_user,
             updated_by=self.system_user,
         )
@@ -105,6 +106,7 @@ class TestTenantMarketPerformance(AmbassadorsGraphQLTestCase):
             tenant=self.tenant,
             custom_recap_template=self.template,
             total_engagements=7,
+            approved=True,
             created_by=self.system_user,
             updated_by=self.system_user,
         )
@@ -121,6 +123,7 @@ class TestTenantMarketPerformance(AmbassadorsGraphQLTestCase):
             name="tx legacy",
             event=tx_event,
             total_engagements=3,
+            approved=True,
             created_by=self.system_user,
             updated_by=self.system_user,
         )
@@ -133,6 +136,7 @@ class TestTenantMarketPerformance(AmbassadorsGraphQLTestCase):
             name="nostate legacy",
             event=nostate_event,
             total_engagements=999,
+            approved=True,
             created_by=self.system_user,
             updated_by=self.system_user,
         )
@@ -145,6 +149,7 @@ class TestTenantMarketPerformance(AmbassadorsGraphQLTestCase):
             name="other legacy",
             event=other_event,
             total_engagements=5000,
+            approved=True,
             created_by=self.system_user,
             updated_by=self.system_user,
         )
@@ -265,6 +270,7 @@ class TestTenantMarketPerformance(AmbassadorsGraphQLTestCase):
         )
         recap_models.Recap.objects.create(
             name="2022 legacy", event=ev, total_engagements=42,
+            approved=True,
             created_by=self.system_user, updated_by=self.system_user,
         )
         by = {r["state"]: r for r in tenant_market_performance(self.tenant.id, year=2022)}
@@ -300,6 +306,7 @@ class TestTenantMarketPerformance(AmbassadorsGraphQLTestCase):
             name="tx flagged legacy",
             event=flagged,
             total_engagements=500,
+            approved=True,
             created_by=self.system_user,
             updated_by=self.system_user,
         )
@@ -329,6 +336,7 @@ class TestTenantMarketPerformance(AmbassadorsGraphQLTestCase):
             tenant=self.tenant,
             custom_recap_template=self.template,
             total_engagements=12,
+            approved=True,
             created_by=self.system_user,
             updated_by=self.system_user,
         )
