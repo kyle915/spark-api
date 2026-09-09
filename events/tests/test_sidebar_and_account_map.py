@@ -165,6 +165,21 @@ class TestSidebarAndAccountMapPayloads(EventsGraphQLTestCase):
             date=last_week,
             coordinates=[40.0, -90.0],
         )
+        done_ev = self.create_event(
+            name="Finished shift",
+            tenant=self.tenant,
+            request=self.done_req,
+            date=last_week,
+            address="2 Done St",
+        )
+        # Filed recap — Done · last 30d counts submitted recaps, not Done-status requests.
+        rm.Recap.objects.create(
+            name="filed-done",
+            event=done_ev,
+            created_by=self.sys,
+            updated_by=self.sys,
+            products_sold=4,
+        )
 
         self.future = em.Request.objects.create(
             name="Next month",
@@ -192,7 +207,7 @@ class TestSidebarAndAccountMapPayloads(EventsGraphQLTestCase):
         assert data.approvals == 1
         assert data.approvals_sla_breach == 1
         assert data.recaps_due == 1
-        assert data.done_30d == 1
+        assert data.done_30d == 1  # filed recap on finished shift (not Done-status alone)
         assert data.upcoming == 0  # 3d pending is not approved/scheduled
 
     def test_account_map_skips_zero_zero_and_keeps_plottable(self):

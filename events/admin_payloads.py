@@ -58,7 +58,13 @@ def compute_sidebar_request_counts(
     *,
     now=None,
 ) -> SidebarRequestCountsData:
-    """Badge integers that used to be tallied client-side off 2,000 rows."""
+    """Badge integers that used to be tallied client-side off 2,000 rows.
+
+    ``done_30d`` is filed (submitted) recaps in the last 30 days — legacy +
+    custom, empty clock-out shells excluded — not Request rows with a Done
+    status. Torch-style programs stay APPROVED with filed recaps; counting
+    Done-status requests under-reports to zero.
+    """
     now = now or timezone.now()
     today = now.date()
     cutoff72 = now - timedelta(hours=72)
@@ -85,6 +91,27 @@ def compute_sidebar_request_counts(
         .count()
     )
 
+    req_ids = qs.values("pk")
+    # Event.date window = program activity in the last 30 calendar days.
+    event_in_window = Q(
+        event__date__date__gte=lookback30, event__date__date__lt=today
+    ) | Q(
+        # Some events only carry start_time; fall back so they still count.
+        event__date__isnull=True,
+        event__start_time__date__gte=lookback30,
+        event__start_time__date__lt=today,
+    )
+    done_30d = (
+        Recap.objects.filter(event__request_id__in=req_ids)
+        .filter(legacy_filed_q())
+        .filter(event_in_window)
+        .count()
+        + CustomRecap.objects.filter(event__request_id__in=req_ids)
+        .filter(custom_filed_q())
+        .filter(event_in_window)
+        .count()
+    )
+
     agg = qs.aggregate(
         tracker=Count("pk", filter=~done_q),
         approvals=Count("pk", filter=approval_q),
@@ -94,19 +121,13 @@ def compute_sidebar_request_counts(
         upcoming=Count(
             "pk", filter=upcoming_q & Q(date__gt=now) & Q(date__lt=horizon14)
         ),
-        done_30d=Count(
-            "pk",
-            filter=done_q
-            & Q(date__gt=now - timedelta(days=30))
-            & Q(date__lt=now),
-        ),
     )
     return SidebarRequestCountsData(
         tracker=int(agg["tracker"] or 0),
         approvals=int(agg["approvals"] or 0),
         approvals_sla_breach=int(agg["approvals_sla_breach"] or 0),
         upcoming=int(agg["upcoming"] or 0),
-        done_30d=int(agg["done_30d"] or 0),
+        done_30d=int(done_30d),
         recaps_due=recaps_due,
     )
 

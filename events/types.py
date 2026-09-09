@@ -1378,7 +1378,10 @@ class NotifyNoteMentionResponse:
 
 @strawberry.type
 class SidebarRequestCounts:
-    """Integer badges the admin sidebar used to tally from 2,000 Request rows."""
+    """Integer badges the admin sidebar used to tally from 2,000 Request rows.
+
+    ``done_30d`` = filed (submitted) recaps in the last 30 days.
+    """
 
     tracker: int
     approvals: int
