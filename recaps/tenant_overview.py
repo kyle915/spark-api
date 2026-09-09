@@ -1924,11 +1924,29 @@ def _retail_onprem_type_q(name_field: str) -> Q:
     return (retail_q | onprem_q) & ~seeding_q
 
 
-def _conversion_pct(sold: int, engagements: int) -> float | None:
+def _conversion_pct(sold: int, sampled: int) -> float | None:
     """Honest CONV — both sides must be > 0 (same gate as Recaps list strip)."""
-    if sold <= 0 or engagements <= 0:
+    if sold <= 0 or sampled <= 0:
         return None
-    return round((sold / engagements) * 100, 1)
+    return round((sold / sampled) * 100, 1)
+
+
+def _conversion_sample_base_from_fields(
+    pairs: list[tuple[str | None, str | None]],
+) -> int | None:
+    """Denominator for CONV: samples given, else consumers sampled.
+
+    Torch / LD / Feel Free log consumers sampled; Girl Beer logs samples
+    given. Prefer an explicit samples-given count when present so we never
+    conflate people sampled with units handed out when both exist.
+    """
+    samples_given = _samples_given_from_fields(pairs)
+    if samples_given is not None:
+        return int(samples_given)
+    consumers_sampled = _consumers_sampled_from_fields(pairs)
+    if consumers_sampled is not None:
+        return int(consumers_sampled)
+    return None
 
 
 def tenant_conversion_kpis(
@@ -1938,10 +1956,15 @@ def tenant_conversion_kpis(
 ) -> dict:
     """Retail + On-Premise conversion for an inclusive date window + prior twin.
 
-    Sold ÷ engagements on approved recaps whose Request type classifies as
-    Retail or On-Premise (Event / Seeding / unclassified excluded). Same
-    rule as Recaps list CONV. Returns current + previous equal-length windows
-    so Insights can show a period delta without a second round-trip.
+    Sold (products purchased / cans+packs) ÷ samples given / consumers
+    sampled on approved recaps whose Request type classifies as Retail or
+    On-Premise (Event / Seeding / unclassified excluded). Matches Recaps
+    list CONV — never sold÷engagements. Returns current + previous
+    equal-length windows so Insights can show a period delta without a
+    second round-trip.
+
+    The ``engagements`` key is the CONV denominator (sampled base) kept for
+    GraphQL field compatibility.
     """
     if start is None or end is None:
         return {
@@ -1974,11 +1997,22 @@ def tenant_conversion_kpis(
             "",
         )
         sold = _sum(legacy, "products_sold")
-        engagements = _sum(legacy, "total_engagements")
+        # Prefer consumers sampled (ConsumerEngagements), then structured
+        # ProductSamples qty, then typed total_engagements as last resort.
+        legacy_ids = list(legacy.values_list("id", flat=True))
+        sampled = 0
+        if legacy_ids:
+            consumers = _sum(
+                ConsumerEngagements.objects.filter(recap_id__in=legacy_ids),
+                "total_consumer",
+            )
+            product_samples = _sum(
+                ProductSamples.objects.filter(recap_id__in=legacy_ids),
+                "quantity",
+            )
+            engagements_fallback = _sum(legacy, "total_engagements")
+            sampled = consumers or product_samples or engagements_fallback
 
-        custom_type_q = _retail_onprem_type_q(
-            "custom_recap__event__request__request_type__name"
-        )
         custom = _approved_only(
             _filter_event_window(
                 CustomRecap.objects.filter(tenant_id=tenant_id).filter(
@@ -1989,9 +2023,16 @@ def tenant_conversion_kpis(
             ),
             "",
         )
-        engagements += _sum(custom, "total_engagements")
+        custom_ids = list(custom.values_list("id", flat=True))
+        custom_eng_fallback = {
+            row["id"]: int(row["total_engagements"] or 0)
+            for row in custom.values("id", "total_engagements")
+        }
 
-        # Free-text sold units on retail/on-prem custom recaps only.
+        custom_type_q = _retail_onprem_type_q(
+            "custom_recap__event__request__request_type__name"
+        )
+        # Free-text sold + sample base on retail/on-prem custom recaps only.
         rows = (
             _approved_only(
                 _filter_event_window(
@@ -2010,14 +2051,36 @@ def tenant_conversion_kpis(
         per_recap: dict[int, list[tuple[str | None, str | None]]] = {}
         for recap_id, name, value in rows.iterator():
             per_recap.setdefault(recap_id, []).append((name, value))
-        for pairs in per_recap.values():
+
+        structured_by_recap: dict[int, int] = {}
+        if custom_ids:
+            for row in (
+                CustomRecapProductSample.objects.filter(
+                    custom_recap_id__in=custom_ids
+                )
+                .values("custom_recap_id")
+                .annotate(qty=Coalesce(Sum("quantity"), 0))
+            ):
+                structured_by_recap[int(row["custom_recap_id"])] = int(
+                    row["qty"] or 0
+                )
+
+        for rid in custom_ids:
+            pairs = per_recap.get(rid, [])
             units = _sold_units_from_fields(pairs)
             if units is not None:
                 sold += int(units)
-        return sold, engagements
+            base = _conversion_sample_base_from_fields(pairs)
+            if base is None:
+                structured = structured_by_recap.get(rid, 0)
+                base = structured or custom_eng_fallback.get(rid, 0) or None
+            if base:
+                sampled += int(base)
 
-    cur_sold, cur_eng = _window_totals(start, end)
-    prev_sold, prev_eng = _window_totals(prev_start, prev_end)
+        return sold, sampled
+
+    cur_sold, cur_sampled = _window_totals(start, end)
+    prev_sold, prev_sampled = _window_totals(prev_start, prev_end)
 
     def _label(a: date, b: date) -> str:
         if a.year == b.year and a.month == b.month and a.day == b.day:
@@ -2028,13 +2091,135 @@ def tenant_conversion_kpis(
 
     return {
         "sold": int(cur_sold),
-        "engagements": int(cur_eng),
-        "pct": _conversion_pct(cur_sold, cur_eng),
+        "engagements": int(cur_sampled),
+        "pct": _conversion_pct(cur_sold, cur_sampled),
         "previous_sold": int(prev_sold),
-        "previous_engagements": int(prev_eng),
-        "previous_pct": _conversion_pct(prev_sold, prev_eng),
+        "previous_engagements": int(prev_sampled),
+        "previous_pct": _conversion_pct(prev_sold, prev_sampled),
         "current_label": _label(start, end),
         "previous_label": _label(prev_start, prev_end),
+        "start_date": start.isoformat(),
+        "end_date": end.isoformat(),
+    }
+
+
+# Cap so Program pulse stays a short strip — never a full catalog dump.
+SKU_PULSE_LIMIT = 8
+
+
+def _sku_pulse_label(name: str | None, type_name: str | None) -> str | None:
+    """Catalog-style ``Type — Name`` when a product type exists."""
+    product = (name or "").strip()
+    if not product:
+        return None
+    cat = (type_name or "").strip()
+    return f"{cat} — {product}" if cat else product
+
+
+def tenant_sku_pulse(
+    tenant_id: int,
+    start: date | None,
+    end: date | None,
+    *,
+    limit: int = SKU_PULSE_LIMIT,
+) -> dict:
+    """Top catalog SKUs by samples handed out (approved recaps only).
+
+    Sums structured ``CustomRecapProductSample`` + legacy ``ProductSamples``
+    quantities in the inclusive event-date window. No session-count fallback —
+    session hits are not units handed out and must not look like sample volume.
+
+    Products purchased is intentionally omitted here: Torch and most custom
+    templates log purchased as free-text totals (cans/packs), not per catalog
+    row. Pair this with :func:`tenant_conversion_kpis` sold for the aggregate
+    purchased figure — never invent a per-SKU purchased column.
+
+    Returns::
+
+        {
+          "mode": "quantity" | "none",
+          "items": [{"product": str, "samples": int}, ...],  # top ``limit``
+          "total_samples": int,
+          "start_date": str | None,
+          "end_date": str | None,
+        }
+    """
+    if start is None or end is None:
+        return {
+            "mode": "none",
+            "items": [],
+            "total_samples": 0,
+            "start_date": None,
+            "end_date": None,
+        }
+
+    window = _inclusive_dates_to_window(start, end)
+    by_product: dict[int, dict] = {}
+
+    def _accumulate(rows) -> None:
+        for row in rows:
+            pid = row.get("product_id")
+            if pid is None:
+                continue
+            qty = int(row.get("total") or 0)
+            if qty <= 0:
+                continue
+            label = _sku_pulse_label(
+                row.get("product__name"),
+                row.get("product__product_type__name"),
+            )
+            if not label:
+                continue
+            bucket = by_product.get(int(pid))
+            if bucket is None:
+                by_product[int(pid)] = {"product": label, "samples": qty}
+            else:
+                bucket["samples"] += qty
+
+    custom_rows = (
+        _approved_only(
+            _filter_event_window(
+                CustomRecapProductSample.objects.filter(
+                    custom_recap__tenant_id=tenant_id
+                ),
+                "custom_recap__event__",
+                window,
+            ),
+            "custom_recap__",
+        )
+        .values("product_id", "product__name", "product__product_type__name")
+        .annotate(total=Coalesce(Sum("quantity"), 0))
+    )
+    _accumulate(custom_rows)
+
+    legacy_rows = (
+        _approved_only(
+            _filter_event_window(
+                ProductSamples.objects.filter(recap__event__tenant_id=tenant_id),
+                "recap__event__",
+                window,
+            ),
+            "recap__",
+        )
+        .values("product_id", "product__name", "product__product_type__name")
+        .annotate(total=Coalesce(Sum("quantity"), 0))
+    )
+    _accumulate(legacy_rows)
+
+    items = sorted(
+        by_product.values(),
+        key=lambda row: (-int(row["samples"]), str(row["product"])),
+    )
+    total_samples = sum(int(row["samples"]) for row in items)
+    top = items[: max(0, int(limit))]
+
+    return {
+        "mode": "quantity" if top else "none",
+        "items": [
+            {"product": row["product"], "samples": int(row["samples"])}
+            for row in top
+        ],
+        "total_samples": int(total_samples),
         "start_date": start.isoformat(),
         "end_date": end.isoformat(),
     }
