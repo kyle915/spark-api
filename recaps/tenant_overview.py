@@ -2103,6 +2103,128 @@ def tenant_conversion_kpis(
     }
 
 
+# Cap so Program pulse stays a short strip — never a full catalog dump.
+SKU_PULSE_LIMIT = 8
+
+
+def _sku_pulse_label(name: str | None, type_name: str | None) -> str | None:
+    """Catalog-style ``Type — Name`` when a product type exists."""
+    product = (name or "").strip()
+    if not product:
+        return None
+    cat = (type_name or "").strip()
+    return f"{cat} — {product}" if cat else product
+
+
+def tenant_sku_pulse(
+    tenant_id: int,
+    start: date | None,
+    end: date | None,
+    *,
+    limit: int = SKU_PULSE_LIMIT,
+) -> dict:
+    """Top catalog SKUs by samples handed out (approved recaps only).
+
+    Sums structured ``CustomRecapProductSample`` + legacy ``ProductSamples``
+    quantities in the inclusive event-date window. No session-count fallback —
+    session hits are not units handed out and must not look like sample volume.
+
+    Products purchased is intentionally omitted here: Torch and most custom
+    templates log purchased as free-text totals (cans/packs), not per catalog
+    row. Pair this with :func:`tenant_conversion_kpis` sold for the aggregate
+    purchased figure — never invent a per-SKU purchased column.
+
+    Returns::
+
+        {
+          "mode": "quantity" | "none",
+          "items": [{"product": str, "samples": int}, ...],  # top ``limit``
+          "total_samples": int,
+          "start_date": str | None,
+          "end_date": str | None,
+        }
+    """
+    if start is None or end is None:
+        return {
+            "mode": "none",
+            "items": [],
+            "total_samples": 0,
+            "start_date": None,
+            "end_date": None,
+        }
+
+    window = _inclusive_dates_to_window(start, end)
+    by_product: dict[int, dict] = {}
+
+    def _accumulate(rows) -> None:
+        for row in rows:
+            pid = row.get("product_id")
+            if pid is None:
+                continue
+            qty = int(row.get("total") or 0)
+            if qty <= 0:
+                continue
+            label = _sku_pulse_label(
+                row.get("product__name"),
+                row.get("product__product_type__name"),
+            )
+            if not label:
+                continue
+            bucket = by_product.get(int(pid))
+            if bucket is None:
+                by_product[int(pid)] = {"product": label, "samples": qty}
+            else:
+                bucket["samples"] += qty
+
+    custom_rows = (
+        _approved_only(
+            _filter_event_window(
+                CustomRecapProductSample.objects.filter(
+                    custom_recap__tenant_id=tenant_id
+                ),
+                "custom_recap__event__",
+                window,
+            ),
+            "custom_recap__",
+        )
+        .values("product_id", "product__name", "product__product_type__name")
+        .annotate(total=Coalesce(Sum("quantity"), 0))
+    )
+    _accumulate(custom_rows)
+
+    legacy_rows = (
+        _approved_only(
+            _filter_event_window(
+                ProductSamples.objects.filter(recap__event__tenant_id=tenant_id),
+                "recap__event__",
+                window,
+            ),
+            "recap__",
+        )
+        .values("product_id", "product__name", "product__product_type__name")
+        .annotate(total=Coalesce(Sum("quantity"), 0))
+    )
+    _accumulate(legacy_rows)
+
+    items = sorted(
+        by_product.values(),
+        key=lambda row: (-int(row["samples"]), str(row["product"])),
+    )
+    total_samples = sum(int(row["samples"]) for row in items)
+    top = items[: max(0, int(limit))]
+
+    return {
+        "mode": "quantity" if top else "none",
+        "items": [
+            {"product": row["product"], "samples": int(row["samples"])}
+            for row in top
+        ],
+        "total_samples": int(total_samples),
+        "start_date": start.isoformat(),
+        "end_date": end.isoformat(),
+    }
+
+
 def tenant_field_cadence(tenant_id: int) -> dict:
     """This-week field pulse: scheduled next 7d vs approved recaps last 7d.
 

@@ -50,6 +50,7 @@ from recaps.tenant_overview import (
     tenant_metro_breakdown,
     tenant_monthly_trend,
     tenant_program_health,
+    tenant_sku_pulse,
 )
 from utils.ai_text import (
     AiUnavailable,
@@ -632,6 +633,61 @@ def _build_conversion_kpis(
         previous_pct=data.get("previous_pct"),
         current_label=data.get("current_label"),
         previous_label=data.get("previous_label"),
+        start_date=data.get("start_date"),
+        end_date=data.get("end_date"),
+    )
+
+
+@strawberry.type
+class TenantSkuPulseItem:
+    """One catalog SKU's samples handed out within :class:`TenantSkuPulse`."""
+
+    product: str
+    samples: int
+
+
+@strawberry.type
+class TenantSkuPulse:
+    """Top catalog SKUs by samples handed out (approved recaps only).
+
+    ``mode`` is ``\"quantity\"`` when structured sample rows exist, else
+    ``\"none\"``. Never invents per-SKU purchased — pair with
+    :class:`TenantConversionKpis`.sold for the Retail+On-Prem aggregate.
+    """
+
+    mode: str
+    items: list[TenantSkuPulseItem]
+    total_samples: int
+    start_date: str | None = None
+    end_date: str | None = None
+
+
+def _empty_sku_pulse(
+    start_date: str | None = None, end_date: str | None = None
+) -> TenantSkuPulse:
+    return TenantSkuPulse(
+        mode="none",
+        items=[],
+        total_samples=0,
+        start_date=start_date,
+        end_date=end_date,
+    )
+
+
+def _build_sku_pulse(
+    tenant_id: int, start: date, end: date
+) -> TenantSkuPulse:
+    data = tenant_sku_pulse(tenant_id, start=start, end=end)
+    return TenantSkuPulse(
+        mode=str(data.get("mode") or "none"),
+        items=[
+            TenantSkuPulseItem(
+                product=str(row["product"]),
+                samples=int(row["samples"]),
+            )
+            for row in (data.get("items") or [])
+        ],
+        total_samples=int(data.get("total_samples") or 0),
         start_date=data.get("start_date"),
         end_date=data.get("end_date"),
     )
@@ -2193,6 +2249,46 @@ class CampaignReportQueries:
             if not Tenant.objects.filter(id=target_tenant_id).exists():
                 return None
             return _build_conversion_kpis(target_tenant_id, start_d, end_d)
+
+        try:
+            data = await sync_to_async(_build, thread_sensitive=True)()
+        except Exception:
+            return empty
+
+        return data if data is not None else empty
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def tenant_sku_pulse(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID,
+        start_date: str,
+        end_date: str,
+    ) -> TenantSkuPulse:
+        """Top catalog SKUs by samples handed out for Insights Program pulse.
+
+        Approved recaps only; structured sample quantities only. Tenant
+        scoping matches :meth:`tenant_kpis`. Never raises — degrades to
+        ``mode=\"none\"``.
+        """
+        empty = _empty_sku_pulse(start_date, end_date)
+        service = _CampaignReportService()
+        target_tenant_id = await service.resolve_target_tenant_id(info, tenant_id)
+        if target_tenant_id is None:
+            return empty
+
+        try:
+            start_d = datetime.fromisoformat(start_date).date()
+            end_d = datetime.fromisoformat(end_date).date()
+        except (ValueError, TypeError):
+            return empty
+
+        def _build():
+            from tenants.models import Tenant
+
+            if not Tenant.objects.filter(id=target_tenant_id).exists():
+                return None
+            return _build_sku_pulse(target_tenant_id, start_d, end_d)
 
         try:
             data = await sync_to_async(_build, thread_sensitive=True)()
