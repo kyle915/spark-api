@@ -567,11 +567,15 @@ def _build_program_health(
 
 @strawberry.type
 class TenantConversionKpis:
-    """Retail + On-Premise conversion for Insights (sold ÷ engagements).
+    """Retail + On-Premise conversion for Insights (sold ÷ sampled).
 
-    Event / Seeding / unclassified activations are excluded. ``pct`` is null
-    when either side is zero — never invent a rate. ``previous_*`` is the
-    equal-length window immediately before ``start_date``/``end_date``.
+    Numerator is products purchased / cans+packs sold. Denominator is
+    samples given or consumers sampled (never raw engagements when a
+    sampled count exists). Event / Seeding / unclassified activations are
+    excluded. ``pct`` is null when either side is zero — never invent a
+    rate. ``previous_*`` is the equal-length window immediately before
+    ``start_date``/``end_date``. ``engagements`` is the CONV denominator
+    kept under that GraphQL name for compatibility.
     """
 
     sold: int
