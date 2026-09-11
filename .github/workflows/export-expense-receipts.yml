@@ -24,6 +24,16 @@ on:
       end:
         description: "End date YYYY-MM-DD (inclusive)"
         required: true
+      amounts:
+        description: 'Optional JSON, recap id -> corrected amount, e.g. {"1012":66.14}. Bills receipt totals instead of typed spend; never edits the recap.'
+        required: false
+        default: ""
+        type: string
+      adjust_note:
+        description: "One line shown on the PDF cover explaining the adjustment."
+        required: false
+        default: ""
+        type: string
       apply:
         description: "Render + upload the PDF (false = summary only)"
         required: false
@@ -43,6 +53,8 @@ jobs:
           START: ${{ github.event.inputs.start }}
           END: ${{ github.event.inputs.end }}
           APPLY: ${{ github.event.inputs.apply }}
+          AMOUNTS: ${{ github.event.inputs.amounts }}
+          ADJUST_NOTE: ${{ github.event.inputs.adjust_note }}
         run: |
           if [ -z "$CRON_SECRET" ]; then
             echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
@@ -55,7 +67,9 @@ jobs:
             --data-urlencode "tenant_id=$TENANT_ID" \
             --data-urlencode "start=$START" \
             --data-urlencode "end=$END" \
-            --data-urlencode "apply=$APPLY")
+            --data-urlencode "apply=$APPLY" \
+            --data-urlencode "amounts=$AMOUNTS" \
+            --data-urlencode "adjust_note=$ADJUST_NOTE")
           echo "HTTP $STATUS"
           cat /tmp/cron-response.json
           echo ""
