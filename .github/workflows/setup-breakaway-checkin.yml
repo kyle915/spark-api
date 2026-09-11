@@ -1,10 +1,11 @@
 name: Setup Breakaway check-in
 
-# Seeds the Breakaway Jimmy Johns + Hiyo recap templates (PDF minus Date;
-# Festival Location stays an open city/state text), creates the tenant if
-# missing, and mints the standing BRK- check-in code. Idempotent. Recaps
-# stay human-reviewed. BA picks Jimmy Johns vs Hiyo on the standing link
-# (same picker as Sipli/Liquid Death).
+# Seeds the Breakaway Jimmy Johns + Hiyo + White Claw Surge recap templates
+# (PDF minus Date; Festival Location stays an open city/state text; White
+# Claw Surge mirrors Hiyo fields/photo buckets), creates the tenant if
+# missing, and mints the standing BRK- check-in code (never remints).
+# Idempotent. Recaps stay human-reviewed. BA picks Jimmy Johns / Hiyo /
+# White Claw Surge on the standing link (same picker as Sipli/Liquid Death).
 #
 # RUN apply=false FIRST AND READ THE LOG.
 
