@@ -1,10 +1,11 @@
-"""Breakaway Jimmy Johns / Hiyo recaps: seeder shape + walk-up apply.
+"""Breakaway Jimmy Johns / Hiyo / White Claw Surge: seeder + walk-up apply.
 
-Pins the templates to the client's own PDFs — "Jimmy Johns // Breakaway
+Pins Jimmy Johns + Hiyo to the client's PDFs — "Jimmy Johns // Breakaway
 Music Festival" (Tishawna Banks, #8, 05/31/2026) and "Hiyo // Breakaway
-Music Festival" (Samantha Redmond, #4, 06/27/2026) — so a future edit is
-deliberate, and proves the standing-link command can create the tenant from
-scratch with the Jimmy Johns vs Hiyo picker on one code.
+Music Festival" (Samantha Redmond, #4, 06/27/2026) — and White Claw Surge
+to the same Hiyo field/photo structure. Proves the standing-link command
+can create the tenant from scratch with the three-program picker on one
+code (never remints an existing BRK- code).
 """
 
 from __future__ import annotations
@@ -27,6 +28,9 @@ from recaps.management.commands.setup_breakaway_checkin import (
     PHOTO_BUCKETS_BY_PROGRAM,
     TENANT_NAME,
     TENANT_SLUG,
+    WCS_PROGRAM,
+    WCS_SPEC,
+    WCS_TEMPLATE_NAME,
 )
 from tenants.tests.base import BaseGraphQLTestCase
 
@@ -41,6 +45,8 @@ EXCLUDED = (
 
 JJ_FIELD_NAMES = [f[0] for _, fields in JJ_SPEC for f in fields]
 HIYO_FIELD_NAMES = [f[0] for _, fields in HIYO_SPEC for f in fields]
+WCS_FIELD_NAMES = [f[0] for _, fields in WCS_SPEC for f in fields]
+PROGRAMS = {JJ_PROGRAM, HIYO_PROGRAM, WCS_PROGRAM}
 
 
 class TestBreakawaySpec:
@@ -68,11 +74,29 @@ class TestBreakawaySpec:
             "What percent of consumer had heard of or tried Hiyo before?",
         ]
 
+    def test_white_claw_surge_mirrors_hiyo(self):
+        """Same structure as Hiyo; only brand awareness names Surge."""
+        assert [f[1:] for _, fields in WCS_SPEC for f in fields] == [
+            f[1:] for _, fields in HIYO_SPEC for f in fields
+        ]
+        assert [s for s, _ in WCS_SPEC] == [s for s, _ in HIYO_SPEC]
+        assert WCS_FIELD_NAMES == [
+            "Festival Location",
+            "Total samples distributed",
+            "Estimated foot traffic / impressions",
+            "Key highlight (1–2 sentences) / What worked well & What didn't?",
+            "What were some consumer comments that you heard?",
+            "What percent of consumer had heard of or tried White Claw Surge before?",
+        ]
+        assert PHOTO_BUCKETS_BY_PROGRAM[WCS_PROGRAM] == PHOTO_BUCKETS_BY_PROGRAM[
+            HIYO_PROGRAM
+        ]
+
     def test_both_brands_have_open_festival_location_text(self):
         """Kyle: Festival Location is typed city/state, not a venue list."""
-        for names in (JJ_FIELD_NAMES, HIYO_FIELD_NAMES):
+        for names in (JJ_FIELD_NAMES, HIYO_FIELD_NAMES, WCS_FIELD_NAMES):
             assert "Festival Location" in names
-        for spec in (JJ_SPEC, HIYO_SPEC):
+        for spec in (JJ_SPEC, HIYO_SPEC, WCS_SPEC):
             field = next(
                 f for _, fields in spec for f in fields if f[0] == "Festival Location"
             )
@@ -81,7 +105,7 @@ class TestBreakawaySpec:
             assert field[3] == []
 
     def test_date_is_not_on_either_form(self):
-        for names in (JJ_FIELD_NAMES, HIYO_FIELD_NAMES):
+        for names in (JJ_FIELD_NAMES, HIYO_FIELD_NAMES, WCS_FIELD_NAMES):
             lowered = [n.lower() for n in names]
             for banned in EXCLUDED:
                 assert not any(
@@ -95,6 +119,9 @@ class TestBreakawaySpec:
         assert [b["name"] for b in PHOTO_BUCKETS_BY_PROGRAM[HIYO_PROGRAM]] == [
             "Consumer Sampling Pictures"
         ]
+        assert [b["name"] for b in PHOTO_BUCKETS_BY_PROGRAM[WCS_PROGRAM]] == [
+            "Consumer Sampling Pictures"
+        ]
         assert ALL_BUCKETS == [
             {"name": "Activation / Sampling / Recap Photos"},
             {"name": "Consumer Sampling Pictures"},
@@ -103,7 +130,12 @@ class TestBreakawaySpec:
     def test_kinds_are_canonical_and_not_image(self):
         """Photos are buckets, not template image fields — two image
         fields would share one grid on the walk-up page."""
-        kinds = {f[1] for spec in (JJ_SPEC, HIYO_SPEC) for _, fields in spec for f in fields}
+        kinds = {
+            f[1]
+            for spec in (JJ_SPEC, HIYO_SPEC, WCS_SPEC)
+            for _, fields in spec
+            for f in fields
+        }
         assert kinds <= {"text", "number", "longtext", "select", "multiselect"}
         assert "image" not in kinds
 
@@ -111,6 +143,7 @@ class TestBreakawaySpec:
         assert CODE_PREFIX == "BRK-"
         assert JJ_TEMPLATE_NAME.startswith("Breakaway")
         assert HIYO_TEMPLATE_NAME.startswith("Breakaway")
+        assert WCS_TEMPLATE_NAME.startswith("Breakaway")
         assert TENANT_SLUG == "breakaway"
         assert TENANT_NAME == "Breakaway"
 
@@ -155,11 +188,8 @@ class TestBreakawaySetupCommand(BaseGraphQLTestCase):
         assert tenant.checkin_photo_buckets == PHOTO_BUCKETS_BY_PROGRAM
         assert tenant.checkin_event_type is not None
         assert tenant.checkin_event_type.name == JJ_PROGRAM
-        assert set(tenant.checkin_event_types.values_list("name", flat=True)) == {
-            JJ_PROGRAM,
-            HIYO_PROGRAM,
-        }
-        assert {JJ_PROGRAM, HIYO_PROGRAM} <= set(
+        assert set(tenant.checkin_event_types.values_list("name", flat=True)) == PROGRAMS
+        assert PROGRAMS <= set(
             EventType.objects.filter(tenant=tenant).values_list("name", flat=True)
         )
         assert FileRecapCategory.objects.filter(
@@ -173,6 +203,9 @@ class TestBreakawaySetupCommand(BaseGraphQLTestCase):
         hiyo_tpl = CustomRecapTemplate.objects.get(
             tenant=tenant, name=HIYO_TEMPLATE_NAME
         )
+        wcs_tpl = CustomRecapTemplate.objects.get(
+            tenant=tenant, name=WCS_TEMPLATE_NAME
+        )
         jj_names = list(
             CustomField.objects.filter(custom_recap_template=jj_tpl)
             .order_by("recap_section__order", "order", "id")
@@ -183,10 +216,17 @@ class TestBreakawaySetupCommand(BaseGraphQLTestCase):
             .order_by("recap_section__order", "order", "id")
             .values_list("name", flat=True)
         )
+        wcs_names = list(
+            CustomField.objects.filter(custom_recap_template=wcs_tpl)
+            .order_by("recap_section__order", "order", "id")
+            .values_list("name", flat=True)
+        )
         assert jj_names == JJ_FIELD_NAMES
         assert hiyo_names == HIYO_FIELD_NAMES
+        assert wcs_names == WCS_FIELD_NAMES
         assert jj_tpl.event_type.name == JJ_PROGRAM
         assert hiyo_tpl.event_type.name == HIYO_PROGRAM
+        assert wcs_tpl.event_type.name == WCS_PROGRAM
 
         code = tenant.checkin_code
         log2 = self._run(tenant="breakaway", apply=True)
@@ -222,10 +262,7 @@ class TestBreakawaySetupCommand(BaseGraphQLTestCase):
         assert EventType.objects.filter(pk=legacy.pk).exists()
         # The legacy near-name is NOT adopted as the brand program.
         assert tenant.checkin_event_type.name == JJ_PROGRAM
-        assert set(tenant.checkin_event_types.values_list("name", flat=True)) == {
-            JJ_PROGRAM,
-            HIYO_PROGRAM,
-        }
+        assert set(tenant.checkin_event_types.values_list("name", flat=True)) == PROGRAMS
 
     def test_reapply_keeps_both_programs_and_the_code(self):
         from recaps.models import CustomRecapTemplate
@@ -240,7 +277,7 @@ class TestBreakawaySetupCommand(BaseGraphQLTestCase):
         assert tenant.checkin_code == code
         assert "already set" in log
         assert tenant.checkin_event_type.name == JJ_PROGRAM
-        assert CustomRecapTemplate.objects.filter(tenant=tenant).count() == 2
+        assert CustomRecapTemplate.objects.filter(tenant=tenant).count() == 3
 
     def _replace_jj_template_with_leftover(self, tenant, with_recap: bool):
         """Reproduce the leftover-template race: a same-event-type template

@@ -5419,11 +5419,13 @@ class SetupBreakawayCheckinView(View):
 
     The Breakaway twin of setup-sipli-checkin: creates the tenant if missing
     (createTenant-style seeds), seeds the Jimmy Johns recap (PDF minus Date;
-    Festival Location stays as open city/state text) plus the Hiyo recap,
-    mints the standing ``BRK-`` check-in code, and makes Jimmy Johns vs Hiyo
-    selectable on that one link (same picker as Sipli/Liquid Death). Recaps
-    stay human-reviewed. Location mode is Event-style address/GPS. Existing
-    Breakaway event types are left alone — nothing is retired.
+    Festival Location stays as open city/state text) plus the Hiyo recap and
+    a White Claw Surge recap (Hiyo-mirrored fields), mints the standing
+    ``BRK-`` check-in code (never remints an existing code), and makes
+    Jimmy Johns / Hiyo / White Claw Surge selectable on that one link (same
+    picker as Sipli/Liquid Death). Recaps stay human-reviewed. Location mode
+    is Event-style address/GPS. Existing Breakaway event types are left alone
+    — nothing is retired.
 
     Idempotent: get_or_create for the templates, and an existing checkin_code
     is left alone (rotating it breaks every copy already shared).

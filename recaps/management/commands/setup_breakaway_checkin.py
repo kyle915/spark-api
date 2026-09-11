@@ -1,9 +1,9 @@
-"""Set up Breakaway: tenant + Jimmy Johns / Hiyo recap templates + standing check-in.
+"""Set up Breakaway: tenant + Jimmy Johns / Hiyo / White Claw Surge recaps + check-in.
 
 The Breakaway twin of ``setup_sipli_checkin`` — same createTenant-style seed
-plus a standing ``BRK-`` check-in code — with the two-program picker used for
-the festival's two brands: BAs run **Jimmy Johns** (Silent DJ chip sampling)
-and **Hiyo** (exit sampling) off one crew and one URL.
+plus a standing ``BRK-`` check-in code — with the multi-program picker used for
+the festival's brands: BAs run **Jimmy Johns** (Silent DJ chip sampling),
+**Hiyo** (exit sampling), and **White Claw Surge** off one crew and one URL.
 
 1. The **Jimmy Johns** custom template, field-for-field off the client's own
    "Jimmy Johns // Breakaway Music Festival" recap PDF (Tishawna Banks, #8,
@@ -15,11 +15,17 @@ and **Hiyo** (exit sampling) off one crew and one URL.
    Music Festival" recap PDF (Samantha Redmond, #4, 06/27/2026). Same Date /
    Festival Location treatment.
 
-3. The tenant's **standing check-in code** — one durable ``/checkin/<code>``
-   link. Start your shift asks **Jimmy Johns vs Hiyo** (required, same picker
-   as Sipli/Liquid Death), then clock in → file the matching recap → clock
-   out. Several BAs at one festival on one day land on the SAME event *per
-   brand* (find-or-create keys on tenant + address + date + event type).
+3. The **White Claw Surge** custom template — same sections, field kinds,
+   required flags, and photo bucket structure as Hiyo (Festival Location,
+   sampling counts, feedback). Brand awareness question names White Claw
+   Surge instead of Hiyo.
+
+4. The tenant's **standing check-in code** — one durable ``/checkin/<code>``
+   link. Start your shift asks **Jimmy Johns / Hiyo / White Claw Surge**
+   (required, same picker as Sipli/Liquid Death), then clock in → file the
+   matching recap → clock out. Several BAs at one festival on one day land on
+   the SAME event *per brand* (find-or-create keys on tenant + address + date
+   + event type). Existing ``BRK-`` codes are never reminted.
 
 Photos are labelled **buckets** (each PDF's own photo label) rather than
 template image fields, with library + camera multi-upload on the walk-up page.
@@ -28,7 +34,7 @@ Recaps stay human-reviewed (not Feel Free auto-approve). Location mode is
 Event-style address/GPS find-or-create, same as Sipli/G7/KKC.
 
 Breakaway already exists as a tenant with historical recaps, so unlike Sipli
-this command does NOT retire other event types — it only adds the two brand
+this command does NOT retire other event types — it only adds the brand
 programs, pins them as the standing link's selectable set, and leaves the
 tenant's existing catalog alone.
 
@@ -55,8 +61,10 @@ TENANT_SLUG = "breakaway"
 CODE_PREFIX = "BRK-"
 JJ_PROGRAM = "Jimmy Johns"
 HIYO_PROGRAM = "Hiyo"
+WCS_PROGRAM = "White Claw Surge"
 JJ_TEMPLATE_NAME = "Breakaway · Jimmy Johns Recap"
 HIYO_TEMPLATE_NAME = "Breakaway · Hiyo Recap"
+WCS_TEMPLATE_NAME = "Breakaway · White Claw Surge Recap"
 
 # Taken field-for-field from the "Jimmy Johns // Breakaway Music Festival"
 # PDF. Date belongs to the event the check-in resolves. Festival Location is
@@ -155,6 +163,47 @@ HIYO_SPEC: list[tuple[str, list[tuple[str, str, bool, list[str]]]]] = [
     ),
 ]
 
+# Mirror of HIYO_SPEC for White Claw Surge — same sections / kinds / required
+# flags / photo bucket. Only the brand awareness question names Surge.
+WCS_SPEC: list[tuple[str, list[tuple[str, str, bool, list[str]]]]] = [
+    (
+        "Event Details",
+        [
+            ("Festival Location", "text", True, []),
+        ],
+    ),
+    (
+        "Sampling Counts",
+        [
+            ("Total samples distributed", "number", True, []),
+            ("Estimated foot traffic / impressions", "number", True, []),
+        ],
+    ),
+    (
+        "Feedback",
+        [
+            (
+                "Key highlight (1–2 sentences) / What worked well & What didn't?",
+                "longtext",
+                True,
+                [],
+            ),
+            (
+                "What were some consumer comments that you heard?",
+                "longtext",
+                True,
+                [],
+            ),
+            (
+                "What percent of consumer had heard of or tried White Claw Surge before?",
+                "text",
+                True,
+                [],
+            ),
+        ],
+    ),
+]
+
 # Display order is tenant-wide (RecapSection is shared). Event Details first
 # so both brands open on Festival Location; the brand-specific sections
 # follow. Jimmy Johns reuses the legacy "Consumer Engagement" /
@@ -174,20 +223,27 @@ SECTION_ORDER = {
 PHOTO_BUCKETS_BY_PROGRAM: dict[str, list[dict]] = {
     JJ_PROGRAM: [{"name": "Activation / Sampling / Recap Photos"}],
     HIYO_PROGRAM: [{"name": "Consumer Sampling Pictures"}],
+    # Same Hiyo photo dropzone label — one FileRecapCategory row serves both.
+    WCS_PROGRAM: [{"name": "Consumer Sampling Pictures"}],
 }
 
-ALL_BUCKETS: list[dict] = [
-    bucket
-    for buckets in PHOTO_BUCKETS_BY_PROGRAM.values()
-    for bucket in buckets
-]
+ALL_BUCKETS: list[dict] = []
+_seen_bucket_names: set[str] = set()
+for _buckets in PHOTO_BUCKETS_BY_PROGRAM.values():
+    for _bucket in _buckets:
+        _name = _bucket["name"]
+        if _name in _seen_bucket_names:
+            continue
+        _seen_bucket_names.add(_name)
+        ALL_BUCKETS.append(_bucket)
+del _seen_bucket_names, _buckets, _bucket, _name
 
 
 class Command(BaseCommand):
     help = (
-        "Set up Breakaway: tenant (if missing), Jimmy Johns + Hiyo recap "
-        "templates, and standing check-in link (dry-run by default; "
-        "--apply to write)."
+        "Set up Breakaway: tenant (if missing), Jimmy Johns + Hiyo + White "
+        "Claw Surge recap templates, and standing check-in link "
+        "(dry-run by default; --apply to write)."
     )
 
     def add_arguments(self, parser):
@@ -231,6 +287,7 @@ class Command(BaseCommand):
             )
         self.stdout.write(f"JJ tpl     : {JJ_TEMPLATE_NAME!r}")
         self.stdout.write(f"Hiyo tpl   : {HIYO_TEMPLATE_NAME!r}")
+        self.stdout.write(f"WCS tpl    : {WCS_TEMPLATE_NAME!r}")
         self.stdout.write(f"Created by : {getattr(creator, 'email', creator)!r}")
         self.stdout.write(
             f"Mode       : {'APPLY (writing)' if apply else 'DRY-RUN (no writes)'}"
@@ -243,14 +300,18 @@ class Command(BaseCommand):
             self.stdout.write(
                 self.style.WARNING(
                     f"DRY-RUN — would create tenant {TENANT_NAME!r}, "
-                    f"Jimmy Johns + Hiyo templates, photo buckets, and a "
-                    f"{CODE_PREFIX} standing link. Re-run with --apply to write."
+                    f"Jimmy Johns + Hiyo + White Claw Surge templates, "
+                    f"photo buckets, and a {CODE_PREFIX} standing link. "
+                    f"Re-run with --apply to write."
                 )
             )
             return
 
         jj_type = self._ensure_program(tenant, JJ_PROGRAM, "jimmy-johns", creator, apply)
         hiyo_type = self._ensure_program(tenant, HIYO_PROGRAM, "hiyo", creator, apply)
+        wcs_type = self._ensure_program(
+            tenant, WCS_PROGRAM, "white-claw-surge", creator, apply
+        )
         self.stdout.write(
             f"JJ type    : {getattr(jj_type, 'name', None)!r} "
             f"(id {getattr(jj_type, 'id', None)})"
@@ -259,53 +320,54 @@ class Command(BaseCommand):
             f"Hiyo type  : {getattr(hiyo_type, 'name', None)!r} "
             f"(id {getattr(hiyo_type, 'id', None)})"
         )
-        if jj_type is None or hiyo_type is None:
+        self.stdout.write(
+            f"WCS type   : {getattr(wcs_type, 'name', None)!r} "
+            f"(id {getattr(wcs_type, 'id', None)})"
+        )
+        if jj_type is None or hiyo_type is None or wcs_type is None:
             if not apply:
                 self._print_spec()
                 return
             raise CommandError(
-                f"Tenant {tenant.slug!r} is missing Jimmy Johns or Hiyo — "
-                "seed failed."
+                f"Tenant {tenant.slug!r} is missing Jimmy Johns, Hiyo, or "
+                "White Claw Surge — seed failed."
             )
 
         self._report_existing_templates(tenant)
 
         ft_cache: dict = {}
-        for spec in (JJ_SPEC, HIYO_SPEC):
+        for spec in (JJ_SPEC, HIYO_SPEC, WCS_SPEC):
             for _, fields in spec:
                 for _, kind, _, _ in fields:
                     self._resolve_field_type(kind, creator, apply, ft_cache)
 
+        template_jobs = (
+            (JJ_TEMPLATE_NAME, jj_type, JJ_SPEC),
+            (HIYO_TEMPLATE_NAME, hiyo_type, HIYO_SPEC),
+            (WCS_TEMPLATE_NAME, wcs_type, WCS_SPEC),
+        )
         if apply:
             with transaction.atomic():
-                self._upsert_template(
-                    tenant, JJ_TEMPLATE_NAME, jj_type, JJ_SPEC, creator, apply, ft_cache
-                )
-                self._upsert_template(
-                    tenant,
-                    HIYO_TEMPLATE_NAME,
-                    hiyo_type,
-                    HIYO_SPEC,
-                    creator,
-                    apply,
-                    ft_cache,
-                )
+                for name, et, spec in template_jobs:
+                    self._upsert_template(
+                        tenant, name, et, spec, creator, apply, ft_cache
+                    )
         else:
-            self._upsert_template(
-                tenant, JJ_TEMPLATE_NAME, jj_type, JJ_SPEC, creator, apply, ft_cache
-            )
-            self._upsert_template(
-                tenant, HIYO_TEMPLATE_NAME, hiyo_type, HIYO_SPEC, creator, apply, ft_cache
-            )
+            for name, et, spec in template_jobs:
+                self._upsert_template(
+                    tenant, name, et, spec, creator, apply, ft_cache
+                )
 
         self._photo_buckets(tenant, creator, apply)
-        self._pin_programs(tenant, jj_type, hiyo_type, apply)
+        self._pin_programs(tenant, jj_type, hiyo_type, wcs_type, apply)
         # Retiring an event type can repoint a leftover template onto one of
         # the brand programs. resolve_template_for_event picks the lowest id,
         # so that leftover would win over the PDF form until we fold it. We
         # don't retire anything on this existing tenant, but the fold also
         # keeps re-runs idempotent.
-        self._fold_extra_templates(tenant, jj_type, hiyo_type, creator, apply, ft_cache)
+        self._fold_extra_templates(
+            tenant, jj_type, hiyo_type, wcs_type, creator, apply, ft_cache
+        )
         self._location_mode(tenant, apply)
         self._checkin_code(tenant, apply, opts.get("prefix"))
 
@@ -318,6 +380,12 @@ class Command(BaseCommand):
                 self.stdout.write(f"    - {fname!r}  [{kind}] {req}")
         self.stdout.write("\nHIYO (PDF fields):")
         for section_name, fields in HIYO_SPEC:
+            self.stdout.write(f"\n  SECTION {section_name!r}")
+            for fname, kind, required, _ in fields:
+                req = "REQUIRED" if required else "optional"
+                self.stdout.write(f"    - {fname!r}  [{kind}] {req}")
+        self.stdout.write("\nWHITE CLAW SURGE (Hiyo-mirrored fields):")
+        for section_name, fields in WCS_SPEC:
             self.stdout.write(f"\n  SECTION {section_name!r}")
             for fname, kind, required, _ in fields:
                 req = "REQUIRED" if required else "optional"
@@ -459,8 +527,8 @@ class Command(BaseCommand):
         Breakaway has history ("Jimmy Johns Silent DJ", "HIYO Exit Sampling"
         request types). An icontains match would adopt one of those and show
         it on the picker; Kyle wants the selector to read exactly "Jimmy
-        Johns" vs "Hiyo", so anything short of an exact match creates a
-        clean program.
+        Johns" / "Hiyo" / "White Claw Surge", so anything short of an exact
+        match creates a clean program.
         """
         from events.models import EventType
         from tenants.mutations import DEFAULT_EVENT_TYPES
@@ -535,7 +603,7 @@ class Command(BaseCommand):
         if not rows:
             self.stdout.write("  (none — these will be the first)")
             return
-        wanted = {JJ_TEMPLATE_NAME, HIYO_TEMPLATE_NAME}
+        wanted = {JJ_TEMPLATE_NAME, HIYO_TEMPLATE_NAME, WCS_TEMPLATE_NAME}
         for t in rows:
             n_fields = CustomField.objects.filter(custom_recap_template=t).count()
             same = " <-- SAME NAME, will be reused" if t.name in wanted else ""
@@ -694,8 +762,8 @@ class Command(BaseCommand):
         tenant.save(update_fields=["checkin_photo_buckets"])
         self.stdout.write(self.style.SUCCESS("  checkin_photo_buckets set."))
 
-    def _pin_programs(self, tenant, jj_type, hiyo_type, apply: bool) -> None:
-        """Default Jimmy Johns; BA picks Jimmy Johns vs Hiyo on the link.
+    def _pin_programs(self, tenant, jj_type, hiyo_type, wcs_type, apply: bool) -> None:
+        """Default Jimmy Johns; BA picks Jimmy Johns / Hiyo / White Claw Surge.
 
         Only the standing link's pins are touched. ``is_default`` is left
         alone — Breakaway is an existing tenant and its admin request-flow
@@ -723,7 +791,7 @@ class Command(BaseCommand):
                     f"(id {jj_type.id})"
                 )
             )
-        selectable = [jj_type, hiyo_type]
+        selectable = [jj_type, hiyo_type, wcs_type]
         if not apply:
             self.stdout.write(
                 self.style.WARNING(
@@ -745,7 +813,14 @@ class Command(BaseCommand):
         template.delete()
 
     def _fold_extra_templates(
-        self, tenant, jj_type, hiyo_type, creator, apply: bool, ft_cache: dict
+        self,
+        tenant,
+        jj_type,
+        hiyo_type,
+        wcs_type,
+        creator,
+        apply: bool,
+        ft_cache: dict,
     ) -> None:
         """Leave one named template per brand so walk-up hits the PDF form.
 
@@ -761,6 +836,7 @@ class Command(BaseCommand):
         pairs = [
             (jj_type, JJ_TEMPLATE_NAME, JJ_SPEC),
             (hiyo_type, HIYO_TEMPLATE_NAME, HIYO_SPEC),
+            (wcs_type, WCS_TEMPLATE_NAME, WCS_SPEC),
         ]
         reupsert: list = []
         for et, keep_name, spec in pairs:
