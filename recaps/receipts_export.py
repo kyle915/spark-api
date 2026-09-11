@@ -141,6 +141,7 @@ def collect_expense_rows(
         rows.append(
             {
                 "kind": "custom",
+                "recap_id": recap.id,
                 "recap_uuid": str(recap.uuid),
                 "event_uuid": str(ev.uuid) if ev else "",
                 "ba_name": ba_name,
@@ -174,6 +175,7 @@ def collect_expense_rows(
         rows.append(
             {
                 "kind": "legacy",
+                "recap_id": recap.id,
                 "recap_uuid": str(recap.uuid),
                 "event_uuid": str(ev.uuid) if ev else "",
                 "ba_name": ba_name,
@@ -196,6 +198,91 @@ def collect_expense_rows(
     return rows
 
 
+def apply_amount_overrides(
+    rows: list[dict],
+    overrides: dict,
+    *,
+    note: str = "",
+) -> tuple[int, list[str]]:
+    """Reconcile recap spend to what the receipts actually total.
+
+    BAs type the spend amount by hand, so the recorded number drifts from the
+    paper: a transposed cent, a receipt left out of the sum. On a packet that
+    goes to a client for BILLING that matters — the invoice total should be
+    what the receipts prove, not what someone typed on a phone.
+
+    This does NOT touch the recap. The custom-field value in Spark stays as the
+    BA entered it (changing it would move dashboard KPIs and client reporting
+    for a bookkeeping correction), and the adjustment lives only in the
+    rendered document.
+
+    Because this makes a financial document disagree with the system of record,
+    the override is never silent: the row keeps ``amount_recorded``, and both
+    the PDF and the CSV print the original beside the corrected figure so the
+    reader can see exactly what was changed and by how much. An override that
+    matches the recorded amount is dropped rather than annotated as a no-op.
+
+    ``overrides`` maps recap id -> corrected amount (keys may be str or int,
+    since they usually arrive as JSON). Returns ``(n_applied, problems)``;
+    problems name ids that matched no row, so a typo'd id fails loudly instead
+    of quietly leaving the total wrong.
+    """
+    by_id: dict[int, dict] = {
+        r["recap_id"]: r for r in rows if r.get("recap_id") is not None
+    }
+    applied = 0
+    problems: list[str] = []
+
+    for raw_key, raw_val in (overrides or {}).items():
+        try:
+            recap_id = int(str(raw_key).strip())
+        except (TypeError, ValueError):
+            problems.append(f"{raw_key!r} is not a recap id")
+            continue
+        try:
+            amount = round(float(raw_val), 2)
+        except (TypeError, ValueError):
+            problems.append(f"recap {recap_id}: {raw_val!r} is not an amount")
+            continue
+
+        row = by_id.get(recap_id)
+        if row is None:
+            problems.append(
+                f"recap {recap_id} is not in this window — override ignored"
+            )
+            continue
+
+        recorded = row.get("amount")
+        if recorded is not None and abs(float(recorded) - amount) < 0.005:
+            continue  # already agrees; nothing to annotate
+
+        row["amount_recorded"] = recorded
+        row["amount"] = amount
+        row["amount_adjusted"] = True
+        if note:
+            row["adjust_note"] = note
+        applied += 1
+
+    return applied, problems
+
+
+def _recorded_total(rows: list[dict]) -> float:
+    """Sum of the spend as FIELD STAFF ENTERED IT, ignoring adjustments.
+
+    An adjusted row reports ``amount_recorded``; a row that carried no spend
+    figure at all contributes nothing, so overriding a blank line can't
+    invent an "as entered" number that was never there.
+    """
+    total = 0.0
+    for r in rows:
+        if r.get("amount_adjusted"):
+            recorded = r.get("amount_recorded")
+            total += float(recorded) if recorded is not None else 0.0
+        elif r.get("amount") is not None:
+            total += float(r["amount"])
+    return total
+
+
 def build_expense_rows_csv(rows: list[dict]) -> str:
     """Bookkeeping CSV — one line per recap, file links joined."""
     import csv
@@ -211,6 +298,8 @@ def build_expense_rows_csv(rows: list[dict]) -> str:
             "Event",
             "Address",
             "Amount",
+            "As entered",
+            "Adjusted",
             "Corpo card",
             "Receipt count",
             "Receipt links",
@@ -226,6 +315,13 @@ def build_expense_rows_csv(rows: list[dict]) -> str:
                 r["event_name"],
                 r["address"],
                 f"{r['amount']:.2f}" if r["amount"] is not None else "",
+                (
+                    f"{r['amount_recorded']:.2f}"
+                    if r.get("amount_adjusted")
+                    and r.get("amount_recorded") is not None
+                    else ""
+                ),
+                "yes" if r.get("amount_adjusted") else "",
                 "yes" if r["corpo_card"] else "",
                 len(r["files"]),
                 " ".join(f["url"] for f in r["files"]),
@@ -234,7 +330,20 @@ def build_expense_rows_csv(rows: list[dict]) -> str:
         )
     total = sum(r["amount"] for r in rows if r["amount"] is not None)
     w.writerow([])
-    w.writerow(["TOTAL", "", "", "", "", f"{total:.2f}", "", "", "", ""])
+    recorded_total = _recorded_total(rows)
+    w.writerow(
+        [
+            "TOTAL",
+            "", "", "", "",
+            f"{total:.2f}",
+            (
+                f"{recorded_total:.2f}"
+                if abs(recorded_total - total) >= 0.005
+                else ""
+            ),
+            "", "", "", "", "",
+        ]
+    )
     return out.getvalue()
 
 
@@ -272,11 +381,25 @@ def build_receipts_bundle_pdf(
     total = sum(r["amount"] for r in rows if r["amount"] is not None)
     receipt_count = sum(len(r["files"]) for r in rows)
 
+    # Reconciliation banner: only rendered when something was actually
+    # adjusted, so an ordinary export looks exactly as it always has.
+    adjusted = [r for r in rows if r.get("amount_adjusted")]
+    recorded_total = _recorded_total(rows)
+    adjust_note = next(
+        (r["adjust_note"] for r in adjusted if r.get("adjust_note")), ""
+    )
+
     sections: list[str] = []
     for r in rows:
         amount = (
             f"${r['amount']:,.2f}" if r["amount"] is not None else "—"
         )
+        was = ""
+        if r.get("amount_adjusted") and r.get("amount_recorded") is not None:
+            was = (
+                ' · <span class="was">adjusted from '
+                f"${r['amount_recorded']:,.2f}</span>"
+            )
         corpo = (
             ' · <span class="corpo">CORPO CARD</span>'
             if r["corpo_card"]
@@ -290,11 +413,23 @@ def build_receipts_bundle_pdf(
         sections.append(
             f"""
       <section class="receipt">
-        <h2>{safe(r['ba_name'])} — {amount}{corpo}</h2>
+        <h2>{safe(r['ba_name'])} — {amount}{was}{corpo}</h2>
         <p class="meta">{safe(r['event_name'])} · {safe(r['event_date'])}
           {('· ' + safe(r['address'])) if r['address'] else ''}</p>
         {imgs}
       </section>"""
+        )
+
+    recon_html = ""
+    if adjusted:
+        n = len(adjusted)
+        recon_html = (
+            '<p class="recon">Reconciled to receipt totals — '
+            f"${recorded_total:,.2f} as entered by field staff, "
+            f"{n} line{'s' if n != 1 else ''} adjusted to match the "
+            "attached receipts."
+            + (f" {safe(adjust_note)}" if adjust_note else "")
+            + "</p>"
         )
 
     html_doc = f"""
@@ -310,6 +445,7 @@ def build_receipts_bundle_pdf(
       <div><span>Receipts</span><strong>{receipt_count}</strong></div>
       <div><span>Total spend</span><strong>${total:,.2f}</strong></div>
     </div>
+    {recon_html}
   </section>
   {''.join(sections)}
 </body></html>
@@ -334,6 +470,9 @@ def build_receipts_bundle_pdf(
                      margin: 0 0 8px; border: 1px solid #ddd; }
       .corpo { color: #7a8a2a; font-size: 10px; letter-spacing: 0.1em; }
       .noimg { color: #999; font-size: 11px; }
+      .recon { margin: 14px auto 0; max-width: 118mm; font-size: 10px;
+               line-height: 1.5; color: #555; }
+      .was { color: #8a6d1a; font-size: 10px; letter-spacing: 0.02em; }
     """
     )
     return HTML(string=html_doc).write_pdf(stylesheets=[css])
