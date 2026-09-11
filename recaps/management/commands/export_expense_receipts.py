@@ -48,6 +48,22 @@ class Command(BaseCommand):
         parser.add_argument("--start", required=True, help="YYYY-MM-DD (inclusive).")
         parser.add_argument("--end", required=True, help="YYYY-MM-DD (inclusive).")
         parser.add_argument(
+            "--amounts",
+            default="",
+            help=(
+                'JSON map of recap id -> corrected amount, e.g. \'{"1012": '
+                '66.14}\'. Bills what the receipts total instead of what the '
+                "BA typed. The recap itself is never modified and both figures "
+                "print in the PDF."
+            ),
+        )
+        parser.add_argument(
+            "--adjust-note",
+            dest="adjust_note",
+            default="",
+            help="One line explaining the adjustment; shown on the PDF cover.",
+        )
+        parser.add_argument(
             "--apply",
             action="store_true",
             help="Fetch images, render the PDF and upload it. Omit for a summary.",
@@ -57,6 +73,7 @@ class Command(BaseCommand):
 
     def handle(self, *args, **opts):
         from recaps.receipts_export import (
+            apply_amount_overrides,
             build_expense_rows_csv,
             build_receipts_bundle_pdf,
             collect_expense_rows,
@@ -93,6 +110,35 @@ class Command(BaseCommand):
                 )
             )
             return
+
+        raw_amounts = (opts.get("amounts") or "").strip()
+        if raw_amounts:
+            import json
+
+            try:
+                overrides = json.loads(raw_amounts)
+            except ValueError as exc:
+                raise CommandError(f"--amounts is not valid JSON: {exc}") from exc
+            if not isinstance(overrides, dict):
+                raise CommandError(
+                    '--amounts must be a JSON object, e.g. \'{"1012": 66.14}\'.'
+                )
+            applied, problems = apply_amount_overrides(
+                rows, overrides, note=opts.get("adjust_note") or ""
+            )
+            for msg in problems:
+                self.stdout.write(self.style.WARNING(f"  ! {msg}"))
+            if problems:
+                # A mistyped id silently drops an adjustment and ships a wrong
+                # invoice total, so refuse rather than render something close.
+                raise CommandError(
+                    f"{len(problems)} override(s) could not be applied — see "
+                    "above. Nothing rendered."
+                )
+            self.stdout.write(
+                f"\n  {applied} line(s) reconciled to receipt totals "
+                f"({len(overrides) - applied} already matched)."
+            )
 
         n_files = sum(len(r.get("files") or []) for r in rows)
         total = 0.0

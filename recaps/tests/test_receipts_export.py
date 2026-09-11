@@ -16,6 +16,8 @@ from ambassadors.tests.base import AmbassadorsGraphQLTestCase
 from recaps import models as recap_models
 from recaps.receipts_export import (
     _parse_money,
+    _recorded_total,
+    apply_amount_overrides,
     build_expense_rows_csv,
     build_receipts_bundle_pdf,
     collect_expense_rows,
@@ -217,3 +219,117 @@ class TestCollectExpenseRows(AmbassadorsGraphQLTestCase):
             # PDF renders daily. Skip locally, render-test in the container.
             pytest.skip("WeasyPrint native libs unavailable on this host")
         assert pdf[:4] == b"%PDF"
+
+
+# ---------------------------------------------------------------------------
+# apply_amount_overrides — billing reconciliation
+#
+# BAs type the spend by hand, so a billing packet's total can disagree with
+# what the attached receipts add up to. These pin that the correction is
+# applied, is never silent, and fails loudly on a bad id rather than shipping
+# an invoice that is quietly short.
+# ---------------------------------------------------------------------------
+
+
+def _row(recap_id, amount, ba="BA"):
+    return {
+        "kind": "custom",
+        "recap_id": recap_id,
+        "recap_uuid": f"uuid-{recap_id}",
+        "event_uuid": "",
+        "ba_name": ba,
+        "ba_email": "",
+        "event_name": "Event",
+        "event_date": "2026-09-04",
+        "address": "",
+        "amount": amount,
+        "corpo_card": False,
+        "files": [],
+    }
+
+
+def test_override_replaces_amount_and_keeps_the_original():
+    rows = [_row(1012, 67.00)]
+    applied, problems = apply_amount_overrides(rows, {"1012": 66.14})
+    assert (applied, problems) == (1, [])
+    assert rows[0]["amount"] == 66.14
+    assert rows[0]["amount_recorded"] == 67.00
+    assert rows[0]["amount_adjusted"] is True
+
+
+def test_override_accepts_int_keys_and_string_amounts():
+    rows = [_row(1012, 67.00)]
+    applied, problems = apply_amount_overrides(rows, {1012: "66.14"})
+    assert (applied, problems) == (1, [])
+    assert rows[0]["amount"] == 66.14
+
+
+def test_override_matching_recorded_amount_is_not_annotated():
+    """A no-op override must not brand a correct line as 'adjusted'."""
+    rows = [_row(1015, 61.65)]
+    applied, problems = apply_amount_overrides(rows, {"1015": 61.65})
+    assert (applied, problems) == (0, [])
+    assert "amount_adjusted" not in rows[0]
+    assert "amount_recorded" not in rows[0]
+
+
+def test_unknown_recap_id_is_reported_not_ignored():
+    rows = [_row(1012, 67.00)]
+    applied, problems = apply_amount_overrides(rows, {"9999": 10.0})
+    assert applied == 0
+    assert len(problems) == 1 and "9999" in problems[0]
+    assert rows[0]["amount"] == 67.00
+
+
+def test_non_numeric_override_is_reported():
+    rows = [_row(1012, 67.00)]
+    applied, problems = apply_amount_overrides(rows, {"1012": "abc"})
+    assert applied == 0
+    assert len(problems) == 1
+    assert rows[0]["amount"] == 67.00
+
+
+def test_untouched_rows_stay_untouched():
+    rows = [_row(1012, 67.00), _row(1018, 102.80)]
+    apply_amount_overrides(rows, {"1012": 66.14})
+    assert rows[1]["amount"] == 102.80
+    assert "amount_adjusted" not in rows[1]
+
+
+def test_note_is_carried_onto_adjusted_rows_only():
+    rows = [_row(1012, 67.00), _row(1018, 102.80)]
+    apply_amount_overrides(rows, {"1012": 66.14}, note="Tied to receipts.")
+    assert rows[0]["adjust_note"] == "Tied to receipts."
+    assert "adjust_note" not in rows[1]
+
+
+def test_csv_shows_both_figures_and_a_reconciled_total():
+    rows = [_row(1012, 67.00), _row(1018, 102.80)]
+    apply_amount_overrides(rows, {"1012": 66.14})
+    csv_text = build_expense_rows_csv(rows)
+    header, *body = [ln for ln in csv_text.splitlines() if ln.strip()]
+    assert "As entered" in header and "Adjusted" in header
+    # billed figure, original figure and the adjusted flag all present
+    assert "66.14" in body[0] and "67.00" in body[0] and "yes" in body[0]
+    # the untouched row carries no 'as entered' echo
+    assert "102.80" in body[1]
+    total_line = body[-1]
+    assert "168.94" in total_line  # 66.14 + 102.80
+    assert "169.80" in total_line  # what the recaps said
+
+
+def test_overriding_a_row_with_no_recorded_amount_invents_no_baseline():
+    """A recap that carried receipts but no typed figure has nothing 'as
+    entered' — the reconciliation line must not pretend otherwise."""
+    rows = [_row(1200, None)]
+    applied, problems = apply_amount_overrides(rows, {"1200": 25.00})
+    assert (applied, problems) == (1, [])
+    assert rows[0]["amount"] == 25.00
+    assert rows[0]["amount_recorded"] is None
+    assert _recorded_total(rows) == 0.0
+
+
+def test_recorded_total_ignores_adjustments():
+    rows = [_row(1012, 67.00), _row(1018, 102.80)]
+    apply_amount_overrides(rows, {"1012": 66.14})
+    assert _recorded_total(rows) == pytest.approx(169.80)

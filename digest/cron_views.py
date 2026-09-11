@@ -5528,7 +5528,13 @@ class ExportExpenseReceiptsView(View):
     total spend) comes back without fetching images or uploading anything.
     With apply, the response log carries a `PDF_URL:` line.
 
-    Params: tenant_id, start, end (all required), apply.
+    Params: tenant_id, start, end (all required), apply, amounts,
+    adjust_note.
+
+    `amounts` is a JSON map of recap id -> corrected amount, for billing what
+    the receipts total rather than what the BA typed. It never writes to the
+    recap; the PDF prints both figures. An id outside the window is an error,
+    not a silent skip.
     """
 
     def _run(self, request: HttpRequest) -> HttpResponse:
@@ -5553,6 +5559,12 @@ class ExportExpenseReceiptsView(View):
             )
         if _param("apply").lower() in ("1", "true", "yes", "on"):
             kwargs["apply"] = True
+        amounts = _param("amounts")
+        if amounts:
+            kwargs["amounts"] = amounts
+        adjust_note = _param("adjust_note")
+        if adjust_note:
+            kwargs["adjust_note"] = adjust_note
 
         out = io.StringIO()
         try:
