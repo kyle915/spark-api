@@ -30,8 +30,19 @@ from datetime import date
 from django.db.models import Q
 
 # Category + field-label matchers. Receipt categories in the wild:
-# "Receipts", "Receipt", "Upload Receipt" (see backfill_girlbeer_receipts).
-_RECEIPT_CATEGORY_RE = r"receipt"
+# "Receipts", "Receipt", "Upload Receipt" (see backfill_girlbeer_receipts),
+# and "Product Spend" — Torch THC's bucket, which holds itemized store
+# receipts but contains no form of the word "receipt".
+#
+# That last one is why this is a pattern and not a fixed list. Torch had 16
+# real receipts attached across Sept 4-6 and the export reported ZERO, because
+# the tenant named their bucket sensibly and the matcher was too narrow. The
+# failure is silent in the worst way: spend still totals correctly, so an
+# invoice looks complete while every line is unsubstantiated.
+#
+# Kept deliberately tight. A bare "spend" would swallow any category with the
+# word in it; "product spend" is unambiguous.
+_RECEIPT_CATEGORY_RE = r"receipt|product\s*spend"
 # Spend labels: GB "Account Spend Amount"; legacy column is separate.
 _AMOUNT_FIELD_RE = re.compile(r"spend|amount", re.IGNORECASE)
 
