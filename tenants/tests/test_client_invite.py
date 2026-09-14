@@ -593,3 +593,59 @@ class TestInviteClientUsersBulk(BaseGraphQLTestCase):
         )
         assert result.errors is None
         assert result.data["inviteClientUsers"]["success"] is False
+
+
+@pytest.mark.django_db(transaction=True)
+class TestRequestMagicLinkResendForClient(BaseGraphQLTestCase):
+    """People page RESEND LINK → requestMagicLink for a tenanted client.
+
+    Regression: ``_resolve_tenant_name_for_invite`` must join via the
+    ``tenanted_users`` related name (not ``tenanteduser``), or the
+    mutation raises FieldError and the UI shows "Couldn't resend".
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self, db):
+        from config.schema_spark import schema_spark
+
+        self.roles = self.setup_default_roles()
+        self.schema = schema_spark
+        self.endpoint_path = "/api/v1/graphql/spark"
+
+    @pytest.mark.asyncio
+    async def test_resend_sends_client_invite_with_tenant_name(self):
+        tenant = await sync_to_async(self.create_tenant)(name="Torch THC")
+        user = await sync_to_async(self.create_user)(
+            username="liberty@torchdrinks.com",
+            email="liberty@torchdrinks.com",
+            role=self.roles["client"],
+            first_name="Liberty",
+            last_name="Flynn",
+        )
+        await sync_to_async(self.create_tenanted_user)(user=user, tenant=tenant)
+
+        with patch(
+            "tenants.mutations.ClientInviteMailer"
+        ) as invite_cls, patch(
+            "tenants.mutations.MagicLinkMailer"
+        ) as magic_cls:
+            invite_cls.return_value.send_async_now = AsyncMock()
+            magic_cls.return_value.send_async_now = AsyncMock()
+
+            result = await self._execute_mutation(
+                """
+                mutation RequestMagicLink($input: RequestMagicLinkInput!) {
+                    requestMagicLink(input: $input) { success message }
+                }
+                """,
+                {"input": {"email": "liberty@torchdrinks.com", "redirect": "/"}},
+                self.endpoint_path,
+            )
+
+        assert result.errors is None, result.errors
+        payload = result.data["requestMagicLink"]
+        assert payload["success"] is True
+        invite_cls.return_value.send_async_now.assert_awaited_once()
+        magic_cls.return_value.send_async_now.assert_not_awaited()
+        _, kwargs = invite_cls.call_args
+        assert kwargs["tenant_name"] == "Torch THC"

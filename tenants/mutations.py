@@ -602,8 +602,8 @@ def _resolve_tenant_name_for_invite(user, tenant_id: int | None = None) -> str |
             return name
     return (
         Tenant.objects.filter(
-            tenanteduser__user_id=user.id,
-            tenanteduser__is_active=True,
+            tenanted_users__user_id=user.id,
+            tenanted_users__is_active=True,
         )
         .values_list("name", flat=True)
         .first()
