@@ -302,6 +302,17 @@ class Command(BaseCommand):
                     item["helper"] = str(e["helper"])
                 if e.get("min"):
                     item["min"] = int(e["min"])
+                # Optional prior labels for in-place relabel (e.g. Torch
+                # "On-Shelf Product" → "Before & After Shelf / Stock").
+                raw_aliases = e.get("aliases") or []
+                if raw_aliases:
+                    if not isinstance(raw_aliases, list):
+                        raise CommandError(
+                            f"--photo-buckets {where}[{i}].aliases must be a list."
+                        )
+                    aliases = [str(a).strip() for a in raw_aliases if str(a).strip()]
+                    if aliases:
+                        item["aliases"] = aliases
                 out.append(item)
             return out
 
@@ -568,6 +579,14 @@ class Command(BaseCommand):
                     )
                     continue
                 match = by_norm.get(key)
+                matched_via_alias = False
+                if match is None:
+                    for alias in spec.get("aliases") or []:
+                        alias_hit = by_norm.get(_norm(alias))
+                        if alias_hit is not None:
+                            match = alias_hit
+                            matched_via_alias = True
+                            break
                 plan[key] = {**spec, "category": match}
                 if match is None:
                     self.stdout.write(f"    + {name!r} — will be CREATED{hint}")
@@ -587,9 +606,10 @@ class Command(BaseCommand):
                         )
                     )
                 else:
+                    via = " (via alias)" if matched_via_alias else ""
                     self.stdout.write(
                         f"    ~ {name!r} — reusing [{match.id}] {match.name!r}, "
-                        f"relabelling in place{hint}"
+                        f"relabelling in place{via}{hint}"
                     )
         return plan
 
@@ -626,6 +646,19 @@ class Command(BaseCommand):
 
         # A single-program brand stores a flat list; the per-program map only
         # earns its keys when there is more than one program to tell apart.
+        # Drop aliases — they only exist to find the row to relabel; the page
+        # and PDF only need name / helper / min.
+        def _public(entries: list[dict]) -> list[dict]:
+            out = []
+            for e in entries:
+                item = {"name": e["name"]}
+                if e.get("helper"):
+                    item["helper"] = e["helper"]
+                if e.get("min"):
+                    item["min"] = e["min"]
+                out.append(item)
+            return out
+
         if len(programs) == 1 and len(wanted) == 1:
-            return next(iter(wanted.values()))
-        return wanted
+            return _public(next(iter(wanted.values())))
+        return {key: _public(entries) for key, entries in wanted.items()}
