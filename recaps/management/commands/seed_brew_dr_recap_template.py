@@ -5,7 +5,9 @@ with only brand swaps:
 
 * ``Liquid Death`` → ``Brew Dr. Kombucha`` in awareness / flavor copy
 * LD question text kept verbatim except ``Liquid Death`` → ``Brew Dr. Kombucha``
-* ``Products Sampled`` options = the five Brew Dr. cans (no Product catalog)
+* ``Products Sampled`` options resolve from the tenant Product catalog
+  (seeded by ``onboard_brew_dr_products``)
+* Feedback & Account Notes fields carry BA-facing placeholder examples
 
 Photos stay on the walk-up ``FileRecapCategory`` buckets from
 ``setup_brew_dr_checkin``; these SPECs do NOT add template image fields.
@@ -26,14 +28,62 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 from django.db.models import Q
 
-# The five Brew Dr. cans the BA can mark as sampled (multi-select options).
-CANS = [
+# Prior hardcoded cans (kept for docs / migration cross-ref). Live options
+# come from the Product catalog via products_sampled_options_for_tenant.
+LEGACY_CANS = [
     "Clear Mind",
     "Island Mango",
     "Superberry",
     "Love",
     "Pineapple Paradise",
 ]
+# Back-compat alias used by older tests.
+CANS = LEGACY_CANS
+
+# BA-facing quality-bar examples (placeholders — never become submitted values).
+FEEDBACK_PLACEHOLDERS: dict[str, str] = {
+    "Anything you'd change or do differently?": "e.g. Na",
+    "Demographics (general age, sex, ethnicities of consumers)": (
+        "e.g. This location had an age demographic on the higher end "
+        "(50+ yrs old) - Caucasian"
+    ),
+    "Demographics": (
+        "e.g. This location had an age demographic on the higher end "
+        "(50+ yrs old) - Caucasian"
+    ),
+    "Consumer Feedback": (
+        "e.g. Flavor: Sweet for the low sugar content- flavor combos are "
+        "favored over the classic\n"
+        "Sparkling aspect: mixed opinions, most people do not like the "
+        "sparkling today\n"
+        "Branding : familiar name , colors made it easy to find"
+    ),
+    "Positive stories from your sampling today": (
+        "e.g. A consumer explained that the tea is something they'd grab at "
+        "lunch, or maybe after lunch as a boost without a crash! I loved "
+        "that they were able to connect it to their daily routine ."
+    ),
+    "Reasons to decline to purchase?": (
+        "e.g. The most common complaint just being flavor preference"
+    ),
+    "Quotes from Consumers": (
+        'e.g. "It\'s yummy"\n'
+        '"Too sparkley"\n'
+        '"Very sweet for how low the sugar is"\n'
+        '"I don\'t like kombucha but I\'d drink this tea"'
+    ),
+    "Account Feedback": (
+        "e.g. This particular location seem to be lower traffic volume . - "
+        "sampled unsweetened , classic, lemon, raspberry , mango passion fruit"
+    ),
+    "Helpful feedback": (
+        "e.g. Flavor: Sweet for the low sugar content- flavor combos are "
+        "favored over the classic\n"
+        "Sparkling aspect: mixed opinions, most people do not like the "
+        "sparkling today\n"
+        "Branding : familiar name , colors made it easy to find"
+    ),
+}
 
 RETAIL_TEMPLATE_NAME = "Brew Dr. Kombucha-Retail Sampling"
 EVENT_TEMPLATE_NAME = "Brew Dr. Kombucha-Event Activation"
@@ -56,6 +106,7 @@ SECTION_ORDER = {
 }
 
 # Field-for-field off Liquid Death-Retail Sampling (id 9), brand-swapped.
+# Feedback order matches Kyle's quality-bar example screenshot.
 RETAIL_SPEC: list[tuple[str, list[tuple[str, str, bool, list[str]]]]] = [
     (
         "Consumer Engagement",
@@ -95,6 +146,7 @@ RETAIL_SPEC: list[tuple[str, list[tuple[str, str, bool, list[str]]]]] = [
     (
         "Feedback & Account Notes",
         [
+            ("Anything you'd change or do differently?", "longtext", True, []),
             (
                 "Demographics (general age, sex, ethnicities of consumers)",
                 "longtext",
@@ -105,7 +157,6 @@ RETAIL_SPEC: list[tuple[str, list[tuple[str, str, bool, list[str]]]]] = [
             ("Positive stories from your sampling today", "longtext", True, []),
             ("Reasons to decline to purchase?", "longtext", True, []),
             ("Quotes from Consumers", "longtext", True, []),
-            ("Anything you'd change or do differently?", "longtext", True, []),
             ("Account Feedback", "longtext", True, []),
         ],
     ),
@@ -118,7 +169,8 @@ RETAIL_SPEC: list[tuple[str, list[tuple[str, str, bool, list[str]]]]] = [
     (
         "Products Sampled",
         [
-            ("Products Sampled", "multiselect", True, list(CANS)),
+            # options filled at seed time from the tenant Product catalog
+            ("Products Sampled", "multiselect", True, []),
         ],
     ),
 ]
@@ -168,7 +220,7 @@ EVENT_SPEC: list[tuple[str, list[tuple[str, str, bool, list[str]]]]] = [
     (
         "Products Sampled",
         [
-            ("Products Sampled", "multiselect", True, list(CANS)),
+            ("Products Sampled", "multiselect", True, []),
         ],
     ),
 ]
@@ -301,6 +353,24 @@ class Command(BaseCommand):
         et = EventType.objects.create(name=name, tenant=tenant, created_by=creator)
         self.stdout.write(f"  + event type {name!r} [{et.id}]")
         return et
+
+    def _product_options(self, tenant) -> list[str]:
+        from recaps.products_sampled import products_sampled_options_for_tenant
+
+        opts = products_sampled_options_for_tenant(tenant)
+        if opts:
+            self.stdout.write(
+                f"Products   : {len(opts)} from Brew Dr Product catalog"
+            )
+        else:
+            self.stdout.write(
+                self.style.WARNING(
+                    "Products   : catalog empty — Products Sampled options "
+                    "will refresh from catalog at form render time "
+                    "(run onboard_brew_dr_products --apply first)"
+                )
+            )
+        return opts
 
     def _resolve_field_type(self, kind: str, creator, apply: bool, cache: dict):
         """Find (or, under --apply, create) the CustomRecapFieldType for a kind."""
@@ -523,13 +593,20 @@ class Command(BaseCommand):
         return out
 
     def _seed_program(
-        self, tenant, creator, apply: bool, program: dict, ft_cache: dict
+        self,
+        tenant,
+        creator,
+        apply: bool,
+        program: dict,
+        ft_cache: dict,
+        catalog_opts: list[str] | None = None,
     ) -> None:
         from recaps.models import CustomField, RecapSection
 
         spec = program["spec"]
         template_name = program["template_name"]
         event_type_name = program["event_type"]
+        catalog_opts = list(catalog_opts or [])
 
         self.stdout.write("\n" + "-" * 68)
         self.stdout.write(f"PROGRAM: {event_type_name} → {template_name!r}")
@@ -591,9 +668,16 @@ class Command(BaseCommand):
             for f_idx, (fname, kind, required, options) in enumerate(fields):
                 keep_names.add(fname)
                 ft = ft_cache[kind]
+                field_options = (
+                    list(catalog_opts)
+                    if fname == "Products Sampled"
+                    else list(options)
+                )
+                placeholder = FEEDBACK_PLACEHOLDERS.get(fname, "")
                 req = "REQUIRED" if required else "optional"
-                opt = f" options={options}" if options else ""
-                self.stdout.write(f"    - {fname!r}  [{kind}] {req}{opt}")
+                opt = f" options={field_options}" if field_options else ""
+                ph = " +placeholder" if placeholder else ""
+                self.stdout.write(f"    - {fname!r}  [{kind}] {req}{opt}{ph}")
                 if not apply:
                     continue
                 field, made_f = CustomField.objects.get_or_create(
@@ -603,7 +687,8 @@ class Command(BaseCommand):
                     defaults={
                         "custom_field_type": ft,
                         "required": required,
-                        "options": list(options),
+                        "options": list(field_options),
+                        "placeholder": placeholder,
                         "order": f_idx,
                         "created_by": creator,
                     },
@@ -618,9 +703,12 @@ class Command(BaseCommand):
                     if field.required != required:
                         field.required = required
                         changed.append("required")
-                    if list(field.options or []) != list(options):
-                        field.options = list(options)
+                    if list(field.options or []) != list(field_options):
+                        field.options = list(field_options)
                         changed.append("options")
+                    if (field.placeholder or "") != placeholder:
+                        field.placeholder = placeholder
+                        changed.append("placeholder")
                     if field.order != f_idx:
                         field.order = f_idx
                         changed.append("order")
@@ -700,14 +788,18 @@ class Command(BaseCommand):
         self.stdout.write("=" * 68)
         self.stdout.write(
             "Mirrors Liquid Death Retail Sampling + Event Activation "
-            "(brand-swapped; Products Sampled = five Brew Dr. cans)."
+            "(brand-swapped; Products Sampled from catalog; feedback "
+            "placeholders)."
         )
 
         ft_cache: dict = {}
+        catalog_opts = self._product_options(tenant)
 
         def _run():
             for program in programs:
-                self._seed_program(tenant, creator, apply, program, ft_cache)
+                self._seed_program(
+                    tenant, creator, apply, program, ft_cache, catalog_opts
+                )
             self.stdout.write("\n" + "=" * 68)
             if apply:
                 self.stdout.write(

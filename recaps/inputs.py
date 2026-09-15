@@ -539,6 +539,9 @@ class CreateCustomFieldInput(SparkGraphQLInput):
     # Allowed choices for select / multiselect field types. None = leave the
     # existing options untouched (on update); [] clears them.
     options: List[str] | None = None
+    # BA-facing example copy for text / longtext inputs. None = leave
+    # untouched on update; "" clears.
+    placeholder: str | None = None
 
 
 @strawberry.input
@@ -558,6 +561,7 @@ class CustomRecapTemplateFieldInput(SparkGraphQLInput):
     order: int | None = None
     # Allowed choices for select / multiselect field types (admin-defined).
     options: List[str] | None = None
+    placeholder: str | None = None
 
 
 @strawberry.input
