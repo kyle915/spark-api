@@ -10,9 +10,9 @@ on:
   workflow_dispatch:
     inputs:
       tenant:
-        description: "Tenant name/slug substring"
+        description: "Tenant slug (exact). Default brew-dr-kombucha — do not use loose 'brew'."
         required: true
-        default: "brew"
+        default: "brew-dr-kombucha"
       event_type:
         description: "Event-type name substring (blank = prefer 'retail', else first)"
         required: false

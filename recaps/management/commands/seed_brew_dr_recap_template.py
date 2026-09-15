@@ -28,6 +28,11 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 from django.db.models import Q
 
+# Prefer exact slug resolve — never a loose "brew" substring (also matches
+# drekker-brewing).
+TENANT_SLUGS = ("brew-dr-kombucha", "brew-dr")
+DEFAULT_TENANT = TENANT_SLUGS[0]
+
 # Prior hardcoded cans (kept for docs / migration cross-ref). Live options
 # come from the Product catalog via products_sampled_options_for_tenant.
 LEGACY_CANS = [
@@ -275,8 +280,12 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument(
             "--tenant",
-            default="brew",
-            help="tenant name/slug substring (case-insensitive). Default: 'brew'.",
+            default=DEFAULT_TENANT,
+            help=(
+                "Tenant slug/name/id. Default: "
+                f"{DEFAULT_TENANT!r}. Prefer the exact slug — "
+                "loose 'brew' also matches drekker-brewing."
+            ),
         )
         parser.add_argument(
             "--template-name",
@@ -307,11 +316,52 @@ class Command(BaseCommand):
     def _resolve_tenant(self, needle: str):
         from tenants.models import Tenant
 
+        search = (needle or "").strip() or DEFAULT_TENANT
+
+        if search.isdigit():
+            by_id = Tenant.objects.filter(pk=int(search)).first()
+            if by_id is not None:
+                return by_id
+            raise CommandError(f"No tenant with id={search}.")
+
+        exact_slug = list(
+            Tenant.objects.filter(slug__iexact=search).order_by("id")
+        )
+        if len(exact_slug) == 1:
+            return exact_slug[0]
+        if len(exact_slug) > 1:
+            ids = ", ".join(f"[{t.id}] {t.name!r}" for t in exact_slug)
+            raise CommandError(
+                f"{len(exact_slug)} tenants share slug {search!r} ({ids})."
+            )
+
+        # Always prefer known Brew Dr slugs before any loose substring match.
+        for slug in TENANT_SLUGS:
+            preferred = list(Tenant.objects.filter(slug=slug).order_by("id"))
+            if len(preferred) == 1:
+                return preferred[0]
+            if len(preferred) > 1:
+                ids = ", ".join(f"[{t.id}] {t.name!r}" for t in preferred)
+                raise CommandError(
+                    f"{len(preferred)} tenants share slug {slug!r} ({ids})."
+                )
+
         matches = list(
             Tenant.objects.filter(
-                Q(name__icontains=needle) | Q(slug__icontains=needle)
-            ).order_by("id")
+                Q(name__icontains=search) | Q(slug__icontains=search)
+            )
+            .distinct()
+            .order_by("id")
         )
+        if len(matches) > 1:
+            prefer = [
+                t
+                for t in matches
+                if (t.slug or "").lower() in TENANT_SLUGS
+                or "brew dr" in (t.name or "").lower()
+            ]
+            if len(prefer) == 1:
+                return prefer[0]
         if len(matches) == 1:
             return matches[0]
         self.stdout.write(self.style.WARNING("Tenants in this database:"))
@@ -319,12 +369,13 @@ class Command(BaseCommand):
             self.stdout.write(f"  [{t.id}] name={t.name!r} slug={t.slug!r}")
         if not matches:
             raise CommandError(
-                f"No tenant matches {needle!r}. If Brew Dr. isn't in the list above "
+                f"No tenant matches {search!r}. If Brew Dr. isn't in the list above "
                 f"it needs onboarding first (tenant + event types + products)."
             )
         raise CommandError(
-            f"{needle!r} matched {len(matches)} tenants "
-            f"({', '.join(repr(t.slug) for t in matches)}) — narrow --tenant."
+            f"{search!r} matched {len(matches)} tenants "
+            f"({', '.join(repr(t.slug) for t in matches)}) — "
+            f"pass --tenant={DEFAULT_TENANT}."
         )
 
     def _resolve_creator(self):

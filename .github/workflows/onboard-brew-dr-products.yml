@@ -12,9 +12,9 @@ on:
         required: true
         default: "kyle@igniteproductions.co"
       tenant:
-        description: "Tenant name/slug substring"
+        description: "Tenant slug (exact). Default brew-dr-kombucha — do not use loose 'brew'."
         required: false
-        default: "brew"
+        default: "brew-dr-kombucha"
       apply:
         description: "Actually write (true) or dry-run (false)"
         required: false
