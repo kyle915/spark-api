@@ -638,3 +638,35 @@ class TestBrewDrSetupCronView:
         assert body["applied"] is False
         mock_call.assert_called_once()
         assert mock_call.call_args[0][0] == "seed_brew_dr_recap_template"
+
+    def test_seed_cron_defaults_to_exact_brew_dr_slug(self):
+        client = Client()
+        with override_settings(INTERNAL_CRON_SECRET=VALID_SECRET):
+            from unittest.mock import patch
+
+            with patch("digest.cron_views.call_command") as mock_call:
+                resp = client.post(
+                    BREW_DR_SEED_URL,
+                    {},
+                    HTTP_X_CRON_SECRET=VALID_SECRET,
+                )
+        assert resp.status_code == 200
+        assert mock_call.call_args.kwargs["tenant"] == "brew-dr-kombucha"
+
+
+@pytest.mark.django_db
+class TestBrewDrTenantResolveAmbiguousBrew(BaseGraphQLTestCase):
+    @pytest.fixture(autouse=True)
+    def setup(self, db):
+        self.setup_default_roles()
+        self.create_tenant(name="Drekker Brewing", slug="drekker-brewing")
+        self.brew = self.create_tenant(
+            name="Brew Dr. Kombucha", slug="brew-dr-kombucha"
+        )
+
+    def test_loose_brew_prefers_brew_dr_over_drekker(self):
+        from recaps.management.commands.seed_brew_dr_recap_template import Command
+
+        resolved = Command()._resolve_tenant("brew")
+        assert resolved.id == self.brew.id
+        assert resolved.slug == "brew-dr-kombucha"

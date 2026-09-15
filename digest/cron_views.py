@@ -3372,7 +3372,8 @@ class SeedBrewDrRecapTemplateView(View):
     stdout.
 
     Params (query or POST, all optional):
-      - tenant: tenant name/slug substring (default "brew")
+      - tenant: exact slug preferred (default "brew-dr-kombucha";
+        never rely on loose "brew" — it also matches drekker-brewing)
       - template_name: only seed programs whose template name matches
       - event_type: only seed programs whose event type matches
       - apply: "1"/"true"/"yes" — actually write (omit for dry-run)
@@ -3388,7 +3389,7 @@ class SeedBrewDrRecapTemplateView(View):
 
         apply_raw = (_param("apply") or "").lower()
         kwargs: dict = {
-            "tenant": _param("tenant") or "brew",
+            "tenant": _param("tenant") or "brew-dr-kombucha",
             "apply": apply_raw in ("1", "true", "yes", "on"),
         }
         if _param("template_name"):
