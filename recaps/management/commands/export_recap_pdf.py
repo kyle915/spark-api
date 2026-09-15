@@ -1,71 +1,89 @@
-"""Render one recap to PDF and upload it, printing the URL.
+"""Render one recap to PDF, upload it, and attach it as the Spark PDF row.
 
-Exactly what the "Export PDF" button on a recap produces — this calls the same
-`recaps.pdf.build_recap_pdf` and gathers images the same way, so the two can't
-drift into producing different documents. It exists because that button is a
-GraphQL mutation behind a login and prod isn't reachable locally; this runs from
-the secret-gated cron endpoint instead.
+Exactly what the "Download PDF" / generateCustomRecapPdf path produces — this
+calls ``_render_and_store_recap_pdf_sync(force=True)`` so the CustomRecapFile
+(or RecapFile) row points at a real GCS object. The older version of this
+command uploaded a blob but left the DB row untouched, so Download PDF kept
+opening a stale NoSuchKey URL.
+
+It exists because that button is a GraphQL mutation behind a login and prod
+isn't always reachable locally; this runs from the secret-gated cron endpoint.
 
 WHICH RECAP
     A CustomRecap and a legacy Recap can share an id, and they hang their files
-    off different models. The type is RESOLVED (CustomRecap first) and printed
-    on every run rather than assumed, for the same reason
-    `attach_fpo_recap_images` does it: writing to the wrong one is accepted by
-    the database because the row it points at genuinely exists.
+    off different models. Prefer ``--uuid`` when you have it (unique). With
+    ``--recap-id``, CustomRecap is tried first (same as before).
 
-Images come from two places and both matter: the recap's attached files, and
-image-type custom FIELDS whose value is a GCS blob path. Missing the second set
-is why receipts once rendered as raw path text in the PDF.
-
-Dry-run prints what would be embedded — file count, categories, total bytes —
-without fetching images or uploading anything, which is enough to confirm you
-have the right recap before spending the downloads.
+Dry-run prints what would be embedded — file count, categories, field count —
+without fetching images or uploading anything.
 
 Usage::
 
-    python manage.py export_recap_pdf --recap-id 692
+    python manage.py export_recap_pdf --uuid 01a09cc9-a145-788e-9827-92d217296c8b
+    python manage.py export_recap_pdf --uuid 01a09cc9-… --apply
     python manage.py export_recap_pdf --recap-id 692 --apply
 """
 
 from __future__ import annotations
 
-import concurrent.futures as cf
-
 from django.core.management.base import BaseCommand, CommandError
 
 
 class Command(BaseCommand):
-    help = "Render a recap to PDF and upload it. Dry-run unless --apply."
+    help = "Render a recap to PDF, upload it, and attach the Spark PDF file row."
 
     def add_arguments(self, parser):
         parser.add_argument(
             "--recap-id",
             dest="recap_id",
             type=int,
-            required=True,
-            help="CustomRecap / Recap id to render.",
+            default=None,
+            help="CustomRecap / Recap integer id to render.",
+        )
+        parser.add_argument(
+            "--uuid",
+            dest="recap_uuid",
+            default=None,
+            help="CustomRecap / Recap uuid (preferred when known).",
         )
         parser.add_argument(
             "--apply",
             action="store_true",
-            help="Fetch images, render and upload. Omit for a summary.",
+            help="Fetch images, render, upload, and attach. Omit for a summary.",
         )
 
     # ------------------------------------------------------------------
 
     def handle(self, *args, **opts):
         from recaps.models import CustomRecap, Recap
+        from recaps.mutation_parts.pdf_helpers import (
+            _render_and_store_recap_pdf_sync,
+        )
+        from utils.gcs import public_url
 
         apply = bool(opts["apply"])
-        recap_id = opts["recap_id"]
+        recap_id = opts.get("recap_id")
+        recap_uuid = (opts.get("recap_uuid") or "").strip() or None
 
-        recap = CustomRecap.objects.filter(id=recap_id).first()
+        if not recap_id and not recap_uuid:
+            raise CommandError("Pass --uuid or --recap-id.")
+
+        recap = None
         kind = "custom"
-        if recap is None:
-            recap = Recap.objects.filter(id=recap_id).first()
-            kind = "legacy"
-        if recap is None:
-            raise CommandError(f"No recap with id={recap_id}.")
+        if recap_uuid:
+            recap = CustomRecap.objects.filter(uuid=recap_uuid).first()
+            if recap is None:
+                recap = Recap.objects.filter(uuid=recap_uuid).first()
+                kind = "legacy"
+            if recap is None:
+                raise CommandError(f"No recap with uuid={recap_uuid}.")
+        else:
+            recap = CustomRecap.objects.filter(id=recap_id).first()
+            if recap is None:
+                recap = Recap.objects.filter(id=recap_id).first()
+                kind = "legacy"
+            if recap is None:
+                raise CommandError(f"No recap with id={recap_id}.")
 
         tenant = getattr(recap, "tenant", None) or getattr(
             getattr(recap, "event", None), "tenant", None
@@ -78,86 +96,72 @@ class Command(BaseCommand):
             f"TENANT: [{getattr(tenant, 'id', '?')}] "
             f"{getattr(tenant, 'name', '(unknown)')!r}\n"
             f"EVENT : {getattr(getattr(recap, 'event', None), 'name', '(none)')!r}\n"
-            f"MODE  : {'APPLY (render + upload)' if apply else 'DRY-RUN (summary)'}"
+            f"MODE  : {'APPLY (render + upload + attach)' if apply else 'DRY-RUN (summary)'}"
         )
         self.stdout.write("=" * 72)
 
-        if kind != "custom":
-            raise CommandError(
-                "This command renders CUSTOM recaps. Recap "
-                f"{recap_id} is a legacy Recap, which uses a different builder "
-                "— use the Export PDF button on the recap page for that one."
+        if kind == "custom":
+            candidates, field_candidates = self._collect_custom(recap)
+            self.stdout.write(
+                f"\n  {len(candidates)} attached image(s), "
+                f"{len(field_candidates)} image-type field value(s)."
             )
+            for crf, _ in candidates[:20]:
+                cat = (
+                    crf.file_recap_category.name
+                    if crf.file_recap_category
+                    else "Uncategorized"
+                )
+                self.stdout.write(f"    {cat:<32} {crf.name}")
+            if len(candidates) > 20:
+                self.stdout.write(f"    ... and {len(candidates) - 20} more")
+            n_values = recap.custom_field_value.count()
+            self.stdout.write(f"  {n_values} field value(s) will render.")
+        else:
+            from recaps.pdf import should_embed_recap_file
+            from utils.gcs import extract_blob_name_from_url
 
-        candidates, field_candidates = self._collect(recap)
-
-        self.stdout.write(
-            f"\n  {len(candidates)} attached image(s), "
-            f"{len(field_candidates)} image-type field value(s)."
-        )
-        for crf, _ in candidates[:20]:
-            cat = (
-                crf.file_recap_category.name
-                if crf.file_recap_category
-                else "Uncategorized"
-            )
-            self.stdout.write(f"    {cat:<32} {crf.name}")
-        if len(candidates) > 20:
-            self.stdout.write(f"    ... and {len(candidates) - 20} more")
-
-        n_values = recap.custom_field_value.count()
-        self.stdout.write(f"  {n_values} field value(s) will render.")
+            n_embed = 0
+            for rf in recap.recap_files.all():
+                if should_embed_recap_file(rf) and extract_blob_name_from_url(
+                    str(rf.file)
+                ):
+                    n_embed += 1
+            self.stdout.write(f"\n  {n_embed} embeddable image file(s).")
 
         if not apply:
             self.stdout.write(
                 "\nDRY-RUN — no images fetched, nothing rendered or uploaded. "
-                "Re-run with --apply to build the PDF."
+                "Re-run with --apply to build and attach the PDF."
             )
             return
 
-        images, field_images = self._fetch(candidates, field_candidates)
-        missing = len(candidates) - len(images)
-        if missing:
-            self.stdout.write(
-                self.style.WARNING(
-                    f"  {missing} image(s) could not be downloaded and will be "
-                    "missing from the PDF."
-                )
+        stored = _render_and_store_recap_pdf_sync(recap, force=True)
+        if stored is None:
+            raise CommandError(
+                "PDF render/store returned None — check logs "
+                "(missing created_by / FileType / WeasyPrint failure)."
             )
 
-        from recaps.pdf import build_recap_pdf
-
-        pdf = build_recap_pdf(recap, images, custom_field_images=field_images)
-
-        from django.utils import timezone as _tz
-
-        from utils.gcs import public_url, upload_bytes
-
-        ts = _tz.now().strftime("%Y%m%d%H%M%S")
-        blob = f"recaps/pdfs/custom-{recap.uuid}-{ts}.pdf"
-        upload_bytes(blob, pdf, content_type="application/pdf")
+        blob_val = getattr(stored, "url", None) or getattr(stored, "file", None)
+        blob = str(blob_val or "")
         url = public_url(blob)
 
         self.stdout.write("")
         self.stdout.write("=" * 72)
         self.stdout.write(
             self.style.SUCCESS(
-                f"PDF {len(pdf) // 1024}KB · {len(images)}/{len(candidates)} "
-                f"image(s) embedded"
+                f"Attached Spark PDF row id={stored.id} name={stored.name!r}"
             )
         )
         self.stdout.write(f"PDF_URL: {url}")
+        self.stdout.write(f"PDF_BLOB: {blob}")
         self.stdout.write("=" * 72)
 
     # ------------------------------------------------------------------
 
-    def _collect(self, recap):
-        """(attached-file candidates, image-field candidates).
-
-        The second list is easy to forget and its absence is silent: an
-        image-type custom field stores a blob PATH as its value, so leaving it
-        out renders the path as literal text in the PDF instead of the photo.
-        """
+    def _collect_custom(self, recap):
+        """(attached-file candidates, image-field candidates)."""
         from recaps.pdf import IMAGE_EXTENSIONS, should_embed_recap_file
         from utils.gcs import extract_blob_name_from_url
 
@@ -186,56 +190,6 @@ class Command(BaseCommand):
             if not blob_name:
                 continue
             seen.add(raw)
-            # Keyed by the ORIGINAL value so the renderer can match it back
-            # against CustomFieldValue.value.
             field_candidates.append((raw, blob_name))
 
         return candidates, field_candidates
-
-    def _fetch(self, candidates, field_candidates):
-        """Download both sets in parallel. A blob that fails is skipped rather
-        than failing the export — one dead file shouldn't cost the whole PDF."""
-        from recaps.pdf import is_image_bytes
-        from utils.gcs import download_blob_bytes
-
-        def _one(item):
-            crf, blob_name = item
-            try:
-                data = download_blob_bytes(blob_name)
-            except Exception:  # noqa: BLE001 — skipped, reported by caller
-                return None
-            if not data or not is_image_bytes(data):
-                return None
-            return {
-                "name": crf.name,
-                "bytes": data,
-                "category": (
-                    crf.file_recap_category.name
-                    if crf.file_recap_category
-                    else "Uncategorized"
-                ),
-            }
-
-        def _one_field(item):
-            value_key, blob_name = item
-            try:
-                data = download_blob_bytes(blob_name)
-            except Exception:  # noqa: BLE001
-                return None
-            if not data or not is_image_bytes(data):
-                return None
-            return (value_key, data)
-
-        images: list[dict] = []
-        field_images: dict[str, bytes] = {}
-        if candidates:
-            with cf.ThreadPoolExecutor(max_workers=16) as pool:
-                for entry in pool.map(_one, candidates):
-                    if entry is not None:
-                        images.append(entry)
-        if field_candidates:
-            with cf.ThreadPoolExecutor(max_workers=16) as pool:
-                for result in pool.map(_one_field, field_candidates):
-                    if result is not None:
-                        field_images[result[0]] = result[1]
-        return images, field_images

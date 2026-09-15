@@ -25,6 +25,7 @@ from utils.gcs import (
     download_blob_bytes,
     generate_download_url,
     get_gcs_client,
+    blob_exists,
 )
 
 # Spark-rendered field/custom recap PDFs use these name prefixes. Other
@@ -154,10 +155,54 @@ async def _resolve_recap_pdf_attachment(
     ]
 
 
+def _pdf_blob_name(pdf_file) -> str | None:
+    """GCS blob path for a RecapFile / CustomRecapFile row, or None."""
+    blob_val = getattr(pdf_file, "url", None) or getattr(pdf_file, "file", None)
+    if not blob_val:
+        return None
+    return extract_blob_name_from_url(str(blob_val))
+
+
 def _find_existing_pdf_file(recap):
     """Most recent Spark-generated PDF on this recap, or None."""
     spark_pdfs = _list_spark_generated_pdfs(recap)
     return spark_pdfs[0] if spark_pdfs else None
+
+
+def _drop_missing_pdf_blob_row(pdf_file) -> None:
+    """Delete a Spark PDF DB row whose GCS object is already gone."""
+    pdf_id = getattr(pdf_file, "id", None)
+    recap = getattr(pdf_file, "custom_recap", None) or getattr(pdf_file, "recap", None)
+    blob = _pdf_blob_name(pdf_file)
+    logger.warning(
+        "Dropping Spark PDF row id=%s recap=%s with missing GCS blob %s",
+        pdf_id,
+        getattr(recap, "id", None),
+        blob,
+    )
+    if isinstance(pdf_file, models.CustomRecapFile):
+        models.CustomRecapFile.objects.filter(id=pdf_id).delete()
+    else:
+        models.RecapFile.objects.filter(id=pdf_id).delete()
+
+
+def _find_reusable_pdf_file(recap):
+    """Spark PDF that matches the approval badge AND still exists in GCS.
+
+    Generate / Download used to reuse any post-approval DB row and mint a
+    public URL for it. When the blob was deleted (race on regenerate, failed
+    upload after row write, ops cleanup), Download PDF opened a NoSuchKey
+    XML page and Generate short-circuited without rebuilding. Drop the dead
+    row and return None so callers regenerate.
+    """
+    for pdf in _list_spark_generated_pdfs(recap):
+        if not _pdf_matches_approval_status(recap, pdf):
+            continue
+        blob = _pdf_blob_name(pdf)
+        if blob and blob_exists(blob):
+            return pdf
+        _drop_missing_pdf_blob_row(pdf)
+    return None
 
 
 def _render_and_store_recap_pdf_sync(recap, user=None, *, force: bool = False):
@@ -165,16 +210,15 @@ def _render_and_store_recap_pdf_sync(recap, user=None, *, force: bool = False):
 
     Used by the approve notify path so the email attaches a PDF that
     matches the current approval badge. Reuses an existing Spark PDF only
-    when it was rendered after approval (APPROVED chip). Best-effort:
-    failures log and return None (link-only email).
+    when it was rendered after approval (APPROVED chip) and the GCS object
+    still exists. Best-effort: failures log and return None (link-only email).
     """
-    existing = _find_existing_pdf_file(recap)
-    if (
-        existing
-        and not force
-        and _pdf_matches_approval_status(recap, existing)
-    ):
+    existing = _find_reusable_pdf_file(recap)
+    if existing and not force:
         return existing
+
+    # Any remaining Spark PDF rows are stale (wrong badge or missing blob).
+    prior = _find_existing_pdf_file(recap)
 
     actor = user or getattr(recap, "updated_by", None) or getattr(recap, "created_by", None)
     if actor is None:
@@ -239,7 +283,7 @@ def _render_and_store_recap_pdf_sync(recap, user=None, *, force: bool = False):
     try:
         # Drop stale Spark PDFs (e.g. pre-approval DRAFT snapshot) before
         # writing the fresh APPROVED render. Non-Spark .pdf attachments stay.
-        if existing or force:
+        if prior or force:
             _delete_spark_generated_pdfs(recap)
 
         pdf_bytes = build_recap_pdf(recap, image_entries)

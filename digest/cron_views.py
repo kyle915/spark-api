@@ -6757,14 +6757,14 @@ class ListCheckinLinksView(View):
 class ExportRecapPdfView(View):
     """GET/POST `/internal/cron/export-recap-pdf`.
 
-    Renders ONE custom recap to PDF and returns its URL — the same document the
-    "Export PDF" button produces, through the same builder.
+    Renders ONE recap to PDF, uploads it, and attaches the Spark PDF file
+    row — the same document Download PDF / generate*Pdf produce.
 
     DRY-RUN unless `apply` is truthy: without it you get the image inventory and
     field count, which is enough to confirm you have the right recap before
     paying for the downloads.
 
-    Params: recap_id (required), apply.
+    Params: uuid OR recap_id (one required), apply.
     """
 
     def _run(self, request: HttpRequest) -> HttpResponse:
@@ -6775,19 +6775,24 @@ class ExportRecapPdfView(View):
         def _param(key: str) -> str:
             return (request.GET.get(key) or request.POST.get(key) or "").strip()
 
+        recap_uuid = _param("uuid")
         raw_id = _param("recap_id")
-        if not raw_id:
+        if not recap_uuid and not raw_id:
             return JsonResponse(
-                {"ok": False, "error": "recap_id-required"}, status=400
-            )
-        try:
-            recap_id = int(raw_id)
-        except ValueError:
-            return JsonResponse(
-                {"ok": False, "error": "recap_id-must-be-an-integer"}, status=400
+                {"ok": False, "error": "uuid-or-recap_id-required"}, status=400
             )
 
-        kwargs: dict = {"recap_id": recap_id}
+        kwargs: dict = {}
+        if recap_uuid:
+            kwargs["recap_uuid"] = recap_uuid
+        else:
+            try:
+                kwargs["recap_id"] = int(raw_id)
+            except ValueError:
+                return JsonResponse(
+                    {"ok": False, "error": "recap_id-must-be-an-integer"}, status=400
+                )
+
         if _param("apply").lower() in ("1", "true", "yes", "on"):
             kwargs["apply"] = True
 
@@ -6804,10 +6809,13 @@ class ExportRecapPdfView(View):
 
         log = out.getvalue()
         url = None
+        blob = None
         for line in log.splitlines():
             if line.startswith("PDF_URL:"):
                 url = line.split("PDF_URL:", 1)[1].strip()
-        return JsonResponse({"ok": True, "url": url, "log": log})
+            elif line.startswith("PDF_BLOB:"):
+                blob = line.split("PDF_BLOB:", 1)[1].strip()
+        return JsonResponse({"ok": True, "url": url, "blob": blob, "log": log})
 
     def post(self, request: HttpRequest) -> HttpResponse:
         return self._run(request)
