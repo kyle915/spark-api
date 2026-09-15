@@ -22,26 +22,36 @@
           <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Date</td>
           <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ date_text|default:"-" }}</td>
         </tr>
+        {% if scheduled_start_time or scheduled_end_time %}
         <tr>
           <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Scheduled Time</td>
           <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ scheduled_start_time|default:"-" }} - {{ scheduled_end_time|default:"-" }}</td>
         </tr>
+        {% endif %}
+        {% if actual_check_in %}
         <tr>
           <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Actual Check-In</td>
           <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ actual_check_in|default:"-" }}</td>
         </tr>
+        {% endif %}
+        {% if actual_check_out %}
         <tr>
           <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Actual Check-Out</td>
           <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ actual_check_out|default:"-" }}</td>
         </tr>
+        {% endif %}
+        {% if ba_on_site %}
         <tr>
           <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">BA(s) On-Site</td>
           <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ ba_on_site|default:"-" }}</td>
         </tr>
+        {% endif %}
+        {% if extensions_text %}
         <tr>
           <td style="padding: 10px 12px; border: 1px solid #d8d8d8; font-weight: 700; color: #202036;">Extensions</td>
           <td style="padding: 10px 12px; border: 1px solid #d8d8d8;">{{ extensions_text|default:"None" }}</td>
         </tr>
+        {% endif %}
       </table>
 
       <h3 style="margin: 0 0 12px 0; color: #202036; font-size: 32px;">Deliverables Included</h3>

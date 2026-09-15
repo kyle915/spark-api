@@ -21,8 +21,15 @@ def _apply_offset(
 def _format_dt_no_tz(
     value: datetime.datetime | None, fmt: str, offset_minutes: int = 0
 ) -> str:
+    """Format a datetime, or return "" when there isn't one.
+
+    Empty rather than "-": the approval email now HIDES a row it has no
+    value for, and it can only do that if "missing" is falsy in the
+    template. Cells that should still show a dash keep `|default:"-"`,
+    which fires on "" exactly as it did on None.
+    """
     if not value:
-        return "-"
+        return ""
     value = _apply_offset(value, offset_minutes) or value
     formatted = value.replace(tzinfo=None).strftime(fmt)
     if fmt.startswith("%I"):
@@ -35,11 +42,15 @@ def _normalize_slug(slug: str | None) -> str:
 
 
 def _extensions_text(recap) -> str:
-    """Approved shift-extension minutes for this recap's event, or an em dash.
+    """Approved shift-extension minutes for this recap's event, or "".
+
+    Returns "" (not an em dash) when there is nothing to report, so the
+    mailer can drop the row instead of printing a placeholder. A real
+    extension still renders as "1h 30m".
 
     The client email used to hardcode ``None`` even when a BA ran long.
     Look up approved ``ShiftExtensionRequest`` rows on the event (scoped
-    to the recap's ambassador when set). Fail open to ``—`` so a missing
+    to the recap's ambassador when set). Fail open to "" so a missing
     table / unexpected shape never blanks the rest of the mailer.
     """
     try:
@@ -47,7 +58,7 @@ def _extensions_text(recap) -> str:
 
         event = getattr(recap, "event", None)
         if event is None:
-            return "—"
+            return ""
         qs = ShiftExtensionRequest.objects.filter(
             event=event,
             status=ShiftExtensionRequest.STATUS_APPROVED,
@@ -63,7 +74,7 @@ def _extensions_text(recap) -> str:
                 or 0
             )
         if minutes <= 0:
-            return "—"
+            return ""
         hours, mins = divmod(minutes, 60)
         if hours and mins:
             return f"{hours}h {mins}m"
@@ -71,7 +82,7 @@ def _extensions_text(recap) -> str:
             return f"{hours}h"
         return f"{mins}m"
     except Exception:
-        return "—"
+        return ""
 
 
 class RecapApprovedNotificationMailer(Mailer):
@@ -124,12 +135,12 @@ class RecapApprovedNotificationMailer(Mailer):
         actual_check_in = (
             _format_dt_no_tz(min(clock_in_times), "%I:%M %p", offset_minutes)
             if clock_in_times
-            else "-"
+            else ""
         )
         actual_check_out = (
             _format_dt_no_tz(max(clock_out_times), "%I:%M %p", offset_minutes)
             if clock_out_times
-            else "-"
+            else ""
         )
         return actual_check_in, actual_check_out
 
