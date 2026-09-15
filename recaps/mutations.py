@@ -74,8 +74,7 @@ from recaps.mutation_parts.file_categories import (  # noqa: F401
 )
 from recaps.mutation_parts.pdf_helpers import (  # noqa: F401
     _ensure_recap_pdf_for_notify,
-    _find_existing_pdf_file,
-    _pdf_matches_approval_status,
+    _find_reusable_pdf_file,
     _render_and_store_recap_pdf_sync,
     _resolve_recap_pdf_attachment,
 )
@@ -4128,14 +4127,13 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
         )
 
         # Reuse only when the stored Spark PDF already reflects the
-        # current approval badge. A Generate-PDF click before approve
-        # used to leave a DRAFT snapshot that never refreshed.
+        # current approval badge AND the GCS object still exists. A
+        # Generate-PDF click before approve used to leave a DRAFT
+        # snapshot that never refreshed; a deleted blob used to mint a
+        # NoSuchKey download URL.
         @sync_to_async
         def existing_current_pdf():
-            existing = _find_existing_pdf_file(recap)
-            if existing and _pdf_matches_approval_status(recap, existing):
-                return existing
-            return None
+            return _find_reusable_pdf_file(recap)
 
         existing_pdf = await existing_current_pdf()
         if existing_pdf:
@@ -4748,13 +4746,11 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
         )
 
         # Reuse only when the stored Spark PDF already reflects the
-        # current approval badge (see generate_recap_pdf).
+        # current approval badge AND the GCS object still exists
+        # (see generate_recap_pdf / _find_reusable_pdf_file).
         @sync_to_async
         def existing_current_custom_pdf():
-            existing = _find_existing_pdf_file(custom_recap)
-            if existing and _pdf_matches_approval_status(custom_recap, existing):
-                return existing
-            return None
+            return _find_reusable_pdf_file(custom_recap)
 
         existing_pdf = await existing_current_custom_pdf()
         if existing_pdf:

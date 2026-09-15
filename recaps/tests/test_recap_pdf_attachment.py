@@ -14,6 +14,7 @@ from events import models as event_models
 from recaps import models as recap_models
 from recaps.mutation_parts.pdf_helpers import (
     _find_existing_pdf_file,
+    _find_reusable_pdf_file,
     _pdf_matches_approval_status,
     _render_and_store_recap_pdf_sync,
     _resolve_recap_pdf_attachment,
@@ -221,13 +222,56 @@ class TestRecapPdfApprovalFreshness(JobsGraphQLTestCase):
             approved=False,
             created_by=self.spark_user,
         )
-        with patch(
-            "recaps.mutation_parts.pdf_helpers.build_recap_pdf"
-        ) as mock_build:
+        with (
+            patch(
+                "recaps.mutation_parts.pdf_helpers.build_recap_pdf"
+            ) as mock_build,
+            patch(
+                "recaps.mutation_parts.pdf_helpers.blob_exists",
+                return_value=True,
+            ),
+        ):
             reused = _render_and_store_recap_pdf_sync(recap)
 
         assert reused.id == current.id
         mock_build.assert_not_called()
+
+    def test_missing_gcs_blob_is_not_reused(self):
+        """DB row pointing at a deleted GCS object must not short-circuit generate."""
+        approved_at = django_timezone.now() - timedelta(minutes=1)
+        recap = self._custom_recap(approved=True, approved_at=approved_at)
+        stale = recap_models.CustomRecapFile.objects.create(
+            name=f"Custom Recap PDF - {recap.name}",
+            url="recaps/pdfs/custom-missing-blob.pdf",
+            file_type=self.pdf_type,
+            custom_recap=recap,
+            approved=False,
+            created_by=self.spark_user,
+        )
+        with patch(
+            "recaps.mutation_parts.pdf_helpers.blob_exists",
+            return_value=False,
+        ):
+            assert _find_reusable_pdf_file(recap) is None
+        assert not recap_models.CustomRecapFile.objects.filter(id=stale.id).exists()
+
+        with (
+            patch(
+                "recaps.mutation_parts.pdf_helpers.build_recap_pdf",
+                return_value=b"%PDF-1.4 rebuilt",
+            ) as mock_build,
+            patch("recaps.mutation_parts.pdf_helpers.upload_bytes"),
+            patch("recaps.mutation_parts.pdf_helpers.delete_blob"),
+            patch(
+                "recaps.mutation_parts.pdf_helpers.blob_exists",
+                return_value=False,
+            ),
+        ):
+            fresh = _render_and_store_recap_pdf_sync(recap)
+
+        assert fresh is not None
+        assert fresh.id != stale.id
+        mock_build.assert_called_once()
 
     def test_connecteam_pdf_does_not_block_spark_generation(self):
         recap = self._custom_recap(
