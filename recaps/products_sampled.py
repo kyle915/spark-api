@@ -8,7 +8,7 @@ re-ran a seed command.
 
 These helpers make the pills resolve from the same catalog at read time.
 Stored ``CustomField.options`` remain a fallback for tenants without products
-(e.g. Brew Dr. cans) and for non–Products-Sampled choice fields.
+and for non–Products-Sampled choice fields.
 """
 
 from __future__ import annotations

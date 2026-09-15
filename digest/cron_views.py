@@ -3365,10 +3365,11 @@ class SeedBrewDrRecapTemplateView(View):
     """GET/POST `/internal/cron/seed-brew-dr-recap-template`.
 
     Builds/reconciles Brew Dr. Kombucha's LD-mirrored **Retail Sampling** and
-    **Event Activation** recap templates (brand-swapped LD questions; five
-    Brew Dr. cans on Products Sampled). Archives a franken retail form when
-    needed. Fires ``seed_brew_dr_recap_template``. DRY-RUN unless apply=true;
-    the response ``report`` is the command's full stdout.
+    **Event Activation** recap templates (brand-swapped LD questions; Products
+    Sampled from the Product catalog; feedback placeholders). Archives a
+    franken retail form when needed. Fires ``seed_brew_dr_recap_template``.
+    DRY-RUN unless apply=true; the response ``report`` is the command's full
+    stdout.
 
     Params (query or POST, all optional):
       - tenant: tenant name/slug substring (default "brew")
@@ -3615,6 +3616,71 @@ class OnboardDrekkerProductsView(View):
             call_command("onboard_drekker_products", stdout=out, **kwargs)
         except Exception as exc:  # noqa: BLE001 — surface to caller
             logger.exception("onboard-drekker-products cron failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "report": out.getvalue(),
+                },
+                status=500,
+            )
+        return JsonResponse(
+            {"ok": True, "applied": kwargs["apply"], "report": out.getvalue()}
+        )
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class OnboardBrewDrProductsView(View):
+    """GET/POST `/internal/cron/onboard-brew-dr-products`.
+
+    Seeds Brew Dr. Kombucha's Product catalog (Kombucha + 6 SKUs), retires
+    extras, refreshes Products Sampled options, and rewrites recaps whose
+    sampled selection is empty or only lists legacy cans. Idempotent.
+    DRY-RUN unless apply=true.
+
+    Params: owner_email (required), tenant, apply, skip_migrate.
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _param(name: str) -> str | None:
+            return request.GET.get(name) or request.POST.get(name)
+
+        owner = (_param("owner_email") or _param("owner-email") or "").strip()
+        if not owner:
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "missing-owner-email",
+                    "detail": "Pass owner_email=kyle@igniteproductions.co",
+                },
+                status=400,
+            )
+        apply_raw = (_param("apply") or "").lower()
+        skip_raw = (_param("skip_migrate") or "").lower()
+        kwargs: dict = {
+            "owner_email": owner,
+            "apply": apply_raw in ("1", "true", "yes", "on"),
+            "skip_migrate": skip_raw in ("1", "true", "yes", "on"),
+        }
+        if _param("tenant"):
+            kwargs["tenant"] = str(_param("tenant"))
+
+        out = io.StringIO()
+        try:
+            call_command("onboard_brew_dr_products", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("onboard-brew-dr-products cron failed")
             return JsonResponse(
                 {
                     "ok": False,
@@ -9513,6 +9579,7 @@ def _registered_views() -> dict[str, Any]:
         "setup-neutonic-checkin": SetupNeutonicCheckinView,
         "setup-mab-checkin": SetupMabCheckinView,
         "onboard-drekker-products": OnboardDrekkerProductsView,
+        "onboard-brew-dr-products": OnboardBrewDrProductsView,
         "onboard-daou-products": OnboardDaouProductsView,
         "import-demo-recaps": ImportDemoRecapsView,
         "audit-client-submissions": AuditClientSubmissionsView,

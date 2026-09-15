@@ -212,6 +212,7 @@ def serialize_template(event) -> dict | None:
                 "required": bool(f.required),
                 "type": (getattr(f.custom_field_type, "name", "") or "text").lower(),
                 "options": list(f.options or []),
+                "placeholder": (getattr(f, "placeholder", None) or "") or "",
             }
         )
 

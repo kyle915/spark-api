@@ -1,9 +1,9 @@
 name: Seed Brew Dr recap template
 
 # Manual: build Brew Dr. Kombucha's LD-mirrored Retail Sampling + Event
-# Activation recap templates (brand-swapped questions; five-can Products
-# Sampled). Dry-run by default — the run log prints both programs. Flip
-# apply=true to write. Idempotent.
+# Activation recap templates (brand-swapped questions; Products Sampled from
+# catalog; feedback placeholders). Dry-run by default — the run log prints
+# both programs. Flip apply=true to write. Idempotent.
 # See recaps/management/commands/seed_brew_dr_recap_template.py.
 
 on:

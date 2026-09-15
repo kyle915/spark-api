@@ -1811,6 +1811,7 @@ class CustomField(Node):
     name: str
     required: bool
     order: int
+    placeholder: str
     custom_recap_template_id: strawberry.ID
     custom_field_type_id: strawberry.ID
     custom_field_type: "CustomRecapFieldType"
@@ -1832,7 +1833,7 @@ class CustomField(Node):
         catalog rows, those win over the frozen JSON list so a new SKU shows
         on the bottom pills as soon as it lands in /products (same source as
         the upper Product Samples grid). Other choice fields and catalog-empty
-        tenants (e.g. Brew Dr. cans) still use the stored options.
+        tenants still fall back to the stored options.
         Read stored options via __dict__ to avoid recursing into this resolver.
         """
         raw = self.__dict__.get("options")

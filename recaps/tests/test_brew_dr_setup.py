@@ -73,13 +73,13 @@ class TestBrewDrRecapTemplateSpec:
         assert any("top 5 frequently asked questions" in n for n in labels)
         assert "Helpful feedback" in labels
 
-    def test_products_sampled_uses_five_cans(self):
+    def test_products_sampled_uses_catalog_options_not_hardcoded_cans(self):
         for spec in (RETAIL_SPEC, EVENT_SPEC):
             products = next(
                 fields for section, fields in spec if section == "Products Sampled"
             )
             assert products == [
-                ("Products Sampled", "multiselect", True, list(CANS))
+                ("Products Sampled", "multiselect", True, [])
             ]
         assert CANS == [
             "Clear Mind",
@@ -88,6 +88,35 @@ class TestBrewDrRecapTemplateSpec:
             "Love",
             "Pineapple Paradise",
         ]
+
+    def test_retail_feedback_order_matches_quality_bar_example(self):
+        feedback = next(
+            fields
+            for section, fields in RETAIL_SPEC
+            if section == "Feedback & Account Notes"
+        )
+        assert [name for name, *_ in feedback] == [
+            "Anything you'd change or do differently?",
+            "Demographics (general age, sex, ethnicities of consumers)",
+            "Consumer Feedback",
+            "Positive stories from your sampling today",
+            "Reasons to decline to purchase?",
+            "Quotes from Consumers",
+            "Account Feedback",
+        ]
+
+    def test_feedback_placeholders_cover_retail_fields(self):
+        from recaps.management.commands.seed_brew_dr_recap_template import (
+            FEEDBACK_PLACEHOLDERS,
+        )
+
+        for name, *_ in next(
+            fields
+            for section, fields in RETAIL_SPEC
+            if section == "Feedback & Account Notes"
+        ):
+            assert name in FEEDBACK_PLACEHOLDERS
+            assert FEEDBACK_PLACEHOLDERS[name].startswith("e.g.")
 
     def test_no_template_image_fields_photos_are_walkup_buckets(self):
         for spec in (RETAIL_SPEC, EVENT_SPEC):
@@ -321,7 +350,21 @@ class TestBrewDrRecapTemplateSeed(BaseGraphQLTestCase):
             products = CustomField.objects.get(
                 custom_recap_template=tpl, name="Products Sampled"
             )
-            assert list(products.options) == list(CANS)
+            # Catalog empty in this fixture → stored options stay [].
+            # Live GraphQL still resolves from Product rows when present.
+            assert list(products.options) == []
+            demo = CustomField.objects.filter(
+                custom_recap_template=tpl,
+                name__icontains="Demographic",
+            ).first()
+            if demo is not None:
+                assert (demo.placeholder or "").startswith("e.g.")
+            change = CustomField.objects.filter(
+                custom_recap_template=tpl,
+                name="Anything you'd change or do differently?",
+            ).first()
+            if change is not None:
+                assert (change.placeholder or "").startswith("e.g.")
 
     def test_apply_renames_empty_legacy_template_in_place(self):
         from recaps.models import CustomField, CustomRecapTemplate

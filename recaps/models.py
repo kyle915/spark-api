@@ -648,6 +648,9 @@ class CustomField(models.Model):
     # CustomFieldValue.value: a single option string for "select", or a JSON
     # array of option strings for "multiselect".
     options = models.JSONField(default=list, blank=True)
+    # BA-facing example / quality-bar copy shown as the input placeholder.
+    # Labels stay as the question; this never becomes the submitted value.
+    placeholder = models.TextField(blank=True, default="")
 
     custom_recap_template = models.ForeignKey(
         CustomRecapTemplate,
