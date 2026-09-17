@@ -6142,6 +6142,57 @@ class RenameTorchOnshelfBucketView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class AddTorchCompetitorFeedbackView(View):
+    """GET/POST `/internal/cron/add-torch-competitor-feedback`.
+
+    Torch THC: ensure the competitor-products Feedback & Account Notes
+    question on live CustomRecapTemplate(s). Does not remint TH-2HRV3D.
+
+    Idempotent. DRY-RUN unless `apply` is truthy.
+    Params: apply, tenant (slug, default torch-thc).
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        kwargs: dict = {}
+        raw = (
+            request.GET.get("apply") or request.POST.get("apply") or ""
+        ).lower()
+        if raw in ("1", "true", "yes", "on"):
+            kwargs["apply"] = True
+        tenant = (
+            request.GET.get("tenant") or request.POST.get("tenant") or ""
+        ).strip()
+        if tenant:
+            kwargs["tenant"] = tenant
+
+        out = io.StringIO()
+        try:
+            call_command("add_torch_competitor_feedback", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("add-torch-competitor-feedback cron failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "log": out.getvalue(),
+                },
+                status=500,
+            )
+        return JsonResponse({"ok": True, "log": out.getvalue()})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class DeleteTenantView(View):
     """GET/POST `/internal/cron/delete-tenant`.
 
@@ -9625,6 +9676,7 @@ def _registered_views() -> dict[str, Any]:
         "onboard-mab-products": OnboardMabProductsView,
         "migrate-torch-product-spend": MigrateTorchProductSpendView,
         "rename-torch-onshelf-bucket": RenameTorchOnshelfBucketView,
+        "add-torch-competitor-feedback": AddTorchCompetitorFeedbackView,
         "clone-recap-template": CloneRecapTemplateView,
         "attach-fpo-recap-images": AttachFpoRecapImagesView,
         "add-recap-template-fields": AddRecapTemplateFieldsView,
