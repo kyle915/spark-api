@@ -32,6 +32,10 @@ class RecapFiltersInput(SparkGraphQLInput):
     state_code: str | None = None
     # True = shared_at is set (link copied / emailed). False = not yet shared.
     shared: bool | None = None
+    # True = archived_at is set (ops parked; not client-visible).
+    # False = still in the active queues. Null = no archive filter.
+    # Needs review = approved=false AND archived=false.
+    archived: bool | None = None
     # Activation program bucket for the Recaps list chips.
     # ``retail`` = Retail + On-premise (same fold as Insights CONV),
     # ``event`` = Event activations only,
@@ -259,6 +263,32 @@ class ApproveRecapInput(SparkGraphQLInput):
 class ApproveCustomRecapInput(SparkGraphQLInput):
     id: strawberry.ID
     approved: bool
+
+
+@strawberry.input
+class ArchiveRecapInput(SparkGraphQLInput):
+    """Park a legacy recap so it leaves Needs review without deleting."""
+
+    id: strawberry.ID
+    reason: str | None = None
+
+
+@strawberry.input
+class ArchiveCustomRecapInput(SparkGraphQLInput):
+    """Park a custom recap so it leaves Needs review without deleting."""
+
+    id: strawberry.ID
+    reason: str | None = None
+
+
+@strawberry.input
+class UnarchiveRecapInput(SparkGraphQLInput):
+    id: strawberry.ID
+
+
+@strawberry.input
+class UnarchiveCustomRecapInput(SparkGraphQLInput):
+    id: strawberry.ID
 
 
 @strawberry.input

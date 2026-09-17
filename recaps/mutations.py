@@ -125,9 +125,33 @@ def _stamp_recap_approval(recap: models.Recap | models.CustomRecap, *, approved:
     if approved:
         recap.approved_by = actor
         recap.approved_at = django_timezone.now()
+        # Approving means the recap is going to the client — clear any
+        # archive park so it is not stuck in Archived while approved.
+        recap.archived_at = None
+        recap.archived_by = None
+        recap.archive_reason = ""
     else:
         recap.approved_by = None
         recap.approved_at = None
+
+
+def _stamp_recap_archive(
+    recap: models.Recap | models.CustomRecap,
+    *,
+    archived: bool,
+    actor,
+    reason: str | None = None,
+) -> None:
+    """Park or restore a recap without deleting it. No client emails."""
+    recap.updated_by = actor
+    if archived:
+        recap.archived_at = django_timezone.now()
+        recap.archived_by = actor
+        recap.archive_reason = (reason or "").strip()
+    else:
+        recap.archived_at = None
+        recap.archived_by = None
+        recap.archive_reason = ""
 
 
 class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
@@ -3555,6 +3579,162 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
 
         return custom_recap
 
+    async def archive_recap(self) -> models.Recap:
+        """Park a legacy recap (no client email, keep the row)."""
+        if not isinstance(self.input, inputs.ArchiveRecapInput):
+            raise GraphQLError("Invalid input type.")
+
+        try:
+            recap_id = resolve_id_to_int(self.input.id)
+            recap = await sync_to_async(
+                models.Recap.objects.select_related("event").get
+            )(id=recap_id)
+        except (models.Recap.DoesNotExist, TypeError, ValueError, GraphQLError):
+            raise GraphQLError("Recap not found.")
+
+        await self._assert_caller_authorized_for_recap_tenant(
+            recap.event.tenant_id if recap.event_id else None,
+            action="archive",
+            block_ambassadors=True,
+        )
+
+        @sync_to_async
+        def archive_recap_transaction():
+            with transaction.atomic():
+                _stamp_recap_archive(
+                    recap,
+                    archived=True,
+                    actor=self.user,
+                    reason=self.input.reason,
+                )
+                recap.save(
+                    update_fields=[
+                        "archived_at",
+                        "archived_by",
+                        "archive_reason",
+                        "updated_by",
+                        "updated_at",
+                    ]
+                )
+                return recap
+
+        return await archive_recap_transaction()
+
+    async def unarchive_recap(self) -> models.Recap:
+        """Restore a legacy recap to the active queues."""
+        if not isinstance(self.input, inputs.UnarchiveRecapInput):
+            raise GraphQLError("Invalid input type.")
+
+        try:
+            recap_id = resolve_id_to_int(self.input.id)
+            recap = await sync_to_async(
+                models.Recap.objects.select_related("event").get
+            )(id=recap_id)
+        except (models.Recap.DoesNotExist, TypeError, ValueError, GraphQLError):
+            raise GraphQLError("Recap not found.")
+
+        await self._assert_caller_authorized_for_recap_tenant(
+            recap.event.tenant_id if recap.event_id else None,
+            action="unarchive",
+            block_ambassadors=True,
+        )
+
+        @sync_to_async
+        def unarchive_recap_transaction():
+            with transaction.atomic():
+                _stamp_recap_archive(recap, archived=False, actor=self.user)
+                recap.save(
+                    update_fields=[
+                        "archived_at",
+                        "archived_by",
+                        "archive_reason",
+                        "updated_by",
+                        "updated_at",
+                    ]
+                )
+                return recap
+
+        return await unarchive_recap_transaction()
+
+    async def archive_custom_recap(self) -> models.CustomRecap:
+        """Park a custom recap (no client email, keep the row)."""
+        if not isinstance(self.input, inputs.ArchiveCustomRecapInput):
+            raise GraphQLError("Invalid input type.")
+
+        try:
+            custom_recap_id = resolve_id_to_int(self.input.id)
+            custom_recap = await sync_to_async(models.CustomRecap.objects.get)(
+                id=custom_recap_id
+            )
+        except (models.CustomRecap.DoesNotExist, TypeError, ValueError, GraphQLError):
+            raise GraphQLError("Custom recap not found.")
+
+        await self._assert_caller_authorized_for_recap_tenant(
+            custom_recap.tenant_id,
+            action="archive",
+            block_ambassadors=True,
+            record_label="Custom recap",
+        )
+
+        @sync_to_async
+        def archive_custom_recap_transaction():
+            with transaction.atomic():
+                _stamp_recap_archive(
+                    custom_recap,
+                    archived=True,
+                    actor=self.user,
+                    reason=self.input.reason,
+                )
+                custom_recap.save(
+                    update_fields=[
+                        "archived_at",
+                        "archived_by",
+                        "archive_reason",
+                        "updated_by",
+                        "updated_at",
+                    ]
+                )
+                return custom_recap
+
+        return await archive_custom_recap_transaction()
+
+    async def unarchive_custom_recap(self) -> models.CustomRecap:
+        """Restore a custom recap to the active queues."""
+        if not isinstance(self.input, inputs.UnarchiveCustomRecapInput):
+            raise GraphQLError("Invalid input type.")
+
+        try:
+            custom_recap_id = resolve_id_to_int(self.input.id)
+            custom_recap = await sync_to_async(models.CustomRecap.objects.get)(
+                id=custom_recap_id
+            )
+        except (models.CustomRecap.DoesNotExist, TypeError, ValueError, GraphQLError):
+            raise GraphQLError("Custom recap not found.")
+
+        await self._assert_caller_authorized_for_recap_tenant(
+            custom_recap.tenant_id,
+            action="unarchive",
+            block_ambassadors=True,
+            record_label="Custom recap",
+        )
+
+        @sync_to_async
+        def unarchive_custom_recap_transaction():
+            with transaction.atomic():
+                _stamp_recap_archive(custom_recap, archived=False, actor=self.user)
+                custom_recap.save(
+                    update_fields=[
+                        "archived_at",
+                        "archived_by",
+                        "archive_reason",
+                        "updated_by",
+                        "updated_at",
+                    ]
+                )
+                return custom_recap
+
+        return await unarchive_custom_recap_transaction()
+
     async def map_custom_recap_store(self) -> models.CustomRecap:
         """Admin confirms a maybe-match / chain for a 3rd-party typed store."""
         if not isinstance(self.input, inputs.MapCustomRecapStoreInput):
@@ -5844,6 +6024,110 @@ class RecapMutations:
                 types.CustomRecapDetailResponse,
                 success=True,
                 message=message,
+                input_obj=input,
+                custom_recap=custom_recap,
+            )
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.CustomRecapDetailResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def archive_recap(
+        self,
+        info: strawberry.Info,
+        input: inputs.ArchiveRecapInput,
+    ) -> types.RecapDetailResponse:
+        """Park a legacy recap without deleting it or emailing the client."""
+        try:
+            service = RecapMutationService.with_input(input)
+            await service.set_user(info)
+            recap = await service.archive_recap()
+            return build_mutation_response(
+                types.RecapDetailResponse,
+                success=True,
+                message="Recap archived.",
+                input_obj=input,
+                recap=recap,
+            )
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.RecapDetailResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def unarchive_recap(
+        self,
+        info: strawberry.Info,
+        input: inputs.UnarchiveRecapInput,
+    ) -> types.RecapDetailResponse:
+        """Restore a legacy recap to Needs review (if still unapproved)."""
+        try:
+            service = RecapMutationService.with_input(input)
+            await service.set_user(info)
+            recap = await service.unarchive_recap()
+            return build_mutation_response(
+                types.RecapDetailResponse,
+                success=True,
+                message="Recap restored.",
+                input_obj=input,
+                recap=recap,
+            )
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.RecapDetailResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def archive_custom_recap(
+        self,
+        info: strawberry.Info,
+        input: inputs.ArchiveCustomRecapInput,
+    ) -> types.CustomRecapDetailResponse:
+        """Park a custom recap without deleting it or emailing the client."""
+        try:
+            service = RecapMutationService.with_input(input)
+            await service.set_user(info)
+            custom_recap = await service.archive_custom_recap()
+            return build_mutation_response(
+                types.CustomRecapDetailResponse,
+                success=True,
+                message="Custom recap archived.",
+                input_obj=input,
+                custom_recap=custom_recap,
+            )
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.CustomRecapDetailResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def unarchive_custom_recap(
+        self,
+        info: strawberry.Info,
+        input: inputs.UnarchiveCustomRecapInput,
+    ) -> types.CustomRecapDetailResponse:
+        """Restore a custom recap to Needs review (if still unapproved)."""
+        try:
+            service = RecapMutationService.with_input(input)
+            await service.set_user(info)
+            custom_recap = await service.unarchive_custom_recap()
+            return build_mutation_response(
+                types.CustomRecapDetailResponse,
+                success=True,
+                message="Custom recap restored.",
                 input_obj=input,
                 custom_recap=custom_recap,
             )
