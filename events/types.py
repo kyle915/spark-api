@@ -1140,7 +1140,8 @@ class Event(Node):
         approved recaps. Drafts / unapproved recaps would otherwise
         leak through here even though /recap/list filters them — a
         client viewing a Request page could read raw BA submissions
-        before they're approved.
+        before they're approved. Archived recaps are excluded the same
+        way (never client-visible).
         """
         # Local import to avoid circular import at module load time
         # (events.types ⇄ recaps.queries pull in each other).
@@ -1148,16 +1149,21 @@ class Event(Node):
 
         is_client_only = await _is_client_only_user(info)
 
+        def _client_visible(r) -> bool:
+            return bool(getattr(r, "approved", False)) and getattr(
+                r, "archived_at", None
+            ) is None
+
         cached = getattr(self, "_prefetched_objects_cache", {}).get("recaps")
         if cached is not None:
             recaps = list(cached)
             if is_client_only:
-                recaps = [r for r in recaps if getattr(r, "approved", False)]
+                recaps = [r for r in recaps if _client_visible(r)]
             return recaps
 
         qs = self.recaps.order_by("-created_at")
         if is_client_only:
-            qs = qs.filter(approved=True)
+            qs = qs.filter(approved=True, archived_at__isnull=True)
         return await sync_to_async(list)(qs)
 
     @strawberry.field
@@ -1297,6 +1303,7 @@ class Event(Node):
         unapproved custom recap leaks to the client through the event
         even though the customRecaps query resolver filters them out
         (e.g. a Connecteam-imported draft visible on a Request page).
+        Archived recaps are excluded the same way (never client-visible).
         """
         # Local import to avoid circular import at module load time
         # (events.types ⇄ recaps.queries pull in each other).
@@ -1304,18 +1311,23 @@ class Event(Node):
 
         is_client_only = await _is_client_only_user(info)
 
+        def _client_visible(r) -> bool:
+            return bool(getattr(r, "approved", False)) and getattr(
+                r, "archived_at", None
+            ) is None
+
         cached = getattr(self, "_prefetched_objects_cache", {}).get(
             "custom_recap"
         )
         if cached is not None:
             recaps = list(cached)
             if is_client_only:
-                recaps = [r for r in recaps if getattr(r, "approved", False)]
+                recaps = [r for r in recaps if _client_visible(r)]
             return recaps
 
         qs = self.custom_recap.order_by("-created_at")
         if is_client_only:
-            qs = qs.filter(approved=True)
+            qs = qs.filter(approved=True, archived_at__isnull=True)
         return await sync_to_async(list)(qs)
 
 

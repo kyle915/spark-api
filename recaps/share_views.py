@@ -63,6 +63,16 @@ def public_recap_view(request: HttpRequest, token: str) -> HttpResponse:
         return JsonResponse(
             {"error": "not_found", "message": "Recap not found."}, status=404
         )
+    # Archived submissions are never client-visible — same gate as
+    # unapproved drafts on the authenticated client lists.
+    if getattr(recap, "archived_at", None) is not None:
+        return JsonResponse(
+            {
+                "error": "not_found",
+                "message": "Recap not found.",
+            },
+            status=404,
+        )
     return JsonResponse({"recap": recap_to_public_dict(kind, recap)})
 
 
@@ -78,6 +88,14 @@ def public_recap_pdf_view(request: HttpRequest, token: str) -> HttpResponse:
     if recap is None:
         return JsonResponse(
             {"error": "not_found", "message": "Recap not found."}, status=404
+        )
+    if getattr(recap, "archived_at", None) is not None:
+        return JsonResponse(
+            {
+                "error": "not_found",
+                "message": "Recap not found.",
+            },
+            status=404,
         )
 
     try:

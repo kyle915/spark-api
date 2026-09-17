@@ -1447,6 +1447,8 @@ class RecapQueries:
         # the client visibility gate. A stale frontend that defaulted
         # My Recaps to shared=true hid every approved-but-unshared recap
         # (Feel Free: 118 approved, 0 shared).
+        # Archived recaps are also never client-visible (same gate as
+        # unapproved) — force archived_at IS NULL for client-only callers.
         client_only = await _is_client_only_user(info)
         if client_only:
             approved = True
@@ -1474,6 +1476,12 @@ class RecapQueries:
             and not client_only
         ):
             queryset = queryset.filter(shared_at__isnull=not filters.shared)
+        if client_only:
+            queryset = queryset.filter(archived_at__isnull=True)
+        elif filters and getattr(filters, "archived", None) is not None:
+            queryset = queryset.filter(
+                archived_at__isnull=not filters.archived
+            )
         queryset = _apply_name_code_filters(
             queryset,
             retailer_name=retailer_name,
@@ -1576,8 +1584,11 @@ class RecapQueries:
             # Client-only users never see unapproved drafts. Return None
             # rather than raising — same posture as the tenant mismatch
             # above, so we don't leak the existence of in-flight work.
+            # Archived is the same gate (parked, not client-visible).
             if await _is_client_only_user(info):
                 if not getattr(recap, "approved", False):
+                    return None
+                if getattr(recap, "archived_at", None) is not None:
                     return None
             return recap
         except GraphQLError:
@@ -1685,6 +1696,7 @@ class RecapQueries:
         # Force approved=True for client users on custom recaps too.
         # Ignore `shared` the same way as the legacy recaps list — clients
         # see every approved recap, not only ones stamped shared_at.
+        # Archived is never client-visible (same gate as unapproved).
         client_only = await _is_client_only_user(info)
         if client_only:
             approved = True
@@ -1726,6 +1738,12 @@ class RecapQueries:
             and not client_only
         ):
             queryset = queryset.filter(shared_at__isnull=not filters.shared)
+        if client_only:
+            queryset = queryset.filter(archived_at__isnull=True)
+        elif filters and getattr(filters, "archived", None) is not None:
+            queryset = queryset.filter(
+                archived_at__isnull=not filters.archived
+            )
         if filters and getattr(filters, "needs_store_map", None) and not client_only:
             queryset = queryset.filter(
                 is_third_party=True, store_mapping_status="unmatched"
@@ -1827,9 +1845,12 @@ class RecapQueries:
                 user, record.tenant_id
             )
             # Hide unapproved drafts from client-only users — same
-            # posture as the legacy Recap resolver above.
+            # posture as the legacy Recap resolver above. Archived is
+            # the same gate (parked, not client-visible).
             if await _is_client_only_user(info):
                 if not getattr(record, "approved", False):
+                    return None
+                if getattr(record, "archived_at", None) is not None:
                     return None
             return record
         except GraphQLError:

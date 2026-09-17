@@ -64,6 +64,18 @@ class Recap(models.Model):
     # Set when ops copies/emails the /r/:token link. Pipeline "Shared"
     # is derived from this — not a new status enum.
     shared_at = models.DateTimeField(null=True, blank=True)
+    # Ops parks a submission that should not go to the client (keep
+    # proof, leave Needs review). Orthogonal to ``approved`` —
+    # client-facing surfaces require approved AND archived_at IS NULL.
+    archived_at = models.DateTimeField(null=True, blank=True)
+    archived_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="recaps_archived_by",
+    )
+    archive_reason = models.TextField(blank=True, default="")
     # Client leave-behind sign-off (Looks good / Need more photos).
     client_signoff_status = models.CharField(max_length=32, blank=True, default="")
     client_signoff_comment = models.TextField(blank=True, default="")
@@ -454,6 +466,18 @@ class CustomRecap(models.Model):
     )
     approved_at = models.DateTimeField(null=True, blank=True)
     shared_at = models.DateTimeField(null=True, blank=True)
+    # Ops parks a submission that should not go to the client (keep
+    # proof, leave Needs review). Orthogonal to ``approved`` —
+    # client-facing surfaces require approved AND archived_at IS NULL.
+    archived_at = models.DateTimeField(null=True, blank=True)
+    archived_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="custom_recaps_archived_by",
+    )
+    archive_reason = models.TextField(blank=True, default="")
     client_signoff_status = models.CharField(max_length=32, blank=True, default="")
     client_signoff_comment = models.TextField(blank=True, default="")
     client_signoff_at = models.DateTimeField(null=True, blank=True)
