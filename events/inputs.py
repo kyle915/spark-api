@@ -103,6 +103,8 @@ class RequestFiltersInput(BaseTenantInput):
     status_slugs: list[str] | None = None
     # Two-value scheduling metadata on Request.scheduling_status.
     scheduling_status: str | None = None
+    # Activation Plan grouping (FMM forward slate).
+    activation_plan_id: strawberry.ID | None = None
     # 2-letter US state code (retailer / location / address fallback).
     state_code: str | None = None
     created_within_hours: int | None = None
@@ -486,6 +488,8 @@ class CreateRequestInput(BaseNameableInput):
     # Torch spark-form: "How many cases to be shipped?" Auto-mapped onto Request.
     cases_to_be_shipped: str | None = None
     store_number: str | None = None
+    # Optional Activation Plan to attach this request to on create.
+    activation_plan_id: strawberry.ID | None = None
     client_name: str | None = None
     client_email: str | None = None
     distributor_name: str | None = None

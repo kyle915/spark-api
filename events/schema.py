@@ -27,6 +27,7 @@ from events.staffing_board import StaffingBoardQueries
 from events.live_board import LiveBoardQueries
 from events.payroll import PayrollQueries, PayrollMutations
 from events.campaign_pnl import CampaignPnlQueries
+from events.activation_plans import ActivationPlanQueries, ActivationPlanMutations
 
 
 @strawberry.type
@@ -54,6 +55,7 @@ class EventQueryClient(
     EventConfirmationQueries,
     PayrollQueries,
     CampaignPnlQueries,
+    ActivationPlanQueries,
     queries.EventTypeQueries,
     queries.EventStatusQueries,
     queries.ClientQueries,
@@ -110,6 +112,7 @@ class EventsMutations(
     RequestStatusMutations,
     RequestMutations,
     RequestStoreManagerMutations,
+    ActivationPlanMutations,
 ):
     pass
 
@@ -143,13 +146,7 @@ class EventMutationsClient(
     RequestMutations,
     RequestStoreManagerMutations,
     TimeZoneMutations,
-):
-    pass
-
-
-@strawberry.type
-class EventMutationsAmbassadors(
-    PublicRequestMutations,
+    ActivationPlanMutations,
 ):
     pass
 

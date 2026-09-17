@@ -428,6 +428,44 @@ class Request(Node):
     state: State | None = None
 
     @strawberry.field
+    async def activation_plan(self) -> Annotated[
+        "ActivationPlanType", strawberry.lazy("events.activation_plans")
+    ] | None:
+        """Optional Activation Plan this request belongs to (FMM slate).
+
+        List rows return the plan identity only (pipeline zeros) so Master
+        Tracker stays cheap; Plan detail recomputes pipeline counts.
+        """
+        from events.activation_plans import (
+            ActivationPlanPipeline,
+            ActivationPlanType,
+        )
+
+        plan_id = getattr(self, "activation_plan_id", None)
+        if not plan_id:
+            return None
+
+        def _load():
+            return models.ActivationPlan.objects.filter(id=plan_id).first()
+
+        plan = await sync_to_async(_load)()
+        if plan is None:
+            return None
+        return ActivationPlanType(
+            id=strawberry.ID(str(plan.id)),
+            uuid=str(plan.uuid),
+            name=plan.name or "",
+            concept_brief=plan.concept_brief or "",
+            start_date=plan.start_date.isoformat() if plan.start_date else None,
+            end_date=plan.end_date.isoformat() if plan.end_date else None,
+            markets=list(plan.markets or []),
+            request_count=0,
+            pipeline=ActivationPlanPipeline(
+                planned=0, approved=0, staffed=0, executed=0, verified=0
+            ),
+        )
+
+    @strawberry.field
     async def store_managers(self) -> List[RequestStoreManager]:
         cached = getattr(self, "_prefetched_objects_cache", {}).get(
             "requests_stores_manager"
