@@ -48,7 +48,7 @@ logger = logging.getLogger(__name__)
 CHECKIN_MAX_PAST_DAYS = 90
 CHECKIN_MAX_FUTURE_DAYS = 14
 
-# Photo uploads only — the check-in page never uploads anything else.
+# Photo / video uploads for check-in recap media.
 _ALLOWED_UPLOAD_TYPES = {
     "image/jpeg",
     "image/jpg",
@@ -56,6 +56,11 @@ _ALLOWED_UPLOAD_TYPES = {
     "image/heic",
     "image/heif",
     "image/webp",
+    "video/mp4",
+    "video/quicktime",
+    "video/webm",
+    "video/x-m4v",
+    "video/mpeg",
 }
 
 # Signed-URL mints per IP. Feel Free-style batches can be ~100 shots; each may
@@ -726,7 +731,7 @@ def public_checkin_upload_url(request: HttpRequest, code: str) -> HttpResponse:
 
     content_type = (data.get("contentType") or data.get("content_type") or "").strip().lower()
     if content_type not in _ALLOWED_UPLOAD_TYPES:
-        return _err("Only photo uploads are allowed here.")
+        return _err("Only photo and video uploads are allowed here.")
     filename = (data.get("filename") or "photo.jpg").strip()
     safe = _SAFE_NAME.sub("-", filename)[-80:] or "photo.jpg"
     blob_name = (
