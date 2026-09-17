@@ -368,6 +368,70 @@ class SchedulingStatus(models.TextChoices):
     NEEDS_SCHEDULING = "needs_scheduling", "Needs scheduling by Ignite"
 
 
+class ActivationPlan(models.Model):
+    """Named forward slate of activations (groups Requests for FMM → leadership).
+
+    Ops still execute per Request after approve. This is the planning object
+    that replaces Google Sheets as the shared source of truth for a quarter's
+    markets / concepts / date window.
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    name = models.CharField(max_length=255)
+    concept_brief = models.TextField(blank=True, default="")
+    # Inclusive planning window (calendar dates in the tenant's ops sense).
+    start_date = models.DateField(null=True, blank=True)
+    end_date = models.DateField(null=True, blank=True)
+    # Free-form market labels (e.g. "CA", "Pacific NW") — not FK'd to State
+    # so FMMs can name regions the way leadership already talks about them.
+    markets = ArrayField(
+        models.CharField(max_length=64),
+        default=list,
+        blank=True,
+    )
+    tenant = models.ForeignKey(
+        Tenant,
+        on_delete=models.CASCADE,
+        related_name="activation_plans",
+    )
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="owned_activation_plans",
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="activation_plan_created_by",
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="activation_plan_updated_by",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(
+                fields=["tenant", "-start_date"],
+                name="ev_actplan_tenant_start_idx",
+            ),
+        ]
+        ordering = ["-start_date", "-created_at"]
+
+    def __str__(self) -> str:
+        return f"ActivationPlan {self.name!r} @ tenant {self.tenant_id}"
+
+
 class Request(models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
@@ -462,6 +526,14 @@ class Request(models.Model):
         Tenant,
         on_delete=models.RESTRICT,
         null=False,
+        related_name="requests",
+    )
+
+    activation_plan = models.ForeignKey(
+        ActivationPlan,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
         related_name="requests",
     )
 

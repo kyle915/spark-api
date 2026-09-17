@@ -1540,6 +1540,11 @@ def _apply_request_list_filters(
         queryset = queryset.filter(updated_by__isnull=not filters.edited)
     if filters.reviewed is not None:
         queryset = queryset.filter(reviewed=filters.reviewed)
+    if filters.activation_plan_id:
+        plan_id = _resolve_filter_id(
+            filters.activation_plan_id, "activation plan"
+        )
+        queryset = queryset.filter(activation_plan_id=plan_id)
 
     return queryset
 
