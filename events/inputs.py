@@ -105,6 +105,8 @@ class RequestFiltersInput(BaseTenantInput):
     scheduling_status: str | None = None
     # Activation Plan grouping (FMM forward slate).
     activation_plan_id: strawberry.ID | None = None
+    # True = only requests on a plan; False = only unplanned; None = either.
+    has_activation_plan: bool | None = None
     # 2-letter US state code (retailer / location / address fallback).
     state_code: str | None = None
     created_within_hours: int | None = None

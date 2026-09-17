@@ -78,6 +78,9 @@ class ActivationPlanType:
     markets: List[str]
     request_count: int
     pipeline: ActivationPlanPipeline
+    owner_id: strawberry.ID | None = None
+    owner_name: str | None = None
+    owner_email: str | None = None
 
 
 @strawberry.type
@@ -196,6 +199,16 @@ def _pipeline_for_plan(plan_id: int) -> ActivationPlanPipeline:
 
 def _serialize_plan(plan: models.ActivationPlan) -> ActivationPlanType:
     pipe = _pipeline_for_plan(plan.id)
+    owner = getattr(plan, "owner", None)
+    owner_name = None
+    owner_email = None
+    owner_id = None
+    if owner is not None:
+        owner_id = strawberry.ID(str(owner.id))
+        first = (getattr(owner, "first_name", None) or "").strip()
+        last = (getattr(owner, "last_name", None) or "").strip()
+        owner_name = f"{first} {last}".strip() or None
+        owner_email = getattr(owner, "email", None) or None
     return ActivationPlanType(
         id=strawberry.ID(str(plan.id)),
         uuid=str(plan.uuid),
@@ -206,6 +219,9 @@ def _serialize_plan(plan: models.ActivationPlan) -> ActivationPlanType:
         markets=list(plan.markets or []),
         request_count=pipe.planned,
         pipeline=pipe,
+        owner_id=owner_id,
+        owner_name=owner_name,
+        owner_email=owner_email,
     )
 
 
@@ -235,9 +251,9 @@ class ActivationPlanQueries:
 
         def _list() -> list[ActivationPlanType]:
             rows = list(
-                models.ActivationPlan.objects.filter(tenant_id=tenant.id).order_by(
-                    "-start_date", "-created_at"
-                )[: max(1, min(first or 50, 200))]
+                models.ActivationPlan.objects.filter(tenant_id=tenant.id)
+                .select_related("owner")
+                .order_by("-start_date", "-created_at")[: max(1, min(first or 50, 200))]
             )
             return [_serialize_plan(p) for p in rows]
 
@@ -254,7 +270,7 @@ class ActivationPlanQueries:
         user = await service.get_user(info)
 
         def _get() -> ActivationPlanType | None:
-            qs = models.ActivationPlan.objects.all()
+            qs = models.ActivationPlan.objects.select_related("owner")
             if id:
                 pk = resolve_id_to_int(id)
                 plan = qs.filter(id=pk).first()

@@ -1545,6 +1545,10 @@ def _apply_request_list_filters(
             filters.activation_plan_id, "activation plan"
         )
         queryset = queryset.filter(activation_plan_id=plan_id)
+    if filters.has_activation_plan is True:
+        queryset = queryset.filter(activation_plan_id__isnull=False)
+    elif filters.has_activation_plan is False:
+        queryset = queryset.filter(activation_plan_id__isnull=True)
 
     return queryset
 
