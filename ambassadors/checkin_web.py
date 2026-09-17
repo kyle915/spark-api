@@ -321,6 +321,9 @@ def serialize_photo_buckets(event) -> list[dict]:
                 "name": name,
                 "helper": str(entry.get("helper") or "").strip(),
                 "min": max(0, minimum),
+                # Optional MIME accept string for the walk-up file inputs
+                # (e.g. "image/*,video/*"). Empty keeps the page on photos-only.
+                "accept": str(entry.get("accept") or "").strip(),
             }
         )
     return buckets

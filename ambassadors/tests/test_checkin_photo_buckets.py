@@ -166,6 +166,7 @@ class TestCheckinPhotoBuckets(AmbassadorsGraphQLTestCase):
         sampling = buckets[2]
         assert sampling["helper"] == "please try to upload 8+"
         assert sampling["min"] == 8
+        assert sampling.get("accept", "") == ""
         # The three without a target carry a falsy one, so the page can render
         # a count only where the brand asked for one.
         assert [b["min"] for b in buckets] == [0, 0, 8, 0]

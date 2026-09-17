@@ -5535,6 +5535,58 @@ class SetupBreakawayCheckinView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class SetupKalshiCheckinView(View):
+    """GET/POST `/internal/cron/setup-kalshi-checkin`.
+
+    Creates the Kalshi tenant if missing (createTenant-style seeds), seeds
+    the Event Activation recap template ("Kalshi · Event Activation Recap")
+    mirroring Breakaway Hiyo with Kalshi field renames, mints the standing
+    ``KA-`` check-in code, pins Event Activation, and labels Activation
+    Photos (photo + video).
+
+    Idempotent: get_or_create for the template, and an existing checkin_code
+    is left alone (rotating it breaks every copy already shared). Recaps stay
+    human-reviewed (walk-up leaves approved=False).
+
+    Params: tenant (default "kalshi"), template_name, event_type,
+    prefix, apply (default DRY RUN).
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        kwargs: dict = {}
+        for key in ("tenant", "template_name", "event_type", "prefix"):
+            val = request.GET.get(key) or request.POST.get(key)
+            if val:
+                kwargs[key] = str(val)
+        raw = (request.GET.get("apply") or request.POST.get("apply") or "").lower()
+        apply_it = raw in ("1", "true", "yes", "on")
+        if apply_it:
+            kwargs["apply"] = True
+
+        out = io.StringIO()
+        try:
+            call_command("setup_kalshi_checkin", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("setup-kalshi-checkin cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc),
+                 "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse({"ok": True, "apply": apply_it, "log": out.getvalue()})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class SetupDudeWipesCheckinView(View):
     """GET/POST `/internal/cron/setup-dude-wipes-checkin`.
 
@@ -9668,6 +9720,7 @@ def _registered_views() -> dict[str, Any]:
         "setup-anthropic-checkin": SetupAnthropicCheckinView,
         "setup-sipli-checkin": SetupSipliCheckinView,
         "setup-breakaway-checkin": SetupBreakawayCheckinView,
+        "setup-kalshi-checkin": SetupKalshiCheckinView,
         "setup-dude-wipes-checkin": SetupDudeWipesCheckinView,
         "backfill-torch-public-form-sheet": BackfillTorchPublicFormSheetView,
         "inspect-tenants": InspectTenantsView,
