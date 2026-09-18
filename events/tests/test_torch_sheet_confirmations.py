@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
-from events.torch_sheet_confirmations import (
+from events.sheet_event_confirmations import (
     STATUS_CANCELLED,
     STATUS_QUEUED,
     STATUS_SENT,
@@ -67,6 +67,12 @@ def test_validate_sheet_id_hard_gate():
     assert validate_sheet_id(None) == TORCH_PUBLIC_FORM_SHEET_ID
     with pytest.raises(ValueError):
         validate_sheet_id("not-the-torch-sheet")
+
+
+def test_validate_sheet_id_allows_liquid_death():
+    from events.sheet_event_confirmations import LIQUID_DEATH_SHEET_ID
+
+    assert validate_sheet_id(LIQUID_DEATH_SHEET_ID) == LIQUID_DEATH_SHEET_ID
 
 
 def test_resolve_timezone_geocode_success():
@@ -155,12 +161,12 @@ def test_send_queued_finalizes_when_confirmation_already_mailed():
         },
     )()
     with patch(
-        "events.torch_sheet_confirmations._find_mailed_confirmation",
+        "events.sheet_event_confirmations._find_mailed_confirmation",
         return_value=fake,
     ) as find, patch(
-        "events.torch_sheet_confirmations.write_row_status"
+        "events.sheet_event_confirmations.write_row_status"
     ) as write, patch(
-        "events.torch_sheet_confirmations._create_and_send"
+        "events.sheet_event_confirmations._create_and_send"
     ) as create:
         result = send_from_sheet_row(payload)
     find.assert_called_once()
@@ -183,10 +189,10 @@ def test_send_queued_refuses_without_mailed_confirmation():
         start_time="1p",
     )
     with patch(
-        "events.torch_sheet_confirmations._find_mailed_confirmation",
+        "events.sheet_event_confirmations._find_mailed_confirmation",
         return_value=None,
     ), patch(
-        "events.torch_sheet_confirmations._create_and_send"
+        "events.sheet_event_confirmations._create_and_send"
     ) as create:
         result = send_from_sheet_row(payload)
     create.assert_not_called()
@@ -205,7 +211,7 @@ def test_find_mailed_confirmation_matches_uuid_with_booked_send():
     from django.utils import timezone as dj_tz
 
     from events.models import EventConfirmation, EventConfirmationSend
-    from events.torch_sheet_confirmations import _find_mailed_confirmation
+    from events.sheet_event_confirmations import _find_mailed_confirmation
     from tenants.models import Tenant
     from tenants.tests.base import ensure_role
 
@@ -259,7 +265,7 @@ def test_find_mailed_confirmation_matches_uuid_with_booked_send():
         start_time="1p",
     )
     with patch(
-        "events.torch_sheet_confirmations._torch_tenant",
+        "events.sheet_event_confirmations._tenant_for",
         return_value=tenant,
     ):
         found = _find_mailed_confirmation(payload)
@@ -282,12 +288,12 @@ def test_send_force_resend_bypasses_sent_guard_then_hits_validation():
     )
     fake_tenant = type("T", (), {"slug": "keee-torch-thc", "id": 17, "name": "Torch"})()
     with patch(
-        "events.torch_sheet_confirmations.write_row_status"
+        "events.sheet_event_confirmations.write_row_status"
     ), patch(
-        "events.torch_sheet_confirmations.resolve_timezone_for_row",
+        "events.sheet_event_confirmations.resolve_timezone_for_row",
         return_value=("America/Chicago", ""),
     ), patch(
-        "events.torch_sheet_confirmations._torch_tenant",
+        "events.sheet_event_confirmations._tenant_for",
         return_value=fake_tenant,
     ):
         result = send_from_sheet_row(payload)
@@ -306,7 +312,7 @@ def test_cancel_without_prior_sent_skips_email():
         start_time="1p",
     )
     with patch(
-        "events.torch_sheet_confirmations.write_row_status"
+        "events.sheet_event_confirmations.write_row_status"
     ) as write, patch(
         "events.event_confirmations.send_cancellation_email"
     ) as mail:
@@ -380,12 +386,10 @@ def test_write_row_status_uses_known_letters_not_header_read():
             return _FakeSpreadsheets()
 
     with patch(
-        "events.torch_sheet_confirmations._service", return_value=_FakeSvc()
+        "events.sheet_event_confirmations._service", return_value=_FakeSvc()
     ), patch(
-        "events.torch_sheet_confirmations._ensure_confirmation_headers"
-    ) as ensure, patch(
-        "events.torch_sheet_confirmations._tab_for_gid"
-    ) as tab:
+        "events.sheet_event_confirmations._ensure_confirmation_headers"
+    ) as ensure:
         write_row_status(
             sheet_id=TORCH_PUBLIC_FORM_SHEET_ID,
             row_number=78,
@@ -395,7 +399,6 @@ def test_write_row_status_uses_known_letters_not_header_read():
             sent_column_value="Sent 2026-09-18 00:44 CDT",
         )
     ensure.assert_not_called()
-    tab.assert_not_called()
     ranges = [d["range"] for d in captured["batch"]["body"]["data"]]
     assert "'Retail Schedule'!AB78" in ranges
     assert "'Retail Schedule'!AC78" in ranges
