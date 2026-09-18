@@ -48,20 +48,15 @@ def has_valid_coordinates(coords) -> bool:
     return True
 
 
-def photon_geocode(
+def photon_geocode_feature(
     address: str,
     *,
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
-) -> list[float] | None:
-    """Geocode ``address`` to ``[lat, lng]`` via Photon, best-effort.
+) -> dict | None:
+    """Geocode ``address`` to coords + Photon properties, best-effort.
 
-    Returns ``[lat, lng]`` (floats) on success, or ``None`` when the address
-    is empty, the request fails/times out, or Photon returns no usable
-    feature. NEVER raises — callers (backfill commands) treat ``None`` as
-    "skip this row" so one bad address can't abort a run.
-
-    Photon's GeoJSON returns coordinates as ``[lng, lat]``; we swap to
-    ``[lat, lng]`` to match how Spark stores them.
+    Returns ``{"lat": float, "lng": float, "state": str, "properties": dict}``
+    or ``None``. NEVER raises.
     """
     address = (address or "").strip()
     if not address:
@@ -86,7 +81,8 @@ def photon_geocode(
     if not features:
         return None
 
-    geometry = (features[0] or {}).get("geometry") or {}
+    feature = features[0] or {}
+    geometry = feature.get("geometry") or {}
     coords = geometry.get("coordinates") or []
     # GeoJSON Point: [lng, lat]. Need two finite numbers.
     if not isinstance(coords, (list, tuple)) or len(coords) < 2:
@@ -97,7 +93,34 @@ def photon_geocode(
     except (TypeError, ValueError):
         return None
 
-    return [lat, lng]
+    props = feature.get("properties") or {}
+    return {
+        "lat": lat,
+        "lng": lng,
+        "state": (props.get("state") or "").strip(),
+        "properties": props,
+    }
+
+
+def photon_geocode(
+    address: str,
+    *,
+    timeout: float = DEFAULT_TIMEOUT_SECONDS,
+) -> list[float] | None:
+    """Geocode ``address`` to ``[lat, lng]`` via Photon, best-effort.
+
+    Returns ``[lat, lng]`` (floats) on success, or ``None`` when the address
+    is empty, the request fails/times out, or Photon returns no usable
+    feature. NEVER raises — callers (backfill commands) treat ``None`` as
+    "skip this row" so one bad address can't abort a run.
+
+    Photon's GeoJSON returns coordinates as ``[lng, lat]``; we swap to
+    ``[lat, lng]`` to match how Spark stores them.
+    """
+    feature = photon_geocode_feature(address, timeout=timeout)
+    if not feature:
+        return None
+    return [feature["lat"], feature["lng"]]
 
 
 def photon_state_for_address(

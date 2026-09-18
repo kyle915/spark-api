@@ -7,6 +7,7 @@ from .schema_ambassador import schema_ambassador
 from .schema_client import schema_clients
 from .schema_spark import schema_spark
 from .schema_mobile import schema_mobile
+from events.torch_sheet_confirmation_views import TorchSheetEventConfirmationView
 
 urlpatterns = [
     path(
@@ -92,6 +93,13 @@ urlpatterns = [
     # background. Fails closed (403) when the secret is unset. See
     # `tasks/views.py`.
     path("api/tasks/", include("tasks.urls")),
+    # Torch retail-schedule Sheet → Event Confirmation / cancel (Apps Script).
+    # X-Cron-Secret gated; Torch sheet id hard-validated. See
+    # events/torch_sheet_confirmation_views.py.
+    path(
+        "internal/torch-sheet-event-confirmation",
+        csrf_exempt(TorchSheetEventConfirmationView.as_view()),
+    ),
 ]
 
 # Add RQ dashboard in DEBUG mode

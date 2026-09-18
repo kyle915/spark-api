@@ -105,6 +105,12 @@ def _try_zone(name: str) -> Optional[ZoneInfo]:
         return None
 
 
+def iana_for_us_state(state_code: str | None) -> Optional[str]:
+    """Dominant IANA zone for a US state/territory code, or None if unknown."""
+    code = (state_code or "").strip().upper()
+    return _US_STATE_TO_IANA.get(code)
+
+
 def offset_minutes_for_state(
     state_code: str | None, at: _dt.datetime | None = None
 ) -> Optional[int]:
@@ -114,8 +120,7 @@ def offset_minutes_for_state(
     when the state is unknown so callers can fall through to their own
     default (e.g. UTC) rather than guessing.
     """
-    code = (state_code or "").strip().upper()
-    iana = _US_STATE_TO_IANA.get(code)
+    iana = iana_for_us_state(state_code)
     if not iana:
         return None
     zi = _try_zone(iana)
@@ -265,6 +270,7 @@ def apply_dst_aware_offset(
 __all__ = [
     "apply_dst_aware_offset",
     "fixed_offset_minutes",
+    "iana_for_us_state",
     "naive_local_iso",
     "offset_minutes_for",
     "offset_minutes_for_state",
