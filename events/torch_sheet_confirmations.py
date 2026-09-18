@@ -247,6 +247,151 @@ def _already_queued(payload: SheetRowPayload) -> bool:
     return _norm_status(payload.confirmation_status).startswith("queued")
 
 
+def _booked_send_succeeded(confirmation) -> bool:
+    """True when the booked-stage ledger row has ``sent_at`` set."""
+    from events.models import EventConfirmation, EventConfirmationSend
+
+    return EventConfirmationSend.objects.filter(
+        confirmation_id=confirmation.pk,
+        stage=EventConfirmation.STAGE_BOOKED,
+        sent_at__isnull=False,
+    ).exists()
+
+
+def _find_mailed_confirmation(payload: SheetRowPayload):
+    """Locate an EventConfirmation whose booked email already left.
+
+    Used to finalize stuck **Queued** rows (Sent stamp failed after a real
+    send) without Force Resend / double-emailing the BA.
+    """
+    from events.models import EventConfirmation
+
+    tenant = _torch_tenant()
+    qs = EventConfirmation.objects.filter(
+        tenant=tenant,
+        cancelled_at__isnull=True,
+    )
+
+    uuid_str = (payload.confirmation_uuid or "").strip()
+    if uuid_str:
+        by_uuid = qs.filter(uuid=uuid_str).first()
+        if by_uuid is not None and _booked_send_succeeded(by_uuid):
+            return by_uuid
+
+    ba_email = (payload.ba_email or "").strip()
+    if not ba_email or "@" not in ba_email:
+        return None
+    try:
+        day = parse_sheet_date_iso(payload.date)
+    except ValueError:
+        return None
+
+    start_clock: time | None = None
+    if (payload.start_time or "").strip():
+        try:
+            start_clock = parse_sheet_clock(payload.start_time)
+        except ValueError:
+            start_clock = None
+
+    # Recent matches for this BA; prefer exact local start when we have it.
+    candidates = list(
+        qs.filter(ba_email__iexact=ba_email)
+        .order_by("-id")[:25]
+    )
+    exact: list = []
+    same_day: list = []
+    for conf in candidates:
+        local = conf.local_start()
+        if local is None or local.date() != day:
+            continue
+        if start_clock is not None and local.hour == start_clock.hour and (
+            local.minute == start_clock.minute
+        ):
+            exact.append(conf)
+        else:
+            same_day.append(conf)
+
+    for conf in exact + same_day:
+        if _booked_send_succeeded(conf):
+            return conf
+    return None
+
+
+def _finalize_queued_sent(
+    payload: SheetRowPayload,
+    confirmation,
+) -> ActionResult:
+    """Stamp Sent for a Queued row whose confirmation email already exists."""
+    uuid_str = str(confirmation.uuid)
+    tz_name = (confirmation.timezone_name or "").strip() or DEFAULT_TIMEZONE_NAME
+    try:
+        ZoneInfo(tz_name)
+    except Exception:  # noqa: BLE001
+        tz_name = DEFAULT_TIMEZONE_NAME
+    now_label = dj_tz.now().astimezone(ZoneInfo(tz_name)).strftime(
+        "%Y-%m-%d %H:%M %Z"
+    )
+
+    if payload.dry_run:
+        return ActionResult(
+            ok=True,
+            action="send",
+            status=STATUS_SENT,
+            message=(
+                f"dry-run ok — would stamp Sent for already-emailed "
+                f"{confirmation.ba_email} (no new email)"
+            ),
+            confirmation_uuid=uuid_str,
+            timezone_name=tz_name,
+            dry_run=True,
+            details={"already_sent": True, "would_stamp": True},
+        )
+
+    stamp_note = ""
+    try:
+        write_row_status(
+            sheet_id=payload.sheet_id,
+            row_number=payload.row_number,
+            status=STATUS_SENT,
+            error="",
+            confirmation_uuid=uuid_str,
+            sent_at=now_label,
+            sent_column_value=f"Sent {now_label}",
+        )
+    except Exception as stamp_exc:  # noqa: BLE001
+        logger.exception(
+            "torch sheet finalize Sent stamp failed row=%s",
+            payload.row_number,
+        )
+        stamp_note = f" (sheet stamp failed: {stamp_exc})"
+        return ActionResult(
+            ok=False,
+            action="send",
+            status=STATUS_QUEUED,
+            message=(
+                f"Already emailed {confirmation.ba_email}, but sheet stamp "
+                f"failed{stamp_note}. Set Status to Sent manually — do not "
+                f"Force Resend."
+            ),
+            confirmation_uuid=uuid_str,
+            timezone_name=tz_name,
+            details={"already_sent": True, "stamp_failed": True},
+        )
+
+    return ActionResult(
+        ok=True,
+        action="send",
+        status=STATUS_SENT,
+        message=(
+            f"Already emailed — stamped Sent for {confirmation.ba_email} "
+            f"(no new email)"
+        ),
+        confirmation_uuid=uuid_str,
+        timezone_name=tz_name,
+        details={"already_sent": True},
+    )
+
+
 def _parse_local_instant(day: date, clock: time, tz_name: str) -> datetime:
     try:
         tz = ZoneInfo(tz_name)
@@ -685,20 +830,32 @@ def send_from_sheet_row(payload: SheetRowPayload) -> ActionResult:
             ok=False,
             action="send",
             status=STATUS_SENT,
-            message="Already Sent — check Force Resend to email again",
+            message=(
+                "Already Sent — do not Force Resend unless the BA never "
+                "got mail and you intend a second email"
+            ),
             confirmation_uuid=payload.confirmation_uuid,
+            details={"already_sent": True, "blocked": "sent"},
         )
 
     if _already_queued(payload) and not payload.force_resend:
+        # Stuck Queued after a successful email + failed Sent stamp: re-stamp
+        # without sending again when we can prove the booked mail left.
+        existing = _find_mailed_confirmation(payload)
+        if existing is not None:
+            return _finalize_queued_sent(payload, existing)
         return ActionResult(
             ok=False,
             action="send",
             status=STATUS_QUEUED,
             message=(
-                "Already Queued — email may already have been sent; "
-                "check Force Resend only if the BA did not receive mail"
+                "Already Queued — email may already have been sent. "
+                "Do not Force Resend unless the BA never got mail. "
+                "If delivery is confirmed, set Confirmation Status to Sent "
+                "manually (and Event Confirmation Sent?)."
             ),
             confirmation_uuid=payload.confirmation_uuid,
+            details={"already_sent": False, "blocked": "queued"},
         )
 
     if not payload.dry_run:

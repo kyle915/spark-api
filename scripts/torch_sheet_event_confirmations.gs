@@ -234,9 +234,30 @@ function _postRow_(sheet, rowNumber, action, dryRun) {
   var code = resp.getResponseCode();
   var body = resp.getContentText();
   Logger.log('row %s action=%s → %s %s', rowNumber, action, code, body);
+  var parsed = null;
+  try {
+    parsed = JSON.parse(body);
+  } catch (err) {
+    parsed = null;
+  }
+  var apiMessage =
+    parsed && parsed.message ? String(parsed.message) : '';
   if (code >= 400) {
+    var toast =
+      apiMessage ||
+      'Spark ' + action + ' failed (HTTP ' + code + ') — see Apps Script logs';
+    // Keep toast readable; full body is in Logger.
+    if (toast.length > 160) toast = toast.substring(0, 157) + '…';
+    SpreadsheetApp.getActive().toast(toast);
+    return;
+  }
+  if (
+    parsed &&
+    (parsed.alreadySent === true ||
+      (parsed.details && parsed.details.already_sent === true))
+  ) {
     SpreadsheetApp.getActive().toast(
-      'Spark ' + action + ' failed (HTTP ' + code + ') — see Apps Script logs'
+      apiMessage || 'Already sent — stamped Sent (no new email)'
     );
   }
 }

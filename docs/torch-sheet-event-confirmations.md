@@ -132,9 +132,13 @@ Do not spam real BAs while wiring the script.
 | From | Action | To |
 |------|--------|-----|
 | (empty) | Send | Queued → Sent (or Error) |
-| Sent | Send (no Force) | refused |
+| **Queued** (mail already left, stamp failed) | Send (no Force) | **Sent** stamped, **no new email** (`alreadySent: true`) when an `EventConfirmation` + booked send exists for the row UUID or BA email+date |
+| Queued (no confirmation found) | Send (no Force) | **409** with clear “do not Force Resend” message |
+| Sent | Send (no Force) | refused (409) |
 | Sent | Force + Send | new confirmation + email |
 | Sent | Cancel | Cancelled (+ cancel email) |
 | (never Sent) | Cancel | Cancelled, **no** email |
 | Cancelled | Send (no Force) | refused |
 | Any | Uncheck Send | no-op |
+
+**Stuck Queued:** Prefer re-checking Send after this finalize path is live. Do **not** Force Resend — that emails the BA again. If finalize cannot find a confirmation, set Status / column O to Sent manually once delivery is confirmed.
