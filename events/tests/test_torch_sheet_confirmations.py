@@ -9,6 +9,7 @@ import pytest
 
 from events.torch_sheet_confirmations import (
     STATUS_CANCELLED,
+    STATUS_QUEUED,
     STATUS_SENT,
     SheetRowPayload,
     parse_sheet_clock,
@@ -127,6 +128,143 @@ def test_send_idempotent_refuses_already_sent():
     result = send_from_sheet_row(payload)
     assert result.ok is False
     assert "Already Sent" in result.message
+    assert "Force Resend" in result.message
+    assert result.details.get("already_sent") is True
+
+
+def test_send_queued_finalizes_when_confirmation_already_mailed():
+    """Stuck Queued after a real send: re-stamp Sent, never email again."""
+    payload = SheetRowPayload(
+        row_number=91,
+        confirmation_status=STATUS_QUEUED,
+        ba_name="Christina",
+        ba_email="et76vargas@gmail.com",
+        date="Sep 18, 2026",
+        start_time="1p",
+        address="1 Main, Chicago, IL",
+        state="IL",
+    )
+    fake = type(
+        "C",
+        (),
+        {
+            "uuid": "11111111-1111-1111-1111-111111111111",
+            "ba_email": "et76vargas@gmail.com",
+            "timezone_name": "America/Chicago",
+            "pk": 9,
+        },
+    )()
+    with patch(
+        "events.torch_sheet_confirmations._find_mailed_confirmation",
+        return_value=fake,
+    ) as find, patch(
+        "events.torch_sheet_confirmations.write_row_status"
+    ) as write, patch(
+        "events.torch_sheet_confirmations._create_and_send"
+    ) as create:
+        result = send_from_sheet_row(payload)
+    find.assert_called_once()
+    create.assert_not_called()
+    assert write.called
+    assert result.ok is True
+    assert result.status == STATUS_SENT
+    assert result.details.get("already_sent") is True
+    assert "no new email" in result.message.lower()
+    assert result.confirmation_uuid == str(fake.uuid)
+
+
+def test_send_queued_refuses_without_mailed_confirmation():
+    payload = SheetRowPayload(
+        row_number=92,
+        confirmation_status=STATUS_QUEUED,
+        ba_name="Michelle",
+        ba_email="orangedog_48@yahoo.com",
+        date="Sep 18, 2026",
+        start_time="1p",
+    )
+    with patch(
+        "events.torch_sheet_confirmations._find_mailed_confirmation",
+        return_value=None,
+    ), patch(
+        "events.torch_sheet_confirmations._create_and_send"
+    ) as create:
+        result = send_from_sheet_row(payload)
+    create.assert_not_called()
+    assert result.ok is False
+    assert result.status == STATUS_QUEUED
+    assert "Do not Force Resend" in result.message
+    assert result.details.get("blocked") == "queued"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_find_mailed_confirmation_matches_uuid_with_booked_send():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from django.contrib.auth import get_user_model
+    from django.utils import timezone as dj_tz
+
+    from events.models import EventConfirmation, EventConfirmationSend
+    from events.torch_sheet_confirmations import _find_mailed_confirmation
+    from tenants.models import Tenant
+    from tenants.tests.base import ensure_role
+
+    chicago = ZoneInfo("America/Chicago")
+    starts = datetime(2026, 9, 18, 13, 0, tzinfo=chicago)
+
+    User = get_user_model()
+    role = ensure_role("System")
+    user = User.objects.filter(username="torch-sheet-test").first()
+    if user is None:
+        user = User.objects.create_user(
+            username="torch-sheet-test",
+            email="torch-sheet-test@spark.local",
+            first_name="Torch",
+            role=role,
+            is_superuser=True,
+            is_staff=True,
+            is_active=True,
+        )
+    tenant = Tenant.objects.create(
+        name="Torch Queued Finalize Test",
+        slug="torch-queued-finalize-test",
+        request_url_name="torch-queued-finalize-test",
+        created_by=user,
+    )
+    conf = EventConfirmation.objects.create(
+        tenant=tenant,
+        ba_name="Christina",
+        ba_email="et76vargas@gmail.com",
+        store_name="Store",
+        address="1 Main",
+        event_type_label="Retail Sampling",
+        starts_at=starts,
+        timezone_name="America/Chicago",
+        products=["Torch 10mg"],
+        send_reminders=True,
+    )
+    EventConfirmationSend.objects.create(
+        confirmation=conf,
+        stage=EventConfirmation.STAGE_BOOKED,
+        to_email=conf.ba_email,
+        sent_at=dj_tz.now(),
+        attempts=1,
+    )
+    payload = SheetRowPayload(
+        row_number=91,
+        confirmation_status=STATUS_QUEUED,
+        confirmation_uuid=str(conf.uuid),
+        ba_email="et76vargas@gmail.com",
+        date="Sep 18, 2026",
+        start_time="1p",
+    )
+    with patch(
+        "events.torch_sheet_confirmations._torch_tenant",
+        return_value=tenant,
+    ):
+        found = _find_mailed_confirmation(payload)
+    assert found is not None
+    assert found.pk == conf.pk
 
 
 def test_send_force_resend_bypasses_sent_guard_then_hits_validation():

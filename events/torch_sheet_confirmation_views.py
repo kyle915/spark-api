@@ -140,6 +140,8 @@ class TorchSheetEventConfirmationView(View):
             )
 
         status_code = 200 if result.ok else 409
+        details = result.details or {}
+        already_sent = bool(details.get("already_sent"))
         return JsonResponse(
             {
                 "ok": result.ok,
@@ -150,7 +152,8 @@ class TorchSheetEventConfirmationView(View):
                 "timezone": result.timezone_name,
                 "timezoneNote": result.timezone_note,
                 "dryRun": result.dry_run,
-                "details": result.details,
+                "alreadySent": already_sent,
+                "details": details,
             },
             status=status_code,
         )
