@@ -200,3 +200,67 @@ def test_tomorrow_date_is_not_blocked():
     # parse accepts Sep-style; build via iso through mapping of M/D/YYYY
     parsed = parse_sheet_date_iso(tomorrow.strftime("%m/%d/%Y"))
     assert parsed == tomorrow
+
+
+def test_known_status_cols_match_live_retail_layout():
+    """Hot-path stamps must hit O/AB–AE without reading the header row."""
+    from events.torch_sheet_confirmations import _KNOWN_STATUS_COLS, SENT_STATUS_HEADER
+
+    assert _KNOWN_STATUS_COLS[SENT_STATUS_HEADER] == "O"
+    assert _KNOWN_STATUS_COLS["Confirmation Status"] == "AB"
+    assert _KNOWN_STATUS_COLS["Confirmation Sent At"] == "AC"
+    assert _KNOWN_STATUS_COLS["Confirmation Error"] == "AD"
+    assert _KNOWN_STATUS_COLS["Spark Confirmation UUID"] == "AE"
+
+
+def test_write_row_status_uses_known_letters_not_header_read():
+    from events.torch_sheet_confirmations import write_row_status
+
+    class _FakeReq:
+        def __init__(self, payload=None):
+            self.payload = payload
+
+        def execute(self):
+            return {"ok": True}
+
+    captured: dict = {}
+
+    class _FakeValues:
+        def batchUpdate(self, **kwargs):
+            captured["batch"] = kwargs
+            return _FakeReq()
+
+    class _FakeSpreadsheets:
+        def values(self):
+            return _FakeValues()
+
+        def get(self, **kwargs):
+            raise AssertionError("write_row_status must not read sheet meta/headers")
+
+    class _FakeSvc:
+        def spreadsheets(self):
+            return _FakeSpreadsheets()
+
+    with patch(
+        "events.torch_sheet_confirmations._service", return_value=_FakeSvc()
+    ), patch(
+        "events.torch_sheet_confirmations._ensure_confirmation_headers"
+    ) as ensure, patch(
+        "events.torch_sheet_confirmations._tab_for_gid"
+    ) as tab:
+        write_row_status(
+            sheet_id=TORCH_PUBLIC_FORM_SHEET_ID,
+            row_number=78,
+            status=STATUS_SENT,
+            confirmation_uuid="uuid-1",
+            sent_at="2026-09-18 00:44 CDT",
+            sent_column_value="Sent 2026-09-18 00:44 CDT",
+        )
+    ensure.assert_not_called()
+    tab.assert_not_called()
+    ranges = [d["range"] for d in captured["batch"]["body"]["data"]]
+    assert "'Retail Schedule'!AB78" in ranges
+    assert "'Retail Schedule'!AC78" in ranges
+    assert "'Retail Schedule'!AD78" in ranges
+    assert "'Retail Schedule'!AE78" in ranges
+    assert "'Retail Schedule'!O78" in ranges

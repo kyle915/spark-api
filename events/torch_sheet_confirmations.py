@@ -242,6 +242,11 @@ def _already_cancelled(payload: SheetRowPayload) -> bool:
     return _norm_status(payload.confirmation_status).startswith("cancelled")
 
 
+def _already_queued(payload: SheetRowPayload) -> bool:
+    """Queued usually means email already left and the Sent stamp failed."""
+    return _norm_status(payload.confirmation_status).startswith("queued")
+
+
 def _parse_local_instant(day: date, clock: time, tz_name: str) -> datetime:
     try:
         tz = ZoneInfo(tz_name)
@@ -349,6 +354,106 @@ def _header_index(header: list[str], name: str) -> int | None:
     return None
 
 
+# Sheets rejects values.batchUpdate past the current grid (HttpError 400).
+# Cap so a bad rowNumber cannot grow the retail tab without bound.
+_MAX_STATUS_ROW = 25000
+
+# Live retail tab (gid 0) as of 2026-09-17 — write these cells directly.
+# Avoids a header read (+ tab meta read) on every Queued/Sent stamp. Bulk
+# Send burns the Sheets 60 reads/min/user quota and 429s mid-batch
+# (stuck Queued / blank status even when the email already left).
+_RETAIL_TAB_TITLE = "Retail Schedule"
+_KNOWN_STATUS_COLS: dict[str, str] = {
+    SENT_STATUS_HEADER: "O",
+    "Event Confirmation Sent?": "O",
+    "Confirmation Status": "AB",
+    "Confirmation Sent At": "AC",
+    "Confirmation Error": "AD",
+    "Spark Confirmation UUID": "AE",
+}
+
+
+def _sheets_execute(request, *, label: str, attempts: int = 5):
+    """Run a Sheets API request with backoff on 429 rate limits."""
+    import time as _time
+
+    from googleapiclient.errors import HttpError
+
+    last: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            return request.execute()
+        except HttpError as exc:
+            last = exc
+            status = int(getattr(exc.resp, "status", 0) or 0)
+            if status != 429 or attempt >= attempts - 1:
+                raise
+            sleep_s = min(2**attempt, 16)
+            logger.warning(
+                "torch sheet %s hit 429; retry in %ss (%s/%s)",
+                label,
+                sleep_s,
+                attempt + 1,
+                attempts,
+            )
+            _time.sleep(sleep_s)
+    assert last is not None
+    raise last
+
+
+def _ensure_grid_covers_row(svc, sheet_id: str, tab: str | None, row_number: int) -> None:
+    """Grow the tab's row count so ``row_number`` is a legal cell.
+
+    Only called after Sheets rejects a write as past the grid — not on the
+    happy path (that meta get was burning read quota during bulk Send).
+    """
+    if row_number > _MAX_STATUS_ROW:
+        raise ValueError(
+            f"rowNumber {row_number} is past the sheet write cap ({_MAX_STATUS_ROW})"
+        )
+    meta = _sheets_execute(
+        svc.spreadsheets().get(
+            spreadsheetId=sheet_id,
+            fields="sheets.properties(sheetId,title,gridProperties.rowCount)",
+        ),
+        label="grid-meta",
+    )
+    target = None
+    for sheet in meta.get("sheets") or []:
+        props = sheet.get("properties") or {}
+        if tab and props.get("title") == tab:
+            target = props
+            break
+    if target is None:
+        sheets = meta.get("sheets") or []
+        if sheets:
+            target = sheets[0].get("properties") or {}
+    if not target:
+        return
+    row_count = int((target.get("gridProperties") or {}).get("rowCount") or 0)
+    if row_number <= row_count:
+        return
+    _sheets_execute(
+        svc.spreadsheets().batchUpdate(
+            spreadsheetId=sheet_id,
+            body={
+                "requests": [
+                    {
+                        "updateSheetProperties": {
+                            "properties": {
+                                "sheetId": target.get("sheetId"),
+                                "gridProperties": {"rowCount": row_number},
+                            },
+                            "fields": "gridProperties.rowCount",
+                        }
+                    }
+                ]
+            },
+        ),
+        label="grid-grow",
+    )
+
+
 def write_row_status(
     *,
     sheet_id: str,
@@ -359,24 +464,39 @@ def write_row_status(
     sent_at: str | None = None,
     sent_column_value: str | None = None,
 ) -> None:
-    """Stamp Confirmation Status / Error / UUID / O on one row.
+    """Stamp O / AB / AC / AD / AE by known retail-tab letters.
+
+    Does **not** call ``_read_header`` / ``_ensure_confirmation_headers`` on
+    the hot path — those reads were the bulk-Send 429 failure mode. One cell
+    write per field; retries 429; grows the grid only if Sheets says the row
+    is past the current limit.
 
     Bypasses ``TORCH_SHEET_WRITES_ENABLED`` — that kill switch only gates
     public-form appends, not confirmation status write-back.
     """
+    from googleapiclient.errors import HttpError
+
     svc = _service()
     if svc is None:
         logger.warning("torch sheet confirmation: no Sheets credentials")
         return
-    tab = _tab_for_gid(svc, sheet_id, TORCH_PUBLIC_FORM_GID)
-    header = _ensure_confirmation_headers(svc, sheet_id, tab)
+    if row_number < 2:
+        raise ValueError(f"rowNumber must be >= 2, got {row_number}")
+    if row_number > _MAX_STATUS_ROW:
+        raise ValueError(
+            f"rowNumber {row_number} is past the sheet write cap ({_MAX_STATUS_ROW})"
+        )
+
+    # Prefer the known retail title; skip spreadsheets.get (another read).
+    tab = _RETAIL_TAB_TITLE
     updates: list[dict[str, Any]] = []
 
     def _put(col_name: str, value: str) -> None:
-        idx = _header_index(header, col_name)
-        if idx is None:
+        col = _KNOWN_STATUS_COLS.get(col_name) or _KNOWN_STATUS_COLS.get(
+            col_name.strip()
+        )
+        if not col:
             return
-        col = _col_letter(idx + 1)
         updates.append(
             {
                 "range": _qualify(tab, f"{col}{row_number}"),
@@ -395,10 +515,29 @@ def write_row_status(
 
     if not updates:
         return
-    svc.spreadsheets().values().batchUpdate(
-        spreadsheetId=sheet_id,
-        body={"valueInputOption": "RAW", "data": updates},
-    ).execute()
+
+    def _batch() -> None:
+        _sheets_execute(
+            svc.spreadsheets().values().batchUpdate(
+                spreadsheetId=sheet_id,
+                body={"valueInputOption": "RAW", "data": updates},
+            ),
+            label=f"status-row-{row_number}",
+        )
+
+    try:
+        _batch()
+    except HttpError as exc:
+        body = ""
+        try:
+            body = (exc.content or b"").decode("utf-8", errors="replace")
+        except Exception:  # noqa: BLE001
+            body = str(exc)
+        if int(getattr(exc.resp, "status", 0) or 0) == 400 and "exceeds grid" in body:
+            _ensure_grid_covers_row(svc, sheet_id, tab, row_number)
+            _batch()
+            return
+        raise
 
 
 def _create_and_send(
@@ -476,14 +615,20 @@ def _create_and_send(
 
     if not result.sent:
         err = result.reason or "email-failed"
-        write_row_status(
-            sheet_id=payload.sheet_id,
-            row_number=payload.row_number,
-            status=STATUS_ERROR,
-            error=err,
-            confirmation_uuid=uuid_str,
-            sent_column_value=f"Error: {err}",
-        )
+        try:
+            write_row_status(
+                sheet_id=payload.sheet_id,
+                row_number=payload.row_number,
+                status=STATUS_ERROR,
+                error=err,
+                confirmation_uuid=uuid_str,
+                sent_column_value=f"Error: {err}",
+            )
+        except Exception:  # noqa: BLE001 — email outcome already known
+            logger.exception(
+                "torch sheet error stamp failed after email miss row=%s",
+                payload.row_number,
+            )
         return ActionResult(
             ok=False,
             action="send",
@@ -495,20 +640,28 @@ def _create_and_send(
         )
 
     err_note = tz_note
-    write_row_status(
-        sheet_id=payload.sheet_id,
-        row_number=payload.row_number,
-        status=STATUS_SENT,
-        error=err_note,
-        confirmation_uuid=uuid_str,
-        sent_at=now_label,
-        sent_column_value=f"Sent {now_label}",
-    )
+    stamp_note = ""
+    try:
+        write_row_status(
+            sheet_id=payload.sheet_id,
+            row_number=payload.row_number,
+            status=STATUS_SENT,
+            error=err_note,
+            confirmation_uuid=uuid_str,
+            sent_at=now_label,
+            sent_column_value=f"Sent {now_label}",
+        )
+    except Exception as stamp_exc:  # noqa: BLE001 — do not 500 after a real send
+        logger.exception(
+            "torch sheet Sent stamp failed after email ok row=%s",
+            payload.row_number,
+        )
+        stamp_note = f" (sheet stamp failed: {stamp_exc})"
     return ActionResult(
         ok=True,
         action="send",
         status=STATUS_SENT,
-        message=f"Confirmation emailed to {ba_email}",
+        message=f"Confirmation emailed to {ba_email}{stamp_note}",
         confirmation_uuid=uuid_str,
         timezone_name=tz_name,
         timezone_note=tz_note,
@@ -536,14 +689,32 @@ def send_from_sheet_row(payload: SheetRowPayload) -> ActionResult:
             confirmation_uuid=payload.confirmation_uuid,
         )
 
-    if not payload.dry_run:
-        write_row_status(
-            sheet_id=payload.sheet_id,
-            row_number=payload.row_number,
+    if _already_queued(payload) and not payload.force_resend:
+        return ActionResult(
+            ok=False,
+            action="send",
             status=STATUS_QUEUED,
-            error="",
+            message=(
+                "Already Queued — email may already have been sent; "
+                "check Force Resend only if the BA did not receive mail"
+            ),
             confirmation_uuid=payload.confirmation_uuid,
         )
+
+    if not payload.dry_run:
+        try:
+            write_row_status(
+                sheet_id=payload.sheet_id,
+                row_number=payload.row_number,
+                status=STATUS_QUEUED,
+                error="",
+                confirmation_uuid=payload.confirmation_uuid,
+            )
+        except Exception:  # noqa: BLE001 — still attempt the email
+            logger.exception(
+                "torch sheet Queued stamp failed row=%s; continuing send",
+                payload.row_number,
+            )
 
     try:
         tz_name, tz_note = resolve_timezone_for_row(
