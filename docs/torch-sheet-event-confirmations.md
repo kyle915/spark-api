@@ -24,24 +24,36 @@ schedule Google Sheet, reusing Spark’s existing Event Confirmation mailer
 | E / F | Start / End Time | `1p` / `4p` style |
 | G | Address | Geocode → IANA TZ for reminders |
 | N | SKUs to sample | Products |
-| **O** | **Event Confirmation Sent?** | **Status stamp only** (not the trigger) |
+| **O** | **Event Confirmation Sent?** | **Status stamp only** (not the trigger, no checkbox) |
 | S | BA Name | Required |
 | V | Email | BA recipient |
-| Y | Spark Request UUID | Optional back-ref |
+| W | Cell Phone # | |
+| X | Shipped? | |
 
-Event type is always **Retail Sampling** (column AB ignored).
+Event type is always **Retail Sampling**. Do not read it from a sheet column.
 
-### New (appended by Apps Script `ensureConfirmationColumns`)
+### Confirmation columns (header name, not letter)
 
-| Header | Type | Role |
-|--------|------|------|
-| **Send Confirmation** | checkbox | Trigger confirmation email |
-| **Cancel Confirmation** | checkbox | Trigger cancel email (if previously Sent) |
-| **Force Resend** | checkbox | Allow Send again after Sent / Cancelled |
-| Confirmation Status | text | `Queued` → `Sent` → `Cancelled` / `Error` |
-| Confirmation Sent At | text | Local stamp when Sent |
-| Confirmation Error | text | Geocode fallback note or error |
-| Spark Confirmation UUID | text | Spark row id (cancel + audit) |
+Apps Script and the API find these by header name. On the live retail tab
+(gid 0, read 2026-09-17) they are **Y–AE**, not AT–AZ. `ensureConfirmationColumns`
+only appends a header that is missing, and it will not write over a cell that
+already has a header.
+
+| Col | Header | Type | Role |
+|-----|--------|------|------|
+| **Y** | **Send Confirmation** | checkbox | Trigger confirmation email |
+| **Z** | **Cancel Confirmation** | checkbox | Trigger cancel email (if previously Sent) |
+| **AA** | **Force Resend** | checkbox | Allow Send again after Sent / Cancelled |
+| AB | Confirmation Status | text | `Queued` → `Sent` → `Cancelled` / `Error` |
+| AC | Confirmation Sent At | text | Local stamp when Sent |
+| AD | Confirmation Error | text | Geocode fallback note or error |
+| AE | Spark Confirmation UUID | text | Spark row id (cancel + audit) |
+
+The pre-install map put **Spark Request UUID** at Y and **Request Type** at AB.
+Those headers are **not** on this tab anymore, and they were **not shifted**
+right of AE (the tab ends at AE). If they were live here before install, they
+were overwritten. Other tabs in the workbook still have Spark Request UUID /
+Request Type, but at different letters (those tabs do not have column O).
 
 ---
 

@@ -11,8 +11,21 @@
  *        SPARK_API_BASE    = https://spark-api-new-490085168610.us-central1.run.app
  *          (optional; defaults to the prod Cloud Run URL above)
  *   3. Run `installTriggers` once (authorize as the installing Google user).
- *   4. Run `ensureConfirmationColumns` once to append headers + checkbox
- *      validation on Send / Cancel / Force Resend.
+ *   4. Run `ensureConfirmationColumns` once. It finds columns by header
+ *      name (not letter) and only appends a header that is missing.
+ *      Checkbox validation is Send / Cancel / Force Resend only.
+ *      Never add a checkbox to "Event Confirmation Sent?" (column O).
+ *
+ * Live retail tab (gid 0), read 2026-09-17 — do not hardcode these letters;
+ * onEdit and _postRow_ resolve them with _colIndex_:
+ *   Y  Send Confirmation
+ *   Z  Cancel Confirmation
+ *   AA Force Resend
+ *   AB Confirmation Status
+ *   AC Confirmation Sent At
+ *   AD Confirmation Error
+ *   AE Spark Confirmation UUID
+ * They were not appended at AT–AZ.
  *
  * Usage:
  *   - Check **Send Confirmation** → emails the BA (Retail Sampling), stamps Sent.
@@ -76,10 +89,29 @@ function ensureConfirmationColumns() {
     if (_colIndex_(headers, name) < 0) missing.push(name);
   });
   if (missing.length) {
-    sheet
-      .getRange(1, headers.length + 1, 1, headers.length + missing.length)
-      .setValues([missing]);
-    headers = headers.concat(missing);
+    // getRange's 4th arg is column count, not an end column. Append only
+    // after the last real header (trailing blanks trimmed in _headerRow_).
+    // Refuse if those cells already have a header — never clobber Y/AB
+    // or any other existing column. Existing Send/Cancel/Status columns
+    // are found by name above, wherever they sit.
+    var startCol = headers.length + 1;
+    var occupied = sheet.getRange(1, startCol, 1, missing.length).getValues()[0];
+    var blocked = false;
+    for (var i = 0; i < occupied.length; i++) {
+      if (String(occupied[i] || '').trim()) {
+        blocked = true;
+        break;
+      }
+    }
+    if (blocked) {
+      SpreadsheetApp.getActive().toast(
+        'Not appending — cells after the last header are already used. ' +
+          'Confirmation columns are resolved by header name.'
+      );
+    } else {
+      sheet.getRange(1, startCol, 1, missing.length).setValues([missing]);
+      headers = headers.concat(missing);
+    }
   }
   [HEADER_SEND, HEADER_CANCEL, HEADER_FORCE].forEach(function (name) {
     var col = _colIndex_(headers, name) + 1;
@@ -216,12 +248,16 @@ function _retailScheduleSheet_() {
 
 function _headerRow_(sheet) {
   var width = Math.max(sheet.getLastColumn(), 40);
-  return sheet
+  var headers = sheet
     .getRange(1, 1, 1, width)
     .getValues()[0]
     .map(function (h) {
       return (h || '').toString();
     });
+  while (headers.length && !String(headers[headers.length - 1] || '').trim()) {
+    headers.pop();
+  }
+  return headers;
 }
 
 function _colIndex_(headers, name) {
