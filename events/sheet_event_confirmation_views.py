@@ -45,6 +45,21 @@ def _check_secret(request: HttpRequest) -> JsonResponse | None:
     return None
 
 
+def _body_flag(body: dict, *keys: str) -> bool:
+    """True for JSON booleans and common checkbox strings. False stays false."""
+    for key in keys:
+        if key not in body:
+            continue
+        raw = body.get(key)
+        if isinstance(raw, bool):
+            if raw:
+                return True
+            continue
+        if str(raw or "").strip().lower() in {"1", "true", "yes", "on"}:
+            return True
+    return False
+
+
 def _parse_body(request: HttpRequest) -> dict:
     if request.body:
         try:
@@ -65,8 +80,13 @@ class SheetEventConfirmationView(View):
           "rowNumber": 42,
           "sheetId": "<allowlisted spreadsheet id>",
           "dryRun": false,
+          "resend": false,
           "values": { "Date": "...", "BA Name": "...", ... }
         }
+
+    ``resend: true`` force-sends this request once (BA did not get mail).
+    It does not read the Resend Confirmation column. Force Resend in
+    ``values`` remains the sticky compatibility flag.
 
     ``values`` may also be flattened onto the top-level body.
     """
@@ -105,12 +125,10 @@ class SheetEventConfirmationView(View):
                 status=400,
             )
 
-        dry_run = str(body.get("dryRun") or body.get("dry_run") or "").lower() in {
-            "1",
-            "true",
-            "yes",
-            "on",
-        }
+        dry_run = _body_flag(body, "dryRun", "dry_run")
+        # One-shot. Do not fall back to the Resend Confirmation cell — Apps
+        # Script clears that checkbox before the next edit can see it.
+        resend = _body_flag(body, "resend")
         values = body.get("values") if isinstance(body.get("values"), dict) else None
         if values is None:
             skip = {
@@ -121,6 +139,7 @@ class SheetEventConfirmationView(View):
                 "sheet_id",
                 "dryRun",
                 "dry_run",
+                "resend",
                 "values",
             }
             values = {k: v for k, v in body.items() if k not in skip}
@@ -132,6 +151,7 @@ class SheetEventConfirmationView(View):
                 row_number=row_number,
                 sheet_id=sheet_id,
                 dry_run=dry_run,
+                resend=resend,
             )
         except ValueError as exc:
             return JsonResponse(

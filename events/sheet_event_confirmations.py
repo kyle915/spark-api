@@ -61,6 +61,9 @@ CONFIRMATION_EXTRA_HEADERS = [
     "Confirmation Sent At",
     "Confirmation Error",
     "Spark Confirmation UUID",
+    # One-shot ops control. Appended after existing headers; never a sticky
+    # force flag — the HTTP `resend` body flag is what bypasses Sent.
+    "Resend Confirmation",
 ]
 
 
@@ -1140,14 +1143,22 @@ def handle_action(
     row_number: int,
     sheet_id: str | None = None,
     dry_run: bool = False,
+    resend: bool = False,
 ) -> ActionResult:
-    """Entry used by the HTTP endpoint."""
+    """Entry used by the HTTP endpoint.
+
+    ``resend=True`` force-sends this call only (same bypass as Force Resend).
+    It is not read from the Resend Confirmation column, so a leftover checkbox
+    cannot double-email on the next Send edit.
+    """
     payload = payload_from_mapping(
         values,
         row_number=row_number,
         sheet_id=sheet_id,
         dry_run=dry_run,
     )
+    if resend:
+        payload.force_resend = True
     validate_sheet_id(payload.sheet_id)
     normalized = (action or "").strip().lower()
     if normalized in {"send", "confirm", "confirmation"}:

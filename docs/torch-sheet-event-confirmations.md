@@ -43,11 +43,12 @@ already has a header.
 |-----|--------|------|------|
 | **Y** | **Send Confirmation** | checkbox | Trigger confirmation email |
 | **Z** | **Cancel Confirmation** | checkbox | Trigger cancel email (if previously Sent) |
-| **AA** | **Force Resend** | checkbox | Allow Send again after Sent / Cancelled |
+| **AA** | **Force Resend** | checkbox | Sticky. Leave this for BA swaps (API compatibility). Do not use it for “didn’t get the email” — if it stays checked, the next Send double-emails. |
 | AB | Confirmation Status | text | `Queued` → `Sent` → `Cancelled` / `Error` |
 | AC | Confirmation Sent At | text | Local stamp when Sent |
 | AD | Confirmation Error | text | Geocode fallback note or error |
 | AE | Spark Confirmation UUID | text | Spark row id (cancel + audit) |
+| *(appended)* | **Resend Confirmation** | checkbox | One-shot. Check to email the BA on that row again. The script clears the box immediately and posts `resend: true`. Header-name lookup only — do not hardcode the letter. |
 
 The pre-install map put **Spark Request UUID** at Y and **Request Type** at AB.
 Those headers are **not** on this tab anymore, and they were **not shifted**
@@ -63,8 +64,8 @@ Request Type, but at different letters (those tabs do not have column O).
 2. Check **Send Confirmation** → BA gets the same staffing@ confirmation as the admin tab (training from tenant `checkin_resources`, clock/recap → `client…/checkin/TH-2HRV3D`). Reminders (24h / 3h) stay on.
 3. **Unchecking Send does nothing** — it never cancels.
 4. **Cancel:** check **Cancel Confirmation**. If status was Sent, BA gets “this sampling has been cancelled”; reminders stop; status → Cancelled.
-5. **Swap BA:** Cancel (or cancel checkbox) → change BA Name + Email → check **Force Resend** + **Send Confirmation**.
-6. **Resend same BA:** check Force Resend + Send.
+5. **Swap BA:** Cancel (or cancel checkbox) → change BA Name + Email → check **Force Resend** + **Send Confirmation**. Force Resend stays checked until you uncheck it.
+6. **BA didn’t get the confirmation:** check **Resend Confirmation** only. That force-sends once (`resend: true`), then the box clears itself. Do not also check Force Resend.
 7. **Tomorrow bulk:** menu **Spark Confirmations → Send confirmations for tomorrow** (checks Send on eligible tomorrow rows missing Sent).
 
 Tomorrow’s samplings are allowed — there is no “must be 2+ days out” gate.
@@ -78,7 +79,7 @@ Tomorrow’s samplings are allowed — there is no “must be 2+ days out” gat
 3. **Project Settings → Script properties:**
    - `SPARK_CRON_SECRET` = Cloud Run `INTERNAL_CRON_SECRET`
    - `SPARK_API_BASE` = `https://spark-api-new-490085168610.us-central1.run.app` (optional)
-4. Run `ensureConfirmationColumns`, then `installTriggers` (authorize the installing Google account — any Editor on the sheet).
+4. Run `ensureConfirmationColumns` (appends **Resend Confirmation** if it is missing; does not overwrite existing headers), then `installTriggers` if this is a first install. Re-pasting the script updates `onConfirmationEdit` without a new trigger name — you still must run `ensureConfirmationColumns` once so the new header exists.
 5. Reload the sheet; **Spark Confirmations** menu appears.
 
 Who installs: Kyle or any Ignite ops Editor. The SA
@@ -95,6 +96,7 @@ status write-back; Apps Script runs as the human installer for `onEdit`.
   "rowNumber": 42,
   "sheetId": "1kAvZhy2B9HoeSS-qjKXve8JWUV1oBxDqnhs1-7dQUYw",
   "dryRun": true,
+  "resend": false,
   "values": {
     "Date": "Sep 18, 2026",
     "Start Time": "1p",
@@ -112,6 +114,8 @@ status write-back; Apps Script runs as the human installer for `onEdit`.
 ```
 
 `dryRun: true` validates mapping / TZ and returns what would send — **no email, no sheet stamp**. Use this for the first test.
+
+`resend: true` (with `action: "send"`) force-sends this request once, same bypass as Force Resend, then the Apps Script clears **Resend Confirmation**. The column value itself is not a force flag.
 
 ---
 
@@ -135,7 +139,8 @@ Do not spam real BAs while wiring the script.
 | **Queued** (mail already left, stamp failed) | Send (no Force) | **Sent** stamped, **no new email** (`alreadySent: true`) when an `EventConfirmation` + booked send exists for the row UUID or BA email+date |
 | Queued (no confirmation found) | Send (no Force) | **409** with clear “do not Force Resend” message |
 | Sent | Send (no Force) | refused (409) |
-| Sent | Force + Send | new confirmation + email |
+| Sent | Force + Send | new confirmation + email (sticky — uncheck Force Resend after) |
+| Sent | **Resend Confirmation** | new confirmation + email once (`resend: true`); checkbox clears |
 | Sent | Cancel | Cancelled (+ cancel email) |
 | (never Sent) | Cancel | Cancelled, **no** email |
 | Cancelled | Send (no Force) | refused |

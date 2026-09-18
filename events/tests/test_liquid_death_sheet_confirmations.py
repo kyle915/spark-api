@@ -25,6 +25,9 @@ def test_ld_config_allowlisted():
     assert cfg.tenant_slug == "liquid-death"
     assert cfg.event_type_label == "Retail Sampling"
     assert SENT_STATUS_HEADER in cfg.extra_headers
+    assert "Resend Confirmation" in cfg.extra_headers
+    assert cfg.extra_headers[-1] == "Resend Confirmation"
+    assert "Resend Confirmation" not in cfg.known_status_cols
     assert cfg.known_status_cols[SENT_STATUS_HEADER] == "AB"
     assert cfg.known_status_cols["Confirmation Status"] == "AF"
     assert cfg.known_status_cols["Spark Confirmation UUID"] == "AI"

@@ -14,7 +14,8 @@
  *   3. Run `installTriggers` once (authorize as the installing Google user).
  *   4. Run `ensureConfirmationColumns` once. It finds columns by header
  *      name (not letter) and only appends a header that is missing.
- *      Checkbox validation is Send / Cancel / Force Resend only.
+ *      Checkbox validation is Send / Cancel / Force Resend /
+ *      Resend Confirmation only.
  *      Never add a checkbox to "Event Confirmation Sent?".
  *      Do NOT reuse column U "SEND" — that is a separate ops flag.
  *
@@ -28,12 +29,17 @@
  *   AG Confirmation Sent At
  *   AH Confirmation Error
  *   AI Spark Confirmation UUID
+ *   Resend Confirmation is appended after the last real header (name lookup
+ *   only — do not hardcode its letter). Checking it force-sends once, then
+ *   the script clears the box so the next edit cannot double-email.
  * onEdit / _postRow_ resolve by header name via _colIndex_ (not letters).
  *
  * Usage:
  *   - Check **Send Confirmation** → emails the BA (Retail Sampling), stamps Sent.
  *   - Check **Cancel Confirmation** → cancel email if previously Sent; stamps Cancelled.
  *   - Unchecking Send does nothing (never cancels).
+ *   - BA didn't get mail: check **Resend Confirmation** (one-shot). Do not
+ *     leave Force Resend checked.
  *   - Swap BA: Cancel → update BA Name+Email → Force Resend + Send Confirmation.
  *   - Menu Spark Confirmations → Send confirmations for tomorrow (bulk).
  *   - Walk-up CTAs: https://client.igniteproductions.co/checkin/LD-TNBJ8K
@@ -49,6 +55,7 @@ var HEADER_SENT_STATUS = 'Event Confirmation Sent?';
 var HEADER_SEND = 'Send Confirmation';
 var HEADER_CANCEL = 'Cancel Confirmation';
 var HEADER_FORCE = 'Force Resend';
+var HEADER_RESEND = 'Resend Confirmation';
 var HEADER_STATUS = 'Confirmation Status';
 var HEADER_SENT_AT = 'Confirmation Sent At';
 var HEADER_ERROR = 'Confirmation Error';
@@ -89,6 +96,7 @@ function ensureConfirmationColumns() {
     HEADER_SENT_AT,
     HEADER_ERROR,
     HEADER_UUID,
+    HEADER_RESEND,
   ];
   var missing = [];
   needed.forEach(function (name) {
@@ -119,7 +127,7 @@ function ensureConfirmationColumns() {
       headers = headers.concat(missing);
     }
   }
-  [HEADER_SEND, HEADER_CANCEL, HEADER_FORCE].forEach(function (name) {
+  [HEADER_SEND, HEADER_CANCEL, HEADER_FORCE, HEADER_RESEND].forEach(function (name) {
     var col = _colIndex_(headers, name) + 1;
     if (col < 1) return;
     var range = sheet.getRange(2, col, Math.max(sheet.getMaxRows() - 1, 1), 1);
@@ -133,8 +141,10 @@ function ensureConfirmationColumns() {
 }
 
 /**
- * Installable onEdit — only fires for Send / Cancel checkbox TRUE.
+ * Installable onEdit — fires for Send / Cancel / Resend checkbox TRUE.
  * Unchecking Send is intentionally a no-op.
+ * Resend Confirmation clears itself before the request returns so it
+ * cannot stay checked and double-fire on the next edit.
  */
 function onConfirmationEdit(e) {
   if (!e || !e.range) return;
@@ -155,13 +165,21 @@ function onConfirmationEdit(e) {
     String(value).toUpperCase() === 'TRUE';
   if (!checked) return;
 
+  var row = e.range.getRow();
+  if (header === HEADER_RESEND) {
+    // Clear before the slow POST so a crash or a later Send edit cannot
+    // see a sticky TRUE. Script writes do not re-enter onEdit.
+    e.range.setValue(false);
+    _postRow_(sheet, row, 'send', false, true);
+    return;
+  }
+
   var action = null;
   if (header === HEADER_SEND) action = 'send';
   if (header === HEADER_CANCEL) action = 'cancel';
   if (!action) return;
 
-  var row = e.range.getRow();
-  _postRow_(sheet, row, action, false);
+  _postRow_(sheet, row, action, false, false);
 }
 
 function sendConfirmationsForTomorrow() {
@@ -188,13 +206,13 @@ function sendConfirmationsForTomorrow() {
     if (/^sent/i.test(status.trim())) continue;
     if (/^cancelled/i.test(status.trim())) continue;
     sheet.getRange(r, sendCol + 1).setValue(true);
-    _postRow_(sheet, r, 'send', false);
+    _postRow_(sheet, r, 'send', false, false);
     queued++;
   }
   SpreadsheetApp.getUi().alert('Queued ' + queued + ' tomorrow row(s).');
 }
 
-function _postRow_(sheet, rowNumber, action, dryRun) {
+function _postRow_(sheet, rowNumber, action, dryRun, resend) {
   var props = PropertiesService.getScriptProperties();
   var secret = props.getProperty('SPARK_CRON_SECRET');
   if (!secret) {
@@ -227,6 +245,9 @@ function _postRow_(sheet, rowNumber, action, dryRun) {
     rowNumber: rowNumber,
     sheetId: LD_SHEET_ID,
     dryRun: !!dryRun,
+    // One-shot flag. Not the Force Resend column, and not the checkbox
+    // cell (that is cleared before this POST).
+    resend: !!resend,
     values: values,
   };
 
@@ -239,7 +260,7 @@ function _postRow_(sheet, rowNumber, action, dryRun) {
   });
   var code = resp.getResponseCode();
   var body = resp.getContentText();
-  Logger.log('row %s action=%s → %s %s', rowNumber, action, code, body);
+  Logger.log('row %s action=%s resend=%s → %s %s', rowNumber, action, !!resend, code, body);
   var parsed = null;
   try {
     parsed = JSON.parse(body);
@@ -248,13 +269,19 @@ function _postRow_(sheet, rowNumber, action, dryRun) {
   }
   var apiMessage =
     parsed && parsed.message ? String(parsed.message) : '';
-  if (code >= 400) {
+  if (code >= 400 || (parsed && parsed.ok === false)) {
     var toast =
       apiMessage ||
       'Spark ' + action + ' failed (HTTP ' + code + ') — see Apps Script logs';
+    if (resend) toast = 'Resend failed — ' + toast;
     // Keep toast readable; full body is in Logger.
     if (toast.length > 160) toast = toast.substring(0, 157) + '…';
     SpreadsheetApp.getActive().toast(toast);
+    return;
+  }
+  if (resend) {
+    var who = values['Email'] || values['BA Name'] || 'the BA';
+    SpreadsheetApp.getActive().toast('Resent to ' + who);
     return;
   }
   if (
