@@ -49,24 +49,54 @@ CHECKIN_MAX_PAST_DAYS = 90
 CHECKIN_MAX_FUTURE_DAYS = 14
 
 # Photo / video uploads for check-in recap media.
+#
+# Android Chrome's file picker (SelectFileDialog.ensureMimeType) reports
+# `application/octet-stream` when MimeTypeMap doesn't know the extension —
+# common for HEIC and for gallery items with no extension. The walk-up
+# client PUTs that exact Content-Type. Rewriting it here would 403 the
+# signed URL (signature is case-sensitive on the header value), so unknown
+# phone types are accepted and signed as sent. The client normalizes to a
+# real image type on refresh; this keeps an already-open page able to retry.
 _ALLOWED_UPLOAD_TYPES = {
     "image/jpeg",
     "image/jpg",
+    "image/pjpeg",
     "image/png",
+    "image/x-png",
+    "image/gif",
+    "image/webp",
+    "image/avif",
     "image/heic",
     "image/heif",
-    "image/webp",
+    "image/heic-sequence",
+    "image/heif-sequence",
+    "application/octet-stream",
+    "binary/octet-stream",
     "video/mp4",
     "video/quicktime",
     "video/webm",
     "video/x-m4v",
     "video/mpeg",
+    "video/3gpp",
+    "video/3gpp2",
 }
 
 # Signed-URL mints per IP. Feel Free-style batches can be ~100 shots; each may
 # retry 2–3 times on LTE. Keep headroom above PHOTO_CAP × PHOTO_PUT_ATTEMPTS.
 CHECKIN_UPLOAD_URL_RATE_LIMIT = 500
 CHECKIN_UPLOAD_URL_RATE_WINDOW_S = 300
+
+
+def checkin_upload_content_type(content_type: str) -> str | None:
+    """Return the type to sign, or None if this endpoint should reject it.
+
+    The returned string is what the browser must send on the PUT. Callers
+    must not remap it — GCS v4 signatures include the Content-Type value.
+    """
+    ct = (content_type or "").strip().lower()
+    if ct in _ALLOWED_UPLOAD_TYPES:
+        return ct
+    return None
 
 
 def _err(message: str, status: int = 400, code: str = "invalid") -> JsonResponse:
@@ -729,8 +759,10 @@ def public_checkin_upload_url(request: HttpRequest, code: str) -> HttpResponse:
         return err
     event, ambassador = loaded
 
-    content_type = (data.get("contentType") or data.get("content_type") or "").strip().lower()
-    if content_type not in _ALLOWED_UPLOAD_TYPES:
+    content_type = checkin_upload_content_type(
+        data.get("contentType") or data.get("content_type") or ""
+    )
+    if content_type is None:
         return _err("Only photo and video uploads are allowed here.")
     filename = (data.get("filename") or "photo.jpg").strip()
     safe = _SAFE_NAME.sub("-", filename)[-80:] or "photo.jpg"
