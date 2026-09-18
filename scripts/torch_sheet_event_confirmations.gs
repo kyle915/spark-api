@@ -76,8 +76,10 @@ function ensureConfirmationColumns() {
     if (_colIndex_(headers, name) < 0) missing.push(name);
   });
   if (missing.length) {
+    // getRange's 4th arg is column count, not an end column. Append at the
+    // last real header (trailing blanks already trimmed in _headerRow_).
     sheet
-      .getRange(1, headers.length + 1, 1, headers.length + missing.length)
+      .getRange(1, headers.length + 1, 1, missing.length)
       .setValues([missing]);
     headers = headers.concat(missing);
   }
@@ -216,12 +218,16 @@ function _retailScheduleSheet_() {
 
 function _headerRow_(sheet) {
   var width = Math.max(sheet.getLastColumn(), 40);
-  return sheet
+  var headers = sheet
     .getRange(1, 1, 1, width)
     .getValues()[0]
     .map(function (h) {
       return (h || '').toString();
     });
+  while (headers.length && !String(headers[headers.length - 1] || '').trim()) {
+    headers.pop();
+  }
+  return headers;
 }
 
 function _colIndex_(headers, name) {
