@@ -591,6 +591,76 @@ def send_confirmation_stage(
     return SendResult(stage=stage, sent=True)
 
 
+def build_cancellation_context(confirmation: EventConfirmation) -> dict:
+    """Template context for a sampling-cancelled email to the BA."""
+    local_start = confirmation.local_start()
+    local_end = confirmation.local_end()
+    date_label = format_event_date(local_start)
+    time_label = format_time_range(local_start, local_end)
+    what = _what_label(confirmation)
+    brand = (getattr(confirmation.tenant, "name", "") or "").strip()
+    program = (confirmation.event_type_label or "").strip()
+    eyebrow = " • ".join(p.upper() for p in (brand, program) if p)
+    address = (confirmation.address or "").strip()
+    return {
+        "eyebrow": eyebrow,
+        "ba_first_name": (confirmation.ba_name or "").strip().split(" ")[0],
+        "intro_html": (
+            f"Your <strong>{what}</strong> has been cancelled. You no longer "
+            f"need to show up for this sampling — sorry for the short notice."
+        ),
+        "event_title": _event_title(confirmation, date_label, time_label),
+        "date_label": date_label,
+        "store_name": (confirmation.store_name or "").strip(),
+        "address": address,
+        "time_label": time_label,
+        "support_phone": SUPPORT_PHONE,
+        "support_phone_href": SUPPORT_PHONE_HREF,
+        "from_address": CONFIRMATION_REPLY_TO,
+    }
+
+
+def build_cancellation_subject(confirmation: EventConfirmation) -> str:
+    local_start = confirmation.local_start()
+    title = _event_title(
+        confirmation,
+        format_event_date(local_start),
+        format_time_range(local_start, confirmation.local_end()),
+    )
+    brand = (getattr(confirmation.tenant, "name", "") or "").strip()
+    program = (confirmation.event_type_label or "").strip()
+    lead = " ".join(p for p in (brand, program) if p) or "Shift"
+    return (
+        f"Cancelled: Your {lead} – {title}"
+        if title
+        else f"Cancelled: Your {lead}"
+    )
+
+
+class EventConfirmationCancellationMailer(Mailer):
+    """Thin cancel notice to the BA from staffing@ — mirrors confirmation tone."""
+
+    def __init__(self, confirmation: EventConfirmation) -> None:
+        self.confirmation = confirmation
+
+    def envelope(self) -> Envelope:
+        return Envelope(
+            subject=build_cancellation_subject(self.confirmation),
+            template="events.templates.emails.event_confirmation_cancelled",
+            to_emails=[self.confirmation.ba_email],
+            headers={"Reply-To": CONFIRMATION_REPLY_TO},
+            from_email=CONFIRMATION_FROM_EMAIL,
+            context=build_cancellation_context(self.confirmation),
+        )
+
+
+def send_cancellation_email(confirmation: EventConfirmation) -> None:
+    """Email the BA that this sampling is cancelled. Caller owns idempotency."""
+    if not (confirmation.ba_email or "").strip():
+        raise ValueError("no-email")
+    EventConfirmationCancellationMailer(confirmation).send_now()
+
+
 # ---------------------------------------------------------------------------
 # The sweep's queryset
 # ---------------------------------------------------------------------------
