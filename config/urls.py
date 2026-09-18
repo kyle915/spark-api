@@ -87,6 +87,10 @@ urlpatterns = [
     path("api/public/", include("academy.urls")),
     # On-demand recap photo thumbnails (utils/thumb_views.py).
     path("api/public/img/", include("utils.thumb_urls")),
+    # Inline recap video playback. .mov is redirected with Content-Type
+    # video/mp4 and Content-Disposition inline so Chrome plays H.264
+    # clips instead of downloading them. See utils/media_views.py.
+    path("api/public/media/", include("utils.media_urls")),
     # Cloud Tasks handler endpoints (no JWT, `X-Tasks-Secret` shared-secret
     # gated). The feature-flagged async path for recap approval enqueues a
     # task that POSTs here to run the client/RMM email + PDF in the

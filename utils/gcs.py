@@ -123,13 +123,22 @@ def generate_upload_url(
     )
 
 
-def generate_download_url(blob_name: str, expiration_minutes: int = 60) -> str:
+def generate_download_url(
+    blob_name: str,
+    expiration_minutes: int = 60,
+    *,
+    response_type: str | None = None,
+    response_disposition: str | None = None,
+) -> str:
     """
     Generate a signed URL for downloading/viewing a file from GCS.
 
     Args:
         blob_name: The path/name of the file in the bucket (e.g., "products/image.jpg")
         expiration_minutes: How long the URL should be valid (default 60 minutes)
+        response_type: Optional Content-Type override (signed response-content-type)
+        response_disposition: Optional Content-Disposition override. Playback
+            uses ``inline`` so the browser plays the file instead of downloading.
 
     Returns:
         A signed URL that can be used to GET a file from GCS
@@ -137,6 +146,12 @@ def generate_download_url(blob_name: str, expiration_minutes: int = 60) -> str:
     client = get_gcs_client()
     bucket = client.bucket(settings.GS_BUCKET_NAME)
     blob = bucket.blob(blob_name)
+
+    overrides: dict[str, str] = {}
+    if response_type:
+        overrides["response_type"] = response_type
+    if response_disposition:
+        overrides["response_disposition"] = response_disposition
 
     sa_email, access_token = _iam_signing_args_for_default_credentials()
     if sa_email is not None and access_token is not None:
@@ -146,12 +161,14 @@ def generate_download_url(blob_name: str, expiration_minutes: int = 60) -> str:
             method="GET",
             service_account_email=sa_email,
             access_token=access_token,
+            **overrides,
         )
 
     return blob.generate_signed_url(
         version="v4",
         expiration=timedelta(minutes=expiration_minutes),
         method="GET",
+        **overrides,
     )
 
 
