@@ -2,7 +2,7 @@
 
 Automates BA event confirmations (and cancellations) from the Torch retail
 schedule Google Sheet, reusing Spark’s existing Event Confirmation mailer
-(email-only — no Event / roster create).
+(email-only — no Event / roster create). Shared implementation: `events/sheet_event_confirmations.py` (also powers Liquid Death).
 
 **Sheet:** [External // Torch Beverage Retail Demos](https://docs.google.com/spreadsheets/d/1kAvZhy2B9HoeSS-qjKXve8JWUV1oBxDqnhs1-7dQUYw/edit)  
 **ID:** `1kAvZhy2B9HoeSS-qjKXve8JWUV1oBxDqnhs1-7dQUYw`  
