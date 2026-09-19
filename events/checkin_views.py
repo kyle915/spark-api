@@ -32,6 +32,7 @@ from django.views.decorators.http import require_http_methods
 
 from ambassadors import checkin_web
 from ambassadors.payable_mileage import NeedsPayableMileage
+from recaps.spend_amount import SpendAmountNeedsCents
 from events.checkin_tokens import (
     BadSignature,
     CHECKIN_SESSION_MAX_AGE_SECONDS,
@@ -870,6 +871,9 @@ def public_checkin_recap(request: HttpRequest, code: str) -> HttpResponse:
             status=400,
             code="needs_payable_mileage",
         )
+    except SpendAmountNeedsCents as exc:
+        logger.warning("checkin recap refused, spend cents, code=%s: %s", code, exc)
+        return _err(str(exc), status=400, code="spend_needs_cents")
     except Exception:  # noqa: BLE001
         logger.exception("checkin recap submit failed code=%s", code)
         return _err("Couldn't submit your recap. Try again.", status=500, code="server")

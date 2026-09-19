@@ -17,6 +17,7 @@ from django.utils.text import slugify
 from recaps import types
 from recaps import models
 from recaps import inputs
+from recaps.spend_amount import SpendAmountNeedsCents, guard_spend_amount
 from recaps import heic_conversion
 from recaps.envelopes import (
     RecapApprovedNotificationMailer,
@@ -1562,10 +1563,24 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
                                 "Custom field not found for the selected template."
                             )
 
+                        try:
+                            stored_value = guard_spend_amount(
+                                custom_field.name,
+                                getattr(
+                                    getattr(custom_field, "custom_field_type", None),
+                                    "name",
+                                    "",
+                                )
+                                or "",
+                                custom_field_value_input.value,
+                            )
+                        except SpendAmountNeedsCents as exc:
+                            raise GraphQLError(str(exc)) from exc
+
                         models.CustomFieldValue.objects.create(
                             custom_recap=custom_recap,
                             custom_field=custom_field,
-                            value=custom_field_value_input.value,
+                            value=stored_value,
                             created_by=self.user,
                         )
 
@@ -2028,8 +2043,27 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
                             raise GraphQLError("Duplicate custom field in the input.")
                         seen_custom_field_ids.add(custom_field.id)
 
+                        try:
+                            stored_value = guard_spend_amount(
+                                custom_field.name,
+                                getattr(
+                                    getattr(custom_field, "custom_field_type", None),
+                                    "name",
+                                    "",
+                                )
+                                or "",
+                                custom_field_value_input.value,
+                                previous=(
+                                    custom_field_value.value
+                                    if custom_field_value
+                                    else None
+                                ),
+                            )
+                        except SpendAmountNeedsCents as exc:
+                            raise GraphQLError(str(exc)) from exc
+
                         if custom_field_value:
-                            custom_field_value.value = custom_field_value_input.value
+                            custom_field_value.value = stored_value
                             custom_field_value.updated_by = self.user
                             custom_field_value.save(
                                 update_fields=["value", "updated_by", "updated_at"]
@@ -2038,7 +2072,7 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
                             custom_field_value = models.CustomFieldValue.objects.create(
                                 custom_recap=custom_recap,
                                 custom_field=custom_field,
-                                value=custom_field_value_input.value,
+                                value=stored_value,
                                 created_by=self.user,
                             )
                         final_custom_field_value_ids.append(custom_field_value.id)
