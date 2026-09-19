@@ -405,3 +405,114 @@ def test_write_row_status_uses_known_letters_not_header_read():
     assert "'Retail Schedule'!AD78" in ranges
     assert "'Retail Schedule'!AE78" in ranges
     assert "'Retail Schedule'!O78" in ranges
+
+
+def test_resend_confirmation_column_is_not_sticky_force():
+    """The one-shot column must not set force_resend. Only the request flag does."""
+    payload = payload_from_mapping(
+        {
+            "Resend Confirmation": True,
+            "Force Resend": False,
+            "Confirmation Status": "Sent",
+            "Email": "alex@example.com",
+        },
+        row_number=12,
+    )
+    assert payload.force_resend is False
+
+    from events.sheet_event_confirmations import CONFIRMATION_EXTRA_HEADERS
+
+    assert CONFIRMATION_EXTRA_HEADERS[-1] == "Resend Confirmation"
+
+
+def test_handle_action_resend_flag_force_sends_once_then_stops():
+    """resend=True bypasses Sent for this call only. The next send does not."""
+    from events.sheet_event_confirmations import ActionResult, handle_action
+
+    sent = ActionResult(
+        ok=True,
+        action="send",
+        status=STATUS_SENT,
+        message="Confirmation emailed to alex@example.com",
+    )
+    values = {
+        "Confirmation Status": "Sent",
+        "BA Name": "Alex BA",
+        "Email": "alex@example.com",
+        "Date": "Sep 18, 2026",
+        "Start Time": "1p",
+        "Address": "1 Main, Chicago, IL",
+        "State": "IL",
+        "Resend Confirmation": True,
+        "Force Resend": False,
+    }
+    with (
+        patch("events.sheet_event_confirmations.write_row_status"),
+        patch(
+            "events.sheet_event_confirmations.resolve_timezone_for_row",
+            return_value=("America/Chicago", ""),
+        ),
+        patch(
+            "events.sheet_event_confirmations._create_and_send",
+            return_value=sent,
+        ) as create,
+    ):
+        result = handle_action("send", values, row_number=12, resend=True)
+    create.assert_called_once()
+    assert create.call_args.args[0].force_resend is True
+    assert result.ok is True
+
+    with patch("events.sheet_event_confirmations._create_and_send") as again:
+        blocked = handle_action("send", values, row_number=12, resend=False)
+    again.assert_not_called()
+    assert blocked.ok is False
+    assert "Already Sent" in blocked.message
+
+
+def test_view_passes_resend_flag_not_column(settings):
+    import json
+
+    from django.test import RequestFactory
+
+    from events.sheet_event_confirmation_views import TorchSheetEventConfirmationView
+    from events.sheet_event_confirmations import ActionResult
+
+    settings.INTERNAL_CRON_SECRET = "test-secret"
+    factory = RequestFactory()
+    sent = ActionResult(
+        ok=True, action="send", status=STATUS_SENT, message="ok"
+    )
+
+    def _post(resend, column):
+        request = factory.post(
+            "/internal/torch-sheet-event-confirmation",
+            data=json.dumps(
+                {
+                    "action": "send",
+                    "rowNumber": 12,
+                    "resend": resend,
+                    "values": {
+                        "Confirmation Status": "Sent",
+                        "Resend Confirmation": column,
+                        "Force Resend": False,
+                        "Email": "alex@example.com",
+                    },
+                }
+            ),
+            content_type="application/json",
+            HTTP_X_CRON_SECRET="test-secret",
+        )
+        with patch(
+            "events.sheet_event_confirmation_views.handle_action",
+            return_value=sent,
+        ) as handle:
+            response = TorchSheetEventConfirmationView.as_view()(request)
+        return response, handle
+
+    response, handle = _post(True, False)
+    assert response.status_code == 200
+    assert handle.call_args.kwargs["resend"] is True
+
+    _response, handle = _post(False, True)
+    assert handle.call_args.kwargs["resend"] is False
+

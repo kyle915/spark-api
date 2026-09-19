@@ -50,11 +50,12 @@ are expected at **AB–AI**:
 | **AB** | **Event Confirmation Sent?** | text | Human-readable Sent / Cancelled stamp |
 | **AC** | **Send Confirmation** | checkbox | Trigger confirmation email |
 | **AD** | **Cancel Confirmation** | checkbox | Trigger cancel email (if previously Sent) |
-| **AE** | **Force Resend** | checkbox | Allow Send again after Sent / Cancelled |
+| **AE** | **Force Resend** | checkbox | Sticky. BA swaps only. If left checked, the next Send double-emails. |
 | AF | Confirmation Status | text | `Queued` → `Sent` → `Cancelled` / `Error` |
 | AG | Confirmation Sent At | text | Local stamp when Sent |
 | AH | Confirmation Error | text | Geocode fallback note or error |
 | AI | Spark Confirmation UUID | text | Spark row id (cancel + audit) |
+| *(appended)* | **Resend Confirmation** | checkbox | One-shot. Check to email the BA on that row again. Script clears the box and posts `resend: true`. Header-name lookup only — do not hardcode the letter. |
 
 `ensureConfirmationColumns` only appends a header that is missing, and it will
 not write over a cell that already has a header. It never remints or renames
@@ -73,8 +74,10 @@ existing columns (including **SEND** at U).
 4. **Cancel:** check **Cancel Confirmation**. If status was Sent, BA gets
    “this sampling has been cancelled”; reminders stop; status → Cancelled.
 5. **Swap BA:** Cancel → change BA Name + Email → check **Force Resend** +
-   **Send Confirmation**.
-6. **Resend same BA:** check Force Resend + Send.
+   **Send Confirmation**. Uncheck Force Resend afterward.
+6. **BA didn’t get the confirmation:** check **Resend Confirmation** only.
+   That force-sends once (`resend: true`), then the box clears itself.
+   Do not also check Force Resend.
 7. **Tomorrow bulk:** menu **Spark Confirmations → Send confirmations for tomorrow**.
 
 Tomorrow’s samplings are allowed — there is no “must be 2+ days out” gate.
@@ -88,7 +91,7 @@ Tomorrow’s samplings are allowed — there is no “must be 2+ days out” gat
 3. **Project Settings → Script properties:**
    - `SPARK_CRON_SECRET` = Cloud Run `INTERNAL_CRON_SECRET`
    - `SPARK_API_BASE` = `https://spark-api-new-490085168610.us-central1.run.app` (optional)
-4. Run `ensureConfirmationColumns`, then `installTriggers` (authorize the installing Google account — any Editor on the sheet).
+4. Run `ensureConfirmationColumns` (appends **Resend Confirmation** if it is missing; does not overwrite existing headers), then `installTriggers` if this is a first install. Re-pasting updates `onConfirmationEdit` — the trigger name does not change — but you must run `ensureConfirmationColumns` once so the new header exists. The script already installed on the live sheet does not update until you paste.
 5. Reload the sheet; **Spark Confirmations** menu appears.
 
 Who installs: Kyle or any Ignite ops Editor. The SA
@@ -104,7 +107,7 @@ https://docs.google.com/spreadsheets/d/1P1k5bpGuce_qAeh1qg9kNI4QjzRYLZhHTDm2vnQQ
 → Extensions → Apps Script. Replace Code.gs with the contents of
 spark-api/scripts/liquid_death_sheet_event_confirmations.gs.
 Set script property SPARK_CRON_SECRET to Cloud Run INTERNAL_CRON_SECRET.
-Run ensureConfirmationColumns, then installTriggers. Do not email real BAs yet.
+Run ensureConfirmationColumns (appends header "Resend Confirmation"), then installTriggers if not already installed. Do not email real BAs.
 ```
 
 ---
@@ -117,6 +120,7 @@ Run ensureConfirmationColumns, then installTriggers. Do not email real BAs yet.
   "rowNumber": 42,
   "sheetId": "1P1k5bpGuce_qAeh1qg9kNI4QjzRYLZhHTDm2vnQQKi0",
   "dryRun": true,
+  "resend": false,
   "values": {
     "Date": "10/3/2026",
     "Start Time": "10a",
@@ -134,6 +138,8 @@ Run ensureConfirmationColumns, then installTriggers. Do not email real BAs yet.
 ```
 
 `dryRun: true` validates mapping / TZ and returns what would send — **no email, no sheet stamp**.
+
+`resend: true` (with `action: "send"`) force-sends this request once. The **Resend Confirmation** column is not a force flag; Apps Script clears it after the click.
 
 ---
 
@@ -159,7 +165,8 @@ Same as Torch (`docs/torch-sheet-event-confirmations.md`):
 | **Queued** (mail already left, stamp failed) | Send (no Force) | **Sent** stamped, **no new email** (`alreadySent: true`) when an `EventConfirmation` + booked send exists |
 | Queued (no confirmation found) | Send (no Force) | **409** — do not Force Resend |
 | Sent | Send (no Force) | refused (409) |
-| Sent | Force + Send | new confirmation + email |
+| Sent | Force + Send | new confirmation + email (sticky — uncheck Force Resend after) |
+| Sent | **Resend Confirmation** | new confirmation + email once (`resend: true`); checkbox clears |
 | Sent | Cancel | Cancelled (+ cancel email) |
 | (never Sent) | Cancel | Cancelled, **no** email |
 | Cancelled | Send (no Force) | refused |
