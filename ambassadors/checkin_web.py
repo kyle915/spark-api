@@ -1101,6 +1101,7 @@ def submit_checkin_recap(
         _resolve_explicit_file_recap_category,
         _resolve_file_recap_category,
     )
+    from recaps.spend_amount import guard_spend_amount
     from utils.gcs import extract_blob_name_from_url
 
     actor = ambassador.user
@@ -1268,14 +1269,24 @@ def submit_checkin_recap(
                 field_id = int(str(raw_id))
             except (TypeError, ValueError):
                 continue
-            custom_field = rmodels.CustomField.objects.filter(
-                id=field_id, custom_recap_template_id=template.id
-            ).first()
+            custom_field = (
+                rmodels.CustomField.objects.select_related("custom_field_type")
+                .filter(id=field_id, custom_recap_template_id=template.id)
+                .first()
+            )
             if not custom_field:
                 continue
             value = fv.get("value")
             if value is None:
                 continue
+            value = guard_spend_amount(
+                custom_field.name,
+                getattr(
+                    getattr(custom_field, "custom_field_type", None), "name", ""
+                )
+                or "",
+                value,
+            )
             rmodels.CustomFieldValue.objects.create(
                 custom_recap=recap,
                 custom_field=custom_field,
