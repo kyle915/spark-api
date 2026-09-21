@@ -1065,6 +1065,19 @@ def resolve_force_new_shift_label(
     return standing_multi_shift_label(filed_count=filed_count)
 
 
+def parse_used_corpo_card(raw) -> bool | None:
+    """Yes/No from the walk-up form. None means the client didn't send it."""
+    if raw is True or raw is False:
+        return raw
+    if isinstance(raw, str):
+        text = raw.strip().lower()
+        if text in {"yes", "true", "1"}:
+            return True
+        if text in {"no", "false", "0"}:
+            return False
+    return None
+
+
 class RecapNeedsAPhoto(ValueError):
     """A submission would leave a recap with no photo on it at all.
 
@@ -1088,6 +1101,7 @@ def submit_checkin_recap(
     force_new: bool = False,
     third_party: bool = False,
     shift_label: str | None = None,
+    used_corpo_card: bool | None = None,
 ):
     """Create a ``CustomRecap`` (+ field values, photos, product samples) for a
     walk-up BA, attributed to their own user. Replicates the write path in
@@ -1236,6 +1250,7 @@ def submit_checkin_recap(
                     if third_party
                     else []
                 ),
+                used_corpo_card=bool(used_corpo_card),
             )
         else:
             recap.submitted_at = dj_tz.now()
@@ -1257,6 +1272,9 @@ def submit_checkin_recap(
             if resolved_shift_label and recap.name != name:
                 recap.name = name
                 update_fields.append("name")
+            if used_corpo_card is not None:
+                recap.used_corpo_card = used_corpo_card
+                update_fields.append("used_corpo_card")
             recap.save(update_fields=update_fields)
             rmodels.CustomFieldValue.objects.filter(custom_recap=recap).delete()
             rmodels.CustomRecapProductSample.objects.filter(
