@@ -17,6 +17,7 @@ from tenants.management.commands.onboard_brew_dr_products import (
     _has_full_new_set,
     _parse_sampled_list,
     _sku_key,
+    _with_new_prefix,
 )
 from tenants.tests.base import BaseGraphQLTestCase
 
@@ -28,6 +29,17 @@ class TestBrewDrSkuHelpers:
     def test_sku_key_strips_type_prefix(self):
         assert _sku_key("Kombucha — Unsweetened") == "unsweetened"
         assert _sku_key("Unsweetened") == "unsweetened"
+        assert (
+            _with_new_prefix("Kombucha — Classic")
+            == "Brew Dr Kombucha Iced Tea — Classic"
+        )
+        assert (
+            _with_new_prefix("Kombucha- Iced Tea Classic")
+            == "Brew Dr Kombucha Iced Tea — Iced Tea Classic"
+        )
+        assert _with_new_prefix("Classic", {"classic"}) == (
+            "Brew Dr Kombucha Iced Tea — Classic"
+        )
 
     def test_has_full_new_set(self):
         labels = [f"Kombucha — {n}" for n in BREW_DR_PRODUCTS]
@@ -186,6 +198,93 @@ class TestOnboardBrewDrProducts(BaseGraphQLTestCase):
         assert _has_full_new_set(parsed, BREW_DR_PRODUCTS)
         field.refresh_from_db()
         assert len(field.options) == 6
+
+    def test_renames_type_and_relabels_without_adding_skus(self):
+        from django.utils import timezone
+
+        from events.models import Event
+        from recaps.models import (
+            CustomField,
+            CustomFieldValue,
+            CustomRecap,
+            CustomRecapFieldType,
+            CustomRecapTemplate,
+            RecapSection,
+        )
+
+        ptype = ProductType.objects.create(
+            name="Kombucha",
+            tenant=self.tenant,
+            created_by=self.owner,
+        )
+        Product.objects.create(
+            name="Iced Tea Classic",
+            product_type=ptype,
+            tenant=self.tenant,
+            created_by=self.owner,
+        )
+        et = self._EventType.objects.create(
+            name="Retail Sampling", tenant=self.tenant, created_by=self.owner
+        )
+        event = Event.objects.create(
+            name="Brew Dr prefix fixture",
+            tenant=self.tenant,
+            address="1 Test St",
+            event_type=et,
+            date=timezone.now(),
+            created_by=self.owner,
+        )
+        tpl = CustomRecapTemplate.objects.create(
+            tenant=self.tenant,
+            name="Brew Dr. Kombucha-Retail Sampling",
+            event_type=et,
+            product_samples=True,
+            created_by=self.owner,
+        )
+        section = RecapSection.objects.create(
+            tenant=self.tenant, name="Products Sampled", created_by=self.owner
+        )
+        ft = CustomRecapFieldType.objects.create(
+            name="multiselect", created_by=self.owner
+        )
+        field = CustomField.objects.create(
+            custom_recap_template=tpl,
+            recap_section=section,
+            custom_field_type=ft,
+            name="Products Sampled",
+            required=True,
+            options=["Kombucha — Classic"],
+            created_by=self.owner,
+        )
+        recap = CustomRecap.objects.create(
+            tenant=self.tenant,
+            custom_recap_template=tpl,
+            event=event,
+            created_by=self.owner,
+            name="prefix sampled",
+        )
+        cfv = CustomFieldValue.objects.create(
+            custom_recap=recap,
+            custom_field=field,
+            value=json.dumps(["Kombucha — Classic"]),
+            created_by=self.owner,
+        )
+
+        call_command(
+            "onboard_brew_dr_products",
+            owner_email=self.owner.email,
+            apply=True,
+            skip_migrate=True,
+        )
+        ptype.refresh_from_db()
+        assert ptype.name == PRODUCT_TYPE_NAME
+        iced = Product.objects.get(tenant=self.tenant, name="Iced Tea Classic")
+        assert iced.product_type_id == ptype.id
+        cfv.refresh_from_db()
+        assert json.loads(cfv.value) == ["Brew Dr Kombucha Iced Tea — Classic"]
+        field.refresh_from_db()
+        assert "Brew Dr Kombucha Iced Tea — Iced Tea Classic" in field.options
+        assert "Brew Dr Kombucha Iced Tea — Classic" in field.options
 
 
 @pytest.mark.django_db(transaction=True)

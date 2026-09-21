@@ -3641,9 +3641,9 @@ class OnboardDrekkerProductsView(View):
 class OnboardBrewDrProductsView(View):
     """GET/POST `/internal/cron/onboard-brew-dr-products`.
 
-    Seeds Brew Dr. Kombucha's Product catalog (Kombucha + 6 SKUs), retires
-    extras, refreshes Products Sampled options, and rewrites recaps whose
-    sampled selection is empty or only lists legacy cans. Idempotent.
+    Seeds Brew Dr. Kombucha's Product catalog (Brew Dr Kombucha Iced Tea +
+    6 SKUs), renames a leftover Kombucha type, retires the old can names,
+    refreshes Products Sampled options, and relabels stored SKU prefixes.
     DRY-RUN unless apply=true.
 
     Params: owner_email (required), tenant, apply, skip_migrate.
