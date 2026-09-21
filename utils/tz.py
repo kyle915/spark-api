@@ -105,6 +105,72 @@ def _try_zone(name: str) -> Optional[ZoneInfo]:
         return None
 
 
+def iana_for_latlng(
+    lat: float | None,
+    lng: float | None,
+    *,
+    when: _dt.datetime | None = None,
+    timeout: float = 6.0,
+) -> Optional[str]:
+    """Exact IANA zone for a coordinate, via the Google Time Zone API.
+
+    Why this exists: :func:`iana_for_us_state` maps a STATE to its dominant
+    zone, which is simply wrong for the fourteen-odd states that span two.
+    Knoxville is Eastern while Tennessee is "Central"; Pensacola is Central
+    while Florida is "Eastern"; El Paso is Mountain while Texas is "Central".
+    A confirmation email built on the state answer tells those BAs to arrive
+    an hour off. Coordinates do not have that ambiguity.
+
+    Best-effort and NEVER raises: returns ``None`` on a missing key, a bad
+    coordinate, a transport error or an unexpected body, so the caller can
+    fall back to the state map rather than fail a send.
+    """
+    try:
+        lat_f = float(lat)  # type: ignore[arg-type]
+        lng_f = float(lng)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    if not (-90.0 <= lat_f <= 90.0 and -180.0 <= lng_f <= 180.0):
+        return None
+
+    try:
+        from django.conf import settings
+
+        key = (getattr(settings, "GOOGLE_MAPS_API_KEY", None) or "").strip()
+    except Exception:  # noqa: BLE001 — settings may be unavailable
+        import os
+
+        key = (os.environ.get("GOOGLE_MAPS_API_KEY") or "").strip()
+    if not key:
+        return None
+
+    # The API needs an instant because a zone's identity is date-independent
+    # but its offset is not; pass the event's own moment when we have it.
+    moment = when or _dt.datetime.now(tz=dt_timezone.utc)
+    try:
+        import httpx
+
+        resp = httpx.get(
+            "https://maps.googleapis.com/maps/api/timezone/json",
+            params={
+                "location": f"{lat_f},{lng_f}",
+                "timestamp": int(moment.timestamp()),
+                "key": key,
+            },
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception:  # noqa: BLE001 — best-effort; caller falls back
+        return None
+
+    if (data or {}).get("status") != "OK":
+        return None
+    name = ((data or {}).get("timeZoneId") or "").strip()
+    # Only trust a name tzdata actually knows.
+    return name if name and _try_zone(name) else None
+
+
 def iana_for_us_state(state_code: str | None) -> Optional[str]:
     """Dominant IANA zone for a US state/territory code, or None if unknown."""
     code = (state_code or "").strip().upper()

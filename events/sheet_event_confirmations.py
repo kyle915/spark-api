@@ -34,7 +34,7 @@ from utils.torch_public_form_sheet import (
     _read_header,
     _service,
 )
-from utils.tz import iana_for_us_state
+from utils.tz import iana_for_us_state, iana_for_latlng
 
 logger = logging.getLogger(__name__)
 
@@ -259,6 +259,14 @@ def products_from_skus_cell(raw: str | None) -> list[str]:
     return out
 
 
+# US states that span more than one timezone. For these, a state-level
+# answer is a coin-flip for any address near the line, so resolve_timezone_
+# for_row flags it rather than presenting it as exact.
+SPLIT_ZONE_STATES = frozenset(
+    {"AK", "AZ", "FL", "ID", "IN", "KS", "KY", "MI", "ND", "NE", "OR", "SD", "TN", "TX"}
+)
+
+
 def _state_code_from_hint(state_hint: str | None, address: str | None) -> str | None:
     hint = (state_hint or "").strip()
     if hint:
@@ -276,11 +284,20 @@ def resolve_timezone_for_row(
     state_hint: str = "",
     *,
     geocode=photon_geocode_feature,
+    coord_tz=iana_for_latlng,
 ) -> tuple[str, str]:
     """Return ``(iana, note)``.
 
-    Prefer Photon geocode → state → IANA. Fall back to sheet State / address
-    parse. Always returns a usable IANA name; ``note`` explains fallbacks.
+    Resolution order: geocoded COORDINATES → zone, then the geocoded state,
+    then the sheet's State / a state parsed out of the address. Always
+    returns a usable IANA name; ``note`` explains any fallback.
+
+    Coordinates come first because a state is not a timezone. Fourteen-odd
+    US states span two zones, and three of them are markets this runs in:
+    Knoxville TN is Eastern while "TN" maps to Central, Pensacola FL is
+    Central while "FL" maps to Eastern, El Paso TX is Mountain while "TX"
+    maps to Central. Resolving by state told BAs at those addresses to
+    arrive an hour off.
     """
     notes: list[str] = []
     feature = None
@@ -291,11 +308,27 @@ def resolve_timezone_for_row(
         feature = None
 
     if feature:
+        # 1. the precise answer: the coordinate's own zone.
+        try:
+            iana = coord_tz(feature.get("lat"), feature.get("lng"))
+        except Exception as exc:  # noqa: BLE001 — never block a send
+            iana = None
+            notes.append(f"coord→tz error: {exc}")
+        if iana:
+            return iana, "; ".join(notes)
+
+        # 2. the geocoder's state. Exact for a single-zone state, a guess for
+        #    one that spans two — so only the latter earns a note.
         photon_state = (feature.get("state") or "").strip()
         code = _state_code_from_hint(photon_state, address)
         iana = iana_for_us_state(code) if code else None
         if iana:
-            return iana, ""
+            if code in SPLIT_ZONE_STATES:
+                notes.append(
+                    f"coord→tz unavailable; {code} spans two zones, so "
+                    f"{iana} is the state default and may be an hour off"
+                )
+            return iana, "; ".join(notes)
         notes.append(
             f"geocode ok but no IANA for state={photon_state!r}"
         )
