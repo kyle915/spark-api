@@ -3,12 +3,14 @@
 Catalog is the single source of truth for walk-up / ops Products Sampled
 selectors (GraphQL resolves live Product rows). This command:
 
-1. Ensures ProductType ``Kombucha`` + exactly these six SKUs:
+1. Ensures ProductType ``Brew Dr Kombucha Iced Tea`` (renames a leftover
+   ``Kombucha`` type in place) and these six SKUs:
    Unsweetened, Classic, Tea & Lemonade, Peach, Raspberry,
-   Mango Passionfruit.
-2. Removes other Brew Dr Product rows once FK sample/sales refs are cleared
-   (no soft-retire column on Product — delete after clearing so selectors
-   only show the six).
+   Mango Passionfruit. Every other Brew Dr product stays and moves onto
+   that same type, so the walk-up and recaps read
+   ``Brew Dr Kombucha Iced Tea — <SKU>``.
+2. Removes the old can names (Clear Mind, Island Mango, Superberry, Love,
+   Pineapple Paradise) once FK sample/sales refs are cleared.
 3. Refreshes stored ``Products Sampled`` CustomField.options from the catalog.
 4. For custom recaps whose sampled selection is empty OR does not already
    list all six new SKUs: clear old multiselect / structured sample rows,
@@ -41,7 +43,9 @@ User = get_user_model()
 
 TENANT_NAME = "Brew Dr. Kombucha"
 TENANT_SLUGS = ("brew-dr-kombucha", "brew-dr")
-PRODUCT_TYPE_NAME = "Kombucha"
+PRODUCT_TYPE_NAME = "Brew Dr Kombucha Iced Tea"
+# Prior type name. Renamed in place so existing Product rows keep their ids.
+LEGACY_PRODUCT_TYPE_NAMES: tuple[str, ...] = ("Kombucha",)
 
 # Prior hardcoded Products Sampled options (seed_brew_dr_recap_template).
 LEGACY_CANS: tuple[str, ...] = (
@@ -88,6 +92,28 @@ def _parse_sampled_list(raw: str | None) -> list[str]:
     if isinstance(parsed, str) and parsed.strip():
         return [parsed.strip()]
     return []
+
+
+def _with_new_prefix(label: str, catalog_names: set[str] | None = None) -> str:
+    """Swap a legacy type prefix for ``Brew Dr Kombucha Iced Tea``.
+
+    ``Kombucha — Classic`` and a bare catalog name ``Classic`` both become
+    ``Brew Dr Kombucha Iced Tea — Classic``. Anything else is left alone.
+    """
+    raw = (label or "").strip()
+    if not raw:
+        return raw
+    new_prefix = PRODUCT_TYPE_NAME.lower()
+    if raw.lower().startswith(new_prefix):
+        return raw
+    legacy = {n.lower() for n in LEGACY_PRODUCT_TYPE_NAMES}
+    for sep in (" — ", " – ", " - ", "- "):
+        head, delim, tail = raw.partition(sep)
+        if delim and head.strip().lower() in legacy and tail.strip():
+            return f"{PRODUCT_TYPE_NAME} — {tail.strip()}"
+    if catalog_names and raw.lower() in catalog_names:
+        return f"{PRODUCT_TYPE_NAME} — {raw}"
+    return raw
 
 
 def _has_full_new_set(selected: list[str], wanted: list[str]) -> bool:
@@ -203,9 +229,11 @@ class Command(BaseCommand):
 
         def _run():
             ptype = self._ensure_product_type(tenant, owner, apply)
-            keep_ids = self._ensure_products(tenant, ptype, owner, apply)
-            self._retire_extra_products(tenant, keep_ids, apply)
+            self._ensure_products(tenant, ptype, owner, apply)
+            self._retype_all_products(tenant, ptype, owner, apply)
+            self._retire_legacy_cans(tenant, apply)
             self._sync_products_sampled_options(tenant, apply)
+            self._rewrite_sampled_prefixes(tenant, owner, apply)
             if not skip_migrate:
                 self._migrate_sampled_on_recaps(tenant, owner, apply)
 
@@ -232,6 +260,24 @@ class Command(BaseCommand):
         if ptype:
             self.stdout.write(f"ProductType: [{ptype.id}] {ptype.name!r} (exists)")
             return ptype
+        legacy = None
+        for old_name in LEGACY_PRODUCT_TYPE_NAMES:
+            legacy = ProductType.objects.filter(
+                tenant_id=tenant.id, name__iexact=old_name
+            ).first()
+            if legacy is not None:
+                break
+        if legacy:
+            self.stdout.write(
+                f"ProductType: rename [{legacy.id}] {legacy.name!r} → "
+                f"{PRODUCT_TYPE_NAME!r}"
+            )
+            if not apply:
+                return legacy
+            legacy.name = PRODUCT_TYPE_NAME
+            legacy.updated_by = owner
+            legacy.save(update_fields=["name", "updated_by", "updated_at"])
+            return legacy
         if not apply:
             self.stdout.write(f"ProductType: would create {PRODUCT_TYPE_NAME!r}")
             return None
@@ -315,12 +361,44 @@ class Command(BaseCommand):
                 )
         return cleared
 
-    def _retire_extra_products(self, tenant, keep_ids: set[int], apply: bool) -> None:
-        extras = list(
+    def _retype_all_products(self, tenant, ptype, owner, apply: bool) -> None:
+        """Put every Brew Dr SKU on the iced-tea type, including ones we keep."""
+        if ptype is None:
+            return
+        rows = list(
             Product.objects.filter(tenant_id=tenant.id)
-            .exclude(id__in=keep_ids)
+            .exclude(product_type_id=ptype.id)
             .order_by("id")
         )
+        if not rows:
+            return
+        for product in rows:
+            self.stdout.write(
+                f"  ~ retype {product.name!r} → {PRODUCT_TYPE_NAME}"
+            )
+            if not apply:
+                continue
+            product.product_type = ptype
+            product.updated_by = owner
+            product.save(update_fields=["product_type", "updated_by", "updated_at"])
+        if not apply:
+            return
+        for old_name in LEGACY_PRODUCT_TYPE_NAMES:
+            for leftover in ProductType.objects.filter(
+                tenant_id=tenant.id, name__iexact=old_name
+            ):
+                if Product.objects.filter(product_type_id=leftover.id).exists():
+                    continue
+                leftover.delete()
+                self.stdout.write(f"  - removed empty type {old_name!r}")
+
+    def _retire_legacy_cans(self, tenant, apply: bool) -> None:
+        legacy_keys = {_sku_key(name) for name in LEGACY_CANS}
+        extras = [
+            product
+            for product in Product.objects.filter(tenant_id=tenant.id).order_by("id")
+            if _sku_key(product.name) in legacy_keys
+        ]
         if not extras:
             self.stdout.write("Extras    : none (catalog already exact)")
             return
@@ -386,6 +464,48 @@ class Command(BaseCommand):
                 self.stdout.write(
                     f"  ~ would refresh options on {tpl_name!r} → {len(options)}"
                 )
+
+    def _rewrite_sampled_prefixes(self, tenant, owner, apply: bool) -> None:
+        """Replace a stored ``Kombucha — SKU`` label. Do not add SKUs."""
+        from recaps.models import CustomField, CustomFieldValue
+        from recaps.products_sampled import PRODUCTS_SAMPLED_FIELD
+
+        catalog_names = {
+            (name or "").strip().lower()
+            for name in Product.objects.filter(tenant_id=tenant.id).values_list(
+                "name", flat=True
+            )
+            if (name or "").strip()
+        }
+        fields = list(
+            CustomField.objects.filter(
+                custom_recap_template__tenant_id=tenant.id,
+                name__iexact=PRODUCTS_SAMPLED_FIELD,
+            )
+        )
+        if not fields:
+            return
+        changed = 0
+        for cfv in CustomFieldValue.objects.filter(
+            custom_field_id__in=[f.id for f in fields]
+        ).order_by("id"):
+            selected = _parse_sampled_list(cfv.value)
+            if not selected:
+                continue
+            relabeled = [_with_new_prefix(item, catalog_names) for item in selected]
+            if relabeled == selected:
+                continue
+            changed += 1
+            self.stdout.write(
+                f"  relabel custom_recap id={cfv.custom_recap_id}: "
+                f"{selected} → {relabeled}"
+            )
+            if not apply:
+                continue
+            cfv.value = json.dumps(relabeled)
+            cfv.updated_by = owner
+            cfv.save(update_fields=["value", "updated_by", "updated_at"])
+        self.stdout.write(f"Prefix relabel: {changed} recap value(s)")
 
     def _migrate_sampled_on_recaps(self, tenant, owner, apply: bool) -> None:
         from events.event_confirmations import catalog_product_options
