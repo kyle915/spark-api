@@ -852,6 +852,9 @@ def public_checkin_recap(request: HttpRequest, code: str) -> HttpResponse:
             force_new=force_new,
             third_party=checkin_web.is_recap_only_code(code, _target),
             shift_label=shift_label,
+            used_corpo_card=checkin_web.parse_used_corpo_card(
+                data.get("usedCorpoCard", data.get("used_corpo_card"))
+            ),
         )
     except checkin_web.RecapNeedsAPhoto as exc:
         # The BA's to fix, not a server fault — so a 400 carrying the SAME
