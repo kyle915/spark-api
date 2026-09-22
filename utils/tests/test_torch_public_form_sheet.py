@@ -326,6 +326,10 @@ def test_sheet_date_parsing_never_guesses():
     assert _parse_sheet_date("09/12/2026") == _d("2026-09-12")
     assert _parse_sheet_date("2026-09-12") == _d("2026-09-12")
     assert _parse_sheet_date("Sep 12, 2026") == _d("2026-09-12")
+    assert _parse_sheet_date("Sept, 25, 2026") == _d("2026-09-25")
+    assert _parse_sheet_date("Sept 25, 2026") == _d("2026-09-25")
+    assert _parse_sheet_date("Sept. 25, 2026") == _d("2026-09-25")
+    assert _parse_sheet_date("September, 25, 2026") == _d("2026-09-25")
     assert _parse_sheet_date("not a date") is None
     assert _parse_sheet_date("") is None
 
