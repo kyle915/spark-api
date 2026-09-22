@@ -571,7 +571,9 @@ class QuerySpark(GoogleCalendarQueries, TenantThemingQuery):
                 queryset = queryset.filter(
                     request_url_name__icontains=filters.request_url_name
                 )
-        queryset = queryset.distinct()
+        queryset = queryset.distinct().select_related(
+            "checkin_event_type"
+        ).prefetch_related("checkin_event_types")
 
         try:
             return await connection_from_queryset_async(
@@ -876,7 +878,9 @@ class QueryClients(
                     request_url_name__icontains=filters.request_url_name
                 )
 
-        queryset = queryset.distinct()
+        queryset = queryset.distinct().select_related(
+            "checkin_event_type"
+        ).prefetch_related("checkin_event_types")
         try:
             return await connection_from_queryset_async(
                 queryset,
@@ -965,7 +969,9 @@ class QueryMobile(TenantThemingQuery):
                     request_url_name__icontains=filters.request_url_name
                 )
 
-        queryset = queryset.distinct()
+        queryset = queryset.distinct().select_related(
+            "checkin_event_type"
+        ).prefetch_related("checkin_event_types")
         try:
             return await connection_from_queryset_async(
                 queryset,

@@ -296,6 +296,14 @@ class ProductDetailResponse:
     product: Product | None = None
 
 
+@strawberry.type
+class RenameCatalogLabelResponse:
+    success: bool
+    message: str
+    recaps_updated: int
+    client_mutation_id: strawberry.ID | None = None
+
+
 @strawberry_django.type(models.RequestType)
 class RequestType(Node):
     uuid: str

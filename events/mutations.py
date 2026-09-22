@@ -1991,6 +1991,48 @@ class ProductMutations:
             )
 
     @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def rename_catalog_label(
+        self,
+        info: strawberry.Info,
+        input: inputs.RenameCatalogLabelInput,
+    ) -> types.RenameCatalogLabelResponse:
+        """Rename a product or product type and rewrite Products Sampled labels."""
+        from recaps.rename_catalog_labels import rename_catalog_label
+
+        user = info.context.request.user
+
+        def _run() -> int:
+            product_id = None
+            product_type_id = None
+            if input.product_id:
+                product_id = resolve_id_to_int(input.product_id)
+            if input.product_type_id:
+                product_type_id = resolve_id_to_int(input.product_type_id)
+            return rename_catalog_label(
+                user=user,
+                product_id=product_id,
+                product_type_id=product_type_id,
+                name=input.name,
+            )
+
+        try:
+            recaps_updated = await sync_to_async(_run)()
+        except (TypeError, ValueError, GraphQLError) as exc:
+            return types.RenameCatalogLabelResponse(
+                success=False,
+                message=str(exc) or "Couldn't rename.",
+                recaps_updated=0,
+                client_mutation_id=getattr(input, "client_mutation_id", None),
+            )
+        noun = "recap" if recaps_updated == 1 else "recaps"
+        return types.RenameCatalogLabelResponse(
+            success=True,
+            message=f"Renamed. {recaps_updated} {noun} updated.",
+            recaps_updated=recaps_updated,
+            client_mutation_id=getattr(input, "client_mutation_id", None),
+        )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
     async def delete_product(
         self,
         info: strawberry.Info,

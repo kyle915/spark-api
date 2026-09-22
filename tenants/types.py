@@ -7,6 +7,51 @@ from .models import Tenant, Role, User, TenantTheme, SupportTicket
 from strawberry.relay import Node
 
 
+def _checkin_bucket_labels(raw) -> list[str]:
+    """Unique bucket names from a list or a program-keyed map."""
+    names: list[str] = []
+
+    def add_list(items) -> None:
+        if not isinstance(items, list):
+            return
+        for item in items:
+            if isinstance(item, str):
+                label = item.strip()
+            elif isinstance(item, dict):
+                label = str(item.get("name") or "").strip()
+            else:
+                continue
+            if label and label not in names:
+                names.append(label)
+
+    if isinstance(raw, list):
+        add_list(raw)
+    elif isinstance(raw, dict):
+        for items in raw.values():
+            add_list(items)
+    return names
+
+
+def _checkin_event_type_names(tenant) -> list[str]:
+    names: list[str] = []
+    seen: set[str] = set()
+    default = getattr(tenant, "checkin_event_type", None)
+    default_name = (getattr(default, "name", None) or "").strip() if default else ""
+    if default_name:
+        names.append(default_name)
+        seen.add(default_name.lower())
+    rows = list(tenant.checkin_event_types.all())
+    rows.sort(key=lambda row: (row.name or "").lower())
+    for row in rows:
+        label = (row.name or "").strip()
+        key = label.lower()
+        if not label or key in seen:
+            continue
+        seen.add(key)
+        names.append(label)
+    return names
+
+
 @strawberry_django.type(Role)
 class RoleType(Node):
     uuid: strawberry.auto
@@ -39,6 +84,20 @@ class TenantType(Node):
     # is already membership-scoped, and the code is meant to be shared
     # with BAs anyway.
     checkin_code: strawberry.auto
+
+    @strawberry.field(name="checkinPhotoBuckets")
+    def checkin_photo_bucket_names(self) -> list[str]:
+        """Photo dropzone labels on this brand's standing check-in.
+
+        A list of bucket objects, or a map of program name → buckets.
+        Names only — helpers and minimums stay on the check-in page.
+        """
+        return _checkin_bucket_labels(getattr(self, "checkin_photo_buckets", None))
+
+    @strawberry.field(name="checkinEventTypeNames")
+    async def checkin_program_names(self) -> list[str]:
+        """Programs a BA can pick on the standing link, default first."""
+        return await sync_to_async(_checkin_event_type_names)(self)
 
     @strawberry.field
     def recap_recipient_emails(self) -> str:
