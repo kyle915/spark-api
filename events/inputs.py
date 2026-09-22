@@ -392,6 +392,20 @@ class DeclineRequestInput(SparkGraphQLInput):
 
 
 @strawberry.input
+class CancelDemoInput(SparkGraphQLInput):
+    """Ask Ignite to cancel a scheduled demo.
+
+    ``request_id`` is the Relay id from a search result. ``lookup`` is a
+    pasted REQ code, numeric id, uuid, or Relay id. ``request_id`` wins
+    when both are set. ``reason`` is required and goes in the email.
+    """
+
+    request_id: strawberry.ID | None = None
+    lookup: str | None = None
+    reason: str
+
+
+@strawberry.input
 class DeleteRequestInput(SparkGraphQLInput):
     id: strawberry.ID
 

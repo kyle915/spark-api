@@ -1,0 +1,86 @@
+{% load static %}<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Cancel demo {{ request_code }}</title>
+  </head>
+  <body
+    style="margin:0;padding:0;background:#f4f4f0;
+           font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,
+                       'Helvetica Neue',Arial,sans-serif;
+           color:#0a0d09;">
+    <table role="presentation" cellspacing="0" cellpadding="0" border="0"
+           width="100%" style="background:#f4f4f0;">
+      <tr>
+        <td align="center" style="padding:24px 12px;">
+          <table role="presentation" cellspacing="0" cellpadding="0" border="0"
+                 width="600" style="width:600px;max-width:600px;
+                        background:#ffffff;border-radius:18px;overflow:hidden;">
+            <tr>
+              <td style="padding:24px 40px;background:#0a0d09;">
+                <img src="https://admin.igniteproductions.co/legal/spark-logo-full.png"
+                     alt="Spark by Ignite" width="180"
+                     style="display:block;height:auto;border:0;" />
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:36px 40px 8px 40px;">
+                <p style="margin:0 0 4px 0;font-family:'Courier New',Courier,monospace;
+                          font-size:10px;letter-spacing:0.22em;color:#5a6354;">
+                  CANCEL DEMO · {{ request_code }}
+                </p>
+                <h1 style="margin:0;font-family:Georgia,'Times New Roman',serif;
+                           font-weight:700;font-size:32px;line-height:36px;color:#0a0d09;">
+                  {{ store }}
+                </h1>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:16px 40px 4px 40px;">
+                <p style="margin:0;font-size:15px;line-height:22px;color:#3b4034;">
+                  <strong>{{ asked_by }}</strong>
+                  {% if asked_email and asked_email != "—" %}({{ asked_email }}){% endif %}
+                  asked Ignite to cancel this demo.
+                </p>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:20px 40px 0 40px;">
+                <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%"
+                       style="border-radius:14px;background:#fff4ee;border:1px solid #ef5a2a;">
+                  <tr>
+                    <td style="padding:16px 18px;font-size:15px;line-height:22px;color:#0a0d09;">
+                      {{ reason }}
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:20px 40px 8px 40px;font-size:14px;line-height:22px;color:#3b4034;">
+                <p style="margin:0 0 6px 0;"><strong>Brand:</strong> {{ brand }}</p>
+                <p style="margin:0 0 6px 0;"><strong>When:</strong> {{ when_label }}</p>
+                <p style="margin:0;"><strong>Where:</strong> {{ address }}</p>
+              </td>
+            </tr>
+            {% if admin_url %}
+            <tr>
+              <td style="padding:20px 40px 36px 40px;">
+                <a href="{{ admin_url }}"
+                   style="display:inline-block;background:#c5f546;color:#0a0d09;
+                          font-weight:700;font-size:14px;text-decoration:none;
+                          padding:12px 18px;border-radius:12px;">
+                  Open the request
+                </a>
+              </td>
+            </tr>
+            {% else %}
+            <tr><td style="padding:0 0 28px 0;"></td></tr>
+            {% endif %}
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>

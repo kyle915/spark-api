@@ -1418,6 +1418,14 @@ class DeclineRequestResponse:
 
 
 @strawberry.type
+class CancelDemoResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    request_code: str | None = None
+
+
+@strawberry.type
 class DeleteRequestResponse:
     success: bool
     message: str
