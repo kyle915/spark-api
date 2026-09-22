@@ -1,18 +1,15 @@
 """Per-tenant weekly digest data builder.
 
-Assembles the three-section payload for the client weekly digest email:
+Assembles the payload for the client weekly digest email:
 
   1. **This week at a glance** — KPI totals + activation / recap counts over the
      trailing 7 days. KPIs are windowed on ``created_at`` (the same anchor the
      period-comparison card uses), so the digest can never drift from the
      in-app numbers.
   2. **Coming up (next 7 days)** — upcoming events ordered by ``start_time``.
-  3. **Needs your approval** — requests still awaiting sign-off
-     (``reviewed=False``), the same signal the Requests list exposes via its
-     ``reviewed`` filter, so the count matches what the client can filter to.
 
-Pure read path: every total is a DB aggregate; only the bounded "coming up" /
-"needs approval" preview rows (capped) ever enter Python. No new model and no
+Pure read path: every total is a DB aggregate; only the bounded "coming up"
+preview rows (capped) ever enter Python. No new model and no
 migration — the caller (``send_client_weekly_digest``) gates on
 ``Tenant.scheduled_report_enabled``, so this whole feature is inert until a
 tenant opts in.
@@ -78,15 +75,13 @@ class WeeklyDigest:
     def has_content(self) -> bool:
         """True when there's at least one thing worth emailing about.
 
-        A tenant with a totally quiet week (nothing ran, nothing's coming up,
-        nothing pending) gets skipped by the command rather than mailed an
-        empty report.
+        A tenant with a totally quiet week (nothing ran, nothing's coming up)
+        gets skipped by the command rather than mailed an empty report.
         """
         return bool(
             self.completed_activations
             or self.recaps_filed
             or self.upcoming_total
-            or self.pending_total
             or self.kpis.total_engagements
             or self.kpis.samples_distributed
         )
@@ -103,7 +98,7 @@ class WeeklyDigest:
 def build_weekly_digest(
     tenant_id: int, now: datetime.datetime | None = None
 ) -> WeeklyDigest:
-    """Build the three-section weekly-digest payload for one tenant.
+    """Build the weekly-digest payload for one tenant.
 
     ``now`` is injectable for tests / deterministic runs; defaults to
     ``timezone.now()``. The trailing window is ``[now-7d, now)`` and the

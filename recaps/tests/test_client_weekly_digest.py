@@ -227,20 +227,18 @@ class TestClientWeeklyDigest(AmbassadorsGraphQLTestCase):
         env = mailer.envelope()
         assert env.template == "events.templates.emails.client_weekly_digest"
         assert "Girl Beer" in env.subject
-        # One pending approval -> subject leads with it.
-        assert "awaiting approval" in env.subject
+        assert "awaiting approval" not in env.subject
+        assert "1 recap last week" in env.subject
+        html = env.render_template()
+        assert "Needs your approval" not in html
+        assert "Review &amp; approve" not in html
         # Template-based email (no attachments, unlike the monthly PDF report).
         assert not env.attachments
         ctx = env.context
-        assert ctx["links"]["approvals"].endswith("/my-approvals")
+        assert "pending" not in ctx
         assert ctx["links"]["tracker"].endswith("/requests/list")
         assert "/master-tracker" not in ctx["links"]["tracker"]
-        assert ctx["links"]["approvals"].rstrip("/").endswith("my-approvals")
-        assert "spark.igniteproductions.co" not in ctx["links"]["approvals"]
         assert "spark.igniteproductions.co" not in ctx["links"]["tracker"]
-        pending_url = ctx["pending"][0]["url"]
-        assert "/request/view/" in pending_url
-        assert "spark.igniteproductions.co" not in pending_url
 
     def test_dry_run_sends_nothing(self):
         with mock.patch.object(

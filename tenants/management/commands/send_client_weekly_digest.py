@@ -1,13 +1,12 @@
 """Email each opted-in tenant a weekly digest of its field-marketing activity.
 
-Once a week this command builds a per-tenant three-section rollup
+Once a week this command builds a per-tenant rollup
 (:func:`recaps.weekly_digest.build_weekly_digest`) and emails it to that
 tenant's client contacts (:class:`recaps.envelopes.ClientWeeklyDigestMailer`):
 
   1. **This week at a glance** — activations run, recaps filed, and the headline
      KPIs over the trailing 7 days.
   2. **Coming up (next 7 days)** — upcoming activations.
-  3. **Needs your approval** — requests still awaiting sign-off.
 
 SAFE DEFAULT — OPT-IN OFF. The digest has its OWN per-tenant flag,
 ``client_weekly_digest_enabled`` (split from ``scheduled_report_enabled`` in
@@ -18,7 +17,7 @@ recipient list (``Tenant.scheduled_report_recipients()`` — the same client
 contacts the recap-approval emails reach).
 
 Quiet weeks are skipped. A tenant whose week has nothing worth reporting
-(nothing ran, nothing coming up, nothing pending — see
+(nothing ran, nothing coming up — see
 ``WeeklyDigest.has_content``) is skipped rather than mailed a barren report.
 Use ``--force`` to send anyway (handy with ``--tenant`` for a test run).
 
@@ -137,8 +136,7 @@ class Command(BaseCommand):
                         f"  - {tenant.name} (id={tenant.id}): would email "
                         f"{len(recipients)} recipient(s) {recipients} — "
                         f"{digest.completed_activations} ran, "
-                        f"{digest.upcoming_total} coming up, "
-                        f"{digest.pending_total} pending — NOT sent (dry-run)."
+                        f"{digest.upcoming_total} coming up — NOT sent (dry-run)."
                     )
                     continue
 

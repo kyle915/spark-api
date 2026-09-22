@@ -782,10 +782,9 @@ def _fmt_when(value: "datetime.datetime | None", *, with_time: bool = True) -> s
 class ClientWeeklyDigestMailer(Mailer):
     """Email a client a once-a-week per-tenant rollup.
 
-    Three sections, all gated by the caller on ``Tenant.scheduled_report_enabled``:
+    Two sections, all gated by the caller on ``Tenant.client_weekly_digest_enabled``:
       * **This week at a glance** — what ran + the headline KPIs (last 7 days).
       * **Coming up** — activations in the next 7 days.
-      * **Needs your approval** — requests still awaiting sign-off.
 
     Pre-formats every value into plain strings here so the template is a dumb
     renderer (no tz math, no model access at render time).
@@ -830,13 +829,11 @@ class ClientWeeklyDigestMailer(Mailer):
 
     def _subject_line(self) -> str:
         d = self.digest
-        # Lead the subject with the single most action-worthy fact so it reads
-        # well in a crowded inbox: pending approvals first, else what's coming.
-        if d.pending_total:
+        if d.recaps_filed:
             tail = (
-                f"{d.pending_total} awaiting approval"
-                if d.pending_total != 1
-                else "1 awaiting approval"
+                f"{d.recaps_filed} recaps last week"
+                if d.recaps_filed != 1
+                else "1 recap last week"
             )
         elif d.upcoming_total:
             tail = f"{d.upcoming_total} coming up"
@@ -868,20 +865,9 @@ class ClientWeeklyDigestMailer(Mailer):
             ],
             "upcoming_total": d.upcoming_total,
             "upcoming_overflow": d.upcoming_overflow,
-            "pending": [
-                {
-                    "name": p.name,
-                    "when": _fmt_when(p.when, with_time=False),
-                    "url": f"{base}/request/view/{p.uuid}" if base else "",
-                }
-                for p in d.pending
-            ],
-            "pending_total": d.pending_total,
-            "pending_overflow": d.pending_overflow,
             "links": {
                 "dashboard": f"{base}/" if base else "",
                 "tracker": f"{base}/requests/list" if base else "",
-                "approvals": f"{base}/my-approvals" if base else "",
             },
         }
 
