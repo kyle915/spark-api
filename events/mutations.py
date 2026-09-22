@@ -42,6 +42,7 @@ from .routing import (
     ROUTED_TENANT_SLUGS,
     suppress_cc,
 )
+from .demo_cancel import DemoCancelError, request_demo_cancellation
 from .torch_portal import (
     should_auto_approve_public_request,
     torch_request_approved_lists,
@@ -4355,6 +4356,60 @@ class RequestMutations:
         except Exception as e:
             return build_mutation_response(
                 types.DeclineRequestResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def cancel_demo(
+        self,
+        info: strawberry.Info,
+        input: inputs.CancelDemoInput,
+    ) -> types.CancelDemoResponse:
+        """Email every Ignite user that a demo should be cancelled.
+
+        Does not change the request status and does not email the BA.
+        Ops still takes the shift off the schedule after they read it.
+        """
+        try:
+            service: RequestMutationService = RequestMutationService()
+            user: User = await service.get_user(info)
+            if user.role_id == ROLE_ID.Ambassadors:
+                raise GraphQLError("You are not authorized to cancel demos.")
+
+            is_spark_admin = await user.role.is_spark_admin
+            tenant_id: int | None = None
+            if not is_spark_admin:
+                tenant = await sync_to_async(lambda: user.tenant)()
+                if tenant is None:
+                    raise GraphQLError("You are not authorized to cancel demos.")
+                tenant_id = tenant.id
+
+            result = await sync_to_async(request_demo_cancellation)(
+                request_id=getattr(input, "request_id", None),
+                lookup=getattr(input, "lookup", None),
+                reason=input.reason,
+                tenant_id=tenant_id,
+                actor=user,
+            )
+            return build_mutation_response(
+                types.CancelDemoResponse,
+                success=True,
+                message=result.message,
+                input_obj=input,
+                request_code=result.request_code,
+            )
+        except (DemoCancelError, GraphQLError) as e:
+            return build_mutation_response(
+                types.CancelDemoResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+        except Exception as e:
+            return build_mutation_response(
+                types.CancelDemoResponse,
                 success=False,
                 message=str(e),
                 input_obj=input,
