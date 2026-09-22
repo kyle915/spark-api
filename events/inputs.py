@@ -341,6 +341,15 @@ class DeleteProductInput(SparkGraphQLInput):
 
 
 @strawberry.input
+class RenameCatalogLabelInput(SparkGraphQLInput):
+    """Rename a product or a product type and relabel filed answers."""
+
+    name: str
+    product_id: strawberry.ID | None = None
+    product_type_id: strawberry.ID | None = None
+
+
+@strawberry.input
 class CreateRequestStatusInput(BaseNameableInput):
     create_event: bool = False
     is_default: bool = False
