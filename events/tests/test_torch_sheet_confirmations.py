@@ -55,6 +55,10 @@ def test_parse_sheet_date_iso(raw):
     assert parse_sheet_date_iso(raw).isoformat() == "2026-09-18"
 
 
+def test_parse_sheet_date_iso_accepts_sept_with_a_comma():
+    assert parse_sheet_date_iso("Sept, 25, 2026").isoformat() == "2026-09-25"
+
+
 def test_products_from_skus_cell():
     assert products_from_skus_cell("Raspberry 10mg, Peach 5mg; Mango") == [
         "Raspberry 10mg",

@@ -322,6 +322,23 @@ def _find_uuid_row(svc, sheet_id: str, tab: str | None, header: list[str], uuid:
 
 
 
+def _normalize_sheet_date_text(cell: str | None) -> str:
+    """Fold the free-text month spellings the retail sheets actually use.
+
+    ``Sept, 25, 2026`` is September 25. ``Sept`` is not a ``%b`` token
+    (that's ``Sep``), and a comma after the month is not ``%b %d, %Y``.
+    """
+    text = re.sub(r"\s+", " ", (cell or "").strip())
+    if not text:
+        return ""
+    text = re.sub(r"\bSept\.?(?!\w)", "Sep", text, flags=re.IGNORECASE)
+    return re.sub(
+        r"^([A-Za-z]+),\s+(\d{1,2}),\s+(\d{2,4})$",
+        r"\1 \2, \3",
+        text,
+    )
+
+
 def _parse_sheet_date(cell: str):
     """Parse a Date cell. None when it is not a date we recognise.
 
@@ -330,7 +347,7 @@ def _parse_sheet_date(cell: str):
     """
     import datetime as _dt
 
-    text = (cell or "").strip()
+    text = _normalize_sheet_date_text(cell)
     if not text:
         return None
     for fmt in ("%m/%d/%Y", "%m/%d/%y", "%Y-%m-%d", "%m-%d-%Y",
