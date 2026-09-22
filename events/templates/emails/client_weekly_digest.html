@@ -65,8 +65,8 @@
             <tr>
               <td class="pad" style="padding:14px 40px 4px 40px;">
                 <p style="margin:0;font-size:15px;line-height:22px;color:#3b4034;">
-                  Here's your field-marketing week at a glance — what ran, what's
-                  coming up, and anything waiting on your approval.
+                  Here's your field-marketing week at a glance — what ran, and
+                  what's coming up.
                 </p>
               </td>
             </tr>
@@ -205,61 +205,6 @@
                 <p style="margin:0;font-size:13px;line-height:20px;color:#7a8074;">
                   Nothing on the calendar for the next 7 days. Want to schedule
                   an activation? Reply to this email and we'll set it up.
-                </p>
-                {% endif %}
-              </td>
-            </tr>
-
-            <!-- ===================================================== -->
-            <!-- SECTION 3 — Needs your approval                        -->
-            <!-- ===================================================== -->
-            <tr>
-              <td class="pad" style="padding:28px 40px 4px 40px;">
-                <p style="margin:0 0 4px 0;
-                          font-family:Georgia,'Times New Roman',serif;
-                          font-weight:700;font-size:18px;
-                          letter-spacing:-0.01em;color:#0a0d09;">
-                  Needs your approval
-                  {% if pending_total %}<span style="font-family:'Courier New',Courier,monospace;font-size:11px;color:#ef5a2a;letter-spacing:0.08em;">&nbsp;{{ pending_total }} PENDING</span>{% endif %}
-                </p>
-              </td>
-            </tr>
-            <tr>
-              <td class="pad" style="padding:8px 40px 4px 40px;">
-                {% if pending %}
-                <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%"
-                       style="border:1px solid #f3d7cb;border-radius:12px;border-collapse:separate;border-spacing:0;overflow:hidden;background:#fdf4ef;">
-                  {% for rq in pending %}
-                  <tr>
-                    <td style="padding:12px 14px;{% if not forloop.last %}border-bottom:1px solid #f3d7cb;{% endif %}">
-                      <p style="margin:0;font-size:14px;font-weight:700;color:#0a0d09;">
-                        {% if rq.url %}<a href="{{ rq.url }}" style="color:#0a0d09;text-decoration:none;">{{ rq.name }}</a>{% else %}{{ rq.name }}{% endif %}
-                      </p>
-                      <p style="margin:3px 0 0 0;font-size:12px;color:#5a6354;">Requested {{ rq.when }}</p>
-                    </td>
-                  </tr>
-                  {% endfor %}
-                </table>
-                {% if pending_overflow %}
-                <p style="margin:8px 0 0 0;font-size:12px;color:#7a8074;">
-                  + {{ pending_overflow }} more awaiting review.
-                </p>
-                {% endif %}
-                {% if links.approvals %}
-                <p style="margin:12px 0 0 0;">
-                  <a href="{{ links.approvals }}" class="cta"
-                     style="display:inline-block;background:#c5f546;color:#0a0d09;
-                            padding:10px 18px;border-radius:999px;
-                            font-family:Georgia,'Times New Roman',serif;
-                            font-weight:700;font-size:13px;text-decoration:none;
-                            letter-spacing:-0.01em;box-shadow:0 0 0 1px #b2dd41 inset;">
-                    Review &amp; approve →
-                  </a>
-                </p>
-                {% endif %}
-                {% else %}
-                <p style="margin:0;font-size:13px;line-height:20px;color:#7a8074;">
-                  You're all caught up — nothing is waiting on your approval. 🎉
                 </p>
                 {% endif %}
               </td>
