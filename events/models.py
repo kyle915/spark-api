@@ -1577,3 +1577,78 @@ class EventConfirmationSend(models.Model):
     def __str__(self) -> str:
         state = "sent" if self.sent_at else f"unsent({self.attempts})"
         return f"EventConfirmationSend {self.stage} {state}"
+
+
+class FieldMarketingEvent(models.Model):
+    """A Torch field-marketing plan, separate from retail sampling.
+
+    Marketers plan the event here. Submitting it creates a Request Ignite
+    executes. Logged numbers feed the monthly KPI scorecard.
+    """
+
+    ACTIVITY_FULL_CAN = "full_can"
+    ACTIVITY_POUR = "pour"
+    ACTIVITY_SPONSORSHIP = "sponsorship"
+    ACTIVITY_RETAIL_SUPPORT = "retail_support"
+    ACTIVITY_CHOICES = [
+        (ACTIVITY_FULL_CAN, "Full can samples"),
+        (ACTIVITY_POUR, "4oz pour samples"),
+        (ACTIVITY_SPONSORSHIP, "Local event sponsorship"),
+        (ACTIVITY_RETAIL_SUPPORT, "Retail activation / support"),
+    ]
+
+    STATUS_PLANNED = "planned"
+    STATUS_SUBMITTED = "submitted"
+    STATUS_CHOICES = [
+        (STATUS_PLANNED, "Planned"),
+        (STATUS_SUBMITTED, "Submitted"),
+    ]
+
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    tenant = models.ForeignKey(
+        Tenant, on_delete=models.CASCADE, related_name="field_marketing_events"
+    )
+    request = models.ForeignKey(
+        "Request",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="field_marketing_events",
+    )
+    market = models.CharField(max_length=32)
+    activity = models.CharField(max_length=32, choices=ACTIVITY_CHOICES)
+    name = models.CharField(max_length=255)
+    starts_on = models.DateField()
+    days = models.PositiveIntegerField(default=1)
+    address = models.TextField(blank=True, default="")
+    notes = models.TextField(blank=True, default="")
+    planned_full_cans = models.PositiveIntegerField(default=0)
+    planned_pour_samples = models.PositiveIntegerField(default=0)
+    planned_emails = models.PositiveIntegerField(default=0)
+    logged_full_cans = models.PositiveIntegerField(null=True, blank=True)
+    logged_pour_samples = models.PositiveIntegerField(null=True, blank=True)
+    logged_emails = models.PositiveIntegerField(null=True, blank=True)
+    logged_days = models.PositiveIntegerField(null=True, blank=True)
+    logged_at = models.DateTimeField(null=True, blank=True)
+    status = models.CharField(
+        max_length=16, choices=STATUS_CHOICES, default=STATUS_PLANNED
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="field_marketing_events_created",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("starts_on", "id")
+        indexes = [
+            models.Index(
+                fields=["tenant", "starts_on"],
+                name="ev_fm_tenant_date_idx",
+            ),
+        ]
