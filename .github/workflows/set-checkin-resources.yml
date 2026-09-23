@@ -28,9 +28,9 @@ on:
   workflow_dispatch:
     inputs:
       tenant:
-        description: "Tenant name/slug substring"
+        description: "Exact tenant slug (Torch: torch-thc; keee-torch-thc also ok)"
         required: false
-        default: "feel free"
+        default: "feel-free"
       resources:
         description: 'JSON array of {label, kind, url, note} — blank = the brand preset. kind: link|pdf|image'
         required: false

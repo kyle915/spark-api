@@ -7160,8 +7160,9 @@ class SetCheckinResourcesView(View):
     so a re-run with no content change writes nothing. Dry run by default and it
     prints both lists, so read that before passing apply.
 
-    Params: tenant (default "feel free"), resources (JSON array, overrides the
-    built-in preset), clear, apply (default DRY RUN).
+    Params: tenant (exact slug preferred; default feel-free. Torch DB slug is
+    torch-thc; public form slug keee-torch-thc also resolves), resources (JSON
+    array, overrides the built-in preset), clear, apply (default DRY RUN).
     """
 
     def _run(self, request: HttpRequest) -> HttpResponse:
@@ -7182,6 +7183,23 @@ class SetCheckinResourcesView(View):
         out = io.StringIO()
         try:
             call_command("set_checkin_resources", stdout=out, **kwargs)
+        except CommandError as exc:
+            # Unknown tenant / missing preset are caller errors, not Internal
+            # Server Error. Returning 500 here paged Spark alerts
+            # (CommandError:digest.cron_views:_run + django.request:log_response)
+            # whenever an Action passed the Torch public-form slug keee-torch-thc
+            # instead of the DB slug torch-thc. 400 still fails the GitHub
+            # Action (non-200) without pretending the write ran.
+            logger.info("set-checkin-resources cron rejected: %s", exc)
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "log": out.getvalue(),
+                },
+                status=400,
+            )
         except Exception as exc:  # noqa: BLE001 — surface to caller
             logger.exception("set-checkin-resources cron failed")
             return JsonResponse(
