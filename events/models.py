@@ -1593,11 +1593,37 @@ class FieldMarketingEvent(models.Model):
     ACTIVITY_POUR = "pour"
     ACTIVITY_SPONSORSHIP = "sponsorship"
     ACTIVITY_RETAIL_SUPPORT = "retail_support"
+    ACTIVITY_EVENT_ACTIVATION = "event_activation"
+    ACTIVITY_GUERILLA = "guerilla"
+    ACTIVITY_PRODUCT_SEEDING = "product_seeding"
+    ACTIVITY_SALES_SUPPORT = "sales_support"
     ACTIVITY_CHOICES = [
         (ACTIVITY_FULL_CAN, "Full can samples"),
         (ACTIVITY_POUR, "4oz pour samples"),
         (ACTIVITY_SPONSORSHIP, "Local event sponsorship"),
         (ACTIVITY_RETAIL_SUPPORT, "Retail activation / support"),
+        (ACTIVITY_EVENT_ACTIVATION, "Event activation / sponsorship"),
+        (ACTIVITY_GUERILLA, "Guerilla event"),
+        (ACTIVITY_PRODUCT_SEEDING, "Product seeding"),
+        (ACTIVITY_SALES_SUPPORT, "Sales support"),
+    ]
+
+    SAMPLING_FULL_CAN = "full_can"
+    SAMPLING_POUR = "pour"
+    SAMPLING_CHOICES = [
+        ("", ""),
+        (SAMPLING_FULL_CAN, "Full can"),
+        (SAMPLING_POUR, "4oz pour"),
+    ]
+
+    SUPPORT_DISTRIBUTOR = "distributor_meeting"
+    SUPPORT_RETAIL_VISIT = "retail_visit"
+    SUPPORT_OTHER = "other"
+    SUPPORT_CHOICES = [
+        ("", ""),
+        (SUPPORT_DISTRIBUTOR, "Distributor meeting"),
+        (SUPPORT_RETAIL_VISIT, "Retail visit"),
+        (SUPPORT_OTHER, "Other"),
     ]
 
     STATUS_PLANNED = "planned"
@@ -1626,6 +1652,18 @@ class FieldMarketingEvent(models.Model):
     days = models.PositiveIntegerField(default=1)
     address = models.TextField(blank=True, default="")
     notes = models.TextField(blank=True, default="")
+    sampling_format = models.CharField(
+        max_length=16, blank=True, default="", choices=SAMPLING_CHOICES
+    )
+    support_type = models.CharField(
+        max_length=32, blank=True, default="", choices=SUPPORT_CHOICES
+    )
+    support_other = models.CharField(max_length=255, blank=True, default="")
+    sku_names = models.JSONField(default=list, blank=True)
+    needs_field_support = models.BooleanField(default=False)
+    ambassador_count = models.PositiveIntegerField(default=0)
+    support_times = models.CharField(max_length=255, blank=True, default="")
+    support_scope = models.TextField(blank=True, default="")
     planned_full_cans = models.PositiveIntegerField(default=0)
     planned_pour_samples = models.PositiveIntegerField(default=0)
     planned_emails = models.PositiveIntegerField(default=0)
@@ -1633,6 +1671,7 @@ class FieldMarketingEvent(models.Model):
     logged_pour_samples = models.PositiveIntegerField(null=True, blank=True)
     logged_emails = models.PositiveIntegerField(null=True, blank=True)
     logged_days = models.PositiveIntegerField(null=True, blank=True)
+    logged_cases = models.PositiveIntegerField(null=True, blank=True)
     logged_at = models.DateTimeField(null=True, blank=True)
     status = models.CharField(
         max_length=16, choices=STATUS_CHOICES, default=STATUS_PLANNED
