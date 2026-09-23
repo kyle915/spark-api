@@ -140,6 +140,31 @@ class TestFieldMarketing(EventsGraphQLTestCase):
         support = next(row for row in board["kpis"] if row["key"] == "retail_support")
         assert support["logged"] == 1
 
+    def test_market_filter_scopes_events_and_projected_kpis(self):
+        self._plan(market="miami", planned_full_cans=200, planned_emails=40)
+        self._plan(
+            market="houston",
+            name="Houston drop",
+            planned_full_cans=80,
+            planned_emails=10,
+        )
+        all_board = build_board(self.tenant, "2026-09")
+        miami = build_board(self.tenant, "2026-09", market="miami")
+        houston = build_board(self.tenant, "2026-09", market="houston")
+        assert len(all_board["events"]) == 2
+        assert len(miami["events"]) == 1
+        assert miami["events"][0]["market"] == "miami"
+        assert miami["events"][0]["manager_name"] == "Alec Aparicio"
+        cans_all = next(row for row in all_board["kpis"] if row["key"] == "full_cans")
+        cans_miami = next(row for row in miami["kpis"] if row["key"] == "full_cans")
+        cans_houston = next(row for row in houston["kpis"] if row["key"] == "full_cans")
+        assert cans_all["planned"] == 280
+        assert cans_miami["planned"] == 200
+        assert cans_houston["planned"] == 80
+        assert cans_miami["target"] == 1152
+        assert cans_miami["logged"] is None
+        assert len(miami["managers"]) == 4
+
     def test_other_brand_cannot_plan(self):
         with pytest.raises(FieldMarketingError):
             plan_event(

@@ -210,15 +210,19 @@ def _sum_logged(events, field: str) -> int | None:
     return sum(vals)
 
 
-def build_board(tenant, month: str | None):
+def build_board(tenant, month: str | None, market: str | None = None):
     start, end, key = _month_window(month)
-    events = list(
-        models.FieldMarketingEvent.objects.filter(
-            tenant=tenant,
-            starts_on__gte=start,
-            starts_on__lt=end,
-        ).order_by("starts_on", "id")
+    qs = models.FieldMarketingEvent.objects.filter(
+        tenant=tenant,
+        starts_on__gte=start,
+        starts_on__lt=end,
     )
+    market_key = (market or "").strip().lower()
+    if market_key:
+        if market_key not in _markets():
+            raise FieldMarketingError("Pick a market.")
+        qs = qs.filter(market=market_key)
+    events = list(qs.order_by("starts_on", "id"))
     sponsorships = [
         event
         for event in events
@@ -608,12 +612,16 @@ class FieldMarketingQueries:
         info: strawberry.Info,
         month: str | None = None,
         tenant_id: strawberry.ID | None = None,
+        market: str | None = None,
     ) -> FieldMarketingBoardType:
         user = await SparkGraphQLMixin().get_user(info)
         tenant = await sync_to_async(_active_tenant_for_user)(user, tenant_id)
         if tenant is None or not is_torch_tenant(tenant):
             return _board_type(empty_board(month))
-        payload = await sync_to_async(build_board)(tenant, month)
+        try:
+            payload = await sync_to_async(build_board)(tenant, month, market)
+        except FieldMarketingError as exc:
+            raise GraphQLError(str(exc)) from exc
         return _board_type(payload)
 
 
