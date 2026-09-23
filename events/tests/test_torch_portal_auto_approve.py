@@ -144,6 +144,40 @@ class TestTorchPortalAutoApprove(EventsGraphQLTestCase):
         assert sheet_append.call_args.args[1] == "keee-torch-thc"
 
     @pytest.mark.asyncio
+    async def test_torch_public_form_accepts_long_store_manager_phone(self):
+        """Formatted phones with country code / extension exceed varchar(20).
+
+        SparkPublicExpressForm posts storeManagerPhone as typed. Postgres
+        previously rejected anything over 20 chars with
+        ``value too long for type character varying(20)``.
+        """
+        long_phone = "+1 (305) 555-1234 x12"
+        assert len(long_phone) > 20
+        with (
+            patch("events.mutations.RequestorRequestApprovedMailer"),
+            patch("events.mutations.RequestorRequestCreatedMailer"),
+            patch("events.mutations.RequestCreatedNotificationMailer"),
+            patch("events.mutations.RmmAssignedRequestMailer"),
+            patch("events.mutations.append_torch_public_form_row"),
+        ):
+            result = await self._execute_mutation(
+                CREATE_BY_URL,
+                {
+                    "input": _public_input(
+                        request_type_id=self.torch_type.id,
+                        timezone_id=self.timezone.id,
+                        extra={"storeManagerPhone": long_phone},
+                    ),
+                    "requestUrlName": "keee-torch-thc",
+                },
+            )
+        assert result.errors is None, result.errors
+        payload = result.data["createRequestByUrl"]
+        assert payload["success"] is True, payload["message"]
+        row = await em.Request.objects.aget(uuid=payload["request"]["uuid"])
+        assert row.store_manager_phone == long_phone
+
+    @pytest.mark.asyncio
     async def test_liquid_death_public_form_stays_pending(self):
         with (
             patch("events.mutations.RequestorRequestApprovedMailer.send") as approved,
