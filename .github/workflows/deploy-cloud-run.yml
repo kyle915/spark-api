@@ -65,6 +65,8 @@ jobs:
       # stuck latestCreatedRevision. Drop non-serving unhealthy
       # revisions so --source can mint a clean one.
       - name: Drop stuck non-serving revisions
+        timeout-minutes: 2
+        continue-on-error: true
         run: |
           set +e
           gcloud run revisions list \
