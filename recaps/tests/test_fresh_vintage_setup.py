@@ -146,7 +146,15 @@ class TestFreshVintageSpec:
 
     def test_photo_buckets_include_expense_receipts(self):
         names = [b["name"] for b in PHOTO_BUCKETS]
-        assert "Expense Receipts" in names
+        assert names == [
+            "Full booth setup, straight-on",
+            "Product display / pallet with price sign visible",
+            "Ambassador at booth in uniform",
+            "Sampling in action with members",
+            "End-of-day remaining inventory",
+            "Expense Receipts",
+        ]
+        assert "Allergen signage" not in names
         assert CODE_PREFIX == "FVF-"
         assert TEMPLATE_NAME.startswith("Fresh Vintage Farms")
         assert PROGRAM_NAME == "Costco Roadshow"
@@ -228,6 +236,26 @@ class TestFreshVintageSetupCommand(BaseGraphQLTestCase):
         tenant.refresh_from_db()
         assert tenant.checkin_code == code
         assert "already set" in log2
+
+    def test_apply_updates_stale_photo_buckets_without_reminting_code(self):
+        from tenants.models import Tenant
+
+        self._run(tenant=TENANT_SLUG, apply=True)
+        tenant = Tenant.objects.get(slug=TENANT_SLUG)
+        code = tenant.checkin_code
+        stale = PHOTO_BUCKETS + [{"name": "Allergen signage", "min": 1}]
+        tenant.checkin_photo_buckets = stale
+        tenant.save(update_fields=["checkin_photo_buckets"])
+
+        log = self._run(tenant=TENANT_SLUG, apply=True)
+        tenant.refresh_from_db()
+        assert tenant.checkin_code == code
+        assert tenant.checkin_photo_buckets == PHOTO_BUCKETS
+        assert "checkin_photo_buckets set" in log
+        assert "Allergen signage" not in [
+            b["name"] for b in tenant.checkin_photo_buckets
+        ]
+        assert f"Check-in code already set: {code}" in log
 
 
 @pytest.mark.django_db
