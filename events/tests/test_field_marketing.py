@@ -140,6 +140,31 @@ class TestFieldMarketing(EventsGraphQLTestCase):
         support = next(row for row in board["kpis"] if row["key"] == "retail_support")
         assert support["logged"] == 1
 
+
+
+
+    def test_all_dates_returns_every_plan_row(self):
+        self._plan(starts_on="2026-07-10", planned_full_cans=100)
+        self._plan(
+            name="Sep drop",
+            starts_on="2026-09-12",
+            planned_full_cans=50,
+        )
+        all_board = build_board(self.tenant, month=None)
+        assert all_board["month"] == "all"
+        assert all_board["month_label"] == "All plans"
+        assert len(all_board["events"]) == 2
+        cans = next(row for row in all_board["kpis"] if row["key"] == "full_cans")
+        assert cans["planned"] == 150
+        # Monthly target still returned for reference; FE must not score all-dates against it.
+        assert cans["target"] == 1152
+        assert cans["logged"] is None
+        sept = build_board(self.tenant, month="2026-09")
+        assert sept["month"] == "2026-09"
+        assert len(sept["events"]) == 1
+        cans_s = next(row for row in sept["kpis"] if row["key"] == "full_cans")
+        assert cans_s["planned"] == 50
+
     def test_market_filter_scopes_events_and_projected_kpis(self):
         self._plan(market="miami", planned_full_cans=200, planned_emails=40)
         self._plan(
