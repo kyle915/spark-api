@@ -64,6 +64,10 @@ _SOLD_FIELD_RE = re.compile(r"\b(cans?|packs?)\b", re.IGNORECASE)
 # "Sold out?" yes/no) are dropped by the int parse.
 _SOLD_FALLBACK_RE = re.compile(r"\b(sold|bought|purchase[ds]?)\b", re.IGNORECASE)
 
+# Per-SKU lines ("Units sold: Almond Oil") outrank a rolled-up
+# "Total units sold today" so the total is not added on top of the parts.
+_SOLD_SKU_LINE_RE = re.compile(r"units sold\s*:", re.IGNORECASE)
+
 # Intent/likelihood phrasing that must NEVER be counted as actual sales even
 # though it contains "purchase" — e.g. "willing to purchase", "would not be
 # willing to purchase", "likely to purchase". The same Stone House Bread
@@ -203,6 +207,9 @@ def _sold_units_from_fields(
                 matched = True
         return total if matched else None
 
+    sku_lines = _sum(_SOLD_SKU_LINE_RE, exclude=_SOLD_EXCLUDE_RE)
+    if sku_lines is not None:
+        return sku_lines
     primary = _sum(_SOLD_FIELD_RE)
     if primary is not None:
         return primary

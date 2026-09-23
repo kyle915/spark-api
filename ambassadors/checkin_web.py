@@ -40,6 +40,7 @@ from django.utils import timezone as dj_tz
 from django.utils.dateparse import parse_datetime
 
 from tenants.models import normalize_checkin_resources
+from recaps.fresh_vintage import inject_roadshow_calcs
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
@@ -1154,6 +1155,11 @@ def submit_checkin_recap(
             field_values=field_values or [],
             payable_miles=claim.payable_miles,
         )
+
+    field_values = inject_roadshow_calcs(
+        template=template,
+        field_values=field_values or [],
+    )
 
     retailer = getattr(event, "retailer", None)
     location = getattr(event, "location", None) or (
