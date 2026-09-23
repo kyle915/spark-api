@@ -29,6 +29,7 @@ REPAIR_EVENT_DATES_URL = "/internal/cron/repair-event-dates"
 BACKFILL_EVENT_COORDS_URL = "/internal/cron/backfill-event-coordinates"
 BACKFILL_AMBASSADOR_COORDS_URL = "/internal/cron/backfill-ambassador-coordinates"
 DUMP_RECAP_FIELDS_URL = "/internal/cron/dump-recap-fields"
+SET_CHECKIN_RESOURCES_URL = "/internal/cron/set-checkin-resources"
 
 VALID_SECRET = "test-cron-secret-value-only-for-tests"
 
@@ -1284,3 +1285,48 @@ class TestDumpRecapFieldsCronView:
         assert resp.status_code == 400
         assert resp.json()["error"].startswith("tenant-required")
         mock_call.assert_not_called()
+
+@pytest.mark.django_db
+class TestSetCheckinResourcesCronView:
+    """`/internal/cron/set-checkin-resources` must not 500 on CommandError.
+
+    A wrong Torch needle (keee-torch-thc public-form slug vs torch-thc DB
+    slug) used to return HTTP 500 and page Spark alerts
+    (CommandError:digest.cron_views:_run + django.request:log_response).
+    400 still fails the GitHub Action without a false Internal Server Error.
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        self.client = Client()
+
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    @patch("digest.cron_views.call_command")
+    def test_unknown_tenant_is_400_not_500(self, mock_call):
+        from django.core.management.base import CommandError
+
+        mock_call.side_effect = CommandError(
+            "No tenant matches 'keee-torch-thc'."
+        )
+        resp = self.client.post(
+            SET_CHECKIN_RESOURCES_URL,
+            {"tenant": "keee-torch-thc", "apply": "true"},
+            HTTP_X_CRON_SECRET=VALID_SECRET,
+        )
+        assert resp.status_code == 400
+        body = resp.json()
+        assert body["ok"] is False
+        assert body["error"] == "command-failed"
+        assert "keee-torch-thc" in body["detail"]
+
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    @patch("digest.cron_views.call_command")
+    def test_programming_error_still_500(self, mock_call):
+        mock_call.side_effect = RuntimeError("boom")
+        resp = self.client.post(
+            SET_CHECKIN_RESOURCES_URL,
+            {"tenant": "torch-thc"},
+            HTTP_X_CRON_SECRET=VALID_SECRET,
+        )
+        assert resp.status_code == 500
+        assert resp.json()["ok"] is False

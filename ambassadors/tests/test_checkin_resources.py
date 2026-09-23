@@ -293,7 +293,7 @@ class TestSetCheckinResourcesCommand(AmbassadorsGraphQLTestCase):
 
     def test_apply_seeds_the_torch_preset_and_email_url(self):
         torch = self.create_tenant(name="Torch THC", slug="torch-thc")
-        self._run(tenant="torch", apply=True)
+        self._run(tenant="torch-thc", apply=True)
         torch.refresh_from_db()
         assert [r["kind"] for r in torch.checkin_resources] == ["pdf", "pdf"]
         assert [r["label"] for r in torch.checkin_resources] == [
@@ -318,13 +318,34 @@ class TestSetCheckinResourcesCommand(AmbassadorsGraphQLTestCase):
             assert "admin.igniteproductions.co" not in row["url"]
             assert "spark.igniteproductions.co" not in row["url"]
 
+    def test_keee_torch_thc_form_slug_resolves_torch_preset(self):
+        """Public form slug is request_url_name, not Tenant.slug (prod alert)."""
+        torch = self.create_tenant(
+            name="Torch THC",
+            slug="torch-thc",
+            request_url_name="keee-torch-thc",
+        )
+        self._run(tenant="keee-torch-thc", apply=True)
+        torch.refresh_from_db()
+        assert [r["label"] for r in torch.checkin_resources] == [
+            "BA Sampling Guide",
+            "Product Sales Sheets",
+        ]
+        assert torch.checkin_resources[0].get("hideOnRecapOnly") is True
+
+    def test_torch_nickname_resolves_exact_slug(self):
+        torch = self.create_tenant(name="Torch THC", slug="torch-thc")
+        self._run(tenant="torch", apply=True)
+        torch.refresh_from_db()
+        assert len(torch.checkin_resources) == 2
+
     def test_apply_seeds_the_drekker_preset_and_email_url(self):
         drekker = self.create_tenant(
             name="Drekker Brewing",
             slug="drekker-brewing",
             checkin_code="DR-BH435N",
         )
-        self._run(tenant="drekker", apply=True)
+        self._run(tenant="drekker-brewing", apply=True)
         drekker.refresh_from_db()
         assert [r["kind"] for r in drekker.checkin_resources] == ["pdf"]
         assert [r["label"] for r in drekker.checkin_resources] == [

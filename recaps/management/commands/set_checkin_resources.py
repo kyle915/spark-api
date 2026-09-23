@@ -31,13 +31,23 @@ import json
 
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
-from django.db.models import Q
 
 from tenants.models import (
     MAX_CHECKIN_RESOURCES,
     Tenant,
     normalize_checkin_resources,
 )
+
+# Nicknames operators type into the Action → exact DB slug. Torch's public
+# form slug (keee-torch-thc) is NOT here: it resolves via request_url_name.
+_NICKNAME_TO_SLUG = {
+    "torch": "torch-thc",
+    "feel free": "feel-free",
+    "drekker": "drekker-brewing",
+    "fresh vintage": "fresh-vintage-farms",
+    "daou": "treasury-wine-estates",
+    "treasury": "treasury-wine-estates",
+}
 
 # Where the assets are served from. They live in the FRONT-END repo under
 # `public/training/<brand>/` and ride its Firebase deploy — same call as the LD
@@ -222,7 +232,15 @@ class Command(BaseCommand):
     )
 
     def add_arguments(self, parser):
-        parser.add_argument("--tenant", default="feel free")
+        parser.add_argument(
+            "--tenant",
+            default="feel-free",
+            help=(
+                "Exact tenant slug preferred (Torch DB slug is torch-thc; "
+                "public form slug keee-torch-thc also resolves via "
+                "request_url_name). Id or exact name also work."
+            ),
+        )
         parser.add_argument(
             "--apply",
             action="store_true",
@@ -245,20 +263,107 @@ class Command(BaseCommand):
     # -- helpers -----------------------------------------------------------
 
     def _resolve_tenant(self, needle: str) -> Tenant:
-        matches = list(
-            Tenant.objects.filter(
-                Q(name__icontains=needle) | Q(slug__icontains=needle)
-            ).order_by("id")
-        )
-        if not matches:
-            raise CommandError(f"No tenant matches {needle!r}.")
-        if len(matches) > 1:
-            for t in matches:
-                self.stdout.write(f"  [{t.id}] {t.name!r} / {t.slug!r}")
-            raise CommandError(f"{len(matches)} tenants match {needle!r}.")
-        return matches[0]
+        """Resolve by id, exact slug, request_url_name, exact name, nickname.
 
-    def _desired(self, needle: str, raw_json: str, clear: bool) -> list[dict]:
+        Torch's DB slug is ``torch-thc``; the public spark-form slug
+        ``keee-torch-thc`` lives on ``request_url_name``. Looking up only
+        name/slug substring misses the form slug and 500s the cron (Spark
+        alert prod incident 2026-09-23). Prefer exact slug; no loose
+        ``icontains`` — ambiguous needles must fail closed.
+        """
+        needle = (needle or "").strip()
+        if not needle:
+            raise CommandError(f"No tenant matches {needle!r}.")
+        if needle.isdigit():
+            t = Tenant.objects.filter(id=int(needle)).first()
+            if t:
+                return t
+            raise CommandError(f"No tenant matches {needle!r}.")
+
+        def _one_slug(slug: str) -> Tenant | None:
+            matches = list(Tenant.objects.filter(slug__iexact=slug).order_by("id"))
+            if len(matches) == 1:
+                return matches[0]
+            if len(matches) > 1:
+                for t in matches:
+                    self.stdout.write(f"  [{t.id}] {t.name!r} / {t.slug!r}")
+                raise CommandError(f"{len(matches)} tenants match {slug!r}.")
+            return None
+
+        hit = _one_slug(needle)
+        if hit is not None:
+            return hit
+
+        by_url = Tenant.objects.filter(request_url_name__iexact=needle).first()
+        if by_url:
+            return by_url
+
+        name_matches = list(
+            Tenant.objects.filter(name__iexact=needle).order_by("id")
+        )
+        if len(name_matches) == 1:
+            return name_matches[0]
+        if len(name_matches) > 1:
+            for t in name_matches:
+                self.stdout.write(f"  [{t.id}] {t.name!r} / {t.slug!r}")
+            raise CommandError(f"{len(name_matches)} tenants match {needle!r}.")
+
+        alias_slug = _NICKNAME_TO_SLUG.get(needle.lower())
+        if alias_slug:
+            hit = _one_slug(alias_slug)
+            if hit is not None:
+                return hit
+
+        raise CommandError(f"No tenant matches {needle!r}.")
+
+    def _preset_key(self, needle: str, tenant: Tenant) -> str | None:
+        """Map a needle or resolved tenant slug to a built-in preset key."""
+        presets = _presets()
+        candidates = [
+            (needle or "").strip().lower(),
+            (tenant.slug or "").strip().lower(),
+            (tenant.request_url_name or "").strip().lower(),
+            (tenant.name or "").strip().lower(),
+        ]
+        # Exact alias → preset key (DB slug vs public form slug vs nickname).
+        aliases = {
+            "feel free": "feel free",
+            "feel-free": "feel free",
+            "feelfree": "feel free",
+            "bl00-feel-free": "feel free",
+            "torch": "torch",
+            "torch-thc": "torch",
+            "keee-torch-thc": "torch",
+            "torch thc": "torch",
+            "drekker": "drekker",
+            "drekker-brewing": "drekker",
+            "fresh-vintage": "fresh-vintage",
+            "fresh vintage": "fresh vintage",
+            "fresh-vintage-farms": "fresh-vintage",
+            "daou": "daou",
+            "treasury": "treasury",
+            "treasury-wine-estates": "treasury",
+        }
+        for cand in candidates:
+            if not cand:
+                continue
+            if cand in aliases and aliases[cand] in presets:
+                return aliases[cand]
+            if cand in presets:
+                return cand
+        # Last resort: preset key is a substring of the needle (legacy
+        # "Feel Free Command" test names / workflow nicknames).
+        for cand in candidates:
+            if not cand:
+                continue
+            hit = next((k for k in presets if k in cand), None)
+            if hit is not None:
+                return hit
+        return None
+
+    def _desired(
+        self, needle: str, tenant: Tenant, raw_json: str, clear: bool
+    ) -> list[dict]:
         if clear:
             return []
         if raw_json:
@@ -281,7 +386,7 @@ class Command(BaseCommand):
             return cleaned
 
         presets = _presets()
-        key = next((k for k in presets if k in needle.lower()), None)
+        key = self._preset_key(needle, tenant)
         if key is None:
             raise CommandError(
                 f"No built-in preset for {needle!r} — pass --resources '<json>' "
@@ -311,7 +416,7 @@ class Command(BaseCommand):
             raise CommandError("Pass --clear or --resources, not both.")
 
         tenant = self._resolve_tenant(needle)
-        desired = self._desired(needle, raw_json, clear)
+        desired = self._desired(needle, tenant, raw_json, clear)
         current = normalize_checkin_resources(
             getattr(tenant, "checkin_resources", None)
         )
