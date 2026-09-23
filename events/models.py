@@ -489,7 +489,10 @@ class Request(models.Model):
     retailer_store_contact = models.CharField(max_length=50, null=True)
 
     store_manager_name = models.CharField(max_length=50, null=True)
-    store_manager_phone = models.CharField(max_length=20, null=True)
+    # Phones with country code, punctuation, or extensions routinely exceed
+    # 20 chars (e.g. "+1 (305) 555-1234 x12"). Keep room for real-world
+    # contact strings from the public spark-form / tracker import.
+    store_manager_phone = models.CharField(max_length=64, null=True)
 
     timezone = models.ForeignKey(
         TimeZone, on_delete=models.RESTRICT, null=True, related_name="requests"
@@ -693,7 +696,7 @@ class RequestStoreManager(models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
     name = models.CharField(max_length=50)
-    phone = models.CharField(max_length=20)
+    phone = models.CharField(max_length=64)
 
     request = models.ForeignKey(
         Request,
