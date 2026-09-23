@@ -71,3 +71,17 @@ def test_willing_to_purchase_alone_is_not_a_sale():
     assert _sold_units_from_fields(
         [("Willing to purchase after tasting?", "30")]
     ) is None
+
+
+def test_per_sku_units_sold_lines_outrank_total():
+    # Fresh Vintage Farms: per-SKU "Units sold: …" lines sum; the rolled-up
+    # "Total units sold today" must not be added again (would double-count).
+    pairs = [
+        ("Units sold: Almond Oil", "12"),
+        ("Units sold: Garlic Almond Oil", "5"),
+        ("Total units sold today", "17"),
+    ]
+    assert _sold_units_from_fields(pairs) == 17  # not 34
+
+    # Stone House-style single total (no colon SKU lines) still counts.
+    assert _sold_units_from_fields([("Total Units Sold", "18")]) == 18
