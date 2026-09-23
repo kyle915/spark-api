@@ -1,10 +1,13 @@
 """Torch field marketing stays off the retail sampling request type."""
 
 import pytest
+from django.core.exceptions import MultipleObjectsReturned
 
 from events import models as em
 from events.field_marketing import (
     FieldMarketingError,
+    _active_tenant_for_user,
+    _require_torch_user,
     build_board,
     log_results,
     plan_event,
@@ -154,3 +157,53 @@ class TestFieldMarketing(EventsGraphQLTestCase):
         with pytest.raises(FieldMarketingError):
             self._plan(address="", submit=True)
         assert em.Request.objects.filter(tenant=self.tenant).count() == 0
+
+    def test_multi_tenant_admin_uses_active_torch_tenant(self):
+        """Spark admins have many TenantedUser rows — never blind user.tenant."""
+        admin = self.create_user(
+            username="kyle_admin",
+            email="kyle@igniteproductions.co",
+            role=self.roles["spark_admin"],
+            is_staff=True,
+        )
+        self.create_tenanted_user(admin, self.tenant)
+        self.create_tenanted_user(admin, self.other)
+        for i in range(20):
+            brand = self.create_tenant(name=f"Brand {i}", slug=f"extra-brand-{i}")
+            self.create_tenanted_user(admin, brand)
+
+        with pytest.raises(MultipleObjectsReturned):
+            _ = admin.tenant
+
+        assert _active_tenant_for_user(admin) is None
+
+        torch = _require_torch_user(admin, tenant_id=self.tenant.id)
+        assert torch.id == self.tenant.id
+        board = build_board(torch, "2026-09")
+        assert board["available"] is True
+        assert len(board["kpis"]) == 5
+        assert {row["key"] for row in board["kpis"]} == {
+            "full_cans",
+            "pour_samples",
+            "sponsorship_days",
+            "retail_support",
+            "emails",
+        }
+
+        with pytest.raises(FieldMarketingError, match="Switch to Torch"):
+            _require_torch_user(admin, tenant_id=self.other.id)
+
+        event = plan_event(
+            user=admin,
+            payload={
+                "market": "miami",
+                "activity": "full_can",
+                "name": "Admin planned drop",
+                "starts_on": "2026-09-15",
+                "address": "1 Brickell, Miami, FL",
+                "planned_full_cans": 50,
+            },
+            submit=False,
+            tenant_id=self.tenant.id,
+        )
+        assert event.tenant_id == self.tenant.id

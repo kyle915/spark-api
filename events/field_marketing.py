@@ -19,12 +19,14 @@ from django.utils import timezone
 from graphql import GraphQLError
 from strawberry import relay
 
+from django.core.exceptions import MultipleObjectsReturned
+
 from events import models
 from events.activity_log import _safe_log
-from tenants.models import TenantedUser
 from events.demo_cancel import request_display_code
+from tenants.models import Tenant, TenantedUser
 from utils.graphql.inputs import SparkGraphQLInput
-from utils.graphql.mixins import SparkGraphQLMixin
+from utils.graphql.mixins import SparkGraphQLMixin, resolve_id_to_int
 from utils.graphql.permissions import StrictIsAuthenticated
 from utils.utils import ROLE_ID, build_mutation_response
 
@@ -107,13 +109,62 @@ def _nonneg(value: int, label: str) -> int:
     return number
 
 
-def _require_torch_user(user):
+def _user_can_pick_any_tenant(user) -> bool:
+    """Staff / spark-admin can view a brand without a single membership get()."""
+    if getattr(user, "is_staff", False) or getattr(user, "is_superuser", False):
+        return True
+    role = getattr(user, "role", None)
+    slug = (getattr(role, "slug", None) or "").lower()
+    return slug == "spark-admin"
+
+
+def _parse_tenant_id(tenant_id) -> int | None:
+    if tenant_id is None or tenant_id == "":
+        return None
+    try:
+        return resolve_id_to_int(tenant_id)
+    except (TypeError, ValueError, GraphQLError):
+        return None
+
+
+def _active_tenant_for_user(user, tenant_id=None):
+    """Resolve the brand the caller is viewing — never blind ``user.tenant``.
+
+    Spark admins have many TenantedUser rows, so ``user.tenant`` raises
+    MultipleObjectsReturned. Callers pass the selected dashboard tenant
+    (same pattern as recap / chat / tracker queries).
+    """
+    resolved_id = _parse_tenant_id(tenant_id)
+    if resolved_id is not None:
+        if _user_can_pick_any_tenant(user):
+            try:
+                return Tenant.objects.get(id=resolved_id)
+            except Tenant.DoesNotExist:
+                return None
+        try:
+            return (
+                TenantedUser.objects.select_related("tenant")
+                .get(user=user, tenant_id=resolved_id, is_active=True)
+                .tenant
+            )
+        except TenantedUser.DoesNotExist:
+            return None
+
+    # No explicit id: only safe when the user has exactly one active membership.
+    try:
+        return (
+            TenantedUser.objects.select_related("tenant")
+            .get(user=user, is_active=True)
+            .tenant
+        )
+    except (TenantedUser.DoesNotExist, MultipleObjectsReturned):
+        return None
+
+
+def _require_torch_user(user, tenant_id=None):
     if getattr(user, "role_id", None) == ROLE_ID.Ambassadors:
         raise FieldMarketingError("Field marketing is for the brand team.")
-    try:
-        tenant = user.tenant
-    except TenantedUser.DoesNotExist:
-        tenant = None
+    tenant = _active_tenant_for_user(user, tenant_id=tenant_id)
     if tenant is None or not is_torch_tenant(tenant):
         raise FieldMarketingError("Switch to Torch THC. Field marketing is that program.")
     return tenant
@@ -362,8 +413,8 @@ def _submit_event(event: models.FieldMarketingEvent, actor) -> models.FieldMarke
 
 
 @transaction.atomic
-def plan_event(*, user, payload: dict, submit: bool) -> models.FieldMarketingEvent:
-    tenant = _require_torch_user(user)
+def plan_event(*, user, payload: dict, submit: bool, tenant_id=None) -> models.FieldMarketingEvent:
+    tenant = _require_torch_user(user, tenant_id=tenant_id)
     cleaned = _clean_plan(payload)
     event = models.FieldMarketingEvent.objects.create(
         tenant=tenant,
@@ -377,8 +428,8 @@ def plan_event(*, user, payload: dict, submit: bool) -> models.FieldMarketingEve
 
 
 @transaction.atomic
-def submit_event(*, user, event_id: str) -> models.FieldMarketingEvent:
-    tenant = _require_torch_user(user)
+def submit_event(*, user, event_id: str, tenant_id=None) -> models.FieldMarketingEvent:
+    tenant = _require_torch_user(user, tenant_id=tenant_id)
     event = models.FieldMarketingEvent.objects.filter(
         tenant=tenant, uuid=event_id
     ).first()
@@ -388,8 +439,8 @@ def submit_event(*, user, event_id: str) -> models.FieldMarketingEvent:
 
 
 @transaction.atomic
-def log_results(*, user, event_id: str, payload: dict) -> models.FieldMarketingEvent:
-    tenant = _require_torch_user(user)
+def log_results(*, user, event_id: str, payload: dict, tenant_id=None) -> models.FieldMarketingEvent:
+    tenant = _require_torch_user(user, tenant_id=tenant_id)
     event = models.FieldMarketingEvent.objects.filter(
         tenant=tenant, uuid=event_id
     ).first()
@@ -522,11 +573,13 @@ class PlanFieldMarketingInput(SparkGraphQLInput):
     planned_pour_samples: int = 0
     planned_emails: int = 0
     submit: bool = False
+    tenant_id: strawberry.ID | None = None
 
 
 @strawberry.input
 class SubmitFieldMarketingInput(SparkGraphQLInput):
     event_id: str
+    tenant_id: strawberry.ID | None = None
 
 
 @strawberry.input
@@ -536,6 +589,7 @@ class LogFieldMarketingInput(SparkGraphQLInput):
     logged_pour_samples: int | None = None
     logged_emails: int | None = None
     logged_days: int | None = None
+    tenant_id: strawberry.ID | None = None
 
 
 @strawberry.type
@@ -550,10 +604,13 @@ class FieldMarketingEventResponse:
 class FieldMarketingQueries:
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def field_marketing(
-        self, info: strawberry.Info, month: str | None = None
+        self,
+        info: strawberry.Info,
+        month: str | None = None,
+        tenant_id: strawberry.ID | None = None,
     ) -> FieldMarketingBoardType:
         user = await SparkGraphQLMixin().get_user(info)
-        tenant = await sync_to_async(lambda: getattr(user, "tenant", None))()
+        tenant = await sync_to_async(_active_tenant_for_user)(user, tenant_id)
         if tenant is None or not is_torch_tenant(tenant):
             return _board_type(empty_board(month))
         payload = await sync_to_async(build_board)(tenant, month)
@@ -587,6 +644,7 @@ class FieldMarketingMutations:
                 user=user,
                 payload=_payload_from_plan(input),
                 submit=bool(input.submit),
+                tenant_id=input.tenant_id,
             )
         except FieldMarketingError as exc:
             raise GraphQLError(str(exc)) from exc
@@ -611,7 +669,11 @@ class FieldMarketingMutations:
     ) -> FieldMarketingEventResponse:
         user = await SparkGraphQLMixin().get_user(info)
         try:
-            event = await sync_to_async(submit_event)(user=user, event_id=input.event_id)
+            event = await sync_to_async(submit_event)(
+                user=user,
+                event_id=input.event_id,
+                tenant_id=input.tenant_id,
+            )
         except FieldMarketingError as exc:
             raise GraphQLError(str(exc)) from exc
         if event.request_id:
@@ -639,6 +701,7 @@ class FieldMarketingMutations:
                     "logged_emails": input.logged_emails,
                     "logged_days": input.logged_days,
                 },
+                tenant_id=input.tenant_id,
             )
         except FieldMarketingError as exc:
             raise GraphQLError(str(exc)) from exc
