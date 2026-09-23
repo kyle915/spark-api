@@ -52,6 +52,82 @@ ACTIVITIES: dict[str, str] = {
     models.FieldMarketingEvent.ACTIVITY_POUR: "4oz pour samples",
     models.FieldMarketingEvent.ACTIVITY_SPONSORSHIP: "Local event sponsorship",
     models.FieldMarketingEvent.ACTIVITY_RETAIL_SUPPORT: "Retail activation / support",
+    models.FieldMarketingEvent.ACTIVITY_EVENT_ACTIVATION: "Event activation / sponsorship",
+    models.FieldMarketingEvent.ACTIVITY_GUERILLA: "Guerilla event",
+    models.FieldMarketingEvent.ACTIVITY_PRODUCT_SEEDING: "Product seeding",
+    models.FieldMarketingEvent.ACTIVITY_SALES_SUPPORT: "Sales support",
+}
+
+# Exact catalog product names. Onboard writes these; the form lists whatever
+# of them exists on the Torch Product catalog.
+FIELD_MARKETING_SKU_NAMES: tuple[str, ...] = (
+    "Black Cherry 10mg",
+    "Strawberry Lemonade 10mg",
+    "Watermelon Limeade 10mg",
+    "Nonactive",
+)
+
+SAMPLING_LABELS = {
+    models.FieldMarketingEvent.SAMPLING_FULL_CAN: "Full can",
+    models.FieldMarketingEvent.SAMPLING_POUR: "4oz pour",
+}
+
+SUPPORT_LABELS = {
+    models.FieldMarketingEvent.SUPPORT_DISTRIBUTOR: "Distributor meeting",
+    models.FieldMarketingEvent.SUPPORT_RETAIL_VISIT: "Retail visit",
+    models.FieldMarketingEvent.SUPPORT_OTHER: "Other",
+}
+
+_SPONSORSHIP_ACTIVITIES = frozenset(
+    {
+        models.FieldMarketingEvent.ACTIVITY_SPONSORSHIP,
+        models.FieldMarketingEvent.ACTIVITY_EVENT_ACTIVATION,
+    }
+)
+_RETAIL_ACTIVITIES = frozenset(
+    {
+        models.FieldMarketingEvent.ACTIVITY_RETAIL_SUPPORT,
+        models.FieldMarketingEvent.ACTIVITY_SALES_SUPPORT,
+    }
+)
+_STAFFED_ACTIVITIES = frozenset(
+    {
+        models.FieldMarketingEvent.ACTIVITY_EVENT_ACTIVATION,
+        models.FieldMarketingEvent.ACTIVITY_GUERILLA,
+    }
+)
+_SKU_ACTIVITIES = frozenset(
+    {
+        models.FieldMarketingEvent.ACTIVITY_EVENT_ACTIVATION,
+        models.FieldMarketingEvent.ACTIVITY_GUERILLA,
+        models.FieldMarketingEvent.ACTIVITY_PRODUCT_SEEDING,
+    }
+)
+# Tactic filter on the new four activities also includes the legacy rows
+# they replaced, so an export of "guerilla" still shows old can/pour plans.
+ACTIVITY_FILTERS: dict[str, frozenset[str]] = {
+    models.FieldMarketingEvent.ACTIVITY_EVENT_ACTIVATION: frozenset(
+        {
+            models.FieldMarketingEvent.ACTIVITY_EVENT_ACTIVATION,
+            models.FieldMarketingEvent.ACTIVITY_SPONSORSHIP,
+        }
+    ),
+    models.FieldMarketingEvent.ACTIVITY_GUERILLA: frozenset(
+        {
+            models.FieldMarketingEvent.ACTIVITY_GUERILLA,
+            models.FieldMarketingEvent.ACTIVITY_FULL_CAN,
+            models.FieldMarketingEvent.ACTIVITY_POUR,
+        }
+    ),
+    models.FieldMarketingEvent.ACTIVITY_PRODUCT_SEEDING: frozenset(
+        {models.FieldMarketingEvent.ACTIVITY_PRODUCT_SEEDING}
+    ),
+    models.FieldMarketingEvent.ACTIVITY_SALES_SUPPORT: frozenset(
+        {
+            models.FieldMarketingEvent.ACTIVITY_SALES_SUPPORT,
+            models.FieldMarketingEvent.ACTIVITY_RETAIL_SUPPORT,
+        }
+    ),
 }
 
 
@@ -98,6 +174,68 @@ def _month_window(month: str | None) -> tuple[date, date, str]:
         end = date(start.year, start.month + 1, 1)
     return start, end, f"{start.year:04d}-{start.month:02d}"
 
+
+def _quarter_window(quarter: str) -> tuple[date, date, str]:
+    raw = (quarter or "").strip().upper().replace(" ", "")
+    try:
+        year_s, q_s = raw.split("-Q", 1)
+        year = int(year_s)
+        q = int(q_s)
+    except (TypeError, ValueError):
+        raise FieldMarketingError("Pick a quarter like 2026-Q3.") from None
+    if q not in (1, 2, 3, 4):
+        raise FieldMarketingError("Pick a quarter like 2026-Q3.")
+    start_month = (q - 1) * 3 + 1
+    start = date(year, start_month, 1)
+    end_month = start_month + 3
+    end = date(year + 1, 1, 1) if end_month > 12 else date(year, end_month, 1)
+    return start, end, f"{year:04d}-Q{q}"
+
+
+def sku_catalog(tenant) -> list[str]:
+    """Field-marketing SKUs that exist on this brand's Product catalog."""
+    present = set(
+        models.Product.objects.filter(
+            tenant=tenant, name__in=FIELD_MARKETING_SKU_NAMES
+        ).values_list("name", flat=True)
+    )
+    return [name for name in FIELD_MARKETING_SKU_NAMES if name in present]
+
+
+def _accepts_cans(event: models.FieldMarketingEvent) -> bool:
+    activity = event.activity
+    sampling = event.sampling_format or ""
+    if activity in (
+        models.FieldMarketingEvent.ACTIVITY_PRODUCT_SEEDING,
+        models.FieldMarketingEvent.ACTIVITY_POUR,
+    ) or activity in _RETAIL_ACTIVITIES:
+        return False
+    if activity == models.FieldMarketingEvent.ACTIVITY_GUERILLA:
+        return sampling == models.FieldMarketingEvent.SAMPLING_FULL_CAN
+    if activity == models.FieldMarketingEvent.ACTIVITY_EVENT_ACTIVATION:
+        return sampling in ("", models.FieldMarketingEvent.SAMPLING_FULL_CAN)
+    return activity in (
+        models.FieldMarketingEvent.ACTIVITY_FULL_CAN,
+        models.FieldMarketingEvent.ACTIVITY_SPONSORSHIP,
+    )
+
+
+def _accepts_pours(event: models.FieldMarketingEvent) -> bool:
+    activity = event.activity
+    sampling = event.sampling_format or ""
+    if activity in (
+        models.FieldMarketingEvent.ACTIVITY_PRODUCT_SEEDING,
+        models.FieldMarketingEvent.ACTIVITY_FULL_CAN,
+    ) or activity in _RETAIL_ACTIVITIES:
+        return False
+    if activity == models.FieldMarketingEvent.ACTIVITY_GUERILLA:
+        return sampling == models.FieldMarketingEvent.SAMPLING_POUR
+    if activity == models.FieldMarketingEvent.ACTIVITY_EVENT_ACTIVATION:
+        return sampling in ("", models.FieldMarketingEvent.SAMPLING_POUR)
+    return activity in (
+        models.FieldMarketingEvent.ACTIVITY_POUR,
+        models.FieldMarketingEvent.ACTIVITY_SPONSORSHIP,
+    )
 
 
 def _nonneg(value: int, label: str) -> int:
@@ -188,6 +326,16 @@ def _serialize(event: models.FieldMarketingEvent):
         "days": event.days,
         "address": event.address or "",
         "notes": event.notes or "",
+        "sampling_format": event.sampling_format or "",
+        "sampling_label": SAMPLING_LABELS.get(event.sampling_format or "", ""),
+        "support_type": event.support_type or "",
+        "support_label": SUPPORT_LABELS.get(event.support_type or "", ""),
+        "support_other": event.support_other or "",
+        "sku_names": list(event.sku_names or []),
+        "needs_field_support": bool(event.needs_field_support),
+        "ambassador_count": event.ambassador_count or 0,
+        "support_times": event.support_times or "",
+        "support_scope": event.support_scope or "",
         "planned_full_cans": event.planned_full_cans,
         "planned_pour_samples": event.planned_pour_samples,
         "planned_emails": event.planned_emails,
@@ -195,6 +343,7 @@ def _serialize(event: models.FieldMarketingEvent):
         "logged_pour_samples": event.logged_pour_samples,
         "logged_emails": event.logged_emails,
         "logged_days": event.logged_days,
+        "logged_cases": event.logged_cases,
         "status": event.status,
         "request_code": code,
     }
@@ -224,6 +373,8 @@ def build_board(
     tenant,
     month: str | None = None,
     market: str | None = None,
+    quarter: str | None = None,
+    activity: str | None = None,
 ):
     """Projected KPIs sum planned FieldMarketingEvent fields for the filter.
 
@@ -231,9 +382,16 @@ def build_board(
     Monthly targets only apply when a single month is selected.
     """
     month_raw = (month or "").strip()
-    all_dates = not month_raw or month_raw.lower() == "all"
+    quarter_raw = (quarter or "").strip()
+    all_dates = not quarter_raw and (not month_raw or month_raw.lower() == "all")
     qs = models.FieldMarketingEvent.objects.filter(tenant=tenant)
-    if all_dates:
+    if quarter_raw:
+        start, end, key = _quarter_window(quarter_raw)
+        label = f"Q{key[-1]} {start.year}"
+        apply_monthly_targets = False
+        qs = qs.filter(starts_on__gte=start, starts_on__lt=end)
+        order = ("starts_on", "id")
+    elif all_dates:
         key = "all"
         label = "All plans"
         apply_monthly_targets = False
@@ -250,17 +408,21 @@ def build_board(
         if market_key not in _markets():
             raise FieldMarketingError("Pick a market.")
         qs = qs.filter(market=market_key)
+    activity_key = (activity or "").strip()
+    if activity_key:
+        allowed = ACTIVITY_FILTERS.get(activity_key)
+        if allowed is None:
+            raise FieldMarketingError("Pick a tactic.")
+        qs = qs.filter(activity__in=allowed)
     events = list(qs.order_by(*order))
+    # Cans and pours ignore product seeding. Planned sums stay on the columns
+    # that were actually saved — seeding never writes those columns.
+    can_events = [event for event in events if _accepts_cans(event)]
+    pour_events = [event for event in events if _accepts_pours(event)]
     sponsorships = [
-        event
-        for event in events
-        if event.activity == models.FieldMarketingEvent.ACTIVITY_SPONSORSHIP
+        event for event in events if event.activity in _SPONSORSHIP_ACTIVITIES
     ]
-    retail = [
-        event
-        for event in events
-        if event.activity == models.FieldMarketingEvent.ACTIVITY_RETAIL_SUPPORT
-    ]
+    retail = [event for event in events if event.activity in _RETAIL_ACTIVITIES]
     retail_logged = [event for event in retail if event.logged_at is not None]
 
     def _target(key_name: str) -> int:
@@ -275,8 +437,8 @@ def build_board(
             "label": "Full can samples",
             "detail": "Product drops, donations, guerilla events. Drives trial and awareness.",
             "target": _target("full_cans"),
-            "planned": _sum_planned(events, "planned_full_cans"),
-            "logged": _sum_logged(events, "logged_full_cans"),
+            "planned": _sum_planned(can_events, "planned_full_cans"),
+            "logged": _sum_logged(can_events, "logged_full_cans"),
             "unit": "cans",
         },
         {
@@ -284,8 +446,8 @@ def build_board(
             "label": "4oz pour samples",
             "detail": "Local sponsorships, events, festivals. 3,456 pours is 1,152 full cans.",
             "target": _target("pour_samples"),
-            "planned": _sum_planned(events, "planned_pour_samples"),
-            "logged": _sum_logged(events, "logged_pour_samples"),
+            "planned": _sum_planned(pour_events, "planned_pour_samples"),
+            "logged": _sum_logged(pour_events, "logged_pour_samples"),
             "unit": "pours",
         },
         {
@@ -334,10 +496,36 @@ def build_board(
         ],
         "kpis": kpis,
         "events": [_serialize(event) for event in events],
+        "skus": sku_catalog(tenant),
     }
 
 
-def _clean_plan(data: dict) -> dict:
+def _clean_skus(tenant, raw, activity: str) -> list[str]:
+    if raw is None:
+        raw = []
+    if not isinstance(raw, (list, tuple)):
+        raise FieldMarketingError("Pick SKUs from the catalog.")
+    names: list[str] = []
+    for item in raw:
+        name = str(item or "").strip()
+        if not name:
+            continue
+        if name not in FIELD_MARKETING_SKU_NAMES:
+            raise FieldMarketingError("Pick a Torch field marketing SKU.")
+        if name not in names:
+            names.append(name)
+    if activity in _SKU_ACTIVITIES and not names:
+        raise FieldMarketingError("Pick at least one SKU.")
+    if activity not in _SKU_ACTIVITIES:
+        return []
+    present = set(sku_catalog(tenant))
+    missing = [name for name in names if name not in present]
+    if missing:
+        raise FieldMarketingError("Those SKUs aren't in the Torch catalog yet.")
+    return names
+
+
+def _clean_plan(data: dict, tenant) -> dict:
     markets = _markets()
     market = (data.get("market") or "").strip().lower()
     if market not in markets:
@@ -353,21 +541,67 @@ def _clean_plan(data: dict) -> dict:
     except ValueError:
         raise FieldMarketingError("Pick the date.") from None
     days = _nonneg(data.get("days") or 1, "Days")
-    if activity == models.FieldMarketingEvent.ACTIVITY_SPONSORSHIP:
-        if days < 1:
-            raise FieldMarketingError("Sponsorships need at least one day.")
-    else:
-        days = max(days, 1)
+    if activity in _SPONSORSHIP_ACTIVITIES and days < 1:
+        raise FieldMarketingError("Sponsorships need at least one day.")
     if days > 31:
         raise FieldMarketingError("Days has to be 31 or fewer.")
-    full_cans = _nonneg(data.get("planned_full_cans") or 0, "Full cans")
-    pours = _nonneg(data.get("planned_pour_samples") or 0, "Pour samples")
+    if activity not in _SPONSORSHIP_ACTIVITIES:
+        days = 1
+    sampling = (data.get("sampling_format") or "").strip()
+    if activity == models.FieldMarketingEvent.ACTIVITY_GUERILLA:
+        if sampling not in (
+            models.FieldMarketingEvent.SAMPLING_FULL_CAN,
+            models.FieldMarketingEvent.SAMPLING_POUR,
+        ):
+            raise FieldMarketingError("Pick full cans or 4oz pours.")
+    elif activity == models.FieldMarketingEvent.ACTIVITY_EVENT_ACTIVATION:
+        if sampling and sampling not in (
+            models.FieldMarketingEvent.SAMPLING_FULL_CAN,
+            models.FieldMarketingEvent.SAMPLING_POUR,
+        ):
+            raise FieldMarketingError("Pick full cans or 4oz pours.")
+    else:
+        sampling = ""
+    support_type = (data.get("support_type") or "").strip()
+    support_other = (data.get("support_other") or "").strip()
+    if activity == models.FieldMarketingEvent.ACTIVITY_SALES_SUPPORT:
+        if support_type not in SUPPORT_LABELS:
+            raise FieldMarketingError("Pick the kind of sales support.")
+        if support_type == models.FieldMarketingEvent.SUPPORT_OTHER and len(support_other) < 2:
+            raise FieldMarketingError("Say what the other sales support is.")
+    else:
+        support_type = ""
+        support_other = ""
+    needs_support = bool(data.get("needs_field_support"))
+    ambassador_count = _nonneg(data.get("ambassador_count") or 0, "Brand ambassadors")
+    support_times = (data.get("support_times") or "").strip()
+    support_scope = (data.get("support_scope") or "").strip()
+    if activity not in _STAFFED_ACTIVITIES:
+        needs_support = False
+        ambassador_count = 0
+        support_times = ""
+        support_scope = ""
+    elif needs_support and ambassador_count < 1:
+        raise FieldMarketingError("Say how many brand ambassadors you need.")
     emails = _nonneg(data.get("planned_emails") or 0, "Emails")
-    if activity == models.FieldMarketingEvent.ACTIVITY_FULL_CAN:
-        pours = 0
-    elif activity == models.FieldMarketingEvent.ACTIVITY_POUR:
-        full_cans = 0
-    elif activity == models.FieldMarketingEvent.ACTIVITY_RETAIL_SUPPORT:
+    # New activities do not take a forecast of cans or pours. Legacy rows still do.
+    legacy = activity in (
+        models.FieldMarketingEvent.ACTIVITY_FULL_CAN,
+        models.FieldMarketingEvent.ACTIVITY_POUR,
+        models.FieldMarketingEvent.ACTIVITY_SPONSORSHIP,
+        models.FieldMarketingEvent.ACTIVITY_RETAIL_SUPPORT,
+    )
+    if legacy:
+        full_cans = _nonneg(data.get("planned_full_cans") or 0, "Full cans")
+        pours = _nonneg(data.get("planned_pour_samples") or 0, "Pour samples")
+        if activity == models.FieldMarketingEvent.ACTIVITY_FULL_CAN:
+            pours = 0
+        elif activity == models.FieldMarketingEvent.ACTIVITY_POUR:
+            full_cans = 0
+        elif activity == models.FieldMarketingEvent.ACTIVITY_RETAIL_SUPPORT:
+            full_cans = 0
+            pours = 0
+    else:
         full_cans = 0
         pours = 0
     return {
@@ -378,6 +612,14 @@ def _clean_plan(data: dict) -> dict:
         "days": days,
         "address": (data.get("address") or "").strip(),
         "notes": (data.get("notes") or "").strip(),
+        "sampling_format": sampling,
+        "support_type": support_type,
+        "support_other": support_other[:255],
+        "sku_names": _clean_skus(tenant, data.get("sku_names"), activity),
+        "needs_field_support": needs_support,
+        "ambassador_count": ambassador_count,
+        "support_times": support_times[:255],
+        "support_scope": support_scope,
         "planned_full_cans": full_cans,
         "planned_pour_samples": pours,
         "planned_emails": emails,
@@ -394,6 +636,23 @@ def _request_notes(event: models.FieldMarketingEvent) -> str:
         f"Activity: {ACTIVITIES.get(event.activity, event.activity)}",
         f"Days: {event.days}",
     ]
+    if event.sampling_format:
+        lines.append(
+            f"Sampling: {SAMPLING_LABELS.get(event.sampling_format, event.sampling_format)}"
+        )
+    if event.sku_names:
+        lines.append("SKUs: " + ", ".join(event.sku_names))
+    if event.support_type:
+        label = SUPPORT_LABELS.get(event.support_type, event.support_type)
+        if event.support_type == models.FieldMarketingEvent.SUPPORT_OTHER and event.support_other:
+            label = f"{label}: {event.support_other}"
+        lines.append(f"Sales support: {label}")
+    if event.needs_field_support:
+        lines.append(f"Field support: {event.ambassador_count} brand ambassadors")
+        if event.support_times:
+            lines.append(f"Times: {event.support_times}")
+        if event.support_scope:
+            lines.append(f"Scope: {event.support_scope}")
     if event.planned_full_cans:
         lines.append(f"Planned full cans: {event.planned_full_cans}")
     if event.planned_pour_samples:
@@ -456,7 +715,7 @@ def _submit_event(event: models.FieldMarketingEvent, actor) -> models.FieldMarke
 @transaction.atomic
 def plan_event(*, user, payload: dict, submit: bool, tenant_id=None) -> models.FieldMarketingEvent:
     tenant = _require_torch_user(user, tenant_id=tenant_id)
-    cleaned = _clean_plan(payload)
+    cleaned = _clean_plan(payload, tenant)
     event = models.FieldMarketingEvent.objects.create(
         tenant=tenant,
         created_by=user,
@@ -488,35 +747,31 @@ def log_results(*, user, event_id: str, payload: dict, tenant_id=None) -> models
     if event is None:
         raise FieldMarketingError("That field marketing event isn't on Torch.")
     touched = False
-    for field, label in (
-        ("logged_full_cans", "Full cans"),
-        ("logged_pour_samples", "Pour samples"),
-        ("logged_emails", "Emails"),
-        ("logged_days", "Days"),
-    ):
+    checks = (
+        ("logged_full_cans", "Full cans", _accepts_cans(event)),
+        ("logged_pour_samples", "Pour samples", _accepts_pours(event)),
+        ("logged_emails", "Emails", True),
+        ("logged_days", "Days", event.activity in _SPONSORSHIP_ACTIVITIES),
+        (
+            "logged_cases",
+            "Cases seeded",
+            event.activity == models.FieldMarketingEvent.ACTIVITY_PRODUCT_SEEDING,
+        ),
+    )
+    update_fields = ["logged_at", "updated_at"]
+    for field, label, allowed in checks:
         raw = payload.get(field)
-        if raw is None:
+        if raw is None or not allowed:
             continue
         setattr(event, field, _nonneg(raw, label))
+        update_fields.append(field)
         touched = True
-    if (
-        not touched
-        and event.activity == models.FieldMarketingEvent.ACTIVITY_RETAIL_SUPPORT
-    ):
+    if not touched and event.activity in _RETAIL_ACTIVITIES:
         touched = True
     if not touched:
-        raise FieldMarketingError("Log a result, or mark the retail activation done.")
+        raise FieldMarketingError("Log a result, or mark the sales support done.")
     event.logged_at = timezone.now()
-    event.save(
-        update_fields=[
-            "logged_full_cans",
-            "logged_pour_samples",
-            "logged_emails",
-            "logged_days",
-            "logged_at",
-            "updated_at",
-        ]
-    )
+    event.save(update_fields=update_fields)
     return event
 
 
@@ -534,6 +789,7 @@ def empty_board(month: str | None = None):
         "managers": [],
         "kpis": [],
         "events": [],
+        "skus": [],
     }
 
 
@@ -570,6 +826,16 @@ class FieldMarketingEventType:
     days: int
     address: str
     notes: str
+    sampling_format: str
+    sampling_label: str
+    support_type: str
+    support_label: str
+    support_other: str
+    sku_names: list[str]
+    needs_field_support: bool
+    ambassador_count: int
+    support_times: str
+    support_scope: str
     planned_full_cans: int
     planned_pour_samples: int
     planned_emails: int
@@ -577,6 +843,7 @@ class FieldMarketingEventType:
     logged_pour_samples: int | None
     logged_emails: int | None
     logged_days: int | None
+    logged_cases: int | None
     status: str
     request_code: str | None
 
@@ -589,6 +856,7 @@ class FieldMarketingBoardType:
     managers: list[FieldMarketingManagerType]
     kpis: list[FieldMarketingKpiType]
     events: list[FieldMarketingEventType]
+    skus: list[str]
 
 
 def _board_type(payload: dict) -> FieldMarketingBoardType:
@@ -599,6 +867,7 @@ def _board_type(payload: dict) -> FieldMarketingBoardType:
         managers=[FieldMarketingManagerType(**row) for row in payload["managers"]],
         kpis=[FieldMarketingKpiType(**row) for row in payload["kpis"]],
         events=[FieldMarketingEventType(**row) for row in payload["events"]],
+        skus=list(payload.get("skus") or []),
     )
 
 
@@ -618,6 +887,14 @@ class PlanFieldMarketingInput(SparkGraphQLInput):
     planned_full_cans: int = 0
     planned_pour_samples: int = 0
     planned_emails: int = 0
+    sampling_format: str = ""
+    support_type: str = ""
+    support_other: str = ""
+    sku_names: list[str] | None = None
+    needs_field_support: bool = False
+    ambassador_count: int = 0
+    support_times: str = ""
+    support_scope: str = ""
     submit: bool = False
     tenant_id: strawberry.ID | None = None
 
@@ -635,6 +912,7 @@ class LogFieldMarketingInput(SparkGraphQLInput):
     logged_pour_samples: int | None = None
     logged_emails: int | None = None
     logged_days: int | None = None
+    logged_cases: int | None = None
     tenant_id: strawberry.ID | None = None
 
 
@@ -655,6 +933,8 @@ class FieldMarketingQueries:
         month: str | None = None,
         tenant_id: strawberry.ID | None = None,
         market: str | None = None,
+        quarter: str | None = None,
+        activity: str | None = None,
     ) -> FieldMarketingBoardType:
         user = await SparkGraphQLMixin().get_user(info)
         tenant = await sync_to_async(_active_tenant_for_user)(user, tenant_id)
@@ -662,7 +942,11 @@ class FieldMarketingQueries:
             return _board_type(empty_board(month=month))
         try:
             payload = await sync_to_async(build_board)(
-                tenant, month=month, market=market
+                tenant,
+                month=month,
+                market=market,
+                quarter=quarter,
+                activity=activity,
             )
         except FieldMarketingError as exc:
             raise GraphQLError(str(exc)) from exc
@@ -681,6 +965,14 @@ def _payload_from_plan(input: PlanFieldMarketingInput) -> dict:
         "planned_full_cans": input.planned_full_cans,
         "planned_pour_samples": input.planned_pour_samples,
         "planned_emails": input.planned_emails,
+        "sampling_format": input.sampling_format,
+        "support_type": input.support_type,
+        "support_other": input.support_other,
+        "sku_names": list(input.sku_names or []),
+        "needs_field_support": input.needs_field_support,
+        "ambassador_count": input.ambassador_count,
+        "support_times": input.support_times,
+        "support_scope": input.support_scope,
     }
 
 
@@ -752,6 +1044,7 @@ class FieldMarketingMutations:
                     "logged_pour_samples": input.logged_pour_samples,
                     "logged_emails": input.logged_emails,
                     "logged_days": input.logged_days,
+                    "logged_cases": input.logged_cases,
                 },
                 tenant_id=input.tenant_id,
             )

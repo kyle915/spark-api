@@ -147,6 +147,11 @@ TORCH_PRODUCTS: list[tuple[str, str, str]] = [
     ('Seltzer 10mg', 'Strawberry Lemonade 10mg 4-Pack', ''),
     ('Seltzer 10mg', 'Watermelon Limeade 10mg 12oz', ''),
     ('Seltzer 10mg', 'Watermelon Limeade 10mg 4-Pack', ''),
+    # Field-marketing planner picks these four, not the 12oz / 4-pack split.
+    ('Field marketing', 'Black Cherry 10mg', ''),
+    ('Field marketing', 'Strawberry Lemonade 10mg', ''),
+    ('Field marketing', 'Watermelon Limeade 10mg', ''),
+    ('Field marketing', 'Nonactive', ''),
     # ── Seltzer 60mg High Potency ─────────────────────
     ('Seltzer 60mg High Potency', 'Black Cherry 60mg 12oz',
      'https://torchdrinks.com/wp-content/uploads/2025/01/3.Black-Cherry-Seltzer_Torch_12oz.png'),

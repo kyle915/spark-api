@@ -5,12 +5,15 @@ from django.core.exceptions import MultipleObjectsReturned
 
 from events import models as em
 from events.field_marketing import (
+    FIELD_MARKETING_SKU_NAMES,
     FieldMarketingError,
     _active_tenant_for_user,
+    _quarter_window,
     _require_torch_user,
     build_board,
     log_results,
     plan_event,
+    sku_catalog,
 )
 from events.tests.base import EventsGraphQLTestCase
 
@@ -140,8 +143,102 @@ class TestFieldMarketing(EventsGraphQLTestCase):
         support = next(row for row in board["kpis"] if row["key"] == "retail_support")
         assert support["logged"] == 1
 
+    def _seed_skus(self):
+        line = em.ProductType.objects.create(
+            tenant=self.tenant, name="Field marketing", created_by=self.sys
+        )
+        for name in FIELD_MARKETING_SKU_NAMES:
+            em.Product.objects.create(
+                tenant=self.tenant,
+                product_type=line,
+                name=name,
+                created_by=self.sys,
+            )
 
+    def test_new_activities_do_not_forecast_cans_or_fold_seeding_in(self):
+        self._seed_skus()
+        assert sku_catalog(self.tenant) == list(FIELD_MARKETING_SKU_NAMES)
+        self._plan(
+            activity="guerilla",
+            name="Can handout",
+            sampling_format="full_can",
+            sku_names=["Black Cherry 10mg"],
+            planned_full_cans=400,
+            planned_pour_samples=50,
+        )
+        self._plan(
+            activity="guerilla",
+            name="Pour bar",
+            sampling_format="pour",
+            sku_names=["Nonactive"],
+            planned_full_cans=400,
+            planned_pour_samples=80,
+        )
+        self._plan(
+            activity="product_seeding",
+            name="Backbar drop",
+            sku_names=["Watermelon Limeade 10mg"],
+            planned_full_cans=999,
+            planned_pour_samples=999,
+        )
+        self._plan(
+            activity="event_activation",
+            name="Festival",
+            days=2,
+            sampling_format="pour",
+            sku_names=["Strawberry Lemonade 10mg"],
+            needs_field_support=True,
+            ambassador_count=3,
+            support_times="4-8pm",
+            support_scope="Two tables",
+        )
+        self._plan(
+            activity="sales_support",
+            name="DP sit-down",
+            support_type="distributor_meeting",
+        )
+        board = build_board(self.tenant, "2026-09")
+        cans = next(row for row in board["kpis"] if row["key"] == "full_cans")
+        pours = next(row for row in board["kpis"] if row["key"] == "pour_samples")
+        days = next(row for row in board["kpis"] if row["key"] == "sponsorship_days")
+        support = next(row for row in board["kpis"] if row["key"] == "retail_support")
+        assert cans["planned"] == 0
+        assert pours["planned"] == 0
+        assert days["planned"] == 2
+        assert support["planned"] == 1
+        seeding = next(row for row in board["events"] if row["name"] == "Backbar drop")
+        assert seeding["sku_names"] == ["Watermelon Limeade 10mg"]
+        log_results(
+            user=self.marketer,
+            event_id=seeding["id"],
+            payload={"logged_cases": 15, "logged_full_cans": 40},
+        )
+        board = build_board(self.tenant, "2026-09")
+        cans = next(row for row in board["kpis"] if row["key"] == "full_cans")
+        assert cans["logged"] is None
+        seeded = next(row for row in board["events"] if row["name"] == "Backbar drop")
+        assert seeded["logged_cases"] == 15
 
+    def test_quarter_spans_three_months_without_a_monthly_score(self):
+        start, end, key = _quarter_window("2026-Q3")
+        assert key == "2026-Q3"
+        assert start.isoformat() == "2026-07-01"
+        assert end.isoformat() == "2026-10-01"
+        self._plan(starts_on="2026-07-10", planned_full_cans=10)
+        self._plan(name="August", starts_on="2026-08-02", planned_full_cans=20)
+        self._plan(name="October", starts_on="2026-10-02", planned_full_cans=99)
+        board = build_board(self.tenant, quarter="2026-Q3")
+        assert board["month"] == "2026-Q3"
+        assert len(board["events"]) == 2
+        cans = next(row for row in board["kpis"] if row["key"] == "full_cans")
+        assert cans["planned"] == 30
+
+    def test_guerilla_requires_a_catalog_sku_and_a_sampling_format(self):
+        with pytest.raises(FieldMarketingError, match="SKU"):
+            self._plan(activity="guerilla", sampling_format="full_can", sku_names=["Black Cherry 10mg"])
+        self._seed_skus()
+        with pytest.raises(FieldMarketingError, match="full cans or 4oz"):
+            self._plan(activity="guerilla", sku_names=["Black Cherry 10mg"])
 
     def test_all_dates_returns_every_plan_row(self):
         self._plan(starts_on="2026-07-10", planned_full_cans=100)
