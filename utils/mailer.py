@@ -26,20 +26,77 @@ resend.api_key = settings.RESEND_API_KEY
 
 logger = logging.getLogger(__name__)
 
+# RFC 2606 / docs placeholders. Resend rejects these with ValidationError
+# ("use our testing email address instead of domains like example.com") and
+# that used to page via ErrorEventLogHandler on the inline Cloud Run path.
+_PLACEHOLDER_EMAIL_DOMAINS = frozenset({
+    "example.com",
+    "example.org",
+    "example.net",
+})
+
+
+def is_placeholder_recipient_email(email: str) -> bool:
+    """True for obvious fake/docs recipients that must never hit Resend."""
+    raw = (email or "").strip().lower()
+    if not raw or "@" not in raw:
+        return False
+    local, _, domain = raw.rpartition("@")
+    if not local or not domain:
+        return False
+    if domain in _PLACEHOLDER_EMAIL_DOMAINS or any(
+        domain.endswith(f".{d}") for d in _PLACEHOLDER_EMAIL_DOMAINS
+    ):
+        return True
+    # Docs / form-filler noise: test@… (not test.user@real-domain).
+    if local == "test" or local.startswith("test+"):
+        return True
+    return False
+
+
+def _recipient_domains(emails: list[str] | None) -> list[str]:
+    domains: set[str] = set()
+    for raw in emails or []:
+        email = (raw or "").strip()
+        if "@" not in email:
+            continue
+        domains.add(email.rsplit("@", 1)[-1].lower())
+    return sorted(domains)
+
+
+def _is_placeholder_resend_rejection(exc: BaseException) -> bool:
+    """Resend ValidationError for reserved/example recipients — not a real outage."""
+    msg = str(exc).lower()
+    if "example.com" in msg or "example.org" in msg:
+        return True
+    if "testing email address" in msg and ("invalid" in msg and "to" in msg):
+        return True
+    return False
+
 
 def valid_recipient_emails(emails: list[str] | None) -> list[str]:
-    """Non-blank ``to`` addresses, de-duplicated (case-insensitive), order kept."""
+    """Non-blank, non-placeholder ``to`` addresses, de-duplicated, order kept."""
     seen: set[str] = set()
     out: list[str] = []
+    dropped_placeholders: list[str] = []
     for raw in emails or []:
         email = (raw or "").strip()
         if not email:
+            continue
+        if is_placeholder_recipient_email(email):
+            dropped_placeholders.append(email)
             continue
         key = email.lower()
         if key in seen:
             continue
         seen.add(key)
         out.append(email)
+    if dropped_placeholders:
+        logger.info(
+            "Mail recipients dropped as placeholders domains=%s count=%s",
+            _recipient_domains(dropped_placeholders),
+            len(dropped_placeholders),
+        )
     return out
 
 
@@ -293,8 +350,9 @@ class ResendMailDriver(MailDriver):
             "text": envelope.render_text(),
             "headers": envelope.delivery_headers(),
         }
-        if envelope.cc_emails:
-            params["cc"] = envelope.cc_emails
+        cc_emails = valid_recipient_emails(envelope.cc_emails)
+        if cc_emails:
+            params["cc"] = cc_emails
         if envelope.attachments:
             params["attachments"] = json_safe_attachments(envelope.attachments)
         result = resend.Emails.send(params)
@@ -343,7 +401,7 @@ class MailpitMailDriver(MailDriver):
             body=envelope.render_text(),
             from_email=envelope.from_email,
             to=to_emails,
-            cc=envelope.cc_emails,
+            cc=valid_recipient_emails(envelope.cc_emails),
             headers=envelope.delivery_headers(),
         )
         email.attach_alternative(html_content, "text/html")
@@ -544,9 +602,18 @@ class Mailer:
             try:
                 self.get_driver().send(envelope)
             except Exception as inline_exc:
-                logger.exception(
-                    "Inline mail send failed: %s", inline_exc,
-                )
+                if _is_placeholder_resend_rejection(inline_exc):
+                    logger.warning(
+                        "Inline mail send skipped placeholder recipient "
+                        "subject=%r to_domains=%s: %s",
+                        envelope.subject,
+                        _recipient_domains(envelope.to_emails),
+                        inline_exc,
+                    )
+                else:
+                    logger.exception(
+                        "Inline mail send failed: %s", inline_exc,
+                    )
             return
         try:
             queues = Queues()
@@ -572,9 +639,18 @@ class Mailer:
             try:
                 self.get_driver().send(envelope)
             except Exception as inline_exc:
-                logger.exception(
-                    "Inline mail fallback failed too: %s", inline_exc,
-                )
+                if _is_placeholder_resend_rejection(inline_exc):
+                    logger.warning(
+                        "Inline mail fallback skipped placeholder recipient "
+                        "subject=%r to_domains=%s: %s",
+                        envelope.subject,
+                        _recipient_domains(envelope.to_emails),
+                        inline_exc,
+                    )
+                else:
+                    logger.exception(
+                        "Inline mail fallback failed too: %s", inline_exc,
+                    )
 
 
 class MailChain:
