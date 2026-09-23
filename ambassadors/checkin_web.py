@@ -1581,7 +1581,7 @@ def _brand_payload(tenant) -> dict:
     }
 
 
-def build_checkin_resources(tenant) -> list[dict]:
+def build_checkin_resources(tenant, *, recap_only: bool = False) -> list[dict]:
     """The BA-facing resource buttons for this tenant's check-in page.
 
     Prefers the `checkin_resources` list and falls back to synthesising one
@@ -1589,13 +1589,18 @@ def build_checkin_resources(tenant) -> list[dict]:
     makes this safe to deploy ahead of any seeding: a tenant whose only config
     is the old field still gets its card, whether or not migration 0036's data
     step has run against this database.
+
+    ``recap_only`` is the 3rd-party / agency twin (Torch TH-AGENCY): drop
+    entries marked ``hideOnRecapOnly`` (BA Sampling Guide) while leaving
+    Product Sales Sheets and every other button alone. The BA clock link
+    and confirmation emails still see the full list.
     """
     if tenant is None:
         return []
 
     resources = normalize_checkin_resources(getattr(tenant, "checkin_resources", None))
     if resources:
-        return _public_resource_urls(resources)
+        return _public_resource_urls(resources, recap_only=recap_only)
 
     legacy = (getattr(tenant, "checkin_training_url", "") or "").strip()
     if not legacy:
@@ -1610,26 +1615,58 @@ def build_checkin_resources(tenant) -> list[dict]:
                     "note": "Field guide, video, product sheets",
                 }
             ]
-        )
+        ),
+        recap_only=recap_only,
     )
 
 
-def _public_resource_urls(resources: list[dict]) -> list[dict]:
+def _public_resource_urls(
+    resources: list[dict], *, recap_only: bool = False
+) -> list[dict]:
     """Rewrite stored admin/spark hosts onto the BA-facing client origin.
 
     Feel Free PDFs were seeded with admin.igniteproductions.co; field
     phones have failed DNS on that host. ``absolute_public_url`` is the
     same rewrite event-confirmation emails already use.
+
+    Strips the internal ``hideOnRecapOnly`` flag from the public payload
+    (and drops those rows entirely when ``recap_only``). Also drops the
+    Torch BA Sampling Guide by label/URL when the stored JSON has not yet
+    been re-seeded with the flag (deploy-before-apply safe).
     """
     from events.event_confirmations import absolute_public_url
 
     out: list[dict] = []
     for row in resources:
+        if recap_only and _hidden_on_recap_only(row):
+            continue
         url = absolute_public_url(row.get("url") or "")
         if not url:
             continue
-        out.append({**row, "url": url})
+        public = {
+            "label": row["label"],
+            "kind": row["kind"],
+            "url": url,
+        }
+        if row.get("note"):
+            public["note"] = row["note"]
+        out.append(public)
     return out
+
+
+def _hidden_on_recap_only(row: dict) -> bool:
+    """True when this resource must not show on an agency / recap-only link."""
+    if row.get("hideOnRecapOnly") is True:
+        return True
+    label = (row.get("label") or "").strip().lower()
+    url = (row.get("url") or "").lower()
+    # Torch (and same-named decks elsewhere): BA Sampling Guide stays on the
+    # clock walk-up + confirmation emails, not the 3rd-party twin.
+    if label == "ba sampling guide":
+        return True
+    if "ba-sampling-guide.pdf" in url:
+        return True
+    return False
 
 
 def _public_training_url(tenant) -> str:
@@ -1640,6 +1677,15 @@ def _public_training_url(tenant) -> str:
     return absolute_public_url(
         getattr(tenant, "checkin_training_url", "") or ""
     )
+
+
+def _training_url_from_resources(resources: list[dict]) -> str:
+    """First pdf/link URL from a public resources list (legacy trainingUrl)."""
+    for kind in ("pdf", "link"):
+        for row in resources:
+            if row.get("kind") == kind and (row.get("url") or "").strip():
+                return row["url"].strip()
+    return ""
 
 
 def build_public_context(event, ambassador=None) -> dict:
@@ -2311,6 +2357,7 @@ def build_tenant_context(tenant, *, recap_only: bool = False) -> dict:
     address (admin maps maybe-matches later), same recap questions.
     """
     stores = [] if recap_only else recent_checkin_locations(tenant)
+    resources = build_checkin_resources(tenant, recap_only=recap_only)
     return {
         "mode": "tenant",
         "needsEventDetails": True,
@@ -2330,9 +2377,16 @@ def build_tenant_context(tenant, *, recap_only: bool = False) -> dict:
         ],
         # BA-facing resources (training deck, photo-release QR, the brand's
         # /training/<code> hub) as ordered buttons. See build_checkin_resources.
-        "resources": build_checkin_resources(tenant),
+        # Agency twin drops hideOnRecapOnly rows (Torch Sampling Guide).
+        "resources": resources,
         # Legacy single-URL twin — see the note in build_public_context.
-        "trainingUrl": _public_training_url(tenant),
+        # On recap-only, point at the first remaining resource so a frontend
+        # that falls back to trainingUrl does not resurrect a hidden guide.
+        "trainingUrl": (
+            _training_url_from_resources(resources)
+            if recap_only
+            else _public_training_url(tenant)
+        ),
     }
 
 

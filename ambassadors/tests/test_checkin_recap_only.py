@@ -100,6 +100,43 @@ class TestRecapOnlyCheckinLink(AmbassadorsGraphQLTestCase):
         assert payload["mode"] == "tenant"
         assert payload["recentLocations"] == []
 
+    def test_recap_only_hides_ba_sampling_guide_keeps_sales_sheets(self):
+        """TH-AGENCY drops the Sampling Guide; TH-2HRV3D keeps both."""
+        base = "https://client.igniteproductions.co/training/torch"
+        self.tenant.checkin_resources = [
+            {
+                "label": "BA Sampling Guide",
+                "kind": "pdf",
+                "url": f"{base}/ba-sampling-guide.pdf",
+                "note": "Setup",
+                "hideOnRecapOnly": True,
+            },
+            {
+                "label": "Product Sales Sheets",
+                "kind": "pdf",
+                "url": f"{base}/product-sales-sheets.pdf",
+                "note": "Beverage Book",
+            },
+        ]
+        self.tenant.checkin_training_url = f"{base}/ba-sampling-guide.pdf"
+        self.tenant.save(
+            update_fields=["checkin_resources", "checkin_training_url"]
+        )
+
+        clock = checkin_web.build_tenant_context(self.tenant, recap_only=False)
+        assert [r["label"] for r in clock["resources"]] == [
+            "BA Sampling Guide",
+            "Product Sales Sheets",
+        ]
+        assert clock["trainingUrl"].endswith("ba-sampling-guide.pdf")
+
+        agency = checkin_web.build_tenant_context(self.tenant, recap_only=True)
+        assert [r["label"] for r in agency["resources"]] == [
+            "Product Sales Sheets",
+        ]
+        assert "ba-sampling-guide" not in agency["trainingUrl"]
+        assert agency["trainingUrl"].endswith("product-sales-sheets.pdf")
+
     def test_identify_requires_typed_store_name_and_address(self):
         missing_name = self._identify(storeName="")
         assert missing_name.status_code == 400
