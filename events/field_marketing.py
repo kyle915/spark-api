@@ -99,6 +99,7 @@ def _month_window(month: str | None) -> tuple[date, date, str]:
     return start, end, f"{start.year:04d}-{start.month:02d}"
 
 
+
 def _nonneg(value: int, label: str) -> int:
     try:
         number = int(value)
@@ -210,19 +211,46 @@ def _sum_logged(events, field: str) -> int | None:
     return sum(vals)
 
 
-def build_board(tenant, month: str | None, market: str | None = None):
-    start, end, key = _month_window(month)
-    qs = models.FieldMarketingEvent.objects.filter(
-        tenant=tenant,
-        starts_on__gte=start,
-        starts_on__lt=end,
-    )
+MONTHLY_TARGETS = {
+    "full_cans": 1152,
+    "pour_samples": 3456,
+    "sponsorship_days": 8,
+    "retail_support": 4,
+    "emails": 500,
+}
+
+
+def build_board(
+    tenant,
+    month: str | None = None,
+    market: str | None = None,
+):
+    """Projected KPIs sum planned FieldMarketingEvent fields for the filter.
+
+    Not retail recaps. Omit month (or pass blank/"all") for every plan row.
+    Monthly targets only apply when a single month is selected.
+    """
+    month_raw = (month or "").strip()
+    all_dates = not month_raw or month_raw.lower() == "all"
+    qs = models.FieldMarketingEvent.objects.filter(tenant=tenant)
+    if all_dates:
+        key = "all"
+        label = "All plans"
+        apply_monthly_targets = False
+        # Soonest / newest first across the full slate.
+        order = ("-starts_on", "-id")
+    else:
+        start, end, key = _month_window(month_raw)
+        label = start.strftime("%B %Y")
+        apply_monthly_targets = True
+        qs = qs.filter(starts_on__gte=start, starts_on__lt=end)
+        order = ("starts_on", "id")
     market_key = (market or "").strip().lower()
     if market_key:
         if market_key not in _markets():
             raise FieldMarketingError("Pick a market.")
         qs = qs.filter(market=market_key)
-    events = list(qs.order_by("starts_on", "id"))
+    events = list(qs.order_by(*order))
     sponsorships = [
         event
         for event in events
@@ -234,12 +262,19 @@ def build_board(tenant, month: str | None, market: str | None = None):
         if event.activity == models.FieldMarketingEvent.ACTIVITY_RETAIL_SUPPORT
     ]
     retail_logged = [event for event in retail if event.logged_at is not None]
+
+    def _target(key_name: str) -> int:
+        # Keep monthly target numbers for UI reference; clients hide the
+        # "/ target" score when month is "all" so a multi-month rollup is
+        # never scored against one month's bar.
+        return MONTHLY_TARGETS[key_name]
+
     kpis = [
         {
             "key": "full_cans",
             "label": "Full can samples",
             "detail": "Product drops, donations, guerilla events. Drives trial and awareness.",
-            "target": 1152,
+            "target": _target("full_cans"),
             "planned": _sum_planned(events, "planned_full_cans"),
             "logged": _sum_logged(events, "logged_full_cans"),
             "unit": "cans",
@@ -248,7 +283,7 @@ def build_board(tenant, month: str | None, market: str | None = None):
             "key": "pour_samples",
             "label": "4oz pour samples",
             "detail": "Local sponsorships, events, festivals. 3,456 pours is 1,152 full cans.",
-            "target": 3456,
+            "target": _target("pour_samples"),
             "planned": _sum_planned(events, "planned_pour_samples"),
             "logged": _sum_logged(events, "logged_pour_samples"),
             "unit": "pours",
@@ -257,7 +292,7 @@ def build_board(tenant, month: str | None, market: str | None = None):
             "key": "sponsorship_days",
             "label": "Local event sponsorships",
             "detail": "Minimum days. Builds meaningful local presence.",
-            "target": 8,
+            "target": _target("sponsorship_days"),
             "planned": sum(event.days or 0 for event in sponsorships),
             "logged": _sum_logged(sponsorships, "logged_days"),
             "unit": "days",
@@ -266,7 +301,7 @@ def build_board(tenant, month: str | None, market: str | None = None):
             "key": "retail_support",
             "label": "Retail activations / support",
             "detail": "On-premise support, retail check-in, sales and DP meetings.",
-            "target": 4,
+            "target": _target("retail_support"),
             "planned": len(retail),
             "logged": len(retail_logged) if retail_logged else None,
             "unit": "activations",
@@ -275,16 +310,18 @@ def build_board(tenant, month: str | None, market: str | None = None):
             "key": "emails",
             "label": "Consumer data captured",
             "detail": "Email addresses. Builds an addressable audience.",
-            "target": 500,
+            "target": _target("emails"),
             "planned": _sum_planned(events, "planned_emails"),
             "logged": _sum_logged(events, "logged_emails"),
             "unit": "emails",
         },
     ]
+    # Silence unused when all_dates — targets still returned for FE caption.
+    _ = apply_monthly_targets
     return {
         "available": True,
         "month": key,
-        "month_label": start.strftime("%B %Y"),
+        "month_label": label,
         "managers": [
             {
                 "market": key_,
@@ -483,12 +520,17 @@ def log_results(*, user, event_id: str, payload: dict, tenant_id=None) -> models
     return event
 
 
-def empty_board(month: str | None):
-    start, _end, key = _month_window(month)
+def empty_board(month: str | None = None):
+    month_raw = (month or "").strip()
+    if not month_raw or month_raw.lower() == "all":
+        key, label = "all", "All plans"
+    else:
+        start, _end, key = _month_window(month_raw)
+        label = start.strftime("%B %Y")
     return {
         "available": False,
         "month": key,
-        "month_label": start.strftime("%B %Y"),
+        "month_label": label,
         "managers": [],
         "kpis": [],
         "events": [],
@@ -617,9 +659,11 @@ class FieldMarketingQueries:
         user = await SparkGraphQLMixin().get_user(info)
         tenant = await sync_to_async(_active_tenant_for_user)(user, tenant_id)
         if tenant is None or not is_torch_tenant(tenant):
-            return _board_type(empty_board(month))
+            return _board_type(empty_board(month=month))
         try:
-            payload = await sync_to_async(build_board)(tenant, month, market)
+            payload = await sync_to_async(build_board)(
+                tenant, month=month, market=market
+            )
         except FieldMarketingError as exc:
             raise GraphQLError(str(exc)) from exc
         return _board_type(payload)
