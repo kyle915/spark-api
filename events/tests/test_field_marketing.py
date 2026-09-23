@@ -207,3 +207,102 @@ class TestFieldMarketing(EventsGraphQLTestCase):
             tenant_id=self.tenant.id,
         )
         assert event.tenant_id == self.tenant.id
+
+    @pytest.mark.asyncio
+    async def test_plan_field_marketing_accepts_relay_tenant_global_id(self):
+        """Clients schema: planFieldMarketing tenantId as TenantType:ID global id.
+
+        Kyle's admin UI sends VGVuYW50VHlwZToxNw== (TenantType:17). The live
+        PlanFieldMarketingInput must accept that field and resolve Torch.
+        """
+        import base64
+
+        from asgiref.sync import sync_to_async
+        from config.schema_client import schema_clients
+
+        self.schema = schema_clients
+        self.endpoint_path = "/api/v1/graphql/clients"
+
+        def _seed_multi_tenant_admin():
+            admin = self.create_user(
+                username="kyle_relay_admin",
+                email="kyle.relay@igniteproductions.co",
+                role=self.roles["spark_admin"],
+                is_staff=True,
+            )
+            self.create_tenanted_user(admin, self.tenant)
+            self.create_tenanted_user(admin, self.other)
+            for i in range(5):
+                brand = self.create_tenant(
+                    name=f"Relay Brand {i}", slug=f"relay-brand-{i}"
+                )
+                self.create_tenanted_user(admin, brand)
+            return admin
+
+        admin = await sync_to_async(_seed_multi_tenant_admin)()
+
+        relay_tenant_id = base64.b64encode(
+            f"TenantType:{self.tenant.id}".encode()
+        ).decode()
+
+        plan = """
+        mutation PlanFieldMarketing($input: PlanFieldMarketingInput!) {
+          planFieldMarketing(input: $input) {
+            success
+            message
+            event { id name status }
+          }
+        }
+        """
+        result = await self._execute_mutation_authenticated(
+            plan,
+            {
+                "input": {
+                    "market": "miami",
+                    "activity": "sponsorship",
+                    "name": "Wynwood Test Festival",
+                    "startsOn": "2026-09-25",
+                    "days": 1,
+                    "plannedPourSamples": 5000,
+                    "plannedEmails": 15,
+                    "submit": False,
+                    "tenantId": relay_tenant_id,
+                }
+            },
+            user=admin,
+        )
+        assert result.errors is None, result.errors
+        payload = result.data["planFieldMarketing"]
+        assert payload["success"] is True
+        assert payload["event"]["name"] == "Wynwood Test Festival"
+        assert (
+            await sync_to_async(
+                em.FieldMarketingEvent.objects.filter(
+                    tenant=self.tenant, name="Wynwood Test Festival"
+                ).count
+            )()
+            == 1
+        )
+
+        board_q = """
+        query FieldMarketingBoard($month: String, $tenantId: ID) {
+          fieldMarketing(month: $month, tenantId: $tenantId) {
+            available
+            kpis { key planned logged target }
+          }
+        }
+        """
+        board = await self._execute_query_authenticated(
+            board_q,
+            {"month": "2026-09", "tenantId": relay_tenant_id},
+            user=admin,
+        )
+        assert board.errors is None, board.errors
+        assert board.data["fieldMarketing"]["available"] is True
+        pours = next(
+            row
+            for row in board.data["fieldMarketing"]["kpis"]
+            if row["key"] == "pour_samples"
+        )
+        assert pours["planned"] == 5000
+        assert pours["logged"] is None
