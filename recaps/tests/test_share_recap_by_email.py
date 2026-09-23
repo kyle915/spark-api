@@ -123,7 +123,7 @@ class TestShareRecapByEmail(AmbassadorsGraphQLTestCase):
             SHARE_BY_EMAIL,
             {
                 "recapId": str(recap.id),
-                "recipients": ["Buyer@Example.com", "buyer@example.com"],
+                "recipients": ["Buyer@Acme.co", "buyer@acme.co"],
                 "message": "Great activation!",
             },
             self.spark_admin,
@@ -142,7 +142,7 @@ class TestShareRecapByEmail(AmbassadorsGraphQLTestCase):
         # One recipient after dedup → one message, link in the HTML body.
         assert len(mail.outbox) == 1
         msg = mail.outbox[0]
-        assert msg.to == ["Buyer@Example.com"]
+        assert msg.to == ["Buyer@Acme.co"]
         assert payload["shareUrl"] in msg.alternatives[0][0]
         assert "Great activation!" in msg.alternatives[0][0]
 
@@ -155,7 +155,7 @@ class TestShareRecapByEmail(AmbassadorsGraphQLTestCase):
             SHARE_BY_EMAIL,
             {
                 "customRecapId": str(recap.id),
-                "recipients": ["one@example.com", "two@example.com"],
+                "recipients": ["one@acme.co", "two@acme.co"],
             },
             self.spark_admin,
             self.endpoint_path,
@@ -177,7 +177,7 @@ class TestShareRecapByEmail(AmbassadorsGraphQLTestCase):
         )
         result = await self._execute_mutation_authenticated(
             SHARE_BY_EMAIL,
-            {"customRecapId": str(recap.id), "recipients": ["c@example.com"]},
+            {"customRecapId": str(recap.id), "recipients": ["c@acme.co"]},
             self.client_user,
             self.endpoint_path,
         )
@@ -192,7 +192,7 @@ class TestShareRecapByEmail(AmbassadorsGraphQLTestCase):
         )
         result = await self._execute_mutation_authenticated(
             SHARE_BY_EMAIL,
-            {"customRecapId": str(recap.id), "recipients": ["c@example.com"]},
+            {"customRecapId": str(recap.id), "recipients": ["c@acme.co"]},
             self.client_user,
             self.endpoint_path,
         )
@@ -208,7 +208,7 @@ class TestShareRecapByEmail(AmbassadorsGraphQLTestCase):
         recap = await sync_to_async(self._make_recap)(self.event, approved=False)
         result = await self._execute_mutation_authenticated(
             SHARE_BY_EMAIL,
-            {"recapId": str(recap.id), "recipients": ["a@example.com"]},
+            {"recapId": str(recap.id), "recipients": ["a@acme.co"]},
             self.spark_admin,
             self.endpoint_path,
         )
@@ -223,7 +223,7 @@ class TestShareRecapByEmail(AmbassadorsGraphQLTestCase):
         )
         result = await self._execute_mutation_authenticated(
             SHARE_BY_EMAIL,
-            {"recapId": str(recap.id), "recipients": ["c@example.com"]},
+            {"recapId": str(recap.id), "recipients": ["c@acme.co"]},
             self.client_user,
             self.endpoint_path,
         )
@@ -238,7 +238,7 @@ class TestShareRecapByEmail(AmbassadorsGraphQLTestCase):
         recap = await sync_to_async(self._make_recap)(self.event, approved=True)
         result = await self._execute_mutation_authenticated(
             SHARE_BY_EMAIL,
-            {"recapId": str(recap.id), "recipients": ["c@example.com"]},
+            {"recapId": str(recap.id), "recipients": ["c@acme.co"]},
             self.ba_user,
             self.endpoint_path,
         )
@@ -286,7 +286,7 @@ class TestShareRecapByEmail(AmbassadorsGraphQLTestCase):
             {
                 "recapId": str(recap.id),
                 "customRecapId": str(custom.id),
-                "recipients": ["c@example.com"],
+                "recipients": ["c@acme.co"],
             },
             self.spark_admin,
             self.endpoint_path,
