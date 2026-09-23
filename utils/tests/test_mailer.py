@@ -28,7 +28,9 @@ from utils.mailer import (
     json_safe_attachments,
     attachment_bytes,
     valid_recipient_emails,
+    is_placeholder_recipient_email,
     _skip_if_no_recipients,
+    _is_placeholder_resend_rejection,
 )
 
 
@@ -41,8 +43,40 @@ class TestValidRecipientEmails:
             ["  A@x.com ", "a@x.com", "", "b@x.com", "   "]
         ) == ["A@x.com", "b@x.com"]
 
+    def test_drops_example_com_placeholders(self):
+        assert valid_recipient_emails(
+            [
+                "real@igniteproductions.co",
+                "buyer@example.com",
+                "x@Example.ORG",
+                "y@mail.example.net",
+                "test@acme.co",
+            ]
+        ) == ["real@igniteproductions.co"]
+
+    def test_is_placeholder_recipient_email(self):
+        assert is_placeholder_recipient_email("requestor@example.com") is True
+        assert is_placeholder_recipient_email("ba@example.org") is True
+        assert is_placeholder_recipient_email("test@gmail.com") is True
+        assert is_placeholder_recipient_email("ops@igniteproductions.co") is False
+
+    def test_placeholder_resend_rejection_detection(self):
+        assert _is_placeholder_resend_rejection(
+            Exception(
+                "Invalid `to` field. Please use our testing email address "
+                "instead of domains like `example.com`."
+            )
+        )
+        assert not _is_placeholder_resend_rejection(
+            Exception("Resend send FAILED (no id in response)")
+        )
+
     def test_skip_if_no_recipients_true_when_empty(self):
         env = Envelope(subject="Test", to_emails=[])
+        assert _skip_if_no_recipients(env) is True
+
+    def test_skip_if_no_recipients_true_when_only_placeholders(self):
+        env = Envelope(subject="Test", to_emails=["a@example.com"])
         assert _skip_if_no_recipients(env) is True
 
     def test_skip_if_no_recipients_false_when_present(self):
@@ -71,16 +105,16 @@ class TestEnvelope:
             subject="Test Subject",
             template="tenants.templates.emails.email_verification",
             context={"user": "test"},
-            to_emails=["test@example.com"],
-            cc_emails=["copy@example.com"],
+            to_emails=["tester@acme.co"],
+            cc_emails=["copy@acme.co"],
             headers={"X-Custom": "value"},
             html="<html>Test</html>"
         )
         assert envelope.subject == "Test Subject"
         assert envelope.template == "tenants.templates.emails.email_verification"
         assert envelope.context == {"user": "test"}
-        assert envelope.to_emails == ["test@example.com"]
-        assert envelope.cc_emails == ["copy@example.com"]
+        assert envelope.to_emails == ["tester@acme.co"]
+        assert envelope.cc_emails == ["copy@acme.co"]
         assert envelope.headers == {"X-Custom": "value"}
         assert envelope.html == "<html>Test</html>"
 
@@ -146,9 +180,9 @@ class TestEnvelope:
         """Test compile returns correct dictionary."""
         envelope = Envelope(
             subject="Test Subject",
-            from_email="from@example.com",
-            to_emails=["to@example.com"],
-            cc_emails=["copy@example.com"],
+            from_email="from@acme.co",
+            to_emails=["to@acme.co"],
+            cc_emails=["copy@acme.co"],
             template="tenants.templates.emails.email_verification",
             headers={"X-Custom": "value"},
             html="<html>Test</html>"
@@ -156,9 +190,9 @@ class TestEnvelope:
         with patch.object(envelope, 'render_template', return_value="<html>Rendered</html>"):
             result = envelope.compile()
             assert result == {
-                "from": "from@example.com",
-                "to": ["to@example.com"],
-                "cc": ["copy@example.com"],
+                "from": "from@acme.co",
+                "to": ["to@acme.co"],
+                "cc": ["copy@acme.co"],
                 "subject": "Test Subject",
                 "html": "<html>Rendered</html>",
                 "template": "tenants.templates.emails.email_verification",
@@ -168,18 +202,18 @@ class TestEnvelope:
     def test_from_dict_valid_payload(self):
         """Test from_dict creates Envelope from valid dictionary."""
         payload = {
-            "from": "from@example.com",
-            "to": ["to@example.com"],
-            "cc": ["copy@example.com"],
+            "from": "from@acme.co",
+            "to": ["to@acme.co"],
+            "cc": ["copy@acme.co"],
             "subject": "Test Subject",
             "html": "<html>Test</html>",
             "headers": {"X-Custom": "value"},
             "template": "tenants.templates.emails.email_verification",
         }
         envelope = Envelope.from_dict(payload)
-        assert envelope.from_email == "from@example.com"
-        assert envelope.to_emails == ["to@example.com"]
-        assert envelope.cc_emails == ["copy@example.com"]
+        assert envelope.from_email == "from@acme.co"
+        assert envelope.to_emails == ["to@acme.co"]
+        assert envelope.cc_emails == ["copy@acme.co"]
         assert envelope.subject == "Test Subject"
         assert envelope.html == "<html>Test</html>"
         assert envelope.headers == {"X-Custom": "value"}
@@ -188,8 +222,8 @@ class TestEnvelope:
     def test_from_dict_missing_required_key(self):
         """Test from_dict raises error when required key is missing."""
         payload = {
-            "from": "from@example.com",
-            "to": ["to@example.com"],
+            "from": "from@acme.co",
+            "to": ["to@acme.co"],
             # Missing "subject"
             "html": "<html>Test</html>",
             "headers": {},
@@ -202,8 +236,8 @@ class TestEnvelope:
         pdf = b"%PDF-1.4 recap-727"
         envelope = Envelope(
             subject="Your activation recap is ready",
-            from_email="from@example.com",
-            to_emails=["to@example.com"],
+            from_email="from@acme.co",
+            to_emails=["to@acme.co"],
             html="<p>Recap</p>",
             headers={},
             attachments=[
@@ -239,18 +273,18 @@ class TestMailDrivers:
         driver = ResendMailDriver()
         envelope = Envelope(
             subject="Test Subject",
-            from_email="from@example.com",
-            to_emails=["to@example.com"],
-            cc_emails=["copy@example.com"],
+            from_email="from@acme.co",
+            to_emails=["to@acme.co"],
+            cc_emails=["copy@acme.co"],
             headers={"X-Custom": "value"},
             html="<html>Test</html>"
         )
         with patch.object(envelope, 'render_template', return_value="<html>Rendered</html>"):
             driver.send(envelope)
             mock_resend_send.assert_called_once_with({
-                "from": "from@example.com",
-                "to": ["to@example.com"],
-                "cc": ["copy@example.com"],
+                "from": "from@acme.co",
+                "to": ["to@acme.co"],
+                "cc": ["copy@acme.co"],
                 "subject": "Test Subject",
                 "html": "<html>Rendered</html>",
                 "text": "Rendered",
@@ -274,15 +308,50 @@ class TestMailDrivers:
         driver.send(envelope)
         mock_resend_send.assert_not_called()
 
+    @patch('utils.mailer.resend.Emails.send')
+    def test_resend_mail_driver_skips_placeholder_to(self, mock_resend_send):
+        """example.com / test@ must not call Resend (no ValidationError alert)."""
+        driver = ResendMailDriver()
+        envelope = Envelope(
+            subject="Your activation recap is ready",
+            html="<html>Test</html>",
+            to_emails=["requestor@example.com", "test@gmail.com"],
+            cc_emails=["copy@example.org"],
+        )
+        driver.send(envelope)
+        mock_resend_send.assert_not_called()
+
+    @override_settings(MAIL_DRIVER="resend", RQ_ENABLED=False)
+    @patch("utils.mailer.resend.Emails.send")
+    @patch("utils.mailer.Queues")
+    def test_send_skips_placeholder_recipients_inline(
+        self, mock_queues_class, mock_resend_send
+    ):
+        """Cloud Run inline path: placeholder to must no-op, not page ops."""
+
+        class PlaceholderMailer(Mailer):
+            def envelope(self):
+                return Envelope(
+                    subject="Your activation recap is ready",
+                    to_emails=["requestor@example.com"],
+                    html="<p>Recap</p>",
+                )
+
+        with patch.object(Mailer, "_build_logo_attachment", return_value=None):
+            PlaceholderMailer().send()
+
+        mock_queues_class.assert_not_called()
+        mock_resend_send.assert_not_called()
+
     @patch('utils.mailer.EmailMultiAlternatives')
     def test_mailpit_mail_driver_send(self, mock_email_class):
         """Test MailpitMailDriver sends email via Django email."""
         driver = MailpitMailDriver()
         envelope = Envelope(
             subject="Test Subject",
-            from_email="from@example.com",
-            to_emails=["to@example.com"],
-            cc_emails=["copy@example.com"],
+            from_email="from@acme.co",
+            to_emails=["to@acme.co"],
+            cc_emails=["copy@acme.co"],
             headers={"X-Custom": "value"},
             html="<html>Test</html>"
         )
@@ -293,9 +362,9 @@ class TestMailDrivers:
             mock_email_class.assert_called_once_with(
                 subject="Test Subject",
                 body="Rendered",
-                from_email="from@example.com",
-                to=["to@example.com"],
-                cc=["copy@example.com"],
+                from_email="from@acme.co",
+                to=["to@acme.co"],
+                cc=["copy@acme.co"],
                 headers={
                     "X-Custom": "value",
                     "List-Unsubscribe": (
@@ -315,8 +384,8 @@ class TestMailDrivers:
         pdf = b"%PDF-1.4 bytes-not-json"
         envelope = Envelope(
             subject="Your activation recap is ready",
-            from_email="from@example.com",
-            to_emails=["to@example.com"],
+            from_email="from@acme.co",
+            to_emails=["to@acme.co"],
             html="<p>Recap</p>",
             attachments=[
                 {
@@ -342,8 +411,8 @@ class TestMailDrivers:
         encoded = base64.b64encode(pdf).decode("ascii")
         envelope = Envelope(
             subject="Campaign report",
-            from_email="from@example.com",
-            to_emails=["to@example.com"],
+            from_email="from@acme.co",
+            to_emails=["to@acme.co"],
             html="<p>Report</p>",
             attachments=[
                 {
@@ -412,8 +481,8 @@ class TestSendEmailTask:
     def test_send_email_task_success(self, mock_drivers_class):
         """Test send_email_task successfully sends email."""
         payload = {
-            "from": "from@example.com",
-            "to": ["to@example.com"],
+            "from": "from@acme.co",
+            "to": ["to@acme.co"],
             "subject": "Test Subject",
             "html": "<html>Test</html>",
             "headers": {},
@@ -429,8 +498,8 @@ class TestSendEmailTask:
     def test_send_email_task_error_handling(self, mock_logger, mock_drivers_class):
         """Test send_email_task handles errors and logs them."""
         payload = {
-            "from": "from@example.com",
-            "to": ["to@example.com"],
+            "from": "from@acme.co",
+            "to": ["to@acme.co"],
             "subject": "Test Subject",
             "html": "<html>Test</html>",
             "headers": {},
@@ -472,7 +541,7 @@ class TestMailer:
         """Test dispatch calls driver.send with envelope."""
         mailer = Mailer()
         mock_envelope = MagicMock()
-        mock_envelope.to_emails = ["test@example.com"]
+        mock_envelope.to_emails = ["tester@acme.co"]
         mock_envelope.context = {}
         mock_envelope.attachments = []
         with patch.object(mailer, 'envelope', return_value=mock_envelope):
@@ -488,12 +557,12 @@ class TestMailer:
         """Test send enqueues email task to RQ."""
         mailer = Mailer()
         mock_envelope = MagicMock()
-        mock_envelope.to_emails = ["to@example.com"]
+        mock_envelope.to_emails = ["to@acme.co"]
         mock_envelope.context = {}
         mock_envelope.attachments = []
         mock_envelope.compile.return_value = {
-            "from": "from@example.com",
-            "to": ["to@example.com"],
+            "from": "from@acme.co",
+            "to": ["to@acme.co"],
             "subject": "Test",
             "html": "<html>Test</html>",
             "template": "test.template",
@@ -534,7 +603,7 @@ class TestMailer:
             def envelope(self):
                 return Envelope(
                     subject="Your activation recap is ready",
-                    to_emails=["events@example.com"],
+                    to_emails=["events@acme.co"],
                     html="<p>Recap</p>",
                     attachments=[
                         {
@@ -567,7 +636,7 @@ class TestMailer:
             def envelope(self):
                 return Envelope(
                     subject="Your activation recap is ready",
-                    to_emails=["events@example.com"],
+                    to_emails=["events@acme.co"],
                     html="<p>Recap</p>",
                 )
 
@@ -630,7 +699,7 @@ class TestMailerSubclass:
         def envelope(self):
             return Envelope(
                 subject="Test",
-                to_emails=["test@example.com"],
+                to_emails=["tester@acme.co"],
                 html="<html>Test</html>"
             )
 

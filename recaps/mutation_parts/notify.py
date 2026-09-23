@@ -19,6 +19,7 @@ from recaps.mutation_parts.pdf_helpers import (
 )
 from tenants.models import Role, Tenant, TenantedUser
 from utils.cloud_tasks import enqueue
+from utils.mailer import is_placeholder_recipient_email
 from utils.onesignal import OneSignalError, one_signal_client
 
 User = get_user_model()
@@ -223,6 +224,8 @@ def _collect_requestor_recipients(
         e = (email or "").strip()
         if not e or e.lower() in seen:
             return
+        if is_placeholder_recipient_email(e):
+            return
         seen.add(e.lower())
         out.append((e, (first or "").strip()))
 
@@ -269,6 +272,8 @@ def _collect_recap_approved_recipients(
     def _push(email: str | None, first: str | None):
         e = (email or "").strip()
         if not e or e.lower() in seen:
+            return
+        if is_placeholder_recipient_email(e):
             return
         seen.add(e.lower())
         recipients.append((e, (first or "").strip()))

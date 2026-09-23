@@ -131,7 +131,7 @@ class TestShareRecapsByEmail(AmbassadorsGraphQLTestCase):
             {
                 "recapIds": [str(legacy.id)],
                 "customRecapIds": [str(custom.id)],
-                "recipients": ["Buyer@Example.com", "buyer@example.com"],
+                "recipients": ["Buyer@Acme.co", "buyer@acme.co"],
                 "message": "Two great activations!",
             },
             self.spark_admin,
@@ -145,7 +145,7 @@ class TestShareRecapsByEmail(AmbassadorsGraphQLTestCase):
         assert payload["sharedCount"] == 2
         assert len(mail.outbox) == 1
         msg = mail.outbox[0]
-        assert msg.to == ["Buyer@Example.com"]
+        assert msg.to == ["Buyer@Acme.co"]
         html = msg.alternatives[0][0]
         # Both recap names + both /r/ links in the ONE email.
         assert "Legacy one" in html
@@ -167,7 +167,7 @@ class TestShareRecapsByEmail(AmbassadorsGraphQLTestCase):
             SHARE_BULK_BY_EMAIL,
             {
                 "recapIds": [str(legacy.id)],
-                "recipients": ["one@example.com", "two@example.com"],
+                "recipients": ["one@acme.co", "two@acme.co"],
             },
             self.spark_admin,
             self.endpoint_path,
@@ -180,8 +180,8 @@ class TestShareRecapsByEmail(AmbassadorsGraphQLTestCase):
         # One email per recipient — recipients never see each other.
         assert len(mail.outbox) == 2
         assert {m.to[0] for m in mail.outbox} == {
-            "one@example.com",
-            "two@example.com",
+            "one@acme.co",
+            "two@acme.co",
         }
 
     @pytest.mark.asyncio
@@ -195,7 +195,7 @@ class TestShareRecapsByEmail(AmbassadorsGraphQLTestCase):
             {
                 "recapIds": [str(legacy.id)],
                 "customRecapIds": [str(custom.id)],
-                "recipients": ["c@example.com"],
+                "recipients": ["c@acme.co"],
             },
             self.client_user,
             self.endpoint_path,
@@ -217,7 +217,7 @@ class TestShareRecapsByEmail(AmbassadorsGraphQLTestCase):
             SHARE_BULK_BY_EMAIL,
             {
                 "recapIds": [str(approved.id), str(draft.id)],
-                "recipients": ["c@example.com"],
+                "recipients": ["c@acme.co"],
             },
             self.client_user,
             self.endpoint_path,
@@ -243,7 +243,7 @@ class TestShareRecapsByEmail(AmbassadorsGraphQLTestCase):
             SHARE_BULK_BY_EMAIL,
             {
                 "recapIds": [str(legacy.id)],
-                "recipients": ["a@example.com"],
+                "recipients": ["a@acme.co"],
             },
             self.spark_admin,
             self.endpoint_path,
@@ -262,7 +262,7 @@ class TestShareRecapsByEmail(AmbassadorsGraphQLTestCase):
             SHARE_BULK_BY_EMAIL,
             {
                 "recapIds": [str(own.id), str(foreign.id)],
-                "recipients": ["c@example.com"],
+                "recipients": ["c@acme.co"],
             },
             self.client_user,
             self.endpoint_path,
@@ -280,7 +280,7 @@ class TestShareRecapsByEmail(AmbassadorsGraphQLTestCase):
             SHARE_BULK_BY_EMAIL,
             {
                 "recapIds": [str(legacy.id)],
-                "recipients": ["c@example.com"],
+                "recipients": ["c@acme.co"],
             },
             self.ba_user,
             self.endpoint_path,
@@ -325,7 +325,7 @@ class TestShareRecapsByEmail(AmbassadorsGraphQLTestCase):
     async def test_no_ids_rejected(self):
         result = await self._execute_mutation_authenticated(
             SHARE_BULK_BY_EMAIL,
-            {"recipients": ["c@example.com"]},
+            {"recipients": ["c@acme.co"]},
             self.spark_admin,
             self.endpoint_path,
         )
@@ -344,7 +344,7 @@ class TestShareRecapsByEmail(AmbassadorsGraphQLTestCase):
             ids.append(str(recap.id))
         result = await self._execute_mutation_authenticated(
             SHARE_BULK_BY_EMAIL,
-            {"recapIds": ids, "recipients": ["c@example.com"]},
+            {"recapIds": ids, "recipients": ["c@acme.co"]},
             self.spark_admin,
             self.endpoint_path,
         )

@@ -131,7 +131,9 @@ def build_request_batch_template_xlsx(tenant_id: int | None = None) -> bytes:
         "latitude": 40.7128,
         "longitude": -74.006,
         "notes": "Product demo and sampling",
-        "requestor_email": "requestor@example.com",
+        # Leave blank — example.com samples get imported and later emailed
+        # (recap-approved → requestor), which Resend rejects and pages ops.
+        "requestor_email": "",
         "distributor_name": "North Distribution",
         "retailer_name": "Central Retail",
         "city": "New York",
