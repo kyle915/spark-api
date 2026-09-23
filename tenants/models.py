@@ -105,6 +105,11 @@ def normalize_checkin_resources(value) -> list[dict]:
         note = str(entry.get("note") or "").strip()[:120]
         if note:
             resource["note"] = note
+        # Optional: hide this button on the 3rd-party / agency recap-only
+        # twin (e.g. Torch TH-AGENCY) while keeping it on the BA clock link
+        # and in event-confirmation emails. Truthy only — missing/false omit.
+        if entry.get("hideOnRecapOnly") is True:
+            resource["hideOnRecapOnly"] = True
         out.append(resource)
         if len(out) >= MAX_CHECKIN_RESOURCES:
             break

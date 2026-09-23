@@ -116,6 +116,26 @@ class TestNormalizeCheckinResources:
         )
         assert [r["kind"] for r in got] == ["pdf", "image"]
 
+    def test_hide_on_recap_only_flag_is_preserved(self):
+        got = normalize_checkin_resources(
+            [
+                {
+                    "label": "BA Sampling Guide",
+                    "kind": "pdf",
+                    "url": "https://e.com/a.pdf",
+                    "hideOnRecapOnly": True,
+                },
+                {
+                    "label": "Sales",
+                    "kind": "pdf",
+                    "url": "https://e.com/b.pdf",
+                    "hideOnRecapOnly": False,
+                },
+            ]
+        )
+        assert got[0].get("hideOnRecapOnly") is True
+        assert "hideOnRecapOnly" not in got[1]
+
     @pytest.mark.parametrize("junk", [None, "", "nope", {}, 42, ["str"], [None], [[]]])
     def test_junk_coerces_to_empty_list(self, junk):
         """Never raise: a malformed blob must not 500 the check-in page."""
@@ -283,6 +303,8 @@ class TestSetCheckinResourcesCommand(AmbassadorsGraphQLTestCase):
         assert torch.checkin_resources[0]["url"] == (
             "https://client.igniteproductions.co/training/torch/ba-sampling-guide.pdf"
         )
+        assert torch.checkin_resources[0].get("hideOnRecapOnly") is True
+        assert "hideOnRecapOnly" not in torch.checkin_resources[1]
         assert torch.checkin_resources[1]["url"] == (
             "https://client.igniteproductions.co/training/torch/"
             "product-sales-sheets.pdf"

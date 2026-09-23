@@ -180,6 +180,11 @@ def _stamp_recap_only(payload: dict, code: str, tenant) -> dict:
     payload["recapOnly"] = recap_only
     if recap_only:
         payload["unfiledShifts"] = []
+        # Mid-session payloads come from build_public_context (full BA list).
+        # Re-filter so TH-AGENCY never resurfaces hideOnRecapOnly guides.
+        resources = checkin_web.build_checkin_resources(tenant, recap_only=True)
+        payload["resources"] = resources
+        payload["trainingUrl"] = checkin_web._training_url_from_resources(resources)
     return payload
 
 
