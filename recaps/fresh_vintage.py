@@ -233,7 +233,6 @@ PHOTO_BUCKETS: list[dict] = [
     {"name": "Product display / pallet with price sign visible", "min": 1},
     {"name": "Ambassador at booth in uniform", "min": 1},
     {"name": "Sampling in action with members", "min": 1},
-    {"name": "Allergen signage", "min": 1},
     {"name": "End-of-day remaining inventory", "min": 1},
     {"name": "Expense Receipts", "min": 1},
 ]

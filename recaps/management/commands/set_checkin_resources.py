@@ -109,6 +109,24 @@ def _presets() -> dict[str, list[dict]]:
                 "note": "Setup, talking points, and shift checklist",
             },
         ],
+        # Fresh Vintage Farms Costco Roadshow (standing FVF-DVN94S).
+        # Keys "fresh-vintage" and "fresh vintage" both resolve (slug vs name).
+        "fresh-vintage": [
+            {
+                "label": "BA Guide",
+                "kind": "pdf",
+                "url": f"{base}/training/fresh-vintage-farms/ba-guide.pdf",
+                "note": "Costco Roadshow sampling guide",
+            },
+        ],
+        "fresh vintage": [
+            {
+                "label": "BA Guide",
+                "kind": "pdf",
+                "url": f"{base}/training/fresh-vintage-farms/ba-guide.pdf",
+                "note": "Costco Roadshow sampling guide",
+            },
+        ],
         # Treasury Wine Estates / DAOU Event Activation (standing DAOU- link).
         # Education session + Discovery tasting notes for table talking points.
         # Keys "daou" and "treasury" both resolve (needle substring match).

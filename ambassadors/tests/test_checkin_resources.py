@@ -321,6 +321,29 @@ class TestSetCheckinResourcesCommand(AmbassadorsGraphQLTestCase):
             assert "admin.igniteproductions.co" not in row["url"]
             assert "spark.igniteproductions.co" not in row["url"]
 
+    def test_apply_seeds_the_fresh_vintage_preset_and_email_url(self):
+        fvf = self.create_tenant(
+            name="Fresh Vintage Farms",
+            slug="fresh-vintage-farms",
+            checkin_code="FVF-DVN94S",
+        )
+        self._run(tenant="fresh-vintage-farms", apply=True)
+        fvf.refresh_from_db()
+        assert [r["kind"] for r in fvf.checkin_resources] == ["pdf"]
+        assert [r["label"] for r in fvf.checkin_resources] == ["BA Guide"]
+        assert fvf.checkin_resources[0]["url"] == (
+            "https://client.igniteproductions.co/training/fresh-vintage-farms/"
+            "ba-guide.pdf"
+        )
+        assert fvf.checkin_training_url == (
+            "https://client.igniteproductions.co/training/fresh-vintage-farms/"
+            "ba-guide.pdf"
+        )
+        assert fvf.checkin_code == "FVF-DVN94S"
+        for row in fvf.checkin_resources:
+            assert "admin.igniteproductions.co" not in row["url"]
+            assert "spark.igniteproductions.co" not in row["url"]
+
     def test_re_running_is_idempotent(self):
         self._run(tenant="Feel Free Command", apply=True)
         out = self._run(tenant="Feel Free Command", apply=True)
