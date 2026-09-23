@@ -38,6 +38,7 @@ from events.event_confirmations import (
     send_confirmation_stage,
     training_url_for,
 )
+from tenants.management.commands.onboard_torch_products import torch_product_options
 from events.models import (
     EventConfirmation,
     EventConfirmationSend,
@@ -287,12 +288,14 @@ class TestTenantProductOptions:
             name="Torch THC", slug="torch-thc", checkin_code="TH-2HRV3D"
         )
         options = confirmation_product_options(tenant)
-        assert len(options) == 54
+        assert options == torch_product_options()
         assert options[0].startswith("Iced Tea 10mg — ")
         assert "Seltzer 60mg High Potency — Black Cherry 60mg 12oz" in options
         assert "Seltzer 10mg — Watermelon Limeade 10mg 12oz" in options
         assert "Seltzer 10mg — Strawberry Lemonade 10mg 4-Pack" in options
         assert "Seltzer 10mg — Black Cherry 10mg 12oz" in options
+        assert "Field marketing — Black Cherry 10mg" in options
+        assert "Field marketing — Nonactive" in options
         assert "10G — TORCH STRAWBERRY LEMONADE 10G" in options
         assert "10G — TORCH BLACK CHERRY 10G" in options
         assert "10G — TORCH WATERMELON 10MG" in options

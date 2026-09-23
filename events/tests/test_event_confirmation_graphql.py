@@ -27,6 +27,7 @@ from django.utils import timezone as djtz
 
 from ambassadors.tests.base import AmbassadorsGraphQLTestCase
 from events.models import EventConfirmation, EventConfirmationSend
+from tenants.management.commands.onboard_torch_products import torch_product_options
 
 SEND_PATH = "events.event_confirmations.EventConfirmationMailer.send_now"
 
@@ -184,9 +185,10 @@ class TestEventConfirmationGraphQL(AmbassadorsGraphQLTestCase):
         assert result.errors is None, result.errors
         data = result.data["eventConfirmationFormOptions"]
         # No catalog rows in the test DB → the onboard SKU list.
-        assert len(data["productOptions"]) == 54
+        assert data["productOptions"] == torch_product_options()
         assert data["productOptions"][0].startswith("Iced Tea 10mg — ")
         assert "Seltzer 10mg — Black Cherry 10mg 4-Pack" in data["productOptions"]
+        assert "Field marketing — Strawberry Lemonade 10mg" in data["productOptions"]
         assert "10G — TORCH STRAWBERRY LEMONADE 10G" in data["productOptions"]
         assert "10G — TORCH WATERMELON 10MG" in data["productOptions"]
         assert not any("Sparkling Water" in o for o in data["productOptions"])
