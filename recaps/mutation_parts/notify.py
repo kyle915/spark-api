@@ -7,7 +7,12 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 
-from events.torch_portal import is_torch_tenant, torch_recap_submit_lists
+from events.torch_portal import is_torch_tenant
+from events.torch_retail_routing import (
+    TORCH_RETAIL_IGNITE_OPS,
+    state_code_from_event,
+    torch_retail_recap_emails,
+)
 from recaps import models
 from recaps.envelopes import (
     RecapApprovedNotificationMailer,
@@ -247,16 +252,44 @@ async def _resolve_recap_requestor_recipients(
 def _collect_recap_approved_recipients(
     recap: models.Recap | models.CustomRecap,
 ) -> tuple[list[tuple[str, str]], str]:
-    """Same recipient set as approve-notify: RMM + client-role users +
-    Tenant.recap_recipient_emails + requestor. Returns (recipients, reply_to).
+    """Recipient set for approve-notify. Returns (recipients, reply_to).
 
-    Torch portal recaps use the four-party list (requestor + Liberty +
-    events + Nevena) instead of the RMM / client-role blast.
+    Torch retail uses the by-state sales list (John / Doug / Liberty always,
+    plus market reps). Ryan is weekly-only and never lands here. Portal
+    (request-linked) Torch keeps the requestor + Ignite ops and adds the
+    same by-state Torch list. Other brands keep RMM + client-role +
+    Tenant.recap_recipient_emails + requestor.
     """
-    if is_torch_portal_recap(recap):
-        requestors = [email for email, _first in _collect_requestor_recipients(recap)]
-        to_emails, cc_emails = torch_recap_submit_lists(requestors)
-        recipients = [(email, "") for email in [*to_emails, *cc_emails]]
+    tenant = None
+    try:
+        tenant = recap.event.tenant
+    except Exception:
+        tenant = None
+
+    if is_torch_tenant(tenant):
+        event = recap.event
+        state = state_code_from_event(event)
+        torch_emails = torch_retail_recap_emails(state)
+        recipients: list[tuple[str, str]] = []
+        seen: set[str] = set()
+
+        def _push(email: str | None, first: str | None = None):
+            e = (email or "").strip()
+            if not e or e.lower() in seen:
+                return
+            if is_placeholder_recipient_email(e):
+                return
+            seen.add(e.lower())
+            recipients.append((e, (first or "").strip()))
+
+        for email in torch_emails:
+            _push(email)
+        if is_torch_portal_recap(recap):
+            for email, first in _collect_requestor_recipients(recap):
+                _push(email, first)
+            for email in TORCH_RETAIL_IGNITE_OPS:
+                _push(email)
+            return recipients, "events@igniteproductions.co"
         return recipients, "events@igniteproductions.co"
 
     event = recap.event

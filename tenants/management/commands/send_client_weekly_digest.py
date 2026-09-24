@@ -53,6 +53,8 @@ from django.utils import timezone
 
 from recaps.envelopes import ClientWeeklyDigestMailer
 from recaps.weekly_digest import build_weekly_digest
+from events.torch_portal import is_torch_tenant
+from events.torch_retail_routing import torch_weekly_digest_emails
 from tenants.models import Tenant
 
 logger = logging.getLogger(__name__)
@@ -114,6 +116,10 @@ class Command(BaseCommand):
             enabled += 1
             try:
                 recipients = tenant.scheduled_report_recipients()
+                if is_torch_tenant(tenant):
+                    # Torch weekly rollup goes to the full sales org + Ryan.
+                    # Per-recap mail uses the by-state list without Ryan.
+                    recipients = torch_weekly_digest_emails()
                 if not recipients:
                     skipped_no_recipients += 1
                     self.stdout.write(
