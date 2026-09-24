@@ -272,8 +272,13 @@ class DashboardGraphQLTestCase(EventsGraphQLTestCase):
             created_by=self.get_system_user()
         )
         
-        # Create an upcoming event for recent events test
+        # Create an upcoming event for recent events test. Keep it inside the
+        # current calendar quarter — default eventDashboard filters to that
+        # window, and `today + 7` crosses into the next quarter near Sep 30
+        # (e.g. 2026-09-24 → 2026-10-01) and drops these cans/packs from KPIs.
         future_date = today + timedelta(days=7)
+        if (future_date.month - 1) // 3 != (today.month - 1) // 3:
+            future_date = today
         self.request3 = self.create_request(
             name="Request 3",
             date=future_date,
