@@ -1,4 +1,4 @@
-"""Torch portal recap submit notifies requestor + Liberty + events + Nevena."""
+"""Torch portal recap submit notifies requestor + by-state Torch list + Ignite ops."""
 
 from unittest.mock import AsyncMock, patch
 
@@ -42,10 +42,10 @@ class TestTorchPortalRecapNotify(EventsGraphQLTestCase):
             role=self.roles["spark_admin"],
         )
 
-    def _torch_request(self, requestor_email="buyer@store.com"):
+    def _torch_request(self, requestor_email="buyer@store.com", address="123 Main St"):
         return em.Request.objects.create(
             name="Torch portal demo",
-            address="123 Main St",
+            address=address,
             tenant=self.torch,
             status=self.req_approved,
             request_type=self.request_type,
@@ -62,12 +62,12 @@ class TestTorchPortalRecapNotify(EventsGraphQLTestCase):
             updated_by=self.spark_user,
         )
 
-    def test_portal_linked_recap_uses_four_party_list(self):
-        req = self._torch_request()
+    def test_portal_linked_recap_uses_by_state_plus_ops(self):
+        req = self._torch_request(address="100 Ocean Dr, Miami Beach, FL 33139")
         event = self.create_event(
             name="Torch activation",
             tenant=self.torch,
-            address="123 Main St",
+            address="100 Ocean Dr, Miami Beach, FL 33139",
             request=req,
         )
         recap = self._make_recap(tenant=self.torch, event=event)
@@ -76,8 +76,10 @@ class TestTorchPortalRecapNotify(EventsGraphQLTestCase):
         emails = [e.lower() for e, _ in recipients]
         assert "buyer@store.com" in emails
         assert "liberty@torchdrinks.com" in emails
+        assert "james@torchdrinks.com" in emails
         assert "events@igniteproductions.co" in emails
         assert "nevena@igniteproductions.co" in emails
+        assert "ryanheuser@torchdrinks.com" not in emails
         for blast in (
             "kyle@igniteproductions.co",
             "harris@igniteproductions.co",
@@ -110,12 +112,12 @@ class TestTorchPortalRecapNotify(EventsGraphQLTestCase):
         recap = self._make_recap(tenant=self.girl, event=event, name="GB")
         assert is_torch_portal_recap(recap) is False
 
-    def test_submit_kick_sends_four_party_and_stamps(self):
-        req = self._torch_request()
+    def test_submit_kick_sends_by_state_and_stamps(self):
+        req = self._torch_request(address="100 Ocean Dr, Miami Beach, FL 33139")
         event = self.create_event(
             name="Torch activation",
             tenant=self.torch,
-            address="123 Main St",
+            address="100 Ocean Dr, Miami Beach, FL 33139",
             request=req,
         )
         recap = self._make_recap(tenant=self.torch, event=event)
@@ -141,12 +143,12 @@ class TestTorchPortalRecapNotify(EventsGraphQLTestCase):
             async_to_sync(_kick_torch_portal_recap_submit_notify)(recap, "legacy")
         ensure_pdf.assert_not_called()
         lowered = {e.lower() for e in sent_to}
-        assert lowered == {
-            "buyer@store.com",
-            "liberty@torchdrinks.com",
-            "events@igniteproductions.co",
-            "nevena@igniteproductions.co",
-        }
+        assert "buyer@store.com" in lowered
+        assert "liberty@torchdrinks.com" in lowered
+        assert "james@torchdrinks.com" in lowered
+        assert "events@igniteproductions.co" in lowered
+        assert "nevena@igniteproductions.co" in lowered
+        assert "ryanheuser@torchdrinks.com" not in lowered
         recap.refresh_from_db()
         assert recap.client_notified_at is not None
 
