@@ -209,6 +209,24 @@ def _presets() -> dict[str, list[dict]]:
                 "note": "Tasting note",
             },
         ],
+        # Pivot Energy Drink Event Activation (standing PE- link).
+        # Keys "pivot" and "pivot-energy-drink" both resolve.
+        "pivot": [
+            {
+                "label": "BA Guide",
+                "kind": "pdf",
+                "url": f"{base}/training/pivot-energy-drink/ba-guide.pdf",
+                "note": "Shift checklist and brand Q&A",
+            },
+        ],
+        "pivot-energy-drink": [
+            {
+                "label": "BA Guide",
+                "kind": "pdf",
+                "url": f"{base}/training/pivot-energy-drink/ba-guide.pdf",
+                "note": "Shift checklist and brand Q&A",
+            },
+        ],
     }
 
 
