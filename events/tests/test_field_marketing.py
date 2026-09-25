@@ -70,17 +70,105 @@ class TestFieldMarketing(EventsGraphQLTestCase):
         assert cans["planned"] == 200
         assert cans["logged"] is None
 
-    def test_submit_creates_field_marketing_request(self):
-        event = self._plan(submit=True)
+    def _ensure_event_activation_type(self):
+        return em.RequestType.objects.get_or_create(
+            tenant=self.tenant,
+            name="Event Activation",
+            defaults={"created_by": self.sys},
+        )[0]
+
+    def test_submit_creates_event_activation_request(self):
+        self._ensure_event_activation_type()
+        self._seed_skus()
+        event = self._plan(
+            activity="event_activation",
+            name="Wynwood fest",
+            notes="Sponsorship weekend",
+            sku_names=["Black Cherry 10mg"],
+            needs_field_support=True,
+            ambassador_count=2,
+            support_times="10am load-in",
+            support_scope="Main stage + sampling tent",
+            submit=True,
+        )
         event.refresh_from_db()
         assert event.status == em.FieldMarketingEvent.STATUS_SUBMITTED
         request = event.request
         assert request is not None
-        assert request.request_type.name == "Field Marketing"
+        assert request.request_type.name == "Event Activation"
         assert request.status_id is None
-        assert request.name.startswith("Field marketing ·")
+        assert request.name == "Wynwood fest"
+        assert "Field Marketing" not in request.request_type.name
         assert "Retail Sampling" not in request.request_type.name
+        assert request.load_in_time == "10am load-in"
+        assert request.onsite_poc == "Alec Aparicio"
+        assert "Main stage" in (request.additional_team_details or "")
+        assert request.scheduling_status == em.SchedulingStatus.NEEDS_SCHEDULING
         assert em.RequestActivityLog.objects.filter(request=request).exists()
+        assert em.RequestProduct.objects.filter(request=request).count() == 1
+
+    def test_guerilla_only_books_when_staffed(self):
+        self._ensure_event_activation_type()
+        self._seed_skus()
+        unstaffed = self._plan(
+            activity="guerilla",
+            name="Can handout",
+            sampling_format="full_can",
+            sku_names=["Black Cherry 10mg"],
+            needs_field_support=False,
+            submit=True,
+        )
+        unstaffed.refresh_from_db()
+        assert unstaffed.status == em.FieldMarketingEvent.STATUS_SUBMITTED
+        assert unstaffed.request_id is None
+        assert em.Request.objects.filter(tenant=self.tenant).count() == 0
+
+        staffed = self._plan(
+            activity="guerilla",
+            name="Staffed handout",
+            sampling_format="full_can",
+            sku_names=["Black Cherry 10mg"],
+            needs_field_support=True,
+            ambassador_count=3,
+            submit=True,
+        )
+        staffed.refresh_from_db()
+        assert staffed.request is not None
+        assert staffed.request.request_type.name == "Event Activation"
+        assert staffed.request.name == "Staffed handout"
+
+    def test_seeding_and_sales_support_confirm_plan_without_request(self):
+        self._ensure_event_activation_type()
+        self._seed_skus()
+        seeding = self._plan(
+            activity="product_seeding",
+            name="Drop cases",
+            sku_names=["Black Cherry 10mg"],
+            submit=True,
+        )
+        support = self._plan(
+            activity="sales_support",
+            name="DP meeting",
+            support_type="distributor_meeting",
+            submit=True,
+        )
+        seeding.refresh_from_db()
+        support.refresh_from_db()
+        assert seeding.status == em.FieldMarketingEvent.STATUS_SUBMITTED
+        assert support.status == em.FieldMarketingEvent.STATUS_SUBMITTED
+        assert seeding.request_id is None
+        assert support.request_id is None
+        assert em.Request.objects.filter(tenant=self.tenant).count() == 0
+
+    def test_submit_requires_event_activation_type(self):
+        self._seed_skus()
+        with pytest.raises(FieldMarketingError, match="Event Activation"):
+            self._plan(
+                activity="event_activation",
+                sku_names=["Black Cherry 10mg"],
+                submit=True,
+            )
+        assert em.Request.objects.filter(tenant=self.tenant).count() == 0
 
     def test_pour_samples_do_not_count_as_full_cans(self):
         self._plan(
@@ -301,8 +389,9 @@ class TestFieldMarketing(EventsGraphQLTestCase):
             )
 
     def test_submit_requires_an_address(self):
+        self._ensure_event_activation_type()
         with pytest.raises(FieldMarketingError):
-            self._plan(address="", submit=True)
+            self._plan(activity="event_activation", address="", submit=True)
         assert em.Request.objects.filter(tenant=self.tenant).count() == 0
 
     def test_multi_tenant_admin_uses_active_torch_tenant(self):
