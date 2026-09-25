@@ -31,7 +31,9 @@ from utils.graphql.permissions import StrictIsAuthenticated
 from utils.utils import ROLE_ID, build_mutation_response
 
 TORCH_SLUGS = frozenset({"torch", "torch-thc", "keee-torch-thc"})
-REQUEST_TYPE_NAME = "Field Marketing"
+# Staffed plan rows book as Event Activation — not the old catch-all
+# "Field Marketing" type, and never auto-approve / retail-sheet.
+EVENT_ACTIVATION_TYPE_NAME = "Event Activation"
 _PT = ZoneInfo("America/Los_Angeles")
 
 MARKETS: tuple[tuple[str, str, str, str, str], ...] = (
@@ -664,32 +666,103 @@ def _request_notes(event: models.FieldMarketingEvent) -> str:
     return "\n".join(lines)
 
 
-def _ensure_request_type(tenant, actor):
+def _resolve_event_activation_type(tenant) -> models.RequestType:
+    """Lookup-only — Torch onboard seeds Event Activation; don't invent a type."""
     existing = models.RequestType.objects.filter(
-        tenant=tenant, name=REQUEST_TYPE_NAME
+        tenant=tenant, name=EVENT_ACTIVATION_TYPE_NAME
     ).first()
     if existing:
         return existing
-    return models.RequestType.objects.create(
-        tenant=tenant,
-        name=REQUEST_TYPE_NAME,
-        created_by=actor,
+    raise FieldMarketingError(
+        "Torch is missing an Event Activation request type. "
+        "Ask Ignite to add it before booking from Plans."
     )
+
+
+def _should_create_request(event: models.FieldMarketingEvent) -> bool:
+    """Staffed activations book with Ignite; seeding / sales support stay plan+log."""
+    activity = event.activity
+    if activity in (
+        models.FieldMarketingEvent.ACTIVITY_EVENT_ACTIVATION,
+        models.FieldMarketingEvent.ACTIVITY_SPONSORSHIP,
+    ):
+        return True
+    if activity in (
+        models.FieldMarketingEvent.ACTIVITY_GUERILLA,
+        models.FieldMarketingEvent.ACTIVITY_FULL_CAN,
+        models.FieldMarketingEvent.ACTIVITY_POUR,
+    ):
+        return bool(event.needs_field_support)
+    return False
+
+
+def _market_manager_name(event: models.FieldMarketingEvent) -> str:
+    market = _markets().get(event.market)
+    return market.manager if market else ""
+
+
+def _activation_team_details(event: models.FieldMarketingEvent) -> str:
+    parts: list[str] = []
+    if event.support_scope:
+        parts.append(event.support_scope.strip())
+    if event.sampling_format:
+        parts.append(
+            f"Sampling: {SAMPLING_LABELS.get(event.sampling_format, event.sampling_format)}"
+        )
+    if event.days and event.days > 1:
+        parts.append(f"{event.days} days")
+    if event.sku_names:
+        parts.append("SKUs: " + ", ".join(event.sku_names))
+    if event.needs_field_support and event.ambassador_count:
+        parts.append(f"{event.ambassador_count} brand ambassadors")
+    return " · ".join(parts)[:2000]
+
+
+def _attach_request_products(request: models.Request, event: models.FieldMarketingEvent, actor) -> None:
+    names = [n for n in (event.sku_names or []) if (n or "").strip()]
+    if not names:
+        return
+    products = list(
+        models.Product.objects.filter(tenant=event.tenant, name__in=names)
+    )
+    by_name = {p.name: p for p in products}
+    for name in names:
+        product = by_name.get(name)
+        if product is None:
+            continue
+        models.RequestProduct.objects.get_or_create(
+            request=request,
+            product=product,
+            defaults={"created_by": actor, "tenant": event.tenant},
+        )
 
 
 def _submit_event(event: models.FieldMarketingEvent, actor) -> models.FieldMarketingEvent:
     if event.status == models.FieldMarketingEvent.STATUS_SUBMITTED and event.request_id:
         return event
+    if (
+        event.status == models.FieldMarketingEvent.STATUS_SUBMITTED
+        and not _should_create_request(event)
+    ):
+        return event
+
+    create_request = _should_create_request(event)
+    if not create_request:
+        # Plan-only confirm — seeding / sales support / unstaffed guerilla.
+        event.status = models.FieldMarketingEvent.STATUS_SUBMITTED
+        event.save(update_fields=["status", "updated_at"])
+        return event
+
     address = (event.address or "").strip()
     if not address:
         raise FieldMarketingError("Add an address before submitting this to Ignite.")
-    request_type = _ensure_request_type(event.tenant, actor)
+    request_type = _resolve_event_activation_type(event.tenant)
     when = timezone.make_aware(
         datetime.combine(event.starts_on, time(12, 0)),
         timezone.get_current_timezone(),
     )
     request = models.Request.objects.create(
-        name=f"Field marketing · {event.name}"[:255],
+        name=(event.name or "Event activation")[:255],
         date=when,
         address=address,
         notes=_request_notes(event),
@@ -698,13 +771,22 @@ def _submit_event(event: models.FieldMarketingEvent, actor) -> models.FieldMarke
         tenant=event.tenant,
         created_by=actor,
         scheduling_status=models.SchedulingStatus.NEEDS_SCHEDULING,
+        load_in_time=(event.support_times or "")[:255],
+        onsite_poc=_market_manager_name(event)[:255],
+        additional_team_details=_activation_team_details(event),
+        # Leave event_assets_needed blank — ops fills on the full request form.
     )
+    _attach_request_products(request, event, actor)
     _safe_log(
         request=request,
         kind=models.RequestActivityLog.KIND_CREATED,
         actor_user=actor,
-        summary=f"Field marketing submitted: {event.name}"[:512],
-        metadata={"field_marketing_event": str(event.uuid), "market": event.market},
+        summary=f"Field marketing booked as Event Activation: {event.name}"[:512],
+        metadata={
+            "field_marketing_event": str(event.uuid),
+            "market": event.market,
+            "activity": event.activity,
+        },
     )
     event.request = request
     event.status = models.FieldMarketingEvent.STATUS_SUBMITTED
@@ -994,11 +1076,12 @@ class FieldMarketingMutations:
             raise GraphQLError(str(exc)) from exc
         if input.submit and event.request_id:
             await _notify_ignite(event)
-        message = (
-            "Submitted to Ignite. It is on the tracker as Field Marketing."
-            if input.submit
-            else "Saved to the plan."
-        )
+        if input.submit and event.request_id:
+            message = "Booked with Ignite as Event Activation — pending on the tracker."
+        elif input.submit:
+            message = "Confirmed on the plan (no Ignite request for this tactic)."
+        else:
+            message = "Saved to the plan."
         return build_mutation_response(
             FieldMarketingEventResponse,
             success=True,
@@ -1022,10 +1105,15 @@ class FieldMarketingMutations:
             raise GraphQLError(str(exc)) from exc
         if event.request_id:
             await _notify_ignite(event)
+        message = (
+            "Booked with Ignite as Event Activation — pending on the tracker."
+            if event.request_id
+            else "Confirmed on the plan (no Ignite request for this tactic)."
+        )
         return build_mutation_response(
             FieldMarketingEventResponse,
             success=True,
-            message="Submitted to Ignite. It is on the tracker as Field Marketing.",
+            message=message,
             input_obj=input,
             event=_event_type(event),
         )
