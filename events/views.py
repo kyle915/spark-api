@@ -45,6 +45,7 @@ from django.views.decorators.http import require_http_methods
 
 from events import models
 from tenants.models import Tenant
+from utils.sheets_mirror import upsert_request_row
 
 logger = logging.getLogger(__name__)
 
@@ -268,6 +269,22 @@ def _do_approve(request_obj: models.Request, recipient_email: str) -> None:
                 "public_approval: Event.from_request failed for request_id=%s",
                 request_obj.id,
             )
+
+    # The post_save mirror swallows its own failures, and once an RMM hand-types
+    # a missing row `reconcile_tracker_rows` treats it as a twin and never writes
+    # Spark's row — so retry here and log a miss.
+    try:
+        if not upsert_request_row(request_obj):
+            logger.warning(
+                "public_approval: tracker mirror did not write request_id=%s "
+                "— reconcile_tracker_rows will retry",
+                request_obj.id,
+            )
+    except Exception:
+        logger.exception(
+            "public_approval: tracker mirror raised for request_id=%s",
+            request_obj.id,
+        )
 
     # Notifications use the async helpers defined in events/mutations.py;
     # we step into sync land via async_to_sync so this view stays a plain

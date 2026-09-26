@@ -894,22 +894,22 @@ class EventMutations:
                 _assigned, _state_code, _routed = await sync_to_async(
                     route_request_sync
                 )(request)
-                if _routed:
-                    # route_request_sync persists via .update() (no
-                    # post_save), so re-sync the sheet once with the final
-                    # state + RMM and refresh the request for the response.
-                    request = await sync_to_async(
-                        models.Request.objects.select_related(
-                            "tenant",
-                            "timezone",
-                            "request_type",
-                            "retailer__location__state",
-                            "distributor__location__state",
-                            "state",
-                            "rmm_asigned",
-                        ).get
-                    )(id=request.id)
-                    await sync_to_async(upsert_request_row)(request)
+                # route_request_sync persists via .update() (no post_save), so
+                # re-sync the sheet with the final state + RMM. Unconditional:
+                # _routed=False (nothing stamped) is when the row is most
+                # likely missing.
+                request = await sync_to_async(
+                    models.Request.objects.select_related(
+                        "tenant",
+                        "timezone",
+                        "request_type",
+                        "retailer__location__state",
+                        "distributor__location__state",
+                        "state",
+                        "rmm_asigned",
+                    ).get
+                )(id=request.id)
+                await sync_to_async(upsert_request_row)(request)
             except Exception:
                 logger.warning(
                     "internal RMM routing failed for request=%s",
@@ -2671,18 +2671,19 @@ class PublicRequestMutations:
                 _a, _c, _routed = await sync_to_async(route_request_sync)(
                     request_with_relations
                 )
-                if _routed:
-                    request_with_relations = await sync_to_async(
-                        models.Request.objects.select_related(
-                            "tenant", "timezone", "request_type",
-                            "retailer__location__state",
-                            "distributor__location__state",
-                            "state", "rmm_asigned",
-                        ).get
-                    )(id=request_with_relations.id)
-                    from utils.sheets_mirror import upsert_request_row
+                # Re-sync unconditionally: _routed=False (nothing stamped, e.g.
+                # state never resolved) is when the row is most likely missing.
+                request_with_relations = await sync_to_async(
+                    models.Request.objects.select_related(
+                        "tenant", "timezone", "request_type",
+                        "retailer__location__state",
+                        "distributor__location__state",
+                        "state", "rmm_asigned",
+                    ).get
+                )(id=request_with_relations.id)
+                from utils.sheets_mirror import upsert_request_row
 
-                    await sync_to_async(upsert_request_row)(request_with_relations)
+                await sync_to_async(upsert_request_row)(request_with_relations)
             except Exception:
                 logger.warning(
                     "external-form state stamp failed for request=%s",
