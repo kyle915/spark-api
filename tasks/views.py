@@ -60,6 +60,13 @@ def _secret_ok(request: HttpRequest) -> bool:
     return hmac.compare_digest(str(provided), str(expected))
 
 
+def _cloud_tasks_retry_count(request: HttpRequest) -> int:
+    try:
+        return int(request.headers.get("X-CloudTasks-TaskRetryCount", "0") or 0)
+    except ValueError:
+        return 0
+
+
 @csrf_exempt
 @require_http_methods(["POST"])
 async def recap_approved_notify_view(request: HttpRequest) -> HttpResponse:
@@ -96,6 +103,18 @@ async def recap_approved_notify_view(request: HttpRequest) -> HttpResponse:
     recap_id = body.get("recap_id")
     recap_kind = body.get("recap_kind")
     html_only = bool(body.get("html_only"))
+    # This view always answers 200, so Cloud Tasks only retries when the last
+    # attempt never answered — the instance died (PDF render OOM). Retrying the
+    # PDF crashes every request on the new instance too, so send link-only.
+    retry_count = _cloud_tasks_retry_count(request)
+    if retry_count > 0 and not html_only:
+        logger.warning(
+            "recap-approved-notify: retry %s for %s recap=%s — sending link-only",
+            retry_count,
+            recap_kind,
+            recap_id,
+        )
+        html_only = True
     if not isinstance(recap_id, int) or recap_kind not in ("legacy", "custom"):
         logger.warning(
             "recap-approved-notify: bad payload recap_id=%r recap_kind=%r",
