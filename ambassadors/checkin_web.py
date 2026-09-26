@@ -821,12 +821,11 @@ def existing_shift_event_for(*, ambassador, tenant, on_date, address: str = ""):
 
     if address:
         key = normalize_place(address)
-        core = address_core_key(address)
         for ev in events:
             ev_addr = ev.address or ""
             if key and normalize_place(ev_addr) == key:
                 return ev
-            if core and address_core_key(ev_addr) == core:
+            if addresses_fuzzy_match(address, ev_addr):
                 return ev
         # Typed a different store on the same day — mint/join that activation,
         # don't hijack the first clock-in (LD: Walmart then 7-Eleven).
@@ -2146,11 +2145,10 @@ def suggest_store_matches(tenant, name: str, address: str, limit: int = 8) -> li
     for retailer in Retailer.objects.filter(tenant=tenant):
         rname = normalize_place(retailer.name or "")
         raddr = normalize_place(retailer.address or "")
-        rcore = address_core_key(retailer.address or "")
         if addr_n and raddr and addr_n == raddr:
             _add(retailer, 95, "Maybe this store — same address", "store")
             continue
-        if addr_core and rcore and addr_core == rcore:
+        if addr_core and addresses_fuzzy_match(address, retailer.address or ""):
             _add(retailer, 82, "Maybe this store — same street", "store")
         overlap = name_tokens & set(rname.split()) if rname else set()
         if len(overlap) >= 2:
@@ -2173,7 +2171,7 @@ def suggest_store_matches(tenant, name: str, address: str, limit: int = 8) -> li
         req_name = row.retailer_name or getattr(row.retailer, "name", "") or ""
         if addr_n and normalize_place(req_addr) == addr_n:
             _add(row.retailer, 92, "On the Account Map at this address", "store")
-        elif addr_core and address_core_key(req_addr) == addr_core:
+        elif addr_core and addresses_fuzzy_match(address, req_addr):
             _add(row.retailer, 80, "On the Account Map — same street", "store")
         elif name_tokens and len(name_tokens & set(normalize_place(req_name).split())) >= 2:
             _add(row.retailer, 60, "On the Account Map / Master Tracker", "store")
