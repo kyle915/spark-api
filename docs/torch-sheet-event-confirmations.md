@@ -43,7 +43,7 @@ already has a header.
 |-----|--------|------|------|
 | **Y** | **Send Confirmation** | checkbox | Trigger confirmation email |
 | **Z** | **Cancel Confirmation** | checkbox | Trigger cancel email (if previously Sent) |
-| **AA** | **Force Resend** | checkbox | Sticky. Leave this for BA swaps (API compatibility). Do not use it for “didn’t get the email” — if it stays checked, the next Send double-emails. |
+| **AA** | **Force Resend** | checkbox | Sticky compatibility flag. Prefer Cancel → new BA → Send (no Force) after a swap; Force is only needed to re-email the *same* BA. If left checked, the next Send double-emails. |
 | AB | Confirmation Status | text | `Queued` → `Sent` → `Cancelled` / `Error` |
 | AC | Confirmation Sent At | text | Local stamp when Sent |
 | AD | Confirmation Error | text | Geocode fallback note or error |
@@ -64,7 +64,7 @@ Request Type, but at different letters (those tabs do not have column O).
 2. Check **Send Confirmation** → BA gets the same staffing@ confirmation as the admin tab (training from tenant `checkin_resources`, clock/recap → `client…/checkin/TH-2HRV3D`). Reminders (24h / 3h) stay on.
 3. **Unchecking Send does nothing** — it never cancels.
 4. **Cancel:** check **Cancel Confirmation**. If status was Sent, BA gets “this sampling has been cancelled”; reminders stop; status → Cancelled.
-5. **Swap BA:** Cancel (or cancel checkbox) → change BA Name + Email → check **Force Resend** + **Send Confirmation**. Force Resend stays checked until you uncheck it.
+5. **Swap BA:** Cancel (or cancel checkbox) → change BA Name + Email → check **Send Confirmation** only. No Force Resend needed after Cancel. If you overwrite BA Email on a still-Sent row without Cancel, Send also emails the new BA (email change is detected). Leave Force Resend unchecked so the next Send does not double-email.
 6. **BA didn’t get the confirmation:** check **Resend Confirmation** only. That force-sends once (`resend: true`), then the box clears itself. Do not also check Force Resend.
 7. **Tomorrow bulk:** menu **Spark Confirmations → Send confirmations for tomorrow** (checks Send on eligible tomorrow rows missing Sent).
 
@@ -138,12 +138,13 @@ Do not spam real BAs while wiring the script.
 | (empty) | Send | Queued → Sent (or Error) |
 | **Queued** (mail already left, stamp failed) | Send (no Force) | **Sent** stamped, **no new email** (`alreadySent: true`) when an `EventConfirmation` + booked send exists for the row UUID or BA email+date |
 | Queued (no confirmation found) | Send (no Force) | **409** with clear “do not Force Resend” message |
-| Sent | Send (no Force) | refused (409) |
+| Sent | Send (no Force, same BA) | refused (409) |
+| Sent | Send (no Force, **BA Email changed**) | new confirmation + email to the new BA |
 | Sent | Force + Send | new confirmation + email (sticky — uncheck Force Resend after) |
 | Sent | **Resend Confirmation** | new confirmation + email once (`resend: true`); checkbox clears |
 | Sent | Cancel | Cancelled (+ cancel email) |
 | (never Sent) | Cancel | Cancelled, **no** email |
-| Cancelled | Send (no Force) | refused |
+| Cancelled | Send (no Force) | Queued → Sent (emails current BA — BA-swap path) |
 | Any | Uncheck Send | no-op |
 
 **Stuck Queued:** Prefer re-checking Send after this finalize path is live. Do **not** Force Resend — that emails the BA again. If finalize cannot find a confirmation, set Status / column O to Sent manually once delivery is confirmed.

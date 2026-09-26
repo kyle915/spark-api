@@ -349,6 +349,32 @@ def _norm_status(raw: str | None) -> str:
     return (raw or "").strip().lower()
 
 
+def _ba_replaced_since_last_send(payload: SheetRowPayload) -> bool:
+    """True when the sheet BA email no longer matches the last confirmation.
+
+    Ops often overwrite BA Name/Email on a Sent row and check Send without
+    Cancel + Force Resend. Comparing emails lets that path through for the
+    new BA only.
+    """
+    from events.models import EventConfirmation
+
+    row_email = (payload.ba_email or "").strip().lower()
+    if not row_email or "@" not in row_email:
+        return False
+    uuid_str = (payload.confirmation_uuid or "").strip()
+    if not uuid_str:
+        return False
+    prior = (
+        EventConfirmation.objects.filter(uuid=uuid_str)
+        .only("ba_email")
+        .first()
+    )
+    if prior is None:
+        return False
+    prior_email = (prior.ba_email or "").strip().lower()
+    return bool(prior_email) and prior_email != row_email
+
+
 def _already_sent(payload: SheetRowPayload) -> bool:
     status = _norm_status(payload.confirmation_status)
     sent = _norm_status(payload.sent_status)
@@ -967,26 +993,30 @@ def send_from_sheet_row(payload: SheetRowPayload) -> ActionResult:
     """Idempotent send path for one sheet row."""
     validate_sheet_id(payload.sheet_id)
 
-    if _already_cancelled(payload) and not payload.force_resend:
-        return ActionResult(
-            ok=False,
-            action="send",
-            status=STATUS_CANCELLED,
-            message="Row is Cancelled — check Force Resend to send again",
-        )
+    # Cancelled means the previous booking is void. A fresh Send (after a BA
+    # swap or a reinstated demo) should email the row's current BA without
+    # requiring Force Resend — that sticky checkbox was blocking the common
+    # Cancel → change BA → Send path and leaving the new BA without mail.
+    # Force Resend stays required only for Already Sent (same BA, second email).
 
     if _already_sent(payload) and not payload.force_resend:
-        return ActionResult(
-            ok=False,
-            action="send",
-            status=STATUS_SENT,
-            message=(
-                "Already Sent — do not Force Resend unless the BA never "
-                "got mail and you intend a second email"
-            ),
-            confirmation_uuid=payload.confirmation_uuid,
-            details={"already_sent": True, "blocked": "sent"},
-        )
+        if _ba_replaced_since_last_send(payload):
+            # Same row UUID/status still say Sent, but BA Email changed.
+            # Treat like a fresh booking for the new BA (no Force Resend).
+            pass
+        else:
+            return ActionResult(
+                ok=False,
+                action="send",
+                status=STATUS_SENT,
+                message=(
+                    "Already Sent — check Resend Confirmation if this BA "
+                    "never got mail (or Force Resend). After a BA swap, "
+                    "Cancel first then Send to the new BA."
+                ),
+                confirmation_uuid=payload.confirmation_uuid,
+                details={"already_sent": True, "blocked": "sent"},
+            )
 
     if _already_queued(payload) and not payload.force_resend:
         # Stuck Queued after a successful email + failed Sent stamp: re-stamp

@@ -50,7 +50,7 @@ are expected at **AB–AI**:
 | **AB** | **Event Confirmation Sent?** | text | Human-readable Sent / Cancelled stamp |
 | **AC** | **Send Confirmation** | checkbox | Trigger confirmation email |
 | **AD** | **Cancel Confirmation** | checkbox | Trigger cancel email (if previously Sent) |
-| **AE** | **Force Resend** | checkbox | Sticky. BA swaps only. If left checked, the next Send double-emails. |
+| **AE** | **Force Resend** | checkbox | Sticky compatibility flag. Prefer Cancel → new BA → Send (no Force) after a swap; Force is only needed to re-email the *same* BA. If left checked, the next Send double-emails. |
 | AF | Confirmation Status | text | `Queued` → `Sent` → `Cancelled` / `Error` |
 | AG | Confirmation Sent At | text | Local stamp when Sent |
 | AH | Confirmation Error | text | Geocode fallback note or error |
@@ -73,8 +73,10 @@ existing columns (including **SEND** at U).
 3. **Unchecking Send does nothing** — it never cancels.
 4. **Cancel:** check **Cancel Confirmation**. If status was Sent, BA gets
    “this sampling has been cancelled”; reminders stop; status → Cancelled.
-5. **Swap BA:** Cancel → change BA Name + Email → check **Force Resend** +
-   **Send Confirmation**. Uncheck Force Resend afterward.
+5. **Swap BA:** Cancel → change BA Name + Email → check **Send Confirmation**
+   only. No Force Resend needed after Cancel. Overwriting BA Email on a
+   still-Sent row also lets Send email the new BA. Leave Force Resend
+   unchecked so the next Send does not double-email.
 6. **BA didn’t get the confirmation:** check **Resend Confirmation** only.
    That force-sends once (`resend: true`), then the box clears itself.
    Do not also check Force Resend.
@@ -164,12 +166,13 @@ Same as Torch (`docs/torch-sheet-event-confirmations.md`):
 | (empty) | Send | Queued → Sent (or Error) |
 | **Queued** (mail already left, stamp failed) | Send (no Force) | **Sent** stamped, **no new email** (`alreadySent: true`) when an `EventConfirmation` + booked send exists |
 | Queued (no confirmation found) | Send (no Force) | **409** — do not Force Resend |
-| Sent | Send (no Force) | refused (409) |
+| Sent | Send (no Force, same BA) | refused (409) |
+| Sent | Send (no Force, **BA Email changed**) | new confirmation + email to the new BA |
 | Sent | Force + Send | new confirmation + email (sticky — uncheck Force Resend after) |
 | Sent | **Resend Confirmation** | new confirmation + email once (`resend: true`); checkbox clears |
 | Sent | Cancel | Cancelled (+ cancel email) |
 | (never Sent) | Cancel | Cancelled, **no** email |
-| Cancelled | Send (no Force) | refused |
+| Cancelled | Send (no Force) | Queued → Sent (emails current BA — BA-swap path) |
 | Any | Uncheck Send | no-op |
 
 ---
