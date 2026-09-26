@@ -37,9 +37,9 @@
  *   - Unchecking Send does nothing (never cancels).
  *   - BA didn't get mail: check **Resend Confirmation** (one-shot). Do not
  *     leave Force Resend checked.
- *   - Swap BA: Cancel (or Cancel checkbox) → update BA Name+Email → Send
- *     Confirmation again (no Force Resend). Overwriting Email on a Sent row
- *     also emails the new BA.
+ *   - Swap BA: Cancel (or Cancel checkbox) → update BA Name+Email → check
+ *     Resend Confirmation. Editing Email alone sends nothing (only checkbox
+ *     edits POST), and Send is usually still TRUE from the first send.
  *   - Menu Spark Confirmations → Send confirmations for tomorrow (bulk).
  */
 

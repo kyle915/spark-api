@@ -73,10 +73,11 @@ existing columns (including **SEND** at U).
 3. **Unchecking Send does nothing** — it never cancels.
 4. **Cancel:** check **Cancel Confirmation**. If status was Sent, BA gets
    “this sampling has been cancelled”; reminders stop; status → Cancelled.
-5. **Swap BA:** Cancel → change BA Name + Email → check **Send Confirmation**
-   only. No Force Resend needed after Cancel. Overwriting BA Email on a
-   still-Sent row also lets Send email the new BA. Leave Force Resend
-   unchecked so the next Send does not double-email.
+5. **Swap BA:** Cancel → change BA Name + Email → check **Resend
+   Confirmation** (one-shot, clears itself). Editing the Email cell alone
+   sends nothing — only checkbox edits reach Spark — and Send is usually
+   still checked from the first send, so checking it again is a no-op.
+   Leave Force Resend unchecked.
 6. **BA didn’t get the confirmation:** check **Resend Confirmation** only.
    That force-sends once (`resend: true`), then the box clears itself.
    Do not also check Force Resend.
