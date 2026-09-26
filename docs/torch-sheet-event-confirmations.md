@@ -64,7 +64,7 @@ Request Type, but at different letters (those tabs do not have column O).
 2. Check **Send Confirmation** → BA gets the same staffing@ confirmation as the admin tab (training from tenant `checkin_resources`, clock/recap → `client…/checkin/TH-2HRV3D`). Reminders (24h / 3h) stay on.
 3. **Unchecking Send does nothing** — it never cancels.
 4. **Cancel:** check **Cancel Confirmation**. If status was Sent, BA gets “this sampling has been cancelled”; reminders stop; status → Cancelled.
-5. **Swap BA:** Cancel (or cancel checkbox) → change BA Name + Email → check **Send Confirmation** only. No Force Resend needed after Cancel. If you overwrite BA Email on a still-Sent row without Cancel, Send also emails the new BA (email change is detected). Leave Force Resend unchecked so the next Send does not double-email.
+5. **Swap BA:** Cancel (or cancel checkbox) → change BA Name + Email → check **Resend Confirmation** (one-shot, clears itself). Editing the Email cell alone sends nothing — only checkbox edits reach Spark — and Send is usually still checked from the first send, so checking it again is a no-op. Leave Force Resend unchecked.
 6. **BA didn’t get the confirmation:** check **Resend Confirmation** only. That force-sends once (`resend: true`), then the box clears itself. Do not also check Force Resend.
 7. **Tomorrow bulk:** menu **Spark Confirmations → Send confirmations for tomorrow** (checks Send on eligible tomorrow rows missing Sent).
 
