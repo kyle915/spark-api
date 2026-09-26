@@ -27,6 +27,24 @@ def test_should_embed_recap_file_accepts_heic_extension():
     assert should_embed_recap_file(recap_file) is True
 
 
+def test_should_embed_recap_file_skips_video_with_image_file_type():
+    recap_file = SimpleNamespace(
+        file_type=SimpleNamespace(extension="img", name="Image"),
+        url="checkin/abc/activation.MOV",
+    )
+
+    assert should_embed_recap_file(recap_file) is False
+
+
+def test_should_embed_recap_file_keeps_photo_with_image_file_type():
+    recap_file = SimpleNamespace(
+        file_type=SimpleNamespace(extension="img", name="Image"),
+        url="checkin/abc/booth.jpg",
+    )
+
+    assert should_embed_recap_file(recap_file) is True
+
+
 def test_detect_image_type_identifies_heic_signature():
     assert detect_image_type(HEIC_SAMPLE_BYTES) == "heic"
 

@@ -275,7 +275,9 @@ def _render_and_store_recap_pdf_sync(recap, user=None, *, force: bool = False):
         }
 
     if candidates:
-        with _cf.ThreadPoolExecutor(max_workers=16) as pool:
+        # Each full-res phone photo decodes to ~70–150 MB before downscale;
+        # keep the in-flight count low enough to stay under the 2 GiB instance.
+        with _cf.ThreadPoolExecutor(max_workers=4) as pool:
             for entry in pool.map(_fetch_one, candidates):
                 if entry is not None:
                     image_entries.append(entry)

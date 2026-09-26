@@ -90,6 +90,9 @@ def _spark_mark_src(*, invert: bool = False) -> str:
 
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif"}
+NON_EMBEDDABLE_EXTENSIONS = {
+    ".mov", ".mp4", ".m4v", ".avi", ".webm", ".3gp", ".mkv", ".hevc", ".pdf",
+}
 HEIF_BRANDS = {
     b"heic",
     b"heix",
@@ -140,6 +143,10 @@ def should_embed_recap_file(recap_file) -> bool:
 
     if _normalize_ext(url_ext) in IMAGE_EXTENSIONS:
         return True
+    # A video in a photo+video bucket carries an image FileType; downloading
+    # it whole for the PDF is what runs the instance out of memory.
+    if _normalize_ext(url_ext) in NON_EMBEDDABLE_EXTENSIONS:
+        return False
     if _normalize_ext(type_ext) in IMAGE_EXTENSIONS:
         return True
 
@@ -344,6 +351,9 @@ def downscale_image_bytes(
     try:
         register_heif_opener()
         with Image.open(BytesIO(data)) as im:
+            # JPEG can decode straight at a reduced scale — avoids holding the
+            # full-res bitmap (a 48 MP photo is ~150 MB decoded).
+            im.draft("RGB", (max_dim, max_dim))
             im = ImageOps.exif_transpose(im)  # honor rotation before resize
             longest = max(im.size)
             if longest > max_dim:
