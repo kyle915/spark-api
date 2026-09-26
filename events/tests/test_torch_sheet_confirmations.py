@@ -138,8 +138,71 @@ def test_send_idempotent_refuses_already_sent():
     result = send_from_sheet_row(payload)
     assert result.ok is False
     assert "Already Sent" in result.message
-    assert "Force Resend" in result.message
     assert result.details.get("already_sent") is True
+
+
+def test_send_after_cancelled_does_not_require_force_resend():
+    """BA swap path: Cancel → new BA → Send (no Force Resend checkbox)."""
+    payload = SheetRowPayload(
+        row_number=231,
+        confirmation_status=STATUS_CANCELLED,
+        confirmation_uuid="01a0d8b1-c262-7dad-8eb2-2b0cb8c3ae2b",
+        ba_name="Lois Brown",
+        ba_email="loisshafer@hotmail.com",
+        date="Sep 26, 2026",
+        start_time="2p",
+        end_time="5p",
+        store_name="Total Wine & More (Alliance)",
+        address="3101 Texas Sage Trail, Fort Worth, TX 76177",
+        state="TX",
+        dry_run=True,
+    )
+    fake_tenant = type("T", (), {"slug": "keee-torch-thc", "id": 17, "name": "Torch"})()
+    with patch(
+        "events.sheet_event_confirmations.resolve_timezone_for_row",
+        return_value=("America/Chicago", ""),
+    ), patch(
+        "events.sheet_event_confirmations._tenant_for",
+        return_value=fake_tenant,
+    ):
+        result = send_from_sheet_row(payload)
+    assert result.ok is True
+    assert result.dry_run is True
+    assert "loisshafer@hotmail.com" in result.message
+
+
+def test_send_when_ba_email_changed_bypasses_sent_guard():
+    """Sent row whose BA Email was overwritten should email the new BA."""
+    payload = SheetRowPayload(
+        row_number=50,
+        confirmation_status=STATUS_SENT,
+        confirmation_uuid="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        ba_name="Lois Brown",
+        ba_email="loisshafer@hotmail.com",
+        date="Sep 26, 2026",
+        start_time="2p",
+        end_time="5p",
+        store_name="Store",
+        address="3101 Texas Sage Trail, Fort Worth, TX 76177",
+        state="TX",
+        dry_run=True,
+    )
+    prior = type("C", (), {"ba_email": "oldba@example.com"})()
+    fake_tenant = type("T", (), {"slug": "keee-torch-thc", "id": 17, "name": "Torch"})()
+    with patch(
+        "events.models.EventConfirmation.objects.filter"
+    ) as filt, patch(
+        "events.sheet_event_confirmations.resolve_timezone_for_row",
+        return_value=("America/Chicago", ""),
+    ), patch(
+        "events.sheet_event_confirmations._tenant_for",
+        return_value=fake_tenant,
+    ):
+        filt.return_value.only.return_value.first.return_value = prior
+        result = send_from_sheet_row(payload)
+    assert result.ok is True
+    assert result.dry_run is True
+    assert "loisshafer@hotmail.com" in result.message
 
 
 def test_send_queued_finalizes_when_confirmation_already_mailed():
