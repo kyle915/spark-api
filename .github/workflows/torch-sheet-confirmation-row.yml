@@ -1,0 +1,126 @@
+name: Torch sheet confirmation (one row)
+
+# Manually POSTs /internal/torch-sheet-event-confirmation for one retail
+# schedule row (values_json from the sheet). Use resend=true after a BA swap
+# or when Force Resend is false but the BA still needs mail.
+#
+# MANUAL one-off — only workflow_dispatch. Secret-gated via X-Cron-Secret.
+
+on:
+  workflow_dispatch:
+    inputs:
+      row_number:
+        description: "Sheet data row number (>= 2)."
+        required: true
+        type: string
+      values_json:
+        description: "JSON object of sheet header→value cells for this row."
+        required: true
+        type: string
+      resend:
+        description: "Force-send once (same bypass as Force Resend / Resend Confirmation)."
+        required: true
+        default: true
+        type: boolean
+      dry_run:
+        description: "Validate only — no email, no sheet stamp."
+        required: true
+        default: false
+        type: boolean
+      sheet_id:
+        description: "Torch spreadsheet id (default = live retail schedule)."
+        required: false
+        default: "1kAvZhy2B9HoeSS-qjKXve8JWUV1oBxDqnhs1-7dQUYw"
+        type: string
+
+jobs:
+  fire-torch-sheet-confirmation-row:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: POST torch-sheet-event-confirmation
+        env:
+          API_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/torch-sheet-event-confirmation
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          ROW_NUMBER: ${{ github.event.inputs.row_number }}
+          VALUES_JSON: ${{ github.event.inputs.values_json }}
+          RESEND: ${{ github.event.inputs.resend }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+          SHEET_ID: ${{ github.event.inputs.sheet_id }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          if [ -z "$VALUES_JSON" ]; then
+            echo "::error::values_json is required."
+            exit 1
+          fi
+
+          python3 - <<'PY'
+          import json, os, sys, urllib.request, urllib.error
+
+          row = int(os.environ["ROW_NUMBER"])
+          if row < 2:
+              print("::error::row_number must be >= 2", file=sys.stderr)
+              sys.exit(1)
+
+          try:
+              values = json.loads(os.environ["VALUES_JSON"])
+          except json.JSONDecodeError as exc:
+              print(f"::error::values_json is not valid JSON: {exc}", file=sys.stderr)
+              sys.exit(1)
+          if not isinstance(values, dict):
+              print("::error::values_json must be a JSON object", file=sys.stderr)
+              sys.exit(1)
+
+          body = {
+              "action": "send",
+              "rowNumber": row,
+              "sheetId": (os.environ.get("SHEET_ID") or "").strip(),
+              "dryRun": os.environ.get("DRY_RUN") == "true",
+              "resend": os.environ.get("RESEND") == "true",
+              "values": values,
+          }
+          raw = json.dumps(body).encode("utf-8")
+          req = urllib.request.Request(
+              os.environ["API_URL"],
+              data=raw,
+              method="POST",
+              headers={
+                  "Content-Type": "application/json",
+                  "X-Cron-Secret": os.environ["CRON_SECRET"],
+              },
+          )
+          try:
+              with urllib.request.urlopen(req, timeout=120) as resp:
+                  status = resp.status
+                  resp_body = resp.read().decode("utf-8", errors="replace")
+          except urllib.error.HTTPError as exc:
+              status = exc.code
+              resp_body = exc.read().decode("utf-8", errors="replace")
+
+          print(f"HTTP {status}")
+          print("----- response -----")
+          try:
+              data = json.loads(resp_body)
+              print(json.dumps(data, indent=2))
+          except json.JSONDecodeError:
+              print(resp_body[:4000])
+              data = {}
+          print("--------------------")
+
+          ok = bool(data.get("ok"))
+          msg = str(data.get("message") or "")
+          email = str(values.get("Email") or values.get("email") or "")
+          if email and email.lower() in msg.lower():
+              print(f"message mentions BA email: {email}")
+          elif email:
+              print(f"::warning::response message did not mention {email}")
+
+          if status != 200 or not ok:
+              print("::error::confirmation send failed — see body above.")
+              sys.exit(1)
+          print("ok=true")
+          PY
