@@ -895,12 +895,9 @@ class EventMutations:
                     route_request_sync
                 )(request)
                 # route_request_sync persists via .update() (no post_save), so
-                # re-sync the sheet with the final state + RMM and refresh the
-                # request for the response. Done UNCONDITIONALLY rather than
-                # `if _routed:` — changed=False just means routing stamped
-                # nothing, which is precisely when the row is most likely to be
-                # missing, and gating on it left those requests relying solely
-                # on the post_save mirror (which swallows its own failures).
+                # re-sync the sheet with the final state + RMM. Unconditional:
+                # _routed=False (nothing stamped) is when the row is most
+                # likely missing.
                 request = await sync_to_async(
                     models.Request.objects.select_related(
                         "tenant",
@@ -2674,18 +2671,8 @@ class PublicRequestMutations:
                 _a, _c, _routed = await sync_to_async(route_request_sync)(
                     request_with_relations
                 )
-                # Re-sync UNCONDITIONALLY — not only when routing changed a
-                # field. `route_request_sync` reports changed=False whenever it
-                # stamps nothing, which is exactly the case for a request whose
-                # state never resolved. Gating the re-sync on it meant those
-                # requests got no second attempt and depended entirely on the
-                # post_save mirror — whose failure `upsert_request_row` swallows
-                # into a warning only readable via gcloud. Liquid Death's
-                # REQ-1581/1582/1583/1589/1515 all sat off MASTER_Tracker until
-                # an RMM hand-typed them, at which point the reconciler treats
-                # the hand-typed row as a twin and suppresses Spark's row for
-                # good. An unconditional retry here costs one Sheets round-trip
-                # on a path that already does several.
+                # Re-sync unconditionally: _routed=False (nothing stamped, e.g.
+                # state never resolved) is when the row is most likely missing.
                 request_with_relations = await sync_to_async(
                     models.Request.objects.select_related(
                         "tenant", "timezone", "request_type",

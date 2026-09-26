@@ -1,18 +1,8 @@
 """Email-link approval must retry the tracker mirror, and say so when it misses.
 
-The public approval path (`/request/approve/<token>` → `_do_approve`) used to
-rely entirely on the Request `post_save` signal to mirror the row into the
-tenant's Master Tracker. `upsert_request_row` swallows every failure into a
-warning that on Cloud Run is only readable via gcloud, so a dropped row left no
-trace anywhere the app surfaces.
-
-That gap is expensive on a client-facing sheet: an RMM who doesn't see the
-activation types it in by hand, and once a hand-typed twin exists
-`reconcile_tracker_rows` correctly refuses to duplicate it — so Spark's row is
-suppressed permanently. Liquid Death's REQ-1515/1581/1582/1583/1589 all ended up
-that way (confirmed by the reconciler: `missing=5 written=0 twins=5`).
-
-So `_do_approve` now retries the mirror explicitly and LOGS a miss.
+`upsert_request_row` swallows its own failures, and once an RMM hand-types a
+missing row `reconcile_tracker_rows` treats it as a twin and never writes
+Spark's row. So `_do_approve` retries the mirror explicitly and logs a miss.
 """
 
 from __future__ import annotations
@@ -23,6 +13,7 @@ from unittest.mock import patch
 import pytest
 
 from events import models as event_models
+from events import views as views_module
 from events.tests.base import EventsGraphQLTestCase
 
 
@@ -64,57 +55,45 @@ class TestPublicApprovalMirrorsTracker(EventsGraphQLTestCase):
         )
 
     def test_approval_retries_the_mirror(self):
-        """The explicit retry runs even though post_save already fired — that
-        second attempt is the whole point."""
-        from events.views import _do_approve
-
+        """The explicit retry runs even though post_save already attempted it."""
         req = self._pending_request()
-        with patch(
-            "utils.sheets_mirror.upsert_request_row", return_value=True
-        ) as mirror:
-            _do_approve(req, "rmm@example.com")
+        with patch("utils.sheets_mirror.upsert_request_row", return_value=True), patch(
+            "events.views.upsert_request_row", return_value=True
+        ) as retry:
+            views_module._do_approve(req, "rmm@example.com")
 
-        assert mirror.called, "approval must attempt the tracker mirror"
-        # post_save fires once on save(); the explicit retry is an ADDITIONAL
-        # attempt, so a single call would mean the retry never ran.
-        assert mirror.call_count >= 2, (
-            f"expected post_save + explicit retry, got {mirror.call_count} call(s)"
-        )
-        assert mirror.call_args[0][0].id == req.id
+        assert retry.call_count == 1, "approval must retry the tracker mirror"
+        assert retry.call_args[0][0].id == req.id
 
     def test_a_silent_miss_is_logged(self):
         """A mirror that returns False must leave a trace naming the request.
 
         Asserted on the module logger rather than caplog: the app's LOGGING
-        config stops `events.views` records propagating to pytest's handler, so
-        caplog sees nothing even though the warning is emitted."""
-        from events import views as views_module
-
+        config stops `events.views` records propagating to pytest's handler."""
         req = self._pending_request()
-        with patch.object(views_module.logger, "warning") as warn:
-            with patch("utils.sheets_mirror.upsert_request_row", return_value=False):
-                _do_approve = views_module._do_approve
-                _do_approve(req, "rmm@example.com")
+        with patch.object(views_module.logger, "warning") as warn, patch(
+            "utils.sheets_mirror.upsert_request_row", return_value=False
+        ), patch("events.views.upsert_request_row", return_value=False):
+            views_module._do_approve(req, "rmm@example.com")
 
         misses = [
             c for c in warn.call_args_list
             if "tracker mirror did not write" in str(c.args[0])
         ]
         assert misses, "a dropped row must be logged, not swallowed silently"
-        # The id is what makes the log actionable — without it you cannot tell
-        # which activation to chase.
         assert req.id in misses[0].args
 
     def test_a_raising_mirror_never_breaks_approval(self):
         """A Sheets outage must not stop the client's approval going through."""
-        from events.views import _do_approve
-
         req = self._pending_request()
         with patch(
             "utils.sheets_mirror.upsert_request_row",
             side_effect=RuntimeError("Sheets 500"),
+        ), patch(
+            "events.views.upsert_request_row",
+            side_effect=RuntimeError("Sheets 500"),
         ):
-            _do_approve(req, "rmm@example.com")
+            views_module._do_approve(req, "rmm@example.com")
 
         req.refresh_from_db()
         assert (req.status.slug or "").lower() == "approved"

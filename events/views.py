@@ -45,6 +45,7 @@ from django.views.decorators.http import require_http_methods
 
 from events import models
 from tenants.models import Tenant
+from utils.sheets_mirror import upsert_request_row
 
 logger = logging.getLogger(__name__)
 
@@ -269,18 +270,10 @@ def _do_approve(request_obj: models.Request, recipient_email: str) -> None:
                 request_obj.id,
             )
 
-    # Belt-and-braces tracker mirror. The post_save from `.save()` above already
-    # attempts this, but `upsert_request_row` swallows every failure into a
-    # warning that on Cloud Run is only readable via gcloud — so a dropped row
-    # leaves no trace and the client just sees nothing. That gap is expensive
-    # here: an RMM who doesn't see the activation hand-types it, and once a
-    # hand-typed twin exists `reconcile_tracker_rows` correctly refuses to
-    # duplicate it, so Spark's row is suppressed for good. Liquid Death's
-    # REQ-1515/1581/1582/1583/1589 all ended up that way. Retry once and LOG the
-    # outcome so a miss stops being invisible.
+    # The post_save mirror swallows its own failures, and once an RMM hand-types
+    # a missing row `reconcile_tracker_rows` treats it as a twin and never writes
+    # Spark's row — so retry here and log a miss.
     try:
-        from utils.sheets_mirror import upsert_request_row
-
         if not upsert_request_row(request_obj):
             logger.warning(
                 "public_approval: tracker mirror did not write request_id=%s "
