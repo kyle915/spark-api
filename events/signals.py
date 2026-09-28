@@ -398,7 +398,9 @@ def auto_create_pending_job_on_request_approval(
 @receiver(post_save, sender=Request)
 def mirror_request_to_sheets(sender, instance: Request, created: bool, **kwargs):
     try:
-        from utils.sheets_mirror import upsert_request_row
+        from utils.sheets_mirror import sheet_mirror_suppressed, upsert_request_row
+        if sheet_mirror_suppressed():
+            return
         try:
             queues.default.add(upsert_request_row, instance)
         except Exception:

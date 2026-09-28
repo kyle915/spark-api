@@ -1,0 +1,3411 @@
+{
+  "tenant_slug": "keee-torch-thc",
+  "event_type": "Retail Sampling",
+  "request_type": "Retail Sampling",
+  "scheduling_status": "already_scheduled",
+  "fuzzy_dedup": true,
+  "mirror_to_sheet": false,
+  "source": "External // Torch Beverage Retail Demos \u2014 Retail Schedule tab",
+  "rows": [
+    {
+      "name": "TOTAL WINE & MORE",
+      "date": "12/02/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "2955 COBB PKWY NW STE 308, ATLANTA, GA30339",
+      "state_code": "GA",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "TOTAL WINE & MORE (Town & Country)",
+      "date": "12/02/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "13887 Manchester Road, TOWN AND COUNTRY, MO 63011",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "TOTAL WINE & MORE ATLANTA",
+      "date": "12/02/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "124 PERIMETER CENTER WEST, ATLANTA, GA30346",
+      "state_code": "GA",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "TOTAL WINE & MORE BROOKHAVEN",
+      "date": "12/02/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "3954A PEACHTREE ROAD NE, BROOKHAVEN, GA30319",
+      "state_code": "GA",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Alliance)",
+      "date": "12/02/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "3101 Texas Sage Trail, Fort Worth, TX 76177",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Altamonte Springs)",
+      "date": "12/02/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "160 E Altamonte Dr, Altamonte Springs, FL 32701",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Arboretum)",
+      "date": "12/02/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "10001 Research Blvd #300, Austin, TX 78759",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Baybrook)",
+      "date": "12/02/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "18740 Gulf Fwy, Friendswood, TX 77546",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Boca Raton)",
+      "date": "12/02/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "5050 Town Center Circle, Boca Raton, FL 33486",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Brandon)",
+      "date": "12/02/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "11211 Causeway Blvd, Brandon, FL 33511",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Brentwood)",
+      "date": "12/02/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "90 Brentwood Promenede Court, BRENTWOOD, MO 63144",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Chesterfield)",
+      "date": "12/02/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "1781 Clarkson Road, CHESTERFIELD, MO 63017",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Coral Springs)",
+      "date": "12/02/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "2564 N. University Drive, Coral Springs, FL 33065",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Daytona Beach)",
+      "date": "12/02/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "2500 W International Speedway Blvd., Daytona Beach, FL 32114",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Euless)",
+      "date": "12/02/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "2501 Rio Grande Blvd, Euless, TX 76039",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Fort Myers)",
+      "date": "12/02/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "13711 S Tamiami Trl, Fort Myers, FL 33912",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Jacksonville)",
+      "date": "12/02/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "4413 Town Center Pkwy Ste 300, Jacksonville, FL 32246",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Kansas City)",
+      "date": "12/02/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "4201 Main Street, KANSAS CITY, MO 64111",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Lake Nona)",
+      "date": "12/02/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "6031 Lake Nona Blvd., Orlando, FL 32827",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Lakeline)",
+      "date": "12/02/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "11066 Pecan Park Blvd Suite 117, Cedar Park, TX 78613",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Lee's Summit)",
+      "date": "12/02/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "1648 NW Chipman Road, LEE'S SUMMIT, MO 64081",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Liberty)",
+      "date": "12/02/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "8520 N Evanston Ave., KANSAS CITY, MO 64157",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (O'Fallon)",
+      "date": "12/02/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "2257 State Hwy K, O'FALLON, MO 63368",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Oak Lawn)",
+      "date": "12/02/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "3810 Congress Ave, Dallas, TX 75219",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Orlando)",
+      "date": "12/02/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "2712 E Colonial Dr, Orlando, FL 32803",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Palm Beach Gardens)",
+      "date": "12/02/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "11221 Legacy Ave, Palm Beach Gardens, FL 33410",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Pensacola)",
+      "date": "12/02/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "1660 Airport Blvd Unit 145, Pensacola, FL 32504",
+      "state_code": "FL",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Plano)",
+      "date": "12/02/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "721 N Central Expy #200, Plano, TX 75075",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Sarasota)",
+      "date": "12/02/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "8280 S Tamiami Trail, Sarasota, FL 34238",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Sarasota)",
+      "date": "12/02/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "8539 Cooper Creek Blvd, University Park, FL 34201",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Springfield)",
+      "date": "12/02/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "3308 S. GLENSTONE AVE, SPRINGFIELD, MO 65804",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (State Line)",
+      "date": "12/02/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "13657 Washington Street, KANSAS CITY, MO 64145",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Sunset Valley)",
+      "date": "12/02/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "5601 Brodie Ln #800, Sunset Valley, TX 78745",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Tallahassee)",
+      "date": "12/02/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "1400-31 Village Square Blvd, Tallahassee, FL 32312",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (The Heights)",
+      "date": "12/02/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "2857 Katy Fwy Ste 100, Houston, TX 77007",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Wesley Chapel)",
+      "date": "12/02/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "25535 Sierra Center Blvd, Lutz, FL 33559",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine / Park Lane Dallas",
+      "date": "12/02/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "9350 N Central Expy, Dallas, TX 75231",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Lakeline)",
+      "date": "12/03/2026",
+      "start_time": "14:00",
+      "end_time": "17:00",
+      "address": "11066 Pecan Park Blvd Suite 117, Cedar Park, TX 78613",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "BINNY'S - ALGONQUIN",
+      "date": "12/03/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "844 S. Randall Rd. Algonquin, IL 60102",
+      "state_code": "IL",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "BINNY'S - ARLINGTON HEIGHTS",
+      "date": "12/03/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "35 W. Rand Rd. Arlington Heights, IL 60004",
+      "state_code": "IL",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "BINNY'S - DOWNTOWN",
+      "date": "12/03/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "213 W. Grand Ave. Chicago, IL 60654",
+      "state_code": "IL",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "BINNY'S - JOLIET",
+      "date": "12/03/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "3150 Tonti Dr. Joliet, IL 60431",
+      "state_code": "IL",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "BINNY'S - LAKE ZURICH",
+      "date": "12/03/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "975 Rand Rd. Lake Zurich, IL 60047",
+      "state_code": "IL",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "BINNY'S - LINCOLN PARK",
+      "date": "12/03/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "1720 N. Marcey St. Chicago, IL 60614",
+      "state_code": "IL",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "BINNY'S - LINCOLNWOOD",
+      "date": "12/03/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "7175 N. Lincoln Ave. Lincolnwood, IL 60712",
+      "state_code": "IL",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "BINNY'S - SKOKIE",
+      "date": "12/03/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "5100 W. Dempster St. Skokie, IL 60077",
+      "state_code": "IL",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "BINNY'S - WILLOWBROOK",
+      "date": "12/03/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "7175 Kingery Hwy. Willowbrook, IL 60527",
+      "state_code": "IL",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "TOTAL WINE & MORE",
+      "date": "12/03/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "2955 COBB PKWY NW STE 308, ATLANTA, GA30339",
+      "state_code": "GA",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "TOTAL WINE & MORE (Town & Country)",
+      "date": "12/03/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "13887 Manchester Road, TOWN AND COUNTRY, MO 63011",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "TOTAL WINE & MORE ATLANTA",
+      "date": "12/03/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "124 PERIMETER CENTER WEST, ATLANTA, GA30346",
+      "state_code": "GA",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "TOTAL WINE & MORE BROOKHAVEN",
+      "date": "12/03/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "3954A PEACHTREE ROAD NE, BROOKHAVEN, GA30319",
+      "state_code": "GA",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Alliance)",
+      "date": "12/03/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "3101 Texas Sage Trail, Fort Worth, TX 76177",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Altamonte Springs)",
+      "date": "12/03/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "160 E Altamonte Dr, Altamonte Springs, FL 32701",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Arboretum)",
+      "date": "12/03/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "10001 Research Blvd #300, Austin, TX 78759",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Baybrook)",
+      "date": "12/03/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "18740 Gulf Fwy, Friendswood, TX 77546",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Boca Raton)",
+      "date": "12/03/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "5050 Town Center Circle, Boca Raton, FL 33486",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Brandon)",
+      "date": "12/03/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "11211 Causeway Blvd, Brandon, FL 33511",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Brentwood)",
+      "date": "12/03/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "90 Brentwood Promenede Court, BRENTWOOD, MO 63144",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Chesterfield)",
+      "date": "12/03/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "1781 Clarkson Road, CHESTERFIELD, MO 63017",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Coral Springs)",
+      "date": "12/03/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "2564 N. University Drive, Coral Springs, FL 33065",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Daytona Beach)",
+      "date": "12/03/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "2500 W International Speedway Blvd., Daytona Beach, FL 32114",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Euless)",
+      "date": "12/03/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "2501 Rio Grande Blvd, Euless, TX 76039",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Fort Myers)",
+      "date": "12/03/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "13711 S Tamiami Trl, Fort Myers, FL 33912",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Jacksonville)",
+      "date": "12/03/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "4413 Town Center Pkwy Ste 300, Jacksonville, FL 32246",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Kansas City)",
+      "date": "12/03/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "4201 Main Street, KANSAS CITY, MO 64111",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Lake Nona)",
+      "date": "12/03/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "6031 Lake Nona Blvd., Orlando, FL 32827",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Lee's Summit)",
+      "date": "12/03/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "1648 NW Chipman Road, LEE'S SUMMIT, MO 64081",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Liberty)",
+      "date": "12/03/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "8520 N Evanston Ave., KANSAS CITY, MO 64157",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (O'Fallon)",
+      "date": "12/03/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "2257 State Hwy K, O'FALLON, MO 63368",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Oak Lawn)",
+      "date": "12/03/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "3810 Congress Ave, Dallas, TX 75219",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Orlando)",
+      "date": "12/03/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "2712 E Colonial Dr, Orlando, FL 32803",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Palm Beach Gardens)",
+      "date": "12/03/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "11221 Legacy Ave, Palm Beach Gardens, FL 33410",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Pensacola)",
+      "date": "12/03/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "1660 Airport Blvd Unit 145, Pensacola, FL 32504",
+      "state_code": "FL",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Plano)",
+      "date": "12/03/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "721 N Central Expy #200, Plano, TX 75075",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Sarasota)",
+      "date": "12/03/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "8280 S Tamiami Trail, Sarasota, FL 34238",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Sarasota)",
+      "date": "12/03/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "8539 Cooper Creek Blvd, University Park, FL 34201",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Springfield)",
+      "date": "12/03/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "3308 S. GLENSTONE AVE, SPRINGFIELD, MO 65804",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (State Line)",
+      "date": "12/03/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "13657 Washington Street, KANSAS CITY, MO 64145",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Sunset Valley)",
+      "date": "12/03/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "5601 Brodie Ln #800, Sunset Valley, TX 78745",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Tallahassee)",
+      "date": "12/03/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "1400-31 Village Square Blvd, Tallahassee, FL 32312",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (The Heights)",
+      "date": "12/03/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "2857 Katy Fwy Ste 100, Houston, TX 77007",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Wesley Chapel)",
+      "date": "12/03/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "25535 Sierra Center Blvd, Lutz, FL 33559",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine / Park Lane Dallas",
+      "date": "12/03/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "9350 N Central Expy, Dallas, TX 75231",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Lake Nona)",
+      "date": "12/04/2026",
+      "start_time": "11:00",
+      "end_time": "14:00",
+      "address": "6031 Lake Nona Blvd., Orlando, FL 32827",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Daytona Beach)",
+      "date": "12/04/2026",
+      "start_time": "14:00",
+      "end_time": "17:00",
+      "address": "2500 W International Speedway Blvd., Daytona Beach, FL 32114",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "LOL Liquors - Castroville",
+      "date": "12/04/2026",
+      "start_time": "15:00",
+      "end_time": "18:00",
+      "address": "703 US-90, Suite 107, Castroville, TX 78009",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "LOL Liquors - Eagle Pass (E. Main St.)",
+      "date": "12/04/2026",
+      "start_time": "15:00",
+      "end_time": "18:00",
+      "address": "2135 E. Main St., Suite 101, Eagle Pass, TX 78852",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "LOL Liquors - O'Connor",
+      "date": "12/04/2026",
+      "start_time": "15:00",
+      "end_time": "18:00",
+      "address": "4330 N Loop 1604 E, Suite 106, San Antonio, TX 78247",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "LOL Liquors - Schertz",
+      "date": "12/04/2026",
+      "start_time": "15:00",
+      "end_time": "18:00",
+      "address": "1204 FM 78, Suite A, Schertz, TX 78154",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "LOL Liquors - Thousand Oaks",
+      "date": "12/04/2026",
+      "start_time": "15:00",
+      "end_time": "18:00",
+      "address": "2235 Thousand Oaks Dr., San Antonio, TX 78232",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "R&H Store",
+      "date": "12/04/2026",
+      "start_time": "15:00",
+      "end_time": "18:00",
+      "address": "330 Landa St., New Braunfels, TX 78130",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Sip & Smoke Liquors - Cibolo",
+      "date": "12/04/2026",
+      "start_time": "15:00",
+      "end_time": "18:00",
+      "address": "2451 FM 1103, Suite 105, Cibolo, TX 78108",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Bottles Beverage Superstore Mount Pleasant",
+      "date": "12/04/2026",
+      "start_time": "15:30",
+      "end_time": "18:30",
+      "address": "610 Coleman Blvd, Mt Pleasant, SC 29464, USA",
+      "state_code": "SC",
+      "timezone_code": "EST",
+      "notes": "SKUs to sample: Fruit Punch 25mg 12oz, Passionfruit 25mg 12oz, Watermelon Squeeze 25mg 12oz"
+    },
+    {
+      "name": "City Farms Wine & Spirits",
+      "date": "12/04/2026",
+      "start_time": "16:00",
+      "end_time": "19:00",
+      "address": "157 N Calderwood St, Alcoa, TN 37701, USA",
+      "state_code": "TN",
+      "timezone_code": "EST",
+      "notes": "SKUs to sample: Blue Razz 25mg 4-Pack, Fruit Punch 25mg 4-Pack, Grapefruit Delight 25mg 4-Pack, Passionfruit 25mg 4-Pack, Pink Lemonade 25mg 4-Pack, Watermelon Squeeze 25mg 4-Pack, Variety Pack 10mg 6-Pack"
+    },
+    {
+      "name": "BINNY'S - CRYSTAL LAKE",
+      "date": "12/04/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "5380 Northwest Hwy. Crystal Lake, IL 60014",
+      "state_code": "IL",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "BINNY'S - DOWNERS GROVE",
+      "date": "12/04/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "2020 Butterfield Rd. Downers Grove, IL 60515",
+      "state_code": "IL",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "BINNY'S - ELMWOOD PARK",
+      "date": "12/04/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "7330 W. North Ave. Elmwood Park, IL 60707",
+      "state_code": "IL",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "BINNY'S - EVERGREEN PARK",
+      "date": "12/04/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "3447 W. 95th St. Evergreen Park, IL 60805",
+      "state_code": "IL",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "BINNY'S - GLEN ELLYN",
+      "date": "12/04/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "670 Roosevelt Rd. Glen Ellyn, IL 60137",
+      "state_code": "IL",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "BINNY'S - MONTGOMERY",
+      "date": "12/04/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "1150 W. Ogden Ave. Montgomery, IL 60538",
+      "state_code": "IL",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "BINNY'S - PORTAGE PARK",
+      "date": "12/04/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "4901 W. Irving Park Rd. Chicago, IL 60641",
+      "state_code": "IL",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "BINNY'S - SCHAUMBURG",
+      "date": "12/04/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "323 W. Golf Rd. Schaumburg, IL 60195",
+      "state_code": "IL",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "TOTAL WINE & MORE",
+      "date": "12/04/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "2955 COBB PKWY NW STE 308, ATLANTA, GA30339",
+      "state_code": "GA",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "TOTAL WINE & MORE (Town & Country)",
+      "date": "12/04/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "13887 Manchester Road, TOWN AND COUNTRY, MO 63011",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "TOTAL WINE & MORE ATLANTA",
+      "date": "12/04/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "124 PERIMETER CENTER WEST, ATLANTA, GA30346",
+      "state_code": "GA",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "TOTAL WINE & MORE BROOKHAVEN",
+      "date": "12/04/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "3954A PEACHTREE ROAD NE, BROOKHAVEN, GA30319",
+      "state_code": "GA",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Alliance)",
+      "date": "12/04/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "3101 Texas Sage Trail, Fort Worth, TX 76177",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Altamonte Springs)",
+      "date": "12/04/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "160 E Altamonte Dr, Altamonte Springs, FL 32701",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Arboretum)",
+      "date": "12/04/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "10001 Research Blvd #300, Austin, TX 78759",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Baybrook)",
+      "date": "12/04/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "18740 Gulf Fwy, Friendswood, TX 77546",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Boca Raton)",
+      "date": "12/04/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "5050 Town Center Circle, Boca Raton, FL 33486",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Brandon)",
+      "date": "12/04/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "11211 Causeway Blvd, Brandon, FL 33511",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Brentwood)",
+      "date": "12/04/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "90 Brentwood Promenede Court, BRENTWOOD, MO 63144",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Chesterfield)",
+      "date": "12/04/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "1781 Clarkson Road, CHESTERFIELD, MO 63017",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Coral Springs)",
+      "date": "12/04/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "2564 N. University Drive, Coral Springs, FL 33065",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Euless)",
+      "date": "12/04/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "2501 Rio Grande Blvd, Euless, TX 76039",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Fort Myers)",
+      "date": "12/04/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "13711 S Tamiami Trl, Fort Myers, FL 33912",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Jacksonville)",
+      "date": "12/04/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "4413 Town Center Pkwy Ste 300, Jacksonville, FL 32246",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Kansas City)",
+      "date": "12/04/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "4201 Main Street, KANSAS CITY, MO 64111",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Lakeline)",
+      "date": "12/04/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "11066 Pecan Park Blvd Suite 117, Cedar Park, TX 78613",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Lee's Summit)",
+      "date": "12/04/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "1648 NW Chipman Road, LEE'S SUMMIT, MO 64081",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Liberty)",
+      "date": "12/04/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "8520 N Evanston Ave., KANSAS CITY, MO 64157",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (O'Fallon)",
+      "date": "12/04/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "2257 State Hwy K, O'FALLON, MO 63368",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Oak Lawn)",
+      "date": "12/04/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "3810 Congress Ave, Dallas, TX 75219",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Orlando)",
+      "date": "12/04/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "2712 E Colonial Dr, Orlando, FL 32803",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Palm Beach Gardens)",
+      "date": "12/04/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "11221 Legacy Ave, Palm Beach Gardens, FL 33410",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Pensacola)",
+      "date": "12/04/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "1660 Airport Blvd Unit 145, Pensacola, FL 32504",
+      "state_code": "FL",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Plano)",
+      "date": "12/04/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "721 N Central Expy #200, Plano, TX 75075",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Sarasota)",
+      "date": "12/04/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "8280 S Tamiami Trail, Sarasota, FL 34238",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Sarasota)",
+      "date": "12/04/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "8539 Cooper Creek Blvd, University Park, FL 34201",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Springfield)",
+      "date": "12/04/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "3308 S. GLENSTONE AVE, SPRINGFIELD, MO 65804",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (State Line)",
+      "date": "12/04/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "13657 Washington Street, KANSAS CITY, MO 64145",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Sunset Valley)",
+      "date": "12/04/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "5601 Brodie Ln #800, Sunset Valley, TX 78745",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Tallahassee)",
+      "date": "12/04/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "1400-31 Village Square Blvd, Tallahassee, FL 32312",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (The Heights)",
+      "date": "12/04/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "2857 Katy Fwy Ste 100, Houston, TX 77007",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Wesley Chapel)",
+      "date": "12/04/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "25535 Sierra Center Blvd, Lutz, FL 33559",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine / Park Lane Dallas",
+      "date": "12/04/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "9350 N Central Expy, Dallas, TX 75231",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "LOL Liquors - Foster",
+      "date": "12/05/2026",
+      "start_time": "12:00",
+      "end_time": "15:00",
+      "address": "6322 FM 78, Suite 124, San Antonio, TX 78244",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "LOL Liquors - Live Oak",
+      "date": "12/05/2026",
+      "start_time": "12:00",
+      "end_time": "15:00",
+      "address": "12107 Toepperwein Rd., Suite 6, Live Oak, TX 78233",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Sip & Smoke Liquors - Eagle Pass",
+      "date": "12/05/2026",
+      "start_time": "12:00",
+      "end_time": "15:00",
+      "address": "2847 El Indio Hwy., Suite 8, Eagle Pass, TX 78852",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "LOL Liquors - Converse",
+      "date": "12/05/2026",
+      "start_time": "14:00",
+      "end_time": "17:00",
+      "address": "8144 Farm-To-Market Rd 78, Suite 5, Converse, TX 78109",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Fort Myers)",
+      "date": "12/05/2026",
+      "start_time": "14:00",
+      "end_time": "17:00",
+      "address": "13711 S Tamiami Trl, Fort Myers, FL 33912",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "LOL Liquors - Garden Ridge",
+      "date": "12/05/2026",
+      "start_time": "15:00",
+      "end_time": "18:00",
+      "address": "18838 FM 2252, Suites 2201 & 2202, Garden Ridge, TX 78266",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "LOL Liquors - Gruene / New Braunfels",
+      "date": "12/05/2026",
+      "start_time": "15:00",
+      "end_time": "18:00",
+      "address": "1050 FM 306, Suite 105, New Braunfels, TX 78130",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Sip & Smoke Liquors - De Zavala",
+      "date": "12/05/2026",
+      "start_time": "15:00",
+      "end_time": "18:00",
+      "address": "6362 De Zavala Rd., Suite 103, San Antonio, TX 78249",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "TOTAL WINE & MORE",
+      "date": "12/05/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "2955 COBB PKWY NW STE 308, ATLANTA, GA30339",
+      "state_code": "GA",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "TOTAL WINE & MORE (Town & Country)",
+      "date": "12/05/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "13887 Manchester Road, TOWN AND COUNTRY, MO 63011",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "TOTAL WINE & MORE ATLANTA",
+      "date": "12/05/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "124 PERIMETER CENTER WEST, ATLANTA, GA30346",
+      "state_code": "GA",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "TOTAL WINE & MORE BROOKHAVEN",
+      "date": "12/05/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "3954A PEACHTREE ROAD NE, BROOKHAVEN, GA30319",
+      "state_code": "GA",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Alliance)",
+      "date": "12/05/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "3101 Texas Sage Trail, Fort Worth, TX 76177",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Altamonte Springs)",
+      "date": "12/05/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "160 E Altamonte Dr, Altamonte Springs, FL 32701",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Arboretum)",
+      "date": "12/05/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "10001 Research Blvd #300, Austin, TX 78759",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Baybrook)",
+      "date": "12/05/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "18740 Gulf Fwy, Friendswood, TX 77546",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Boca Raton)",
+      "date": "12/05/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "5050 Town Center Circle, Boca Raton, FL 33486",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Brandon)",
+      "date": "12/05/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "11211 Causeway Blvd, Brandon, FL 33511",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Brentwood)",
+      "date": "12/05/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "90 Brentwood Promenede Court, BRENTWOOD, MO 63144",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Chesterfield)",
+      "date": "12/05/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "1781 Clarkson Road, CHESTERFIELD, MO 63017",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Coral Springs)",
+      "date": "12/05/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "2564 N. University Drive, Coral Springs, FL 33065",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Daytona Beach)",
+      "date": "12/05/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "2500 W International Speedway Blvd., Daytona Beach, FL 32114",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Euless)",
+      "date": "12/05/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "2501 Rio Grande Blvd, Euless, TX 76039",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Jacksonville)",
+      "date": "12/05/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "4413 Town Center Pkwy Ste 300, Jacksonville, FL 32246",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Kansas City)",
+      "date": "12/05/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "4201 Main Street, KANSAS CITY, MO 64111",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Lake Nona)",
+      "date": "12/05/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "6031 Lake Nona Blvd., Orlando, FL 32827",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Lakeline)",
+      "date": "12/05/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "11066 Pecan Park Blvd Suite 117, Cedar Park, TX 78613",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Lee's Summit)",
+      "date": "12/05/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "1648 NW Chipman Road, LEE'S SUMMIT, MO 64081",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Liberty)",
+      "date": "12/05/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "8520 N Evanston Ave., KANSAS CITY, MO 64157",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (O'Fallon)",
+      "date": "12/05/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "2257 State Hwy K, O'FALLON, MO 63368",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Oak Lawn)",
+      "date": "12/05/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "3810 Congress Ave, Dallas, TX 75219",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Orlando)",
+      "date": "12/05/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "2712 E Colonial Dr, Orlando, FL 32803",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Palm Beach Gardens)",
+      "date": "12/05/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "11221 Legacy Ave, Palm Beach Gardens, FL 33410",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Pensacola)",
+      "date": "12/05/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "1660 Airport Blvd Unit 145, Pensacola, FL 32504",
+      "state_code": "FL",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Plano)",
+      "date": "12/05/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "721 N Central Expy #200, Plano, TX 75075",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Sarasota)",
+      "date": "12/05/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "8539 Cooper Creek Blvd, University Park, FL 34201",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Springfield)",
+      "date": "12/05/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "3308 S. GLENSTONE AVE, SPRINGFIELD, MO 65804",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (State Line)",
+      "date": "12/05/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "13657 Washington Street, KANSAS CITY, MO 64145",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Sunset Valley)",
+      "date": "12/05/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "5601 Brodie Ln #800, Sunset Valley, TX 78745",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Tallahassee)",
+      "date": "12/05/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "1400-31 Village Square Blvd, Tallahassee, FL 32312",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (The Heights)",
+      "date": "12/05/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "2857 Katy Fwy Ste 100, Houston, TX 77007",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Wesley Chapel)",
+      "date": "12/05/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "25535 Sierra Center Blvd, Lutz, FL 33559",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine / Park Lane Dallas",
+      "date": "12/05/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "9350 N Central Expy, Dallas, TX 75231",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "TOTAL WINE & MORE",
+      "date": "12/06/2026",
+      "start_time": "14:00",
+      "end_time": "17:00",
+      "address": "2955 COBB PKWY NW STE 308, ATLANTA, GA30339",
+      "state_code": "GA",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "TOTAL WINE & MORE (Town & Country)",
+      "date": "12/06/2026",
+      "start_time": "14:00",
+      "end_time": "17:00",
+      "address": "13887 Manchester Road, TOWN AND COUNTRY, MO 63011",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "TOTAL WINE & MORE ATLANTA",
+      "date": "12/06/2026",
+      "start_time": "14:00",
+      "end_time": "17:00",
+      "address": "124 PERIMETER CENTER WEST, ATLANTA, GA30346",
+      "state_code": "GA",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "TOTAL WINE & MORE BROOKHAVEN",
+      "date": "12/06/2026",
+      "start_time": "14:00",
+      "end_time": "17:00",
+      "address": "3954A PEACHTREE ROAD NE, BROOKHAVEN, GA30319",
+      "state_code": "GA",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Altamonte Springs)",
+      "date": "12/06/2026",
+      "start_time": "14:00",
+      "end_time": "17:00",
+      "address": "160 E Altamonte Dr, Altamonte Springs, FL 32701",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Boca Raton)",
+      "date": "12/06/2026",
+      "start_time": "14:00",
+      "end_time": "17:00",
+      "address": "5050 Town Center Circle, Boca Raton, FL 33486",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Brandon)",
+      "date": "12/06/2026",
+      "start_time": "14:00",
+      "end_time": "17:00",
+      "address": "11211 Causeway Blvd, Brandon, FL 33511",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Brentwood)",
+      "date": "12/06/2026",
+      "start_time": "14:00",
+      "end_time": "17:00",
+      "address": "90 Brentwood Promenede Court, BRENTWOOD, MO 63144",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Chesterfield)",
+      "date": "12/06/2026",
+      "start_time": "14:00",
+      "end_time": "17:00",
+      "address": "1781 Clarkson Road, CHESTERFIELD, MO 63017",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Coral Springs)",
+      "date": "12/06/2026",
+      "start_time": "14:00",
+      "end_time": "17:00",
+      "address": "2564 N. University Drive, Coral Springs, FL 33065",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Daytona Beach)",
+      "date": "12/06/2026",
+      "start_time": "14:00",
+      "end_time": "17:00",
+      "address": "2500 W International Speedway Blvd., Daytona Beach, FL 32114",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Fort Myers)",
+      "date": "12/06/2026",
+      "start_time": "14:00",
+      "end_time": "17:00",
+      "address": "13711 S Tamiami Trl, Fort Myers, FL 33912",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Jacksonville)",
+      "date": "12/06/2026",
+      "start_time": "14:00",
+      "end_time": "17:00",
+      "address": "4413 Town Center Pkwy Ste 300, Jacksonville, FL 32246",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Kansas City)",
+      "date": "12/06/2026",
+      "start_time": "14:00",
+      "end_time": "17:00",
+      "address": "4201 Main Street, KANSAS CITY, MO 64111",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Lake Nona)",
+      "date": "12/06/2026",
+      "start_time": "14:00",
+      "end_time": "17:00",
+      "address": "6031 Lake Nona Blvd., Orlando, FL 32827",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Lee's Summit)",
+      "date": "12/06/2026",
+      "start_time": "14:00",
+      "end_time": "17:00",
+      "address": "1648 NW Chipman Road, LEE'S SUMMIT, MO 64081",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Liberty)",
+      "date": "12/06/2026",
+      "start_time": "14:00",
+      "end_time": "17:00",
+      "address": "8520 N Evanston Ave., KANSAS CITY, MO 64157",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Orlando)",
+      "date": "12/06/2026",
+      "start_time": "14:00",
+      "end_time": "17:00",
+      "address": "2712 E Colonial Dr, Orlando, FL 32803",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Palm Beach Gardens)",
+      "date": "12/06/2026",
+      "start_time": "14:00",
+      "end_time": "17:00",
+      "address": "11221 Legacy Ave, Palm Beach Gardens, FL 33410",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Pensacola)",
+      "date": "12/06/2026",
+      "start_time": "14:00",
+      "end_time": "17:00",
+      "address": "1660 Airport Blvd Unit 145, Pensacola, FL 32504",
+      "state_code": "FL",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Sarasota)",
+      "date": "12/06/2026",
+      "start_time": "14:00",
+      "end_time": "17:00",
+      "address": "8539 Cooper Creek Blvd, University Park, FL 34201",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Springfield)",
+      "date": "12/06/2026",
+      "start_time": "14:00",
+      "end_time": "17:00",
+      "address": "3308 S. GLENSTONE AVE, SPRINGFIELD, MO 65804",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (State Line)",
+      "date": "12/06/2026",
+      "start_time": "14:00",
+      "end_time": "17:00",
+      "address": "13657 Washington Street, KANSAS CITY, MO 64145",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Tallahassee)",
+      "date": "12/06/2026",
+      "start_time": "14:00",
+      "end_time": "17:00",
+      "address": "1400-31 Village Square Blvd, Tallahassee, FL 32312",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Wesley Chapel)",
+      "date": "12/06/2026",
+      "start_time": "14:00",
+      "end_time": "17:00",
+      "address": "25535 Sierra Center Blvd, Lutz, FL 33559",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (O'Fallon)",
+      "date": "12/06/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "2257 State Hwy K, O'FALLON, MO 63368",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "TOTAL WINE & MORE",
+      "date": "12/07/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "2955 COBB PKWY NW STE 308, ATLANTA, GA30339",
+      "state_code": "GA",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "TOTAL WINE & MORE (Town & Country)",
+      "date": "12/07/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "13887 Manchester Road, TOWN AND COUNTRY, MO 63011",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "TOTAL WINE & MORE ATLANTA",
+      "date": "12/07/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "124 PERIMETER CENTER WEST, ATLANTA, GA30346",
+      "state_code": "GA",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "TOTAL WINE & MORE BROOKHAVEN",
+      "date": "12/07/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "3954A PEACHTREE ROAD NE, BROOKHAVEN, GA30319",
+      "state_code": "GA",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Alliance)",
+      "date": "12/07/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "3101 Texas Sage Trail, Fort Worth, TX 76177",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Altamonte Springs)",
+      "date": "12/07/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "160 E Altamonte Dr, Altamonte Springs, FL 32701",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Arboretum)",
+      "date": "12/07/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "10001 Research Blvd #300, Austin, TX 78759",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Baybrook)",
+      "date": "12/07/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "18740 Gulf Fwy, Friendswood, TX 77546",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Boca Raton)",
+      "date": "12/07/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "5050 Town Center Circle, Boca Raton, FL 33486",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Brandon)",
+      "date": "12/07/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "11211 Causeway Blvd, Brandon, FL 33511",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Brentwood)",
+      "date": "12/07/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "90 Brentwood Promenede Court, BRENTWOOD, MO 63144",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Chesterfield)",
+      "date": "12/07/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "1781 Clarkson Road, CHESTERFIELD, MO 63017",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Coral Springs)",
+      "date": "12/07/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "2564 N. University Drive, Coral Springs, FL 33065",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Daytona Beach)",
+      "date": "12/07/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "2500 W International Speedway Blvd., Daytona Beach, FL 32114",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Euless)",
+      "date": "12/07/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "2501 Rio Grande Blvd, Euless, TX 76039",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Fort Myers)",
+      "date": "12/07/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "13711 S Tamiami Trl, Fort Myers, FL 33912",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Jacksonville)",
+      "date": "12/07/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "4413 Town Center Pkwy Ste 300, Jacksonville, FL 32246",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Kansas City)",
+      "date": "12/07/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "4201 Main Street, KANSAS CITY, MO 64111",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Lake Nona)",
+      "date": "12/07/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "6031 Lake Nona Blvd., Orlando, FL 32827",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Lakeline)",
+      "date": "12/07/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "11066 Pecan Park Blvd Suite 117, Cedar Park, TX 78613",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Lee's Summit)",
+      "date": "12/07/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "1648 NW Chipman Road, LEE'S SUMMIT, MO 64081",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Liberty)",
+      "date": "12/07/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "8520 N Evanston Ave., KANSAS CITY, MO 64157",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (O'Fallon)",
+      "date": "12/07/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "2257 State Hwy K, O'FALLON, MO 63368",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Oak Lawn)",
+      "date": "12/07/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "3810 Congress Ave, Dallas, TX 75219",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Orlando)",
+      "date": "12/07/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "2712 E Colonial Dr, Orlando, FL 32803",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Palm Beach Gardens)",
+      "date": "12/07/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "11221 Legacy Ave, Palm Beach Gardens, FL 33410",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Pensacola)",
+      "date": "12/07/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "1660 Airport Blvd Unit 145, Pensacola, FL 32504",
+      "state_code": "FL",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Plano)",
+      "date": "12/07/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "721 N Central Expy #200, Plano, TX 75075",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Sarasota)",
+      "date": "12/07/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "8539 Cooper Creek Blvd, University Park, FL 34201",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Springfield)",
+      "date": "12/07/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "3308 S. GLENSTONE AVE, SPRINGFIELD, MO 65804",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (State Line)",
+      "date": "12/07/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "13657 Washington Street, KANSAS CITY, MO 64145",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Sunset Valley)",
+      "date": "12/07/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "5601 Brodie Ln #800, Sunset Valley, TX 78745",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Tallahassee)",
+      "date": "12/07/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "1400-31 Village Square Blvd, Tallahassee, FL 32312",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (The Heights)",
+      "date": "12/07/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "2857 Katy Fwy Ste 100, Houston, TX 77007",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Wesley Chapel)",
+      "date": "12/07/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "25535 Sierra Center Blvd, Lutz, FL 33559",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine / Park Lane Dallas",
+      "date": "12/07/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "9350 N Central Expy, Dallas, TX 75231",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "TOTAL WINE & MORE",
+      "date": "12/08/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "2955 COBB PKWY NW STE 308, ATLANTA, GA30339",
+      "state_code": "GA",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "TOTAL WINE & MORE (Town & Country)",
+      "date": "12/08/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "13887 Manchester Road, TOWN AND COUNTRY, MO 63011",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "TOTAL WINE & MORE ATLANTA",
+      "date": "12/08/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "124 PERIMETER CENTER WEST, ATLANTA, GA30346",
+      "state_code": "GA",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "TOTAL WINE & MORE BROOKHAVEN",
+      "date": "12/08/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "3954A PEACHTREE ROAD NE, BROOKHAVEN, GA30319",
+      "state_code": "GA",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Alliance)",
+      "date": "12/08/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "3101 Texas Sage Trail, Fort Worth, TX 76177",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Altamonte Springs)",
+      "date": "12/08/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "160 E Altamonte Dr, Altamonte Springs, FL 32701",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Arboretum)",
+      "date": "12/08/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "10001 Research Blvd #300, Austin, TX 78759",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Baybrook)",
+      "date": "12/08/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "18740 Gulf Fwy, Friendswood, TX 77546",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Boca Raton)",
+      "date": "12/08/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "5050 Town Center Circle, Boca Raton, FL 33486",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Brandon)",
+      "date": "12/08/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "11211 Causeway Blvd, Brandon, FL 33511",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Brentwood)",
+      "date": "12/08/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "90 Brentwood Promenede Court, BRENTWOOD, MO 63144",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Chesterfield)",
+      "date": "12/08/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "1781 Clarkson Road, CHESTERFIELD, MO 63017",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Coral Springs)",
+      "date": "12/08/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "2564 N. University Drive, Coral Springs, FL 33065",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Daytona Beach)",
+      "date": "12/08/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "2500 W International Speedway Blvd., Daytona Beach, FL 32114",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Euless)",
+      "date": "12/08/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "2501 Rio Grande Blvd, Euless, TX 76039",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Fort Myers)",
+      "date": "12/08/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "13711 S Tamiami Trl, Fort Myers, FL 33912",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Jacksonville)",
+      "date": "12/08/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "4413 Town Center Pkwy Ste 300, Jacksonville, FL 32246",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Kansas City)",
+      "date": "12/08/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "4201 Main Street, KANSAS CITY, MO 64111",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Lake Nona)",
+      "date": "12/08/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "6031 Lake Nona Blvd., Orlando, FL 32827",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Lakeline)",
+      "date": "12/08/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "11066 Pecan Park Blvd Suite 117, Cedar Park, TX 78613",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Lee's Summit)",
+      "date": "12/08/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "1648 NW Chipman Road, LEE'S SUMMIT, MO 64081",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Liberty)",
+      "date": "12/08/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "8520 N Evanston Ave., KANSAS CITY, MO 64157",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (O'Fallon)",
+      "date": "12/08/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "2257 State Hwy K, O'FALLON, MO 63368",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Oak Lawn)",
+      "date": "12/08/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "3810 Congress Ave, Dallas, TX 75219",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Orlando)",
+      "date": "12/08/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "2712 E Colonial Dr, Orlando, FL 32803",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Palm Beach Gardens)",
+      "date": "12/08/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "11221 Legacy Ave, Palm Beach Gardens, FL 33410",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Pensacola)",
+      "date": "12/08/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "1660 Airport Blvd Unit 145, Pensacola, FL 32504",
+      "state_code": "FL",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Plano)",
+      "date": "12/08/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "721 N Central Expy #200, Plano, TX 75075",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Sarasota)",
+      "date": "12/08/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "8539 Cooper Creek Blvd, University Park, FL 34201",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Springfield)",
+      "date": "12/08/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "3308 S. GLENSTONE AVE, SPRINGFIELD, MO 65804",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (State Line)",
+      "date": "12/08/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "13657 Washington Street, KANSAS CITY, MO 64145",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Sunset Valley)",
+      "date": "12/08/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "5601 Brodie Ln #800, Sunset Valley, TX 78745",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Tallahassee)",
+      "date": "12/08/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "1400-31 Village Square Blvd, Tallahassee, FL 32312",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (The Heights)",
+      "date": "12/08/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "2857 Katy Fwy Ste 100, Houston, TX 77007",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Wesley Chapel)",
+      "date": "12/08/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "25535 Sierra Center Blvd, Lutz, FL 33559",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine / Park Lane Dallas",
+      "date": "12/08/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "9350 N Central Expy, Dallas, TX 75231",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "TOTAL WINE & MORE",
+      "date": "12/09/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "2955 COBB PKWY NW STE 308, ATLANTA, GA30339",
+      "state_code": "GA",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "TOTAL WINE & MORE (Town & Country)",
+      "date": "12/09/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "13887 Manchester Road, TOWN AND COUNTRY, MO 63011",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "TOTAL WINE & MORE ATLANTA",
+      "date": "12/09/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "124 PERIMETER CENTER WEST, ATLANTA, GA30346",
+      "state_code": "GA",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "TOTAL WINE & MORE BROOKHAVEN",
+      "date": "12/09/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "3954A PEACHTREE ROAD NE, BROOKHAVEN, GA30319",
+      "state_code": "GA",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Alliance)",
+      "date": "12/09/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "3101 Texas Sage Trail, Fort Worth, TX 76177",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Altamonte Springs)",
+      "date": "12/09/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "160 E Altamonte Dr, Altamonte Springs, FL 32701",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Arboretum)",
+      "date": "12/09/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "10001 Research Blvd #300, Austin, TX 78759",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Baybrook)",
+      "date": "12/09/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "18740 Gulf Fwy, Friendswood, TX 77546",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Boca Raton)",
+      "date": "12/09/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "5050 Town Center Circle, Boca Raton, FL 33486",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Brandon)",
+      "date": "12/09/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "11211 Causeway Blvd, Brandon, FL 33511",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Brentwood)",
+      "date": "12/09/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "90 Brentwood Promenede Court, BRENTWOOD, MO 63144",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Chesterfield)",
+      "date": "12/09/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "1781 Clarkson Road, CHESTERFIELD, MO 63017",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Daytona Beach)",
+      "date": "12/09/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "2500 W International Speedway Blvd., Daytona Beach, FL 32114",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Euless)",
+      "date": "12/09/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "2501 Rio Grande Blvd, Euless, TX 76039",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Fort Myers)",
+      "date": "12/09/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "13711 S Tamiami Trl, Fort Myers, FL 33912",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Jacksonville)",
+      "date": "12/09/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "4413 Town Center Pkwy Ste 300, Jacksonville, FL 32246",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Kansas City)",
+      "date": "12/09/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "4201 Main Street, KANSAS CITY, MO 64111",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Lake Nona)",
+      "date": "12/09/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "6031 Lake Nona Blvd., Orlando, FL 32827",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Lakeline)",
+      "date": "12/09/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "11066 Pecan Park Blvd Suite 117, Cedar Park, TX 78613",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Lee's Summit)",
+      "date": "12/09/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "1648 NW Chipman Road, LEE'S SUMMIT, MO 64081",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Liberty)",
+      "date": "12/09/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "8520 N Evanston Ave., KANSAS CITY, MO 64157",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (O'Fallon)",
+      "date": "12/09/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "2257 State Hwy K, O'FALLON, MO 63368",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Oak Lawn)",
+      "date": "12/09/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "3810 Congress Ave, Dallas, TX 75219",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Orlando)",
+      "date": "12/09/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "2712 E Colonial Dr, Orlando, FL 32803",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Palm Beach Gardens)",
+      "date": "12/09/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "11221 Legacy Ave, Palm Beach Gardens, FL 33410",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Pensacola)",
+      "date": "12/09/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "1660 Airport Blvd Unit 145, Pensacola, FL 32504",
+      "state_code": "FL",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Plano)",
+      "date": "12/09/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "721 N Central Expy #200, Plano, TX 75075",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Sarasota)",
+      "date": "12/09/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "8539 Cooper Creek Blvd, University Park, FL 34201",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Springfield)",
+      "date": "12/09/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "3308 S. GLENSTONE AVE, SPRINGFIELD, MO 65804",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (State Line)",
+      "date": "12/09/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "13657 Washington Street, KANSAS CITY, MO 64145",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Sunset Valley)",
+      "date": "12/09/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "5601 Brodie Ln #800, Sunset Valley, TX 78745",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Tallahassee)",
+      "date": "12/09/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "1400-31 Village Square Blvd, Tallahassee, FL 32312",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (The Heights)",
+      "date": "12/09/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "2857 Katy Fwy Ste 100, Houston, TX 77007",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Wesley Chapel)",
+      "date": "12/09/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "25535 Sierra Center Blvd, Lutz, FL 33559",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine / Park Lane Dallas",
+      "date": "12/09/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "9350 N Central Expy, Dallas, TX 75231",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Fort Myers)",
+      "date": "12/10/2026",
+      "start_time": "14:00",
+      "end_time": "17:00",
+      "address": "13711 S Tamiami Trl, Fort Myers, FL 33912",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (State Line)",
+      "date": "12/10/2026",
+      "start_time": "14:00",
+      "end_time": "17:00",
+      "address": "13657 Washington Street, KANSAS CITY, MO 64145",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "BINNY'S - BOLINGBROOK",
+      "date": "12/10/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "639 E. Boughton Rd. Bolingbrook, IL 60440",
+      "state_code": "IL",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "BINNY'S - GURNEE",
+      "date": "12/10/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "6911 W. Grand Ave. Gurnee, IL 60031",
+      "state_code": "IL",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "BINNY'S - HYDE PARK",
+      "date": "12/10/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "1240 E. 47th St. Chicago, IL 60653",
+      "state_code": "IL",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "BINNY'S - MCHENRY",
+      "date": "12/10/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "4610 W. Elm St. McHenry, IL 60050",
+      "state_code": "IL",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "BINNY'S - NILES",
+      "date": "12/10/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "8935 N. Milwaukee Ave. Niles, IL 60714",
+      "state_code": "IL",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "BINNY'S - NORTH RIVERSIDE",
+      "date": "12/10/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "7250 W. Cermak Rd. North Riverside, IL 60546",
+      "state_code": "IL",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "BINNY'S - OAK BROOK",
+      "date": "12/10/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "1500 16th St. Oak Brook, IL 60523",
+      "state_code": "IL",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "BINNY'S - SOUTH LOOP",
+      "date": "12/10/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "1132 S. Jefferson St. Chicago, IL 60607",
+      "state_code": "IL",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "TOTAL WINE & MORE",
+      "date": "12/10/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "2955 COBB PKWY NW STE 308, ATLANTA, GA30339",
+      "state_code": "GA",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "TOTAL WINE & MORE (Town & Country)",
+      "date": "12/10/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "13887 Manchester Road, TOWN AND COUNTRY, MO 63011",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "TOTAL WINE & MORE ATLANTA",
+      "date": "12/10/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "124 PERIMETER CENTER WEST, ATLANTA, GA30346",
+      "state_code": "GA",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "TOTAL WINE & MORE BROOKHAVEN",
+      "date": "12/10/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "3954A PEACHTREE ROAD NE, BROOKHAVEN, GA30319",
+      "state_code": "GA",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Alliance)",
+      "date": "12/10/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "3101 Texas Sage Trail, Fort Worth, TX 76177",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Altamonte Springs)",
+      "date": "12/10/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "160 E Altamonte Dr, Altamonte Springs, FL 32701",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Arboretum)",
+      "date": "12/10/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "10001 Research Blvd #300, Austin, TX 78759",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Baybrook)",
+      "date": "12/10/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "18740 Gulf Fwy, Friendswood, TX 77546",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Boca Raton)",
+      "date": "12/10/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "5050 Town Center Circle, Boca Raton, FL 33486",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Brandon)",
+      "date": "12/10/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "11211 Causeway Blvd, Brandon, FL 33511",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Brentwood)",
+      "date": "12/10/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "90 Brentwood Promenede Court, BRENTWOOD, MO 63144",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Chesterfield)",
+      "date": "12/10/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "1781 Clarkson Road, CHESTERFIELD, MO 63017",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Daytona Beach)",
+      "date": "12/10/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "2500 W International Speedway Blvd., Daytona Beach, FL 32114",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Euless)",
+      "date": "12/10/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "2501 Rio Grande Blvd, Euless, TX 76039",
+      "state_code": "TX",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Jacksonville)",
+      "date": "12/10/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "4413 Town Center Pkwy Ste 300, Jacksonville, FL 32246",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Kansas City)",
+      "date": "12/10/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "4201 Main Street, KANSAS CITY, MO 64111",
+      "state_code": "MO",
+      "timezone_code": "CST",
+      "notes": ""
+    },
+    {
+      "name": "Total Wine & More (Lake Nona)",
+      "date": "12/10/2026",
+      "start_time": "17:00",
+      "end_time": "20:00",
+      "address": "6031 Lake Nona Blvd., Orlando, FL 32827",
+      "state_code": "FL",
+      "timezone_code": "EST",
+      "notes": ""
+    }
+  ]
+}

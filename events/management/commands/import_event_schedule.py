@@ -24,7 +24,14 @@ the timezone (with a sample wall-clock→UTC conversion so you can eyeball
 that 3 PM stays 3 PM), and per-row outcomes.
 
 Schedules live in events/management/commands/data/<key>.json with shape:
-    {"tenant_name", "event_type", "request_type", "scheduling_status",
+    {"tenant_name" | "tenant_slug", "event_type", "request_type",
+     "scheduling_status",
+     "fuzzy_dedup" (optional — also skip rows already in Spark at the same
+                    store within an hour, matched on street address or
+                    name; for schedules typed by hand, whose addresses
+                    won't equal what Spark stored),
+     "mirror_to_sheet" (optional, default true — false skips the per-save
+                        linked-Sheet mirror for big imports),
      "rows": [{name, date(mm/dd/yyyy), start_time(HH:MM), end_time(HH:MM),
                address, store_number, retailer_name, city, state,
                store_manager_phone, notes,
@@ -39,12 +46,18 @@ import datetime
 import io
 import json
 import re
+from contextlib import nullcontext
 from pathlib import Path
 
 from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand, CommandError
 from openpyxl import Workbook
 
+from ambassadors.checkin_web import (
+    address_core_parts,
+    addresses_fuzzy_match,
+    normalize_place,
+)
 from events.batch_requests import (
     TEMPLATE_COLUMNS,
     _local_datetime_to_utc,
@@ -54,11 +67,13 @@ from events.batch_requests import (
 from events.models import (
     EventStatus,
     EventType,
+    Request,
     RequestStatus,
     RequestType,
     TimeZone,
 )
 from tenants.models import Tenant
+from utils.sheets_mirror import suppress_sheet_mirror
 
 User = get_user_model()
 
@@ -66,6 +81,7 @@ _DATA_DIR = Path(__file__).resolve().parent / "data"
 # Only [a-z0-9_] schedule keys — the key maps straight to a filename, so
 # this guards against path traversal (../) reaching outside data/.
 _KEY_RE = re.compile(r"^[a-z0-9_]+$")
+_FUZZY_DEDUP_WINDOW = datetime.timedelta(minutes=60)
 
 
 class Command(BaseCommand):
@@ -128,6 +144,7 @@ class Command(BaseCommand):
             raise CommandError(f"No rows in {data_path}")
 
         tenant_name = (opts["tenant_name"] or spec.get("tenant_name") or "").strip()
+        tenant_slug = "" if opts["tenant_name"] else (spec.get("tenant_slug") or "").strip()
         event_type_name = (spec.get("event_type") or "Retail Sampling").strip()
         request_type_name = (spec.get("request_type") or "Retail Sampling").strip()
         scheduling_status = (spec.get("scheduling_status") or "already_scheduled").strip()
@@ -137,7 +154,7 @@ class Command(BaseCommand):
         w(self.style.MIGRATE_HEADING(f"Import event schedule: {schedule_key}"))
         w(f"  mode      : {'COMMIT (writing)' if commit else 'DRY-RUN (no event writes)'}")
         w(f"  rows      : {len(rows)}")
-        w(f"  tenant    : {tenant_name!r}")
+        w(f"  tenant    : {tenant_slug or tenant_name!r}")
 
         # ---- Resolve owner -------------------------------------------------
         # (Before the tenant: --create-tenant needs it as created_by.)
@@ -147,11 +164,16 @@ class Command(BaseCommand):
         w(f"  owner     : {owner.id} ({owner.email})")
 
         # ---- Resolve tenant ------------------------------------------------
-        tenant = (
-            Tenant.objects.filter(name__iexact=tenant_name).order_by("id").first()
-            if tenant_name
-            else None
-        )
+        if tenant_slug:
+            tenant = Tenant.objects.filter(slug=tenant_slug).first()
+            if not tenant:
+                raise CommandError(f"Tenant not found by slug {tenant_slug!r}.")
+        else:
+            tenant = (
+                Tenant.objects.filter(name__iexact=tenant_name).order_by("id").first()
+                if tenant_name
+                else None
+            )
         if not tenant and tenant_name and opts["create_tenant"]:
             tenant = Tenant.objects.create(
                 name=tenant_name,
@@ -243,6 +265,18 @@ class Command(BaseCommand):
             f"{(stored_utc + datetime.timedelta(minutes=off_min)).strftime('%H:%M')}"
         )
 
+        if spec.get("fuzzy_dedup"):
+            rows, fuzzy_skips = _drop_rows_already_in_spark(rows, tenant.id, tz)
+            w(f"  fuzzy dedup  : {len(fuzzy_skips)} row(s) already in Spark")
+            for label, uuid in fuzzy_skips[:25]:
+                w(f"   - {label} → request {uuid}")
+            if len(fuzzy_skips) > 25:
+                w(f"   …and {len(fuzzy_skips) - 25} more.")
+            if not rows:
+                w("")
+                w(self.style.SUCCESS("Nothing to import — every row is already in Spark."))
+                return
+
         # ---- Build the importer's XLSX in memory ---------------------------
         xlsx_bytes = _build_xlsx(
             rows=rows,
@@ -253,16 +287,18 @@ class Command(BaseCommand):
         )
 
         # ---- Run the proven importer (dedup + atomic + retailer link) ------
-        result = import_requests_from_excel_bytes(
-            file_bytes=xlsx_bytes,
-            tenant_id=tenant.id,
-            created_by_id=owner.id,
-            default_timezone_id=tz.id,
-            default_request_type_id=request_type.id,
-            sheet_name="Requests",
-            dry_run=not commit,
-            rollback_on_error=True,
-        )
+        mirror_to_sheet = spec.get("mirror_to_sheet", True)
+        with nullcontext() if mirror_to_sheet else suppress_sheet_mirror():
+            result = import_requests_from_excel_bytes(
+                file_bytes=xlsx_bytes,
+                tenant_id=tenant.id,
+                created_by_id=owner.id,
+                default_timezone_id=tz.id,
+                default_request_type_id=request_type.id,
+                sheet_name="Requests",
+                dry_run=not commit,
+                rollback_on_error=True,
+            )
 
         w("")
         w(self.style.SUCCESS("Result"))
@@ -322,6 +358,63 @@ class Command(BaseCommand):
         return sorted(eastern, key=lambda t: t.id)[0]
 
 
+def _drop_rows_already_in_spark(
+    rows: list, tenant_id: int, default_tz: TimeZone
+) -> tuple[list, list[tuple[str, str]]]:
+    """Split rows into (to_import, [(label, existing_uuid)]).
+
+    A row is already in Spark when a live request for the tenant starts
+    within an hour of it at the same street address (or, when either side
+    has no street number, the same store name). The importer's own dedup
+    needs the exact address string.
+    """
+    tz_by_code: dict[str, TimeZone | None] = {}
+    kept: list = []
+    skipped: list[tuple[str, str]] = []
+    for r in rows:
+        code = (r.get("timezone_code") or default_tz.code).strip().upper()
+        if code not in tz_by_code:
+            tz_by_code[code] = (
+                TimeZone.objects.filter(code__iexact=code).order_by("id").first()
+            )
+        tz = tz_by_code[code]
+        if tz is None:
+            kept.append(r)
+            continue
+        start = _local_datetime_to_utc(
+            datetime.datetime.combine(_parse_date(r["date"]), _parse_time(r["start_time"])),
+            tz.offset,
+        )
+        address = r.get("address") or ""
+        has_street = bool(address_core_parts(address)[0])
+        name_key = normalize_place(r.get("name") or "")
+        match = next(
+            (
+                uuid
+                for uuid, name, addr in Request.objects.filter(
+                    tenant_id=tenant_id,
+                    deleted_at__isnull=True,
+                    start_time__gte=start - _FUZZY_DEDUP_WINDOW,
+                    start_time__lte=start + _FUZZY_DEDUP_WINDOW,
+                ).values_list("uuid", "name", "address")
+                if addresses_fuzzy_match(address, addr or "")
+                # Generic banners ("Total Wine & More") repeat across
+                # cities, so names only decide when an address can't.
+                or (
+                    name_key
+                    and not (has_street and address_core_parts(addr or "")[0])
+                    and normalize_place(name or "") == name_key
+                )
+            ),
+            None,
+        )
+        if match:
+            skipped.append((f"{r['date']} {r['start_time']} {r.get('name')}", str(match)))
+        else:
+            kept.append(r)
+    return kept, skipped
+
+
 def _slugify(name: str) -> str:
     from django.utils.text import slugify
 
@@ -356,6 +449,8 @@ def _build_xlsx(
         # ("…, Grand Blanc, MI 48439") carries the location for display, and
         # retailer_name links every row to one "Kroger" account, so we lose
         # nothing important while guaranteeing the geography can't fail a row.
+        # `state_code` (distinct from the display-only `state`) opts a
+        # schedule into State linking — Torch routes recap mail by state.
         cell = {
             "name": r.get("name"),
             "date": r.get("date"),
@@ -367,6 +462,7 @@ def _build_xlsx(
             "notes": r.get("notes"),
             "retailer_name": r.get("retailer_name"),
             "store_manager_phone": r.get("store_manager_phone"),
+            "state": r.get("state_code"),
             # A row may carry its own timezone (multi-market schedules span
             # ET/CT); the command-level code is the fallback for the rest.
             "timezone_code": r.get("timezone_code") or timezone_code,

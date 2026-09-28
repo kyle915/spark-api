@@ -12,10 +12,20 @@ import datetime
 
 import pytest
 
-from events.management.commands.import_event_schedule import Command, _build_xlsx
+import io
+from unittest import mock
+
+from django.core.management import call_command
+
+from events.management.commands.import_event_schedule import (
+    Command,
+    _build_xlsx,
+    _drop_rows_already_in_spark,
+)
 from events.batch_requests import import_requests_from_excel_bytes
-from events.models import Event, EventStatus, RequestStatus, TimeZone
+from events.models import Event, EventStatus, Request, RequestStatus, State, TimeZone
 from events.tests.base import EventsGraphQLTestCase
+from utils.sheets_mirror import suppress_sheet_mirror, upsert_request_row
 
 
 _ROWS = [
@@ -204,3 +214,64 @@ class TestImportEventSchedule(EventsGraphQLTestCase):
         # dry-run: no events/requests written
         assert not Event.objects.filter(tenant=tenant).exists()
         assert not Request.objects.filter(tenant=tenant).exists()
+
+    # ---------- fuzzy dedup / Torch schedule ----------
+
+    def _existing_request(self, *, name, address, start_utc):
+        return Request.objects.create(
+            tenant=self.tenant,
+            created_by=self.system_user,
+            name=name,
+            date=start_utc,
+            start_time=start_utc,
+            end_time=start_utc + datetime.timedelta(hours=3),
+            address=address,
+            request_type=self.request_type,
+        )
+
+    def test_fuzzy_dedup_skips_same_street_address_within_the_hour(self):
+        # 15:00 EDT on 6/19 = 19:00 UTC; Spark stored the geocoder's spelling.
+        existing = self._existing_request(
+            name="Kroger",
+            address="12731 South Saginaw Street, Grand Blanc, MI 48439, USA",
+            start_utc=datetime.datetime(2026, 6, 19, 19, 30, tzinfo=datetime.timezone.utc),
+        )
+        kept, skipped = _drop_rows_already_in_spark(_ROWS, self.tenant.id, self.edt)
+        assert [r["store_number"] for r in kept] == ["526"]
+        assert skipped == [(f"06/19/2026 15:00 {_ROWS[0]['name']}", str(existing.uuid))]
+
+    def test_fuzzy_dedup_ignores_generic_name_at_another_address(self):
+        self._existing_request(
+            name=_ROWS[0]["name"],
+            address="1 Other Rd, Flint, MI 48502",
+            start_utc=datetime.datetime(2026, 6, 19, 19, 0, tzinfo=datetime.timezone.utc),
+        )
+        kept, skipped = _drop_rows_already_in_spark(_ROWS, self.tenant.id, self.edt)
+        assert len(kept) == 2 and skipped == []
+
+    def test_torch_chunk_dry_runs_clean_by_slug_without_sheet_mirror(self):
+        torch = self.create_tenant(name="Torch THC", slug="keee-torch-thc")
+        for code, off in (("CDT", -300), ("CST", -360)):
+            TimeZone.objects.create(name=code, code=code, offset=off, created_by=self.system_user)
+        for code in ("FL", "TX", "MO", "GA", "IL", "TN", "SC", "KS", "OH"):
+            State.objects.create(name=code, code=code, created_by=self.system_user)
+        out = io.StringIO()
+        with mock.patch("events.signals.queues") as queues:
+            call_command(
+                "import_event_schedule",
+                "--schedule", "torch_retail_2026_p01",
+                "--owner-email", self.system_user.email,
+                stdout=out,
+            )
+        report = out.getvalue()
+        assert f"tenant id : {torch.id}" in report
+        assert "failed     : 0" in report, report[-2000:]
+        assert "would create : 340" in report, report[-2000:]
+        assert not Request.objects.filter(tenant=torch).exists()
+        queues.default.add.assert_not_called()
+
+    def test_suppressed_mirror_never_reads_the_tenant_sheet(self):
+        req = mock.Mock()
+        with suppress_sheet_mirror():
+            assert upsert_request_row(req) is False
+        assert not req.mock_calls
