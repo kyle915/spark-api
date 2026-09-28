@@ -23,7 +23,9 @@ import logging
 import re
 import socket
 import time
-from typing import Any, Iterable
+from contextlib import contextmanager
+from contextvars import ContextVar
+from typing import Any, Iterable, Iterator
 
 import httplib2
 from django.conf import settings
@@ -36,6 +38,24 @@ from googleapiclient.errors import HttpError
 from tenants.models import Tenant
 
 logger = logging.getLogger(__name__)
+
+# Bulk schedule imports create thousands of Requests in one HTTP call. With
+# no queue on Cloud Run each save mirrors inline (3 Sheets calls apiece),
+# which rate-limits and can blow the request deadline.
+_MIRROR_SUPPRESSED: ContextVar[bool] = ContextVar("sheet_mirror_suppressed", default=False)
+
+
+@contextmanager
+def suppress_sheet_mirror() -> Iterator[None]:
+    token = _MIRROR_SUPPRESSED.set(True)
+    try:
+        yield
+    finally:
+        _MIRROR_SUPPRESSED.reset(token)
+
+
+def sheet_mirror_suppressed() -> bool:
+    return _MIRROR_SUPPRESSED.get()
 
 # Bulk reads (reconcile cron scanning the LD key column) can span tens of
 # thousands of rows. httplib2 defaults to no timeout, but Google's side can
@@ -1152,6 +1172,8 @@ def upsert_request_row(request) -> bool:
     Safe to call on every Request save — every failure path logs and
     records sync status on the tenant without raising.
     """
+    if sheet_mirror_suppressed():
+        return False
     tenant = getattr(request, "tenant", None)
     try:
         sheet_url = getattr(tenant, "linked_sheet_url", None) if tenant else None
