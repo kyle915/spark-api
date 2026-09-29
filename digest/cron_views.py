@@ -4703,6 +4703,11 @@ class BackfillStoreRecapNamesView(View):
         out = io.StringIO()
         try:
             call_command("backfill_store_recap_names", stdout=out, **kwargs)
+        except CommandError as exc:
+            return JsonResponse(
+                {"ok": False, "error": "bad-input", "detail": str(exc), "log": out.getvalue()},
+                status=400,
+            )
         except Exception as exc:  # noqa: BLE001 — surface to caller
             logger.exception("backfill-store-recap-names cron failed")
             return JsonResponse(

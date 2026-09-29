@@ -86,7 +86,10 @@ class Command(BaseCommand):
         if not isinstance(numbers, dict):
             raise CommandError("--numbers-json must be a JSON object")
 
-        tenant = Tenant.objects.filter(slug=slug).first()
+        tenant = (
+            Tenant.objects.filter(slug=slug).order_by("id").first()
+            or Tenant.objects.filter(request_url_name=slug).order_by("id").first()
+        )
         if tenant is None:
             raise CommandError(f"tenant-not-found: {slug}")
 
