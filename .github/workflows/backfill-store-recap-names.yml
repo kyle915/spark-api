@@ -23,6 +23,11 @@ on:
         required: false
         default: "keee-torch-thc"
         type: string
+      directory:
+        description: "Store lists in recaps/management/commands/data (comma-separated)."
+        required: false
+        default: "torch_total_wine_stores"
+        type: string
       numbers_json:
         description: 'Optional store numbers, e.g. {"Total Wine & More (Sarasota)": "1234"}'
         required: false
@@ -40,6 +45,7 @@ jobs:
           DRY_RUN: ${{ github.event.inputs.dry_run }}
           TENANT_SLUG: ${{ github.event.inputs.tenant_slug || 'keee-torch-thc' }}
           NUMBERS_JSON: ${{ github.event.inputs.numbers_json }}
+          DIRECTORY: ${{ github.event.inputs.directory }}
         run: |
           set -euo pipefail
           if [ -z "$CRON_SECRET" ]; then
@@ -53,6 +59,7 @@ jobs:
             --data-urlencode "apply=$APPLY" \
             --data-urlencode "tenant_slug=$TENANT_SLUG" \
             --data-urlencode "numbers_json=$NUMBERS_JSON" \
+            --data-urlencode "directory=$DIRECTORY" \
             -H "X-Cron-Secret: $CRON_SECRET")
           echo "HTTP $STATUS"
           python3 -c "import json; d=json.load(open('/tmp/cron-response.json')); print(d.get('log') or d)"
