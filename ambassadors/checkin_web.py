@@ -39,6 +39,7 @@ from django.db import transaction
 from django.utils import timezone as dj_tz
 from django.utils.dateparse import parse_datetime
 
+from events.torch_portal import is_torch_tenant
 from tenants.models import normalize_checkin_resources
 from recaps.fresh_vintage import inject_roadshow_calcs
 
@@ -1031,6 +1032,58 @@ def compose_shift_recap_name(event_name: str, shift_label: str) -> str:
     return f"{base} · {label}"[:255]
 
 
+def requires_store_identity(tenant) -> bool:
+    """Brands whose recap title must be "Store Name #1234" (client ask)."""
+    return is_torch_tenant(tenant)
+
+
+def compose_store_recap_name(store_name: str, store_number: str = "") -> str:
+    """ "Total Wine & More (Sarasota)" + "1234" → "Total Wine & More (Sarasota) #1234"."""
+    name = re.sub(r"\s+", " ", store_name or "").strip()
+    number = (store_number or "").strip().lstrip("#").strip()
+    if not number or re.search(rf"#\s*{re.escape(number)}\b", name):
+        return name[:255]
+    return f"{name} #{number}"[:255]
+
+
+def store_identity_prefill(event) -> dict:
+    """What the recap form's Store name / Store # boxes start with.
+
+    Walk-in titles are "M/D/YYYY - <address> (<store>)"; scheduled ones are
+    the request's store label. Never prefill the street address as a name.
+    """
+    address = (getattr(event, "address", "") or "").strip()
+    name = _store_display_name(getattr(event, "name", "") or "", address)
+    if address and normalize_place(name) == normalize_place(address):
+        name = ""
+    req = getattr(event, "request", None)
+    if not name and req is not None:
+        name = (getattr(req, "retailer_name", None) or "").strip()
+    number = (getattr(req, "store_number", None) or "").strip() if req is not None else ""
+    if not number:
+        number = known_store_number(getattr(event, "tenant_id", None), address)
+    return {"name": name, "number": number}
+
+
+def known_store_number(tenant_id, address: str) -> str:
+    """Store # already on file for this address on any live request of the brand."""
+    from events.models import Request
+
+    address = (address or "").strip()
+    if not tenant_id or not address:
+        return ""
+    rows = (
+        Request.objects.filter(tenant_id=tenant_id, deleted_at__isnull=True)
+        .exclude(store_number__isnull=True)
+        .exclude(store_number="")
+        .values_list("address", "store_number")
+    )
+    for req_address, number in rows:
+        if addresses_fuzzy_match(address, req_address or ""):
+            return (number or "").strip()
+    return ""
+
+
 def resolve_force_new_shift_label(
     *,
     tenant,
@@ -1102,6 +1155,8 @@ def submit_checkin_recap(
     third_party: bool = False,
     shift_label: str | None = None,
     used_corpo_card: bool | None = None,
+    store_name: str = "",
+    store_number: str = "",
 ):
     """Create a ``CustomRecap`` (+ field values, photos, product samples) for a
     walk-up BA, attributed to their own user. Replicates the write path in
@@ -1120,6 +1175,8 @@ def submit_checkin_recap(
 
     actor = ambassador.user
     name = (event.name or "Recap").strip() or "Recap"
+    if (store_name or "").strip():
+        name = compose_store_recap_name(store_name, store_number)
 
     # Feel Free payable mileage: require the itinerary claim, then write the
     # computed miles into the template's Mileage field so the BA never re-types.
@@ -1274,7 +1331,9 @@ def submit_checkin_recap(
             ]
             # force_new reusing an empty stub still needs the second-shift
             # title — otherwise admin sees two rows both named the market.
-            if resolved_shift_label and recap.name != name:
+            # A re-filed store recap takes the corrected store name/number.
+            # A re-filed store recap takes the corrected store name/number.
+            if (resolved_shift_label or (store_name or "").strip()) and recap.name != name:
                 recap.name = name
                 update_fields.append("name")
             if used_corpo_card is not None:
@@ -1736,6 +1795,8 @@ def build_public_context(event, ambassador=None) -> dict:
         # and hides Log this stop.
         "locationMode": tenant_location_mode(tenant),
     }
+    if requires_store_identity(tenant):
+        payload["storeIdentity"] = store_identity_prefill(event)
     # Which program this event is — so a BA who picked one can see the page
     # agreed with them before they start filling in a 15-field form.
     etype = getattr(event, "event_type", None)
@@ -2026,6 +2087,25 @@ def recent_checkin_locations(tenant, limit: int = 30) -> list:
     return out
 
 
+def _trailing_parenthetical(text: str) -> str:
+    """Inner text of the balanced "(...)" that ends ``text``, else "".
+
+    Store names nest: "… (Total Wine & More (Sarasota))" must yield
+    "Total Wine & More (Sarasota)", not "Sarasota)".
+    """
+    if not text.endswith(")"):
+        return ""
+    depth = 0
+    for i in range(len(text) - 1, -1, -1):
+        if text[i] == ")":
+            depth += 1
+        elif text[i] == "(":
+            depth -= 1
+            if depth == 0:
+                return text[i + 1 : -1].strip()
+    return ""
+
+
 def _store_display_name(name: str, address: str) -> str:
     """A picker label that names the STORE, not the walk-in event title.
 
@@ -2039,18 +2119,12 @@ def _store_display_name(name: str, address: str) -> str:
     if not n:
         return a
     addr_key = normalize_place(a)[:24] if a else ""
-    if addr_key and addr_key in normalize_place(n):
-        if "(" in n and n.endswith(")"):
-            inner = n[n.rfind("(") + 1 : -1].strip()
-            if inner:
-                return inner
-        return a
-    if re.match(r"^\d{1,2}/\d{1,2}/\d{4}", n):
-        if "(" in n and n.endswith(")"):
-            inner = n[n.rfind("(") + 1 : -1].strip()
-            if inner:
-                return inner
-        return a
+    if (addr_key and addr_key in normalize_place(n)) or re.match(
+        r"^\d{1,2}/\d{1,2}/\d{4}", n
+    ):
+        n = _trailing_parenthetical(n)
+        if not n:
+            return a
     stripped = re.sub(r"^(torch sampling\s*-\s*)", "", n, flags=re.I).strip()
     return stripped or n
 

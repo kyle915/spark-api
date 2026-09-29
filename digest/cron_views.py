@@ -4672,6 +4672,57 @@ class BackfillRecapRetailersView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class BackfillStoreRecapNamesView(View):
+    """POST `/internal/cron/backfill-store-recap-names`.
+
+    Fires `backfill_store_recap_names` — retitles filed recaps to
+    "Store Name #1234". DRY-RUN by default; only `apply=true` writes.
+
+    Params (query or POST, all optional): apply/execute, tenant_slug
+    (default keee-torch-thc), numbers_json ({"<store or address>": "<#>"}).
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _bool(name: str) -> bool:
+            raw = (request.GET.get(name) or request.POST.get(name) or "").lower()
+            return raw in ("1", "true", "yes", "on")
+
+        def _str(name: str):
+            return request.GET.get(name) or request.POST.get(name) or None
+
+        apply = _bool("apply") or _bool("execute")
+        kwargs = {"apply": apply, "tenant_slug": _str("tenant_slug") or "keee-torch-thc"}
+        numbers_json = _str("numbers_json")
+        if numbers_json:
+            kwargs["numbers_json"] = numbers_json
+
+        out = io.StringIO()
+        try:
+            call_command("backfill_store_recap_names", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("backfill-store-recap-names cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc),
+                 "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse(
+            {"ok": True, "applied": apply, "tenant_slug": kwargs["tenant_slug"],
+             "log": out.getvalue()}
+        )
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class DescribeSheetTabsView(View):
     """GET/POST `/internal/cron/describe-sheet-tabs` — read-only.
 
@@ -9824,6 +9875,7 @@ def _registered_views() -> dict[str, Any]:
         "export-ld-summary": ExportLdSummaryView,
         "export-girlbeer-summary": ExportGirlbeerSummaryView,
         "backfill-recap-retailers": BackfillRecapRetailersView,
+    "backfill-store-recap-names": BackfillStoreRecapNamesView,
         "describe-sheet-tabs": DescribeSheetTabsView,
         "fix-ld-kpi-totals": FixLdKpiTotalsView,
         "add-ld-others-row": AddLdOthersRowView,

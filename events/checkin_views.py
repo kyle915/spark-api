@@ -209,6 +209,11 @@ def _parse_iso_date(value: str):
         return None
 
 
+def _str_field(data: dict, key: str) -> str:
+    value = data.get(key)
+    return value.strip() if isinstance(value, str) else ""
+
+
 def _load_event(code: str):
     """Resolve the code to a live event, or ``None``."""
     from asgiref.sync import async_to_sync  # noqa: F401 — not needed; kept sync
@@ -860,6 +865,14 @@ def public_checkin_recap(request: HttpRequest, code: str) -> HttpResponse:
             used_corpo_card=checkin_web.parse_used_corpo_card(
                 data.get("usedCorpoCard", data.get("used_corpo_card"))
             ),
+            # Not required here: queued offline recaps and cached pages predate
+            # the Store boxes; the page enforces them for store-identity brands.
+            store_name=(
+                _str_field(data, "storeName")
+                if checkin_web.requires_store_identity(event.tenant)
+                else ""
+            ),
+            store_number=_str_field(data, "storeNumber"),
         )
     except checkin_web.RecapNeedsAPhoto as exc:
         # The BA's to fix, not a server fault — so a 400 carrying the SAME
