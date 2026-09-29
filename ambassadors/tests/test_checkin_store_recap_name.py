@@ -213,6 +213,9 @@ class TestStoreRecapName(AmbassadorsGraphQLTestCase):
         nowhere_recap = self._filed(nowhere, nowhere.name)
 
         self._backfill(apply=True)
+        assert CustomRecap.objects.get(id=dated_recap.id).name == dated.name
+
+        self._backfill(include_unnumbered=True, apply=True)
         names = dict(CustomRecap.objects.values_list("id", "name"))
         assert names[dated_recap.id] == "Big Bend Liquor"
         assert names[bare_recap.id] == "Arena Liquors"
@@ -241,12 +244,20 @@ class TestStoreRecapName(AmbassadorsGraphQLTestCase):
             code="TH-B12",
         )
         kc_recap = self._filed(kc, kc.name)
+        spaced = self._event(
+            torch,
+            name="9/24/2026 - 3954 A Peachtree Rd Ne (Total Wine And More)",
+            address="3954 A Peachtree Rd Ne",
+            code="TH-B13",
+        )
+        spaced_recap = self._filed(spaced, spaced.name)
 
         self._backfill(directory="torch_total_wine_stores", apply=True)
         names = dict(CustomRecap.objects.values_list("id", "name"))
         assert names[near_recap.id] == "Total Wine & More (Springfield) #1809"
         assert names[typed_recap.id] == "Total Wine & More (Lee's Summit) #1807"
-        assert names[kc_recap.id] == "Total Wine"
+        assert names[spaced_recap.id] == "Total Wine & More (Brookhaven) #804"
+        assert names[kc_recap.id] == kc.name
 
     def test_placeholder_store_numbers_are_ignored(self):
         assert checkin_web.real_store_number("BINNY-60202") == ""

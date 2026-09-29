@@ -16,6 +16,8 @@ number + street, then city — each only when exactly one store fits.
 
 Otherwise the number comes from the event's Request.store_number or any live
 request of the brand at the same address (chain+zip placeholders ignored).
+Recaps with no number found keep their title unless ``--include-unnumbered``:
+a bare "lol liquors" says less than the walk-in title's address did.
 
 Only system titles are rewritten (the event title, the event title + a
 " · <shift>" suffix, or an earlier run's "Store Name" form). A title an admin
@@ -68,9 +70,9 @@ def _zip(text: str) -> str:
 
 
 def _street(text: str) -> str:
-    """"11221 legacy" from "11221 Legacy Ave. West Palm Beach"."""
-    m = re.match(r"^\s*(\d+[a-z]?)\s+([a-z]+)", _key(text))
-    return f"{m.group(1)} {m.group(2)}" if m else ""
+    """"11221 legacy" from "11221 Legacy Ave. West Palm Beach"; "3954 A Peachtree" → "3954a peachtree"."""
+    m = re.match(r"^\s*(\d+)\s?([a-z]?)\s+([a-z]+)", _key(text))
+    return f"{m.group(1)}{m.group(2)} {m.group(3)}" if m else ""
 
 
 def _city(address: str) -> str:
@@ -168,6 +170,11 @@ class Command(BaseCommand):
             default="",
             help='JSON object {"<store name or address>": "<store #>"}.',
         )
+        parser.add_argument(
+            "--include-unnumbered",
+            action="store_true",
+            help="Also retitle recaps with no store # found (drops the address from walk-in titles).",
+        )
         parser.add_argument("--apply", action="store_true", help="Write changes (default: dry-run).")
 
     def handle(self, *args, **opts):
@@ -242,6 +249,9 @@ class Command(BaseCommand):
                 proposed = compose_shift_recap_name(proposed, shift)
             if not number:
                 missing_number[(store_name, address)] += 1
+                if not opts["include_unnumbered"]:
+                    counts["kept-no-number"] += 1
+                    continue
 
             if proposed == current:
                 counts["already"] += 1
