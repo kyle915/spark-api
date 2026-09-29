@@ -1059,10 +1059,45 @@ def store_identity_prefill(event) -> dict:
     req = getattr(event, "request", None)
     if not name and req is not None:
         name = (getattr(req, "retailer_name", None) or "").strip()
-    number = (getattr(req, "store_number", None) or "").strip() if req is not None else ""
+    number = real_store_number(getattr(req, "store_number", None)) if req is not None else ""
     if not number:
         number = known_store_number(getattr(event, "tenant_id", None), address)
     return {"name": name, "number": number}
+
+
+_PLACEHOLDER_STORE_NUMBER = re.compile(r"^[A-Za-z]+-\d{5}$")
+
+
+def real_store_number(value) -> str:
+    """The store # a client would recognize; "" for import placeholders like BINNY-60202 (chain + zip)."""
+    number = (value or "").strip().lstrip("#").strip()
+    return "" if _PLACEHOLDER_STORE_NUMBER.match(number) else number
+
+
+def known_store_name(tenant_id, address: str) -> str:
+    """A store name another request or event of the brand already uses for this address."""
+    from events.models import Event, Request
+
+    address = (address or "").strip()
+    if not tenant_id or not address:
+        return ""
+    requests = Request.objects.filter(tenant_id=tenant_id, deleted_at__isnull=True).values_list(
+        "retailer_name", "name", "address"
+    )
+    events = Event.objects.filter(tenant_id=tenant_id).values_list("name", "address")
+    rows = [(r or "", n or "", a or "") for r, n, a in requests]
+    rows += [("", n or "", a or "") for n, a in events]
+    for retailer_name, name, other_address in rows:
+        if not addresses_fuzzy_match(address, other_address):
+            continue
+        for candidate in (retailer_name.strip(), _store_display_name(name, other_address)):
+            if (
+                candidate
+                and normalize_place(candidate) != normalize_place(other_address)
+                and not _looks_like_address(candidate)
+            ):
+                return candidate
+    return ""
 
 
 def known_store_number(tenant_id, address: str) -> str:
@@ -1079,8 +1114,8 @@ def known_store_number(tenant_id, address: str) -> str:
         .values_list("address", "store_number")
     )
     for req_address, number in rows:
-        if addresses_fuzzy_match(address, req_address or ""):
-            return (number or "").strip()
+        if real_store_number(number) and addresses_fuzzy_match(address, req_address or ""):
+            return real_store_number(number)
     return ""
 
 
@@ -2106,6 +2141,19 @@ def _trailing_parenthetical(text: str) -> str:
     return ""
 
 
+_STREET_WORD = re.compile(
+    r"\b(road|rd|street|st|avenue|ave|boulevard|blvd|drive|dr|lane|ln|way|highway|hwy|"
+    r"parkway|pkwy|court|ct|trail|pike|plaza|suite|fm|route)\b",
+    re.I,
+)
+
+
+def _looks_like_address(text: str) -> bool:
+    return bool(
+        re.search(r"\b\d{5}\b", text) or re.match(r"^\d", text) or _STREET_WORD.search(text)
+    )
+
+
 def _store_display_name(name: str, address: str) -> str:
     """A picker label that names the STORE, not the walk-in event title.
 
@@ -2122,9 +2170,18 @@ def _store_display_name(name: str, address: str) -> str:
     if (addr_key and addr_key in normalize_place(n)) or re.match(
         r"^\d{1,2}/\d{1,2}/\d{4}", n
     ):
-        n = _trailing_parenthetical(n)
-        if not n:
-            return a
+        inner = _trailing_parenthetical(n)
+        if not inner:
+            rest = re.sub(r"^\d{1,2}/\d{1,2}/\d{4}\s*-\s*", "", n).strip()
+            if (
+                not rest
+                or rest == n
+                or (addr_key and addr_key in normalize_place(rest))
+                or _looks_like_address(rest)
+            ):
+                return a
+            inner = rest
+        n = inner
     stripped = re.sub(r"^(torch sampling\s*-\s*)", "", n, flags=re.I).strip()
     return stripped or n
 
