@@ -218,6 +218,36 @@ class TestStoreRecapName(AmbassadorsGraphQLTestCase):
         assert names[bare_recap.id] == "Arena Liquors"
         assert names[nowhere_recap.id] == nowhere.name
 
+    def test_backfill_matches_total_wine_list_despite_geocoder_noise(self):
+        torch = self.create_tenant(name="Torch THC", slug="keee-torch-thc")
+        near = self._event(
+            torch,
+            name="9/23/2026 - 3310 South Glenstone Avenue, Springfield, MO 65804 (Total Wine)",
+            address="3310 South Glenstone Avenue, Springfield, MO 65804",
+            code="TH-B10",
+        )
+        near_recap = self._filed(near, near.name)
+        typed = self._event(
+            torch,
+            name="9/17/2026 - Total Wine, Lee's Summit, Missouri 64065",
+            address="Total Wine, Lee's Summit, Missouri 64065",
+            code="TH-B11",
+        )
+        typed_recap = self._filed(typed, typed.name)
+        kc = self._event(
+            torch,
+            name="9/20/2026 - Kansas City, Missouri (Total Wine)",
+            address="Kansas City, Missouri",
+            code="TH-B12",
+        )
+        kc_recap = self._filed(kc, kc.name)
+
+        self._backfill(directory="torch_total_wine_stores", apply=True)
+        names = dict(CustomRecap.objects.values_list("id", "name"))
+        assert names[near_recap.id] == "Total Wine & More (Springfield) #1809"
+        assert names[typed_recap.id] == "Total Wine & More (Lee's Summit) #1807"
+        assert names[kc_recap.id] == "Total Wine"
+
     def test_placeholder_store_numbers_are_ignored(self):
         assert checkin_web.real_store_number("BINNY-60202") == ""
         assert checkin_web.real_store_number("#1805") == "1805"
