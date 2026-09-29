@@ -30,8 +30,10 @@ from ambassadors.checkin_web import (
     addresses_fuzzy_match,
     compose_shift_recap_name,
     compose_store_recap_name,
+    known_store_name,
     known_store_number,
     normalize_place,
+    real_store_number,
     store_identity_prefill,
 )
 
@@ -101,6 +103,7 @@ class Command(BaseCommand):
         counts: Counter[str] = Counter()
         missing_number: Counter[tuple[str, str]] = Counter()
         address_numbers: dict[str, str] = {}
+        address_names: dict[str, str] = {}
 
         for recap in recaps.iterator():
             event = recap.event
@@ -110,6 +113,11 @@ class Command(BaseCommand):
             store_name = store_identity_prefill(event)["name"] or (
                 (recap.retailer.name or "").strip() if recap.retailer_id else ""
             )
+            if not store_name and address:
+                addr_key = normalize_place(address)
+                if addr_key not in address_names:
+                    address_names[addr_key] = known_store_name(tenant.id, address)
+                store_name = address_names[addr_key]
             if not store_name:
                 counts["no-store-name"] += 1
                 self.stdout.write(f"no-store-name  #{recap.id}  {current!r}")
@@ -125,14 +133,14 @@ class Command(BaseCommand):
             number = _supplied_number(numbers, store_name, address)
             if not number:
                 req = getattr(event, "request", None)
-                number = ((req.store_number if req is not None else "") or "").strip()
+                number = real_store_number(req.store_number) if req is not None else ""
             if not number and address:
                 addr_key = normalize_place(address)
                 if addr_key not in address_numbers:
                     address_numbers[addr_key] = known_store_number(tenant.id, address)
                 number = address_numbers[addr_key]
             if not number and base != event_name and base.startswith(store_name):
-                number = base[len(store_name):].strip().lstrip("#").strip()
+                number = real_store_number(base[len(store_name):])
 
             proposed = compose_store_recap_name(store_name, number)
             if shift:

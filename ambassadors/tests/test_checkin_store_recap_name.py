@@ -202,6 +202,26 @@ class TestStoreRecapName(AmbassadorsGraphQLTestCase):
         self._backfill(numbers_json='{"Big Bend Liquor": "9"}', apply=True)
         assert CustomRecap.objects.get(id=recap.id).name == "Big Bend Liquor #9"
 
+    def test_backfill_recovers_store_from_title_or_same_address(self):
+        torch = self.create_tenant(name="Torch THC", slug="keee-torch-thc")
+        dated = self._event(torch, name="8/27/2026 - Big Bend Liquor", address="3620 S Big Bend Blvd, Maplewood, MO 63143", code="TH-B6")
+        dated_recap = self._filed(dated, dated.name)
+        self._event(torch, name="Torch Sampling - Arena Liquors", address="1217 Hampton Avenue, Saint Louis, MO 63139", code="TH-B7")
+        bare = self._event(torch, name="9/4/2026 - 1217 Hampton Ave, Saint Louis, MO 63139", address="1217 Hampton Ave, Saint Louis, MO 63139", code="TH-B8")
+        bare_recap = self._filed(bare, bare.name)
+        nowhere = self._event(torch, name="9/4/2026 - Bryan Road, O'Fallon, Missouri 63368", address="Bryan Rd, O'Fallon, MO 63368", code="TH-B9")
+        nowhere_recap = self._filed(nowhere, nowhere.name)
+
+        self._backfill(apply=True)
+        names = dict(CustomRecap.objects.values_list("id", "name"))
+        assert names[dated_recap.id] == "Big Bend Liquor"
+        assert names[bare_recap.id] == "Arena Liquors"
+        assert names[nowhere_recap.id] == nowhere.name
+
+    def test_placeholder_store_numbers_are_ignored(self):
+        assert checkin_web.real_store_number("BINNY-60202") == ""
+        assert checkin_web.real_store_number("#1805") == "1805"
+
     def test_backfill_leaves_other_brands_alone(self):
         torch = self.create_tenant(name="Torch THC", slug="keee-torch-thc")
         other = self.create_tenant(name="Liquid Death", slug="liquid-death")
