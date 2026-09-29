@@ -1,0 +1,190 @@
+{
+ "source": "External // Torch Beverage Retail Demos → Total Wine List",
+ "stores": [
+  {
+   "name": "Total Wine & More (Springfield)",
+   "address": "3308 S. GLENSTONE AVE, SPRINGFIELD, MO 65804",
+   "number": "1809"
+  },
+  {
+   "name": "Total Wine & More (Brentwood)",
+   "address": "90 Brentwood Promenede Court, BRENTWOOD, MO 63144",
+   "number": "1802"
+  },
+  {
+   "name": "Total Wine & More (O'Fallon)",
+   "address": "2257 State Hwy K, O'FALLON, MO 63368",
+   "number": "1804"
+  },
+  {
+   "name": "Total Wine & More (Town & Country)",
+   "address": "13887 Manchester Road, TOWN AND COUNTRY, MO 63011",
+   "number": "1801"
+  },
+  {
+   "name": "Total Wine & More (Lee's Summit)",
+   "address": "1648 NW Chipman Road, LEE'S SUMMIT, MO 64081",
+   "number": "1807"
+  },
+  {
+   "name": "Total Wine & More (Liberty)",
+   "address": "8520 N Evanston Ave., KANSAS CITY, MO 64157",
+   "number": "1805"
+  },
+  {
+   "name": "Total Wine & More (Chesterfield)",
+   "address": "1781 Clarkson Road, CHESTERFIELD, MO 63017",
+   "number": "1803"
+  },
+  {
+   "name": "Total Wine & More (State Line)",
+   "address": "13657 Washington Street, KANSAS CITY, MO 64145",
+   "number": "1806"
+  },
+  {
+   "name": "Total Wine & More (Kansas City)",
+   "address": "4201 Main Street, KANSAS CITY, MO 64111",
+   "number": "1808"
+  },
+  {
+   "name": "Total Wine & More (Atlanta)",
+   "address": "2955 COBB PKWY NW STE 308, ATLANTA, GA 30339",
+   "number": "805"
+  },
+  {
+   "name": "Total Wine & More (Atlanta)",
+   "address": "124 PERIMETER CENTER WEST, ATLANTA, GA 30346",
+   "number": "803"
+  },
+  {
+   "name": "Total Wine & More (Brookhaven)",
+   "address": "3954A PEACHTREE ROAD NE, BROOKHAVEN, GA 30319",
+   "number": "804"
+  },
+  {
+   "name": "Total Wine & More (Park Lane)",
+   "address": "9350 N Central Expy, Dallas, TX 75231",
+   "number": "501"
+  },
+  {
+   "name": "Total Wine & More (Plano)",
+   "address": "721 N Central Expy #200, Plano, TX 75075",
+   "number": "505"
+  },
+  {
+   "name": "Total Wine & More (Alliance)",
+   "address": "3101 Texas Sage Trail, Fort Worth, TX 76177",
+   "number": "523"
+  },
+  {
+   "name": "Total Wine & More (Euless)",
+   "address": "2501 Rio Grande Blvd, Euless, TX 76039",
+   "number": "528"
+  },
+  {
+   "name": "Total Wine & More (Oak Lawn)",
+   "address": "3810 Congress Ave, Dallas, TX 75219",
+   "number": "531"
+  },
+  {
+   "name": "Total Wine & More (Baybrook)",
+   "address": "18740 Gulf Fwy, Friendswood, TX 77546",
+   "number": "515"
+  },
+  {
+   "name": "Total Wine & More (The Heights)",
+   "address": "2857 Katy Fwy Ste 100, Houston, TX 77007",
+   "number": "530"
+  },
+  {
+   "name": "Total Wine & More (Sunset Valley)",
+   "address": "5601 Brodie Ln #800, Sunset Valley, TX 78745",
+   "number": "509"
+  },
+  {
+   "name": "Total Wine & More (Lakeline)",
+   "address": "11066 Pecan Park Blvd Suite 117, Cedar Park, TX 78613",
+   "number": "510"
+  },
+  {
+   "name": "Total Wine & More (Arboretum)",
+   "address": "10001 Research Blvd #300, Austin, TX 78759",
+   "number": "522"
+  },
+  {
+   "name": "Total Wine & More (Pensacola)",
+   "address": "1660 Airport Blvd Unit 145, Pensacola, FL 32504",
+   "number": "937"
+  },
+  {
+   "name": "Total Wine & More (Tallahassee)",
+   "address": "1400-31 Village Square Blvd, Tallahassee, FL 32312",
+   "number": "938"
+  },
+  {
+   "name": "Total Wine & More (Jacksonville)",
+   "address": "4413 Town Center Pkwy Ste 300, Jacksonville, FL 32246",
+   "number": "907"
+  },
+  {
+   "name": "Total Wine & More (Altamonte Springs)",
+   "address": "160 E Altamonte Dr, Altamonte Springs, FL 32701",
+   "number": "925"
+  },
+  {
+   "name": "Total Wine & More (Orlando)",
+   "address": "2712 E Colonial Dr, Orlando, FL 32803",
+   "number": "909"
+  },
+  {
+   "name": "Total Wine & More (Wesley Chapel)",
+   "address": "25535 Sierra Center Blvd, Lutz, FL 33559",
+   "number": "934"
+  },
+  {
+   "name": "Total Wine & More (Brandon)",
+   "address": "11211 Causeway Blvd, Brandon, FL 33511",
+   "number": "928"
+  },
+  {
+   "name": "Total Wine & More (Sarasota)",
+   "address": "8280 S Tamiami Trail, Sarasota, FL 34238",
+   "number": "924"
+  },
+  {
+   "name": "Total Wine & More (Fort Myers)",
+   "address": "13711 S Tamiami Trl, Fort Myers, FL 33912",
+   "number": "902"
+  },
+  {
+   "name": "Total Wine & More (Palm Beach Gardens)",
+   "address": "11221 Legacy Ave, Palm Beach Gardens, FL 33410",
+   "number": "903"
+  },
+  {
+   "name": "Total Wine & More (Lake Nona)",
+   "address": "6031 Lake Nona Blvd., Orlando, FL 32827",
+   "number": "944"
+  },
+  {
+   "name": "Total Wine & More (Coral Springs)",
+   "address": "2564 N. University Drive, Coral Springs, FL 33065",
+   "number": "927"
+  },
+  {
+   "name": "Total Wine & More (Daytona Beach)",
+   "address": "2500 W International Speedway Blvd., Daytona Beach, FL 32114",
+   "number": "923"
+  },
+  {
+   "name": "Total Wine & More (Boca Raton)",
+   "address": "5050 Town Center Circle, Boca Raton, FL 33486",
+   "number": "905"
+  },
+  {
+   "name": "Total Wine & More (Sarasota)",
+   "address": "8539 Cooper Creek Blvd, University Park, FL 34201",
+   "number": "914"
+  }
+ ]
+}

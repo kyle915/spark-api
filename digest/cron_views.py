@@ -4679,7 +4679,8 @@ class BackfillStoreRecapNamesView(View):
     "Store Name #1234". DRY-RUN by default; only `apply=true` writes.
 
     Params (query or POST, all optional): apply/execute, tenant_slug
-    (default keee-torch-thc), numbers_json ({"<store or address>": "<#>"}).
+    (default keee-torch-thc), directory (store list keys in
+    recaps/management/commands/data), numbers_json ({"<store or address>": "<#>"}).
     """
 
     def _run(self, request: HttpRequest) -> HttpResponse:
@@ -4699,6 +4700,9 @@ class BackfillStoreRecapNamesView(View):
         numbers_json = _str("numbers_json")
         if numbers_json:
             kwargs["numbers_json"] = numbers_json
+        directory = _str("directory")
+        if directory:
+            kwargs["directory"] = directory
 
         out = io.StringIO()
         try:
