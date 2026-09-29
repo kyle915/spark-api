@@ -165,7 +165,10 @@ class Command(BaseCommand):
 
         # ---- Resolve tenant ------------------------------------------------
         if tenant_slug:
-            tenant = Tenant.objects.filter(slug=tenant_slug).first()
+            tenant = (
+                Tenant.objects.filter(slug=tenant_slug).order_by("id").first()
+                or Tenant.objects.filter(request_url_name=tenant_slug).order_by("id").first()
+            )
             if not tenant:
                 raise CommandError(f"Tenant not found by slug {tenant_slug!r}.")
         else:

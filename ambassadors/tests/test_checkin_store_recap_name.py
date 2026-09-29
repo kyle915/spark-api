@@ -193,6 +193,15 @@ class TestStoreRecapName(AmbassadorsGraphQLTestCase):
             self._backfill(apply=True)
         assert CustomRecap.objects.get(id=recap.id).name == "Big Bend Liquor #77"
 
+    def test_backfill_finds_torch_by_public_form_slug(self):
+        torch = self.create_tenant(name="Torch THC", slug="torch-prod")
+        torch.request_url_name = "keee-torch-thc"
+        torch.save(update_fields=["request_url_name"])
+        event = self._event(torch, name="Big Bend Liquor", address="1 A St, X, MO", code="TH-B5")
+        recap = self._filed(event, "Big Bend Liquor")
+        self._backfill(numbers_json='{"Big Bend Liquor": "9"}', apply=True)
+        assert CustomRecap.objects.get(id=recap.id).name == "Big Bend Liquor #9"
+
     def test_backfill_leaves_other_brands_alone(self):
         torch = self.create_tenant(name="Torch THC", slug="keee-torch-thc")
         other = self.create_tenant(name="Liquid Death", slug="liquid-death")
