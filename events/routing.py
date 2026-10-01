@@ -45,10 +45,17 @@ LIQUID_DEATH_TERRITORY: dict[str, list[str]] = {
     ],
 }
 
-# Public-form Liquid Death Retail Sampling goes to all of these together,
-# whatever the state — LD's regions are in flux after layoffs (Oct 2026).
-# The first address becomes the assigned RMM. Other request types keep the
-# territory map above.
+# Laid off (Oct 2026). Kept in the territory map so the LD summary still
+# credits their past demos, but never routed to.
+LIQUID_DEATH_DEPARTED_RMMS: set[str] = {
+    "k.williams@liquiddeath.com",
+    "m.cristancho@liquiddeath.com",
+    "t.reed@liquiddeath.com",
+}
+
+# The remaining RMMs, all together: every public-form Retail Sampling request
+# (regions are in flux), and any request in a departed RMM's states. The
+# first address becomes the assigned RMM.
 LIQUID_DEATH_RETAIL_RMMS: list[str] = [
     "l.giaccio@liquiddeath.com",
     "ross@liquiddeath.com",
@@ -232,13 +239,16 @@ def territory_emails_for_state(tenant_slug: str, state_code: str | None) -> list
     if tenant_slug not in ROUTED_TENANT_SLUGS:
         return []
     state_code = (state_code or "").upper()
-    matched = [
+    owners = [
         email
         for email, states in LIQUID_DEATH_TERRITORY.items()
         if state_code in states
     ]
+    matched = [e for e in owners if e not in LIQUID_DEATH_DEPARTED_RMMS]
     if matched:
         return matched
+    if owners:
+        return list(LIQUID_DEATH_RETAIL_RMMS)
     logger.info(
         "No RMM territory match for tenant=%s state=%s — routing to Ignite only",
         tenant_slug,

@@ -43,13 +43,14 @@ class TestRequestRmmRouting(EventsGraphQLTestCase):
         self.ld = self.create_tenant(
             name="Liquid Death", request_url_name="ighn-liquid-death"
         )
-        # Manuela Cristancho owns GA/FL/NC/... in LIQUID_DEATH_TERRITORY.
-        self.manuela = self.create_user(
-            username="m.cristancho@liquiddeath.com",
-            email="m.cristancho@liquiddeath.com",
+        # GA/FL were Manuela's; since the Oct 2026 layoffs they route to the
+        # remaining RMMs with Lauren assigned.
+        self.lauren = self.create_user(
+            username="l.giaccio@liquiddeath.com",
+            email="l.giaccio@liquiddeath.com",
             role=self.roles["spark_admin"],
-            first_name="Manuela",
-            last_name="Cristancho",
+            first_name="Lauren",
+            last_name="Giaccio",
         )
         self.ga = event_models.State.objects.create(
             name="Georgia", code="GA", created_by=self.system_user
@@ -73,7 +74,7 @@ class TestRequestRmmRouting(EventsGraphQLTestCase):
     def test_compute_assigns_territory_owner_and_state(self):
         req = self._make_request()
         assigned, state_code, state_obj = compute_request_routing(req)
-        assert assigned is not None and assigned.id == self.manuela.id
+        assert assigned is not None and assigned.id == self.lauren.id
         assert state_code == "GA"
         assert state_obj is not None and state_obj.id == self.ga.id
         # Read-only: nothing persisted.
@@ -106,10 +107,10 @@ class TestRequestRmmRouting(EventsGraphQLTestCase):
         req = self._make_request()
         assigned, state_code, changed = route_request_sync(req)
         assert changed is True
-        assert assigned.id == self.manuela.id
+        assert assigned.id == self.lauren.id
         assert state_code == "GA"
         req.refresh_from_db()
-        assert req.rmm_asigned_id == self.manuela.id
+        assert req.rmm_asigned_id == self.lauren.id
         assert req.state_id == self.ga.id
 
         # Second run is a no-op (only fills blanks).
@@ -157,7 +158,7 @@ class TestRequestRmmRouting(EventsGraphQLTestCase):
         assert "synced=1" in report
         assert "remaining=0" in report
         assert (
-            event_models.Request.objects.filter(rmm_asigned=self.manuela).count() == 1
+            event_models.Request.objects.filter(rmm_asigned=self.lauren).count() == 1
         )
 
     def test_backfill_execute_is_idempotent(self):
@@ -185,7 +186,7 @@ class TestRequestRmmRouting(EventsGraphQLTestCase):
         assert "assigned=2" in r1
         assert "remaining=1" in r1
         assert (
-            event_models.Request.objects.filter(rmm_asigned=self.manuela).count() == 2
+            event_models.Request.objects.filter(rmm_asigned=self.lauren).count() == 2
         )
 
         out2 = StringIO()
@@ -197,13 +198,13 @@ class TestRequestRmmRouting(EventsGraphQLTestCase):
         assert "assigned=1" in r2
         assert "remaining=0" in r2
         assert (
-            event_models.Request.objects.filter(rmm_asigned=self.manuela).count() == 3
+            event_models.Request.objects.filter(rmm_asigned=self.lauren).count() == 3
         )
 
     def test_geocode_state_fallback_routes_unparseable_address(self):
         # Address with NO parseable state (just a venue name). Without
         # --geocode-state it can't route; WITH it, Photon resolves "Georgia"
-        # → GA → m.cristancho's territory.
+        # → GA → Lauren.
         req = event_models.Request.objects.create(
             name="Walmart SC",
             address="Walmart Supercenter 389",  # no city/state for the regex
@@ -221,7 +222,7 @@ class TestRequestRmmRouting(EventsGraphQLTestCase):
         req.refresh_from_db()
         assert req.rmm_asigned_id is None
 
-        # With --geocode-state: Photon → "Georgia" → GA → Manuela.
+        # With --geocode-state: Photon → "Georgia" → GA → Lauren.
         out1 = StringIO()
         with patch(UPSERT_PATH, return_value=True), patch("time.sleep"), patch(
             "utils.geocoding.photon_state_for_address", return_value="Georgia"
@@ -236,7 +237,7 @@ class TestRequestRmmRouting(EventsGraphQLTestCase):
         assert "geocoded=1" in r1
         assert "assigned=1" in r1
         req.refresh_from_db()
-        assert req.rmm_asigned_id == self.manuela.id
+        assert req.rmm_asigned_id == self.lauren.id
         assert req.state_id == self.ga.id
 
     def test_backfill_stamps_state_for_rmm_set_but_state_null(self):
@@ -244,7 +245,7 @@ class TestRequestRmmRouting(EventsGraphQLTestCase):
         # so the Market/State column was blank and the RMM couldn't see the row
         # on their sheet. The backfill must catch these (candidates = no RMM OR
         # no state) and stamp the state without disturbing the RMM.
-        req = self._make_request(rmm_asigned=self.manuela)  # rmm set, state null
+        req = self._make_request(rmm_asigned=self.lauren)  # rmm set, state null
         assert req.state_id is None
         out = StringIO()
         with patch(UPSERT_PATH, return_value=True) as mock_upsert:
@@ -252,7 +253,7 @@ class TestRequestRmmRouting(EventsGraphQLTestCase):
             mock_upsert.assert_called_once()  # re-synced with the stamped state
         req.refresh_from_db()
         assert req.state_id == self.ga.id  # state now stamped
-        assert req.rmm_asigned_id == self.manuela.id  # RMM preserved
+        assert req.rmm_asigned_id == self.lauren.id  # RMM preserved
         report = out.getvalue()
         assert "stated=1" in report
         assert "unroutable=0" in report
@@ -261,7 +262,7 @@ class TestRequestRmmRouting(EventsGraphQLTestCase):
     def test_force_state_stamps_explicit_state_and_assigns_rmm(self):
         # A venue-only address the parser + Photon can't resolve, with no RMM
         # and no state — the genuinely-incomplete case. The operator knows it's
-        # Florida and forces it; the territory RMM (Manuela) then attaches and
+        # Florida and forces it; the territory RMM (Lauren) then attaches and
         # the Sheet row re-syncs.
         fl = event_models.State.objects.create(
             name="Florida", code="FL", created_by=self.system_user
@@ -286,7 +287,7 @@ class TestRequestRmmRouting(EventsGraphQLTestCase):
             mock_upsert.assert_called_once()  # one row re-synced
         req.refresh_from_db()
         assert req.state_id == fl.id  # state forced
-        assert req.rmm_asigned_id == self.manuela.id  # FL → m.cristancho
+        assert req.rmm_asigned_id == self.lauren.id  # FL → Lauren
         report = out.getvalue()
         assert "RESULT mode=execute force_state=FL" in report
         assert "forced=1" in report
@@ -296,7 +297,7 @@ class TestRequestRmmRouting(EventsGraphQLTestCase):
     def test_force_state_preserves_existing_rmm(self):
         # A row that already has an RMM but no state: force the state, keep RMM.
         ga = self.ga
-        req = self._make_request(rmm_asigned=self.manuela, address="venue only")
+        req = self._make_request(rmm_asigned=self.lauren, address="venue only")
         assert req.state_id is None
         out = StringIO()
         with patch(UPSERT_PATH, return_value=True):
@@ -309,22 +310,22 @@ class TestRequestRmmRouting(EventsGraphQLTestCase):
             )
         req.refresh_from_db()
         assert req.state_id == ga.id
-        assert req.rmm_asigned_id == self.manuela.id  # unchanged
+        assert req.rmm_asigned_id == self.lauren.id  # unchanged
         # RMM was already set (and legitimately owns GA) → no new assignment,
         # no reroute.
         assert "assigned=0" in out.getvalue()
         assert "rerouted=0" in out.getvalue()
 
     def test_force_state_corrects_wrong_rmm(self):
-        # The real backlog bug: a FL/GA row stuck on the WRONG owner (ross owns
-        # TX/OK/AR/LA/AL/MS, not GA) from an earlier mis-geocode. Forcing the
-        # state must MOVE it to the correct owner's sheet — not just fill blanks.
-        ross = self.create_user(
-            username="ross@liquiddeath.com",
-            email="ross@liquiddeath.com",
+        # A FL/GA row stuck on the WRONG owner (t.reed owned the Midwest, and
+        # has since left). Forcing the state must MOVE it to the correct
+        # owner's sheet — not just fill blanks.
+        wrong = self.create_user(
+            username="t.reed@liquiddeath.com",
+            email="t.reed@liquiddeath.com",
             role=self.roles["spark_admin"],
         )
-        req = self._make_request(rmm_asigned=ross, address="venue only")
+        req = self._make_request(rmm_asigned=wrong, address="venue only")
         assert req.state_id is None
         out = StringIO()
         with patch(UPSERT_PATH, return_value=True):
@@ -337,7 +338,7 @@ class TestRequestRmmRouting(EventsGraphQLTestCase):
             )
         req.refresh_from_db()
         assert req.state_id == self.ga.id
-        assert req.rmm_asigned_id == self.manuela.id  # ross → m.cristancho
+        assert req.rmm_asigned_id == self.lauren.id  # t.reed → Lauren
         report = out.getvalue()
         assert "rerouted=1" in report
         assert "assigned=0" in report  # it was a correction, not a new assign
