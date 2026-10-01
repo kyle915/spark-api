@@ -45,6 +45,16 @@ LIQUID_DEATH_TERRITORY: dict[str, list[str]] = {
     ],
 }
 
+# Public-form Liquid Death Retail Sampling goes to all of these together,
+# whatever the state — LD's regions are in flux after layoffs (Oct 2026).
+# The first address becomes the assigned RMM. Other request types keep the
+# territory map above.
+LIQUID_DEATH_RETAIL_RMMS: list[str] = [
+    "l.giaccio@liquiddeath.com",
+    "ross@liquiddeath.com",
+    "pat@liquiddeath.com",
+]
+
 # Ignite admins that always get CC'd on the routing email.
 IGNITE_REVIEW_CC: list[str] = [
     "events@igniteproductions.co",
@@ -237,6 +247,20 @@ def territory_emails_for_state(tenant_slug: str, state_code: str | None) -> list
     return []
 
 
+def _is_retail_sampling(request) -> bool:
+    request_type = getattr(request, "request_type", None)
+    return "retail" in (getattr(request_type, "name", "") or "").lower()
+
+
+def public_form_rmm_emails(tenant_slug: str, request) -> list[str]:
+    """TO list for a public-form request on a routed tenant ([] = Ignite-only triage)."""
+    if tenant_slug not in ROUTED_TENANT_SLUGS:
+        return []
+    if _is_retail_sampling(request):
+        return list(LIQUID_DEATH_RETAIL_RMMS)
+    return territory_emails_for_state(tenant_slug, _state_code_from_request(request))
+
+
 @sync_to_async
 def assign_rmm_for_request(request, tenant_slug: str) -> tuple[object | None, list[str]]:
     """Pick the RMM for this request and assign it. Returns (user, all_to_emails).
@@ -286,10 +310,7 @@ def assign_rmm_for_request(request, tenant_slug: str) -> tuple[object | None, li
         )
         return rmm, ([rmm.email] if rmm.email else [])
 
-    if tenant_slug not in ROUTED_TENANT_SLUGS:
-        return None, []
-    state = _state_code_from_request(request)
-    emails = territory_emails_for_state(tenant_slug, state)
+    emails = public_form_rmm_emails(tenant_slug, request)
     if not emails:
         return None, []
     primary_email = emails[0]

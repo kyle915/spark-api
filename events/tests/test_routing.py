@@ -5,9 +5,15 @@ Tests are intentionally I/O-free — no DB, no Django setup — so they
 run fast and don't get skipped when the test DB is slow to set up.
 """
 
+from types import SimpleNamespace
+
 import pytest
 
-from events.routing import extract_state_code, territory_emails_for_state
+from events.routing import (
+    extract_state_code,
+    public_form_rmm_emails,
+    territory_emails_for_state,
+)
 
 
 @pytest.mark.parametrize(
@@ -112,3 +118,30 @@ def test_territory_emails_for_state_unknown_state_returns_empty():
 def test_territory_emails_for_state_other_tenant_returns_empty():
     """Non-routed tenants always return [] regardless of state."""
     assert territory_emails_for_state("some-other-tenant", "NY") == []
+
+
+def _public_request(request_type: str, address: str):
+    return SimpleNamespace(
+        request_type=SimpleNamespace(name=request_type),
+        address=address,
+        state=None,
+        location=None,
+        retailer=None,
+    )
+
+
+def test_public_ld_retail_sampling_goes_to_the_three_rmms_in_any_state():
+    expected = [
+        "l.giaccio@liquiddeath.com",
+        "ross@liquiddeath.com",
+        "pat@liquiddeath.com",
+    ]
+    for address in ("1885 Halite Dr, Sparks, NV 89436", "Columbia, Missouri", "1608 Broadway St"):
+        req = _public_request("Retail Sampling", address)
+        assert public_form_rmm_emails("ighn-liquid-death", req) == expected
+
+
+def test_public_ld_other_types_keep_territory_routing():
+    req = _public_request("Event Activation", "EDMOND, OK, 73034")
+    assert public_form_rmm_emails("ighn-liquid-death", req) == ["ross@liquiddeath.com"]
+    assert public_form_rmm_emails("some-other-tenant", _public_request("Retail Sampling", "Chino, CA")) == []
