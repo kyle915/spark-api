@@ -141,6 +141,17 @@ def test_public_ld_retail_sampling_goes_to_the_three_rmms_in_any_state():
         assert public_form_rmm_emails("ighn-liquid-death", req) == expected
 
 
+def test_departed_rmm_states_go_to_the_remaining_three():
+    remaining = [
+        "l.giaccio@liquiddeath.com",
+        "ross@liquiddeath.com",
+        "pat@liquiddeath.com",
+    ]
+    for state in ("CA", "FL", "WI"):
+        assert territory_emails_for_state("ighn-liquid-death", state) == remaining
+    assert territory_emails_for_state("ighn-liquid-death", "DE") == ["pat@liquiddeath.com"]
+
+
 def test_public_ld_other_types_keep_territory_routing():
     req = _public_request("Event Activation", "EDMOND, OK, 73034")
     assert public_form_rmm_emails("ighn-liquid-death", req) == ["ross@liquiddeath.com"]
