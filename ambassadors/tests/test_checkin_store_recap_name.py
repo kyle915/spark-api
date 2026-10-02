@@ -296,12 +296,20 @@ class TestStoreRecapName(AmbassadorsGraphQLTestCase):
             code="TH-BN10",
         )
         elsewhere_recap = self._filed(elsewhere, elsewhere.name)
+        promenade = self._event(
+            torch,
+            name="9/23/2026 - Brentwood Promenade Court, Brentwood, Missouri 63144",
+            address="Brentwood Promenade Court, Brentwood, Missouri 63144",
+            code="TH-BN11",
+        )
+        promenade_recap = self._filed(promenade, promenade.name)
 
         self._backfill(directory="torch_total_wine_stores,torch_binnys_stores", apply=True)
         names = dict(CustomRecap.objects.values_list("id", "name"))
         assert {expected: names[r.id] for expected, r in recaps.items()} == {e: e for e in cases}
         assert names[typed.id] == "Binny's (Niles) #18"
         assert names[elsewhere_recap.id] == elsewhere.name
+        assert names[promenade_recap.id] == "Total Wine & More (Brentwood) #1802"
 
     def test_backfill_numbers_ba_typed_chain_titles_but_not_conflicts(self):
         torch = self.create_tenant(name="Torch THC", slug="keee-torch-thc")
@@ -321,7 +329,7 @@ class TestStoreRecapName(AmbassadorsGraphQLTestCase):
         assert names[missing.id] == "Total Wine & More (Sunset Valley) #509"
         assert names[right.id] == "Total Wine #509"
         assert names[conflict.id] == "Total wine Akers mill #803"
-        assert f"conflict       #{conflict.id}" in out
+        assert f"conflict       #{conflict.id}  'Total wine Akers mill #803'  (list: Total Wine & More (Atlanta) #805)" in out
         assert names[other_chain.id] == "Sip & Smoke"
 
     def test_street_key_folds_directionals_but_keeps_unit_letters(self):

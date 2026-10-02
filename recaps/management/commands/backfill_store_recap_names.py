@@ -85,10 +85,12 @@ _STREET_TYPES = {
 def _street_parts(text: str) -> tuple[str, str]:
     """("7330", "north") from "7330 W. North Ave"; ("3954a", "peachtree") from "3954 A Peachtree".
 
-    The name is "" unless the text reads like a street: a house number or a
-    street type right after the name ("Tonti Drive", not "lake zurich Illinois").
+    The name is "" unless the text reads like a street: a house number, or a
+    street type before the first comma ("Brentwood Promenade Court", not
+    "lake zurich Illinois").
     """
     words = _key(text).split()
+    first_part = set(_key((text or "").split(",")[0]).split())
     number = ""
     if words and re.fullmatch(r"\d+[a-z]?", words[0]):
         number, words = words[0], words[1:]
@@ -98,7 +100,7 @@ def _street_parts(text: str) -> tuple[str, str]:
         words = words[1:]
     if not words or words[0].isdigit():
         return number, ""
-    if not number and (len(words) < 2 or words[1] not in _STREET_TYPES):
+    if not number and (len(words) < 2 or not (first_part - {words[0]}) & _STREET_TYPES):
         return "", ""
     return number, words[0]
 
@@ -322,7 +324,8 @@ class Command(BaseCommand):
                 reason = _custom_reason(directory, listed, current)
                 if reason:
                     counts[reason] += 1
-                    self.stdout.write(f"{reason:<15}#{recap.id}  {current!r}")
+                    seen = f"  (list: {listed.name} #{listed.number})" if reason == "conflict" else ""
+                    self.stdout.write(f"{reason:<15}#{recap.id}  {current!r}{seen}")
                     continue
 
             if not number:
