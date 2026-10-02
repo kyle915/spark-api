@@ -4732,6 +4732,57 @@ class BackfillStoreRecapNamesView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class AuditTorchRecapsView(View):
+    """GET/POST `/internal/cron/audit-torch-recaps`.
+
+    Fires `audit_torch_recaps` — READ-ONLY per-recap audit of Torch THC
+    conversion math + data quality. Never writes.
+
+    Params (query or POST, all optional): tenant (default keee-torch-thc),
+    since / until (YYYY-MM-DD inclusive; default all-time → today),
+    focus_since (default 2026-09-30), no_csv.
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _str(name: str) -> str:
+            return (request.GET.get(name) or request.POST.get(name) or "").strip()
+
+        kwargs = {"tenant": _str("tenant") or "keee-torch-thc"}
+        for key in ("since", "until", "focus_since"):
+            if _str(key):
+                kwargs[key] = _str(key)
+        if _str("no_csv").lower() in ("1", "true", "yes", "on"):
+            kwargs["no_csv"] = True
+
+        out = io.StringIO()
+        try:
+            call_command("audit_torch_recaps", stdout=out, **kwargs)
+        except CommandError as exc:
+            return JsonResponse(
+                {"ok": False, "error": "bad-input", "detail": str(exc), "log": out.getvalue()},
+                status=400,
+            )
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("audit-torch-recaps cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc),
+                 "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse({"ok": True, "log": out.getvalue()})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class OffboardClientUsersView(View):
     """POST `/internal/cron/offboard-client-users`.
 
@@ -9942,6 +9993,7 @@ def _registered_views() -> dict[str, Any]:
         "backfill-recap-retailers": BackfillRecapRetailersView,
     "backfill-store-recap-names": BackfillStoreRecapNamesView,
     "offboard-client-users": OffboardClientUsersView,
+    "audit-torch-recaps": AuditTorchRecapsView,
         "describe-sheet-tabs": DescribeSheetTabsView,
         "fix-ld-kpi-totals": FixLdKpiTotalsView,
         "add-ld-others-row": AddLdOthersRowView,

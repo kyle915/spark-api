@@ -1,0 +1,74 @@
+name: Audit Torch recaps (manual, read-only)
+
+# Manually fires `/internal/cron/audit-torch-recaps` on Cloud Run to run
+# `audit_torch_recaps`: per-recap Torch THC audit (consumers sampled,
+# purchases, SKUs, photo buckets, status, activation type) + pooled
+# conversion by month / store / BA next to what Insights shows, and a CSV.
+# See recaps/management/commands/audit_torch_recaps.py.
+#
+# READ-ONLY — never writes. Secret-gated via X-Cron-Secret (shared
+# INTERNAL_CRON_SECRET) — a HEADER, never the URL.
+
+on:
+  workflow_dispatch:
+    inputs:
+      since:
+        description: "YYYY-MM-DD inclusive start (blank = all-time)."
+        required: false
+        default: ""
+        type: string
+      until:
+        description: "YYYY-MM-DD inclusive end (blank = today)."
+        required: false
+        default: ""
+        type: string
+      focus_since:
+        description: "Extra window called out separately (start date)."
+        required: false
+        default: "2026-09-30"
+        type: string
+      tenant:
+        description: "Tenant slug."
+        required: false
+        default: "keee-torch-thc"
+        type: string
+
+jobs:
+  fire-audit-torch-recaps:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire audit-torch-recaps cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/audit-torch-recaps
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          SINCE: ${{ github.event.inputs.since }}
+          UNTIL: ${{ github.event.inputs.until }}
+          FOCUS_SINCE: ${{ github.event.inputs.focus_since }}
+          TENANT: ${{ github.event.inputs.tenant || 'keee-torch-thc' }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            --max-time 600 \
+            -X POST "$CRON_URL" \
+            --data-urlencode "tenant=$TENANT" \
+            --data-urlencode "since=$SINCE" \
+            --data-urlencode "until=$UNTIL" \
+            --data-urlencode "focus_since=$FOCUS_SINCE" \
+            -H "X-Cron-Secret: $CRON_SECRET")
+          echo "HTTP $STATUS"
+          python3 -c "import json; d=json.load(open('/tmp/cron-response.json')); open('/tmp/torch-audit.txt','w').write(d.get('log') or json.dumps(d)); print(d.get('log') or d)"
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS — see body above."
+            exit 1
+          fi
+      - name: Upload audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: torch-recap-audit
+          path: /tmp/torch-audit.txt
+          if-no-files-found: ignore
