@@ -259,6 +259,78 @@ class TestStoreRecapName(AmbassadorsGraphQLTestCase):
         assert names[spaced_recap.id] == "Total Wine & More (Brookhaven) #804"
         assert names[kc_recap.id] == kc.name
 
+    def test_backfill_matches_binnys_list_however_the_ba_wrote_it(self):
+        torch = self.create_tenant(name="Torch THC", slug="keee-torch-thc")
+        cases = {
+            "Binny's (Chicago - Lincoln Park) #24": ("9/20/2026 - 1725 n marcey (Binny's)", "1725 n marcey"),
+            "Binny's (Lake Zurich) #20": ("9/20/2026 - lake zurich Illinois (Binny's)", "lake zurich Illinois"),
+            "Binny's (Chicago - Logan Square) #35": (
+                "9/21/2026 - 3934 W Diversey Ave, Chicago, IL 60647 (Binnys)",
+                "3934 W Diversey Ave, Chicago, IL 60647",
+            ),
+            "Binny's (Chicago - Hyde Park) #7": (
+                "Retail Sampling - BINNY'S - HYDE PARK",
+                "1240 E. 47th St. Chicago, IL 60653",
+            ),
+            "Binny's (Joliet) #40": (
+                "9/11/2026 - Tonti Drive, Plainfield Township, Illinois 60431",
+                "Tonti Drive, Plainfield Township, Illinois 60431",
+            ),
+            "Binny's (Elmwood Park) #5": (
+                "9/17/2026 - 7330 North Avenue, Elmwood Park, IL 60707",
+                "7330 North Avenue, Elmwood Park, IL 60707",
+            ),
+        }
+        recaps = {}
+        for i, (expected, (name, address)) in enumerate(cases.items()):
+            event = self._event(torch, name=name, address=address, code=f"TH-BN{i}")
+            recaps[expected] = self._filed(event, name)
+        typed_event = self._event(
+            torch, name="10/1/2026 - Milwaukee Avenue, Niles, Illinois", address="Milwaukee Ave, Niles, IL", code="TH-BN9"
+        )
+        typed = self._filed(typed_event, "Binnys Niles")
+        elsewhere = self._event(
+            torch,
+            name="9/4/2026 - Bryan Road, O'Fallon, Missouri 63368",
+            address="Bryan Rd, O'Fallon, MO 63368",
+            code="TH-BN10",
+        )
+        elsewhere_recap = self._filed(elsewhere, elsewhere.name)
+
+        self._backfill(directory="torch_total_wine_stores,torch_binnys_stores", apply=True)
+        names = dict(CustomRecap.objects.values_list("id", "name"))
+        assert {expected: names[r.id] for expected, r in recaps.items()} == {e: e for e in cases}
+        assert names[typed.id] == "Binny's (Niles) #18"
+        assert names[elsewhere_recap.id] == elsewhere.name
+
+    def test_backfill_numbers_ba_typed_chain_titles_but_not_conflicts(self):
+        torch = self.create_tenant(name="Torch THC", slug="keee-torch-thc")
+        sunset = self._event(
+            torch, name="9/26/2026 - 5601 Brodie Lane, Sunset Valley, TX 78745", address="5601 Brodie Lane, Sunset Valley, TX 78745", code="TH-BC1"
+        )
+        missing = self._filed(sunset, "Total wine #Sunset valley")
+        right = self._filed(sunset, "Total Wine #509")
+        akers = self._event(
+            torch, name="9/27/2026 - 2955 Cobb Pkwy Atlanta, GA 30339", address="2955 Cobb Pkwy, Atlanta, GA 30339", code="TH-BC2"
+        )
+        conflict = self._filed(akers, "Total wine Akers mill #803")
+        other_chain = self._filed(akers, "Sip & Smoke")
+
+        out = self._backfill(directory="torch_total_wine_stores,torch_binnys_stores", apply=True)
+        names = dict(CustomRecap.objects.values_list("id", "name"))
+        assert names[missing.id] == "Total Wine & More (Sunset Valley) #509"
+        assert names[right.id] == "Total Wine #509"
+        assert names[conflict.id] == "Total wine Akers mill #803"
+        assert f"conflict       #{conflict.id}" in out
+        assert names[other_chain.id] == "Sip & Smoke"
+
+    def test_street_key_folds_directionals_but_keeps_unit_letters(self):
+        from recaps.management.commands.backfill_store_recap_names import _street
+
+        assert _street("7330 W. North Ave") == _street("7330 North Avenue") == "7330 north"
+        assert _street("2712 east colonial drive") == _street("2712 E Colonial Dr") == "2712 colonial"
+        assert _street("3954 A Peachtree Rd Ne") == _street("3954A PEACHTREE ROAD NE") == "3954a peachtree"
+
     def test_placeholder_store_numbers_are_ignored(self):
         assert checkin_web.real_store_number("BINNY-60202") == ""
         assert checkin_web.real_store_number("#1805") == "1805"
