@@ -111,12 +111,11 @@ SPEC_FIELDS: list[tuple[str, list[Field]]] = [
                 "People who actually tasted Torch (21+ only)",
             ),
             (
-                "How many people did you engage with in total "
-                "(including people who didn't sample)?",
+                "People engaged",
                 "number",
                 True,
                 [],
-                "Every conversation at the booth, sampled or not",
+                "People you talked with about Torch, tasted or not",
             ),
             (
                 "How many consumers were trying Torch for the first time?",

@@ -34,7 +34,7 @@ from recaps.models import (
     RecapSection,
 )
 from recaps.tenant_overview import _ACTIVATION_BUCKETS, tenant_conversion_kpis
-from recaps.types import _CONSUMERS_SAMPLED_RE
+from recaps.types import _CONSUMERS_SAMPLED_RE, _PEOPLE_ENGAGED_RE
 
 VALID_SECRET = "test-cron-secret-value-only-for-tests"
 URL = "/internal/cron/setup-torch-event-activation"
@@ -78,8 +78,9 @@ class TestSpec:
     def test_consumers_sampled_and_people_engaged_stay_distinct(self):
         sampled = [n for n in _labels() if _CONSUMERS_SAMPLED_RE.search(n)]
         assert sampled == ["How many TOTAL consumers did you sample?"]
-        engaged = next(n for n in _labels() if "engage with in total" in n)
-        assert not _CONSUMERS_SAMPLED_RE.search(engaged)
+        engaged = [n for n in _labels() if _PEOPLE_ENGAGED_RE.search(n)]
+        assert engaged == ["People engaged"]
+        assert not _CONSUMERS_SAMPLED_RE.search(engaged[0])
 
     def test_activation_buckets_mirror_ld(self):
         assert [b["name"] for b in ACTIVATION_BUCKETS] == [
