@@ -101,11 +101,27 @@ class TestAuditTorchRecaps(AmbassadorsGraphQLTestCase):
         assert "===CSV-BEGIN===" in log
         assert "updated_by" in log
 
-    def test_dry_demo_split_out(self):
+    def test_tagged_dry_demo_excluded_and_untagged_notes_flagged(self):
+        select = recap_models.CustomRecapFieldType.objects.create(name="select", created_by=self.sys)
+        self.fields["Dry demo? (no product tasted)"] = recap_models.CustomField.objects.create(
+            name="Dry demo? (no product tasted)",
+            custom_recap_template=self.template,
+            custom_field_type=select,
+            recap_section=self.section,
+            options=["No", "Yes"],
+            created_by=self.sys,
+        )
         self._walkup_recap(
             {
                 "Total number of consumers sampled": "30",
                 "How many single cans did consumers purchase?": "25",
+                "Dry demo? (no product tasted)": "Yes",
+            }
+        )
+        self._walkup_recap(
+            {
+                "Total number of consumers sampled": "20",
+                "How many single cans did consumers purchase?": "2",
                 "General notes": "For this gig I didn't have samples, they bought on my word.",
             }
         )
@@ -116,9 +132,11 @@ class TestAuditTorchRecaps(AmbassadorsGraphQLTestCase):
             }
         )
         log = self._run(no_csv=True)
-        assert "live-sampled only: 5/50 = 10.0% (n=1)" in log
-        assert "dry demos: 25/30 = 83.3% (n=1)" in log
-        assert "dry_demo_no_tasting" in log
+        assert "excl. dry demos: sold 7 ÷ sampled 70 = 10.0% (n=2)" in log
+        assert "tagged dry demos (excluded): 25/30 (n=1)" in log
+        assert "notes say dry but untagged: n=1" in log
+        assert "dry_demo_tagged" in log
+        assert "dry_demo_notes_untagged" in log
 
     def test_needs_review_reported_separately(self):
         self._walkup_recap(

@@ -166,7 +166,9 @@ class Command(BaseCommand):
         from recaps.types import (
             _account_spend_from_fields,
             _consumers_sampled_from_fields,
+            _is_dry_demo_from_fields,
             _parse_recap_int,
+            _people_engaged_from_fields,
             _samples_given_from_fields,
             _sold_units_from_fields,
         )
@@ -266,6 +268,7 @@ class Command(BaseCommand):
                     f.required
                     and f.custom_recap_template_id == r.custom_recap_template_id
                     and f.id not in present_field_ids
+                    and (f.created_at is None or r.created_at is None or f.created_at <= r.created_at)
                     and (f.custom_field_type is None or (f.custom_field_type.name or "").lower() not in ("file", "photo", "image"))
                 ):
                     missing_required.append(f.name)
@@ -337,7 +340,9 @@ class Command(BaseCommand):
                 source += " · filed by other user"
 
             conv = _pct(sold or 0, consumers or 0) if consumers else None
-            dry_demo = bool(_DRY_DEMO_RE.search(note_text))
+            dry_demo = _is_dry_demo_from_fields(pairs)
+            dry_demo_notes = bool(_DRY_DEMO_RE.search(note_text))
+            people_engaged = _people_engaged_from_fields(pairs)
 
             flags: list[str] = []
             counts_toward = bucket_audit in ("retail", "onprem")
@@ -396,7 +401,9 @@ class Command(BaseCommand):
                 if bucket_insights != bucket_audit and counts_toward:
                     flags.append("insights_excludes_from_conv")
                 if dry_demo:
-                    flags.append("dry_demo_no_tasting")
+                    flags.append("dry_demo_tagged")
+                elif dry_demo_notes:
+                    flags.append("dry_demo_notes_untagged")
                 for label, key in (("first_time", "first time"), ("knew_brand", "knew about"), ("willing", "would be willing")):
                     val = next((_parse_recap_int(v) for n, v in pairs if n and key in n.lower()), None)
                     if val is not None and consumers is not None and val > consumers:
@@ -447,6 +454,8 @@ class Command(BaseCommand):
                     "kpi_fields": json.dumps(kpi, ensure_ascii=False),
                     "notes": note_text[:1500],
                     "dry_demo": dry_demo,
+                    "dry_demo_notes": dry_demo_notes,
+                    "people_engaged": "" if people_engaged is None else people_engaged,
                     "updated_at": r.updated_at.isoformat() if r.updated_at else "",
                     "updated_by": getattr(getattr(r, "updated_by", None), "email", "") or "",
                     "approved_at": r.approved_at.isoformat() if r.approved_at else "",
@@ -580,22 +589,24 @@ class Command(BaseCommand):
                 n += 1
             return sold, sampled, n
 
-        def _conv_rows(subset):
+        def _conv_rows(subset, include_dry=False):
             return [
                 r
                 for r in subset
-                if r.get("bucket_audit") in ("retail", "onprem") and r.get("status") == "approved"
+                if r.get("bucket_audit") in ("retail", "onprem")
+                and r.get("status") == "approved"
+                and (include_dry or not r.get("dry_demo"))
             ]
 
         def _conv_line(label, subset):
-            rows_c = _conv_rows(subset)
-            s, b, n = _pool(rows_c)
-            ls, lb, ln = _pool([r for r in rows_c if not r.get("dry_demo")])
+            rows_c = _conv_rows(subset, include_dry=True)
+            s, b, n = _pool([r for r in rows_c if not r.get("dry_demo")])
             ds, db, dn = _pool([r for r in rows_c if r.get("dry_demo")])
+            un = sum(1 for r in rows_c if r.get("dry_demo_notes") and not r.get("dry_demo"))
             return (
-                f"  {label:24} approved retail/on-prem: sold {s} ÷ sampled {b} = {_fmt_pct(_pct(s, b))} "
-                f"(n={n}) | live-sampled only: {ls}/{lb} = {_fmt_pct(_pct(ls, lb))} (n={ln}) "
-                f"| dry demos: {ds}/{db} = {_fmt_pct(_pct(ds, db))} (n={dn})"
+                f"  {label:24} approved retail/on-prem excl. dry demos: sold {s} ÷ sampled {b} = "
+                f"{_fmt_pct(_pct(s, b))} (n={n}) | tagged dry demos (excluded): {ds}/{db} (n={dn}) "
+                f"| notes say dry but untagged: n={un}"
             )
 
         w("\n## Conversion — audited basis (approved, non-archived, Retail + On-Premise by request→event→template type; purchases ÷ consumers sampled)")
@@ -607,7 +618,7 @@ class Command(BaseCommand):
 
         w("\n## Conversion incl. Needs-review (what it would be if pending recaps are approved as-is)")
         def _conv_line_nr(label, subset):
-            sub = [r for r in subset if r.get("bucket_audit") in ("retail", "onprem") and r.get("status") in ("approved", "needs_review")]
+            sub = [r for r in subset if r.get("bucket_audit") in ("retail", "onprem") and r.get("status") in ("approved", "needs_review") and not r.get("dry_demo")]
             s, b, n = _pool(sub)
             return f"  {label:24} sold {s} ÷ sampled {b} = {_fmt_pct(_pct(s, b))} (n={n})"
         w(_conv_line_nr("WINDOW", rows_w))
@@ -692,7 +703,7 @@ class Command(BaseCommand):
                 "event_type", "source", "event_id", "request_id", "store", "store_number", "typed_store",
                 "address", "state", "ba", "total_engagements", "consumers_sampled", "samples_given_field",
                 "purchases", "conv_pct", "skus", "sku_qty_total", "files", "account_spend", "flags",
-                "dry_demo", "note_sold_mentions", "note_sampled_mentions", "kpi_fields", "notes", "submitted_at",
+                "dry_demo", "dry_demo_notes", "people_engaged", "note_sold_mentions", "note_sampled_mentions", "kpi_fields", "notes", "submitted_at",
                 "created_at", "updated_at", "updated_by", "approved_at", "approved_by",
                 "data_quality_flags",
             ]

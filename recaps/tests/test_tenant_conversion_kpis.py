@@ -259,6 +259,27 @@ class TestTenantConversionSampledBase(AmbassadorsGraphQLTestCase):
         assert data["engagements"] == 50
         assert data["pct"] == 20.0
 
+    def test_dry_demo_recap_excluded_from_both_sides(self):
+        self._walkup_recap(
+            fields=[
+                ("Total number of consumers sampled", "30"),
+                ("How many packs did consumers purchase?", "25"),
+                ("Dry demo? (no product tasted)", "Yes"),
+                ("People engaged", "30"),
+            ]
+        )
+        self._walkup_recap(
+            fields=[
+                ("Total number of consumers sampled", "50"),
+                ("How many packs did consumers purchase?", "10"),
+                ("Dry demo? (no product tasted)", "No"),
+            ]
+        )
+        data = tenant_conversion_kpis(self.tenant.id, start=self.start, end=self.end)
+        assert data["sold"] == 10
+        assert data["engagements"] == 50
+        assert data["pct"] == 20.0
+
     def test_archived_recap_excluded(self):
         recap = self._custom_recap(
             request_type=self.retail_type,
