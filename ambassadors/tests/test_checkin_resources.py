@@ -295,17 +295,27 @@ class TestSetCheckinResourcesCommand(AmbassadorsGraphQLTestCase):
         torch = self.create_tenant(name="Torch THC", slug="torch-thc")
         self._run(tenant="torch-thc", apply=True)
         torch.refresh_from_db()
-        assert [r["kind"] for r in torch.checkin_resources] == ["pdf", "pdf"]
+        assert [r["kind"] for r in torch.checkin_resources] == [
+            "pdf",
+            "pdf",
+            "pdf",
+        ]
         assert [r["label"] for r in torch.checkin_resources] == [
             "BA Sampling Guide",
+            "Torch Demo Playbook",
             "Product Sales Sheets",
         ]
         assert torch.checkin_resources[0]["url"] == (
             "https://client.igniteproductions.co/training/torch/ba-sampling-guide.pdf"
         )
         assert torch.checkin_resources[0].get("hideOnRecapOnly") is True
-        assert "hideOnRecapOnly" not in torch.checkin_resources[1]
         assert torch.checkin_resources[1]["url"] == (
+            "https://client.igniteproductions.co/training/torch/"
+            "torch-demo-playbook.pdf"
+        )
+        assert torch.checkin_resources[1].get("hideOnRecapOnly") is True
+        assert "hideOnRecapOnly" not in torch.checkin_resources[2]
+        assert torch.checkin_resources[2]["url"] == (
             "https://client.igniteproductions.co/training/torch/"
             "product-sales-sheets.pdf"
         )
@@ -329,6 +339,7 @@ class TestSetCheckinResourcesCommand(AmbassadorsGraphQLTestCase):
         torch.refresh_from_db()
         assert [r["label"] for r in torch.checkin_resources] == [
             "BA Sampling Guide",
+            "Torch Demo Playbook",
             "Product Sales Sheets",
         ]
         assert torch.checkin_resources[0].get("hideOnRecapOnly") is True
@@ -337,7 +348,34 @@ class TestSetCheckinResourcesCommand(AmbassadorsGraphQLTestCase):
         torch = self.create_tenant(name="Torch THC", slug="torch-thc")
         self._run(tenant="torch", apply=True)
         torch.refresh_from_db()
-        assert len(torch.checkin_resources) == 2
+        assert len(torch.checkin_resources) == 3
+
+    def test_torch_demo_playbook_on_clock_walkup_and_email_not_agency(self):
+        from events.event_confirmations import email_training_resources
+
+        torch = self.create_tenant(name="Torch THC", slug="torch-thc")
+        self._run(tenant="torch-thc", apply=True)
+        torch.refresh_from_db()
+
+        clock = checkin_web.build_tenant_context(torch, recap_only=False)
+        assert [r["label"] for r in clock["resources"]] == [
+            "BA Sampling Guide",
+            "Torch Demo Playbook",
+            "Product Sales Sheets",
+        ]
+        agency = checkin_web.build_tenant_context(torch, recap_only=True)
+        assert [r["label"] for r in agency["resources"]] == [
+            "Product Sales Sheets",
+        ]
+        assert [r["label"] for r in email_training_resources(torch)] == [
+            "BA Sampling Guide",
+            "Torch Demo Playbook",
+            "Product Sales Sheets",
+        ]
+        assert email_training_resources(torch)[1]["url"] == (
+            "https://client.igniteproductions.co/training/torch/"
+            "torch-demo-playbook.pdf"
+        )
 
     def test_apply_seeds_the_drekker_preset_and_email_url(self):
         drekker = self.create_tenant(
