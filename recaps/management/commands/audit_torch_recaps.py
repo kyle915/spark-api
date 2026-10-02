@@ -69,6 +69,15 @@ _SAMPLED_NOTE_RES = (
     ),
 )
 _STORE_NO_RE = re.compile(r"#\s*(\d+)\b")
+# BA says nobody actually tasted product (dry demo / no samples on hand).
+_DRY_DEMO_RE = re.compile(
+    r"\bdry[- ]?(demo|sampl|tasting|educational)|did a dry|was dry|dry sampler"
+    r"|didn.?t have (any )?samples|did not have (any )?samples|no samples were available"
+    r"|could not sample anything|no items to actually physically sample|no product to sample"
+    r"|forgot to leave samples|wasn.?t able to do sampling|did not receive my samples"
+    r"|couldn.?t (sample|taste)|no samples\b|zero sampling|no actually sampling",
+    re.I,
+)
 
 
 def _bucket(name: str | None) -> str:
@@ -287,7 +296,7 @@ class Command(BaseCommand):
             ev_type = (getattr(getattr(ev, "event_type", None), "name", "") or "") if ev else ""
             tmpl = getattr(r.custom_recap_template, "name", "") or ""
             tmpl_type = getattr(getattr(r.custom_recap_template, "event_type", None), "name", "") or ""
-            bucket_insights = _bucket(req_type)  # what tenant_conversion_kpis keys on today
+            bucket_insights = _bucket(req_type) or _bucket(ev_type) or _bucket(tmpl)  # tenant_conversion_kpis
             bucket_audit = _bucket(req_type) or _bucket(ev_type) or _bucket(tmpl) or _bucket(tmpl_type) or "other"
             tmpl_bucket = _bucket(tmpl) or _bucket(tmpl_type)
 
@@ -326,6 +335,7 @@ class Command(BaseCommand):
                 source += " · filed by other user"
 
             conv = _pct(sold or 0, consumers or 0) if consumers else None
+            dry_demo = bool(_DRY_DEMO_RE.search(note_text))
 
             flags: list[str] = []
             counts_toward = bucket_audit in ("retail", "onprem")
@@ -383,6 +393,12 @@ class Command(BaseCommand):
                     flags.append(f"needs_review_{age}d")
                 if bucket_insights != bucket_audit and counts_toward:
                     flags.append("insights_excludes_from_conv")
+                if dry_demo:
+                    flags.append("dry_demo_no_tasting")
+                for label, key in (("first_time", "first time"), ("knew_brand", "knew about"), ("willing", "would be willing")):
+                    val = next((_parse_recap_int(v) for n, v in pairs if n and key in n.lower()), None)
+                    if val is not None and consumers is not None and val > consumers:
+                        flags.append(f"{label}_gt_sampled({val}>{consumers})")
                 if samples_given is not None and consumers is not None and samples_given != consumers:
                     flags.append(f"insights_uses_samples_given({samples_given})_not_sampled")
 
@@ -428,6 +444,7 @@ class Command(BaseCommand):
                     "note_sampled_mentions": ",".join(map(str, sampled_mentions)),
                     "kpi_fields": json.dumps(kpi, ensure_ascii=False),
                     "notes": note_text[:1500],
+                    "dry_demo": dry_demo,
                     "data_quality_flags": r.data_quality_flags or "",
                 }
             )
@@ -565,11 +582,14 @@ class Command(BaseCommand):
             ]
 
         def _conv_line(label, subset):
-            s, b, n = _pool(_conv_rows(subset))
-            s2, b2, n2 = _pool(_conv_rows(subset), require_sold=True)
+            rows_c = _conv_rows(subset)
+            s, b, n = _pool(rows_c)
+            ls, lb, ln = _pool([r for r in rows_c if not r.get("dry_demo")])
+            ds, db, dn = _pool([r for r in rows_c if r.get("dry_demo")])
             return (
                 f"  {label:24} approved retail/on-prem: sold {s} ÷ sampled {b} = {_fmt_pct(_pct(s, b))} "
-                f"(n={n}) | both-fields-present: {s2}/{b2} = {_fmt_pct(_pct(s2, b2))} (n={n2})"
+                f"(n={n}) | live-sampled only: {ls}/{lb} = {_fmt_pct(_pct(ls, lb))} (n={ln}) "
+                f"| dry demos: {ds}/{db} = {_fmt_pct(_pct(ds, db))} (n={dn})"
             )
 
         w("\n## Conversion — audited basis (approved, non-archived, Retail + On-Premise by request→event→template type; purchases ÷ consumers sampled)")
@@ -662,7 +682,7 @@ class Command(BaseCommand):
                 "event_type", "source", "event_id", "request_id", "store", "store_number", "typed_store",
                 "address", "state", "ba", "total_engagements", "consumers_sampled", "samples_given_field",
                 "purchases", "conv_pct", "skus", "sku_qty_total", "files", "account_spend", "flags",
-                "note_sold_mentions", "note_sampled_mentions", "kpi_fields", "notes", "submitted_at",
+                "dry_demo", "note_sold_mentions", "note_sampled_mentions", "kpi_fields", "notes", "submitted_at",
                 "created_at", "data_quality_flags",
             ]
             buf = io.StringIO()

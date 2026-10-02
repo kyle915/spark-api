@@ -171,3 +171,104 @@ class TestTenantConversionSampledBase(AmbassadorsGraphQLTestCase):
         assert data["sold"] == 0
         assert data["engagements"] == 0
         assert data["pct"] is None
+
+    def _walkup_recap(self, *, fields, event_type_name="Retail Sampling", approved=True):
+        when = timezone.make_aware(
+            datetime(self.today.year, self.today.month, self.today.day, 12, 0)
+        )
+        et = event_models.EventType.objects.create(
+            name=event_type_name,
+            slug=f"walkup-{event_type_name.lower().replace(' ', '-')}-{len(fields)}-{approved}",
+            tenant=self.tenant,
+            created_by=self.sys,
+        )
+        event = event_models.Event.objects.create(
+            name="walk-in",
+            tenant=self.tenant,
+            address="9 Walk St",
+            date=when,
+            event_type=et,
+            created_by=self.sys,
+            updated_by=self.sys,
+        )
+        recap = recap_models.CustomRecap.objects.create(
+            name="walk-in recap",
+            approved=approved,
+            event=event,
+            tenant=self.tenant,
+            custom_recap_template=self.template,
+            created_by=self.sys,
+        )
+        for name, value in fields:
+            field = recap_models.CustomField.objects.create(
+                name=name,
+                custom_recap_template=self.template,
+                custom_field_type=self.field_type,
+                recap_section=self.section,
+                created_by=self.sys,
+            )
+            recap_models.CustomFieldValue.objects.create(
+                custom_recap=recap, custom_field=field, value=value, created_by=self.sys
+            )
+        return recap
+
+    def test_walkup_recap_without_request_counts_by_event_type(self):
+        # Standing walk-up events have no Request; their Event type says Retail.
+        self._walkup_recap(
+            fields=[
+                ("Total number of consumers sampled", "40"),
+                ("How many single cans did consumers purchase?", "6"),
+                ("How many packs did consumers purchase?", "2"),
+            ]
+        )
+        data = tenant_conversion_kpis(self.tenant.id, start=self.start, end=self.end)
+        assert data["sold"] == 8
+        assert data["engagements"] == 40
+        assert data["pct"] == 20.0
+
+    def test_walkup_event_activation_still_excluded(self):
+        self._walkup_recap(
+            event_type_name="Event Activation",
+            fields=[
+                ("Total number of consumers sampled", "40"),
+                ("How many single cans did consumers purchase?", "6"),
+            ],
+        )
+        data = tenant_conversion_kpis(self.tenant.id, start=self.start, end=self.end)
+        assert data["sold"] == 0
+        assert data["engagements"] == 0
+
+    def test_zero_sampled_recap_adds_no_purchases(self):
+        # Dry demo: nobody sampled, a few sales — no base, so no numerator.
+        self._custom_recap(
+            request_type=self.retail_type,
+            fields=[
+                ("Total number of consumers sampled", "0"),
+                ("How many packs did consumers purchase?", "17"),
+            ],
+        )
+        self._custom_recap(
+            request_type=self.retail_type,
+            fields=[
+                ("Total number of consumers sampled", "50"),
+                ("How many packs did consumers purchase?", "10"),
+            ],
+        )
+        data = tenant_conversion_kpis(self.tenant.id, start=self.start, end=self.end)
+        assert data["sold"] == 10
+        assert data["engagements"] == 50
+        assert data["pct"] == 20.0
+
+    def test_archived_recap_excluded(self):
+        recap = self._custom_recap(
+            request_type=self.retail_type,
+            fields=[
+                ("Total number of consumers sampled", "50"),
+                ("How many packs did consumers purchase?", "10"),
+            ],
+        )
+        recap.archived_at = timezone.now()
+        recap.save(update_fields=["archived_at"])
+        data = tenant_conversion_kpis(self.tenant.id, start=self.start, end=self.end)
+        assert data["sold"] == 0
+        assert data["engagements"] == 0
