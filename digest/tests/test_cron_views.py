@@ -30,6 +30,7 @@ BACKFILL_EVENT_COORDS_URL = "/internal/cron/backfill-event-coordinates"
 BACKFILL_AMBASSADOR_COORDS_URL = "/internal/cron/backfill-ambassador-coordinates"
 DUMP_RECAP_FIELDS_URL = "/internal/cron/dump-recap-fields"
 SET_CHECKIN_RESOURCES_URL = "/internal/cron/set-checkin-resources"
+OFFBOARD_CLIENT_USERS_URL = "/internal/cron/offboard-client-users"
 
 VALID_SECRET = "test-cron-secret-value-only-for-tests"
 
@@ -1330,3 +1331,57 @@ class TestSetCheckinResourcesCronView:
         )
         assert resp.status_code == 500
         assert resp.json()["ok"] is False
+
+
+@pytest.mark.django_db
+class TestOffboardClientUsersCronView:
+    """`/internal/cron/offboard-client-users` — secret-gated, dry-run default."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        self.client = Client()
+
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    @patch("digest.cron_views.call_command")
+    def test_requires_secret(self, mock_call):
+        resp = self.client.post(OFFBOARD_CLIENT_USERS_URL, HTTP_X_CRON_SECRET="wrong")
+        assert resp.status_code == 401
+        mock_call.assert_not_called()
+
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    @patch("digest.cron_views.call_command")
+    def test_defaults_to_dry_run(self, mock_call):
+        resp = self.client.post(
+            OFFBOARD_CLIENT_USERS_URL,
+            {
+                "tenant_slug": "ighn-liquid-death",
+                "emails": "k.williams@liquiddeath.com",
+                "reassign_to": "l.giaccio@liquiddeath.com",
+            },
+            HTTP_X_CRON_SECRET=VALID_SECRET,
+        )
+        assert resp.status_code == 200
+        assert resp.json()["applied"] is False
+        args, kwargs = mock_call.call_args
+        assert args[0] == "offboard_client_users"
+        assert kwargs["apply"] is False
+        assert kwargs["tenant_slug"] == "ighn-liquid-death"
+        assert kwargs["emails"] == "k.williams@liquiddeath.com"
+        assert kwargs["reassign_to"] == "l.giaccio@liquiddeath.com"
+
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    @patch("digest.cron_views.call_command")
+    def test_unknown_tenant_is_400(self, mock_call):
+        from django.core.management.base import CommandError
+
+        mock_call.side_effect = CommandError("tenant-not-found: no-such-tenant")
+        resp = self.client.post(
+            OFFBOARD_CLIENT_USERS_URL,
+            {"tenant_slug": "no-such-tenant", "emails": "a@b.com", "apply": "true"},
+            HTTP_X_CRON_SECRET=VALID_SECRET,
+        )
+        assert resp.status_code == 400
+        body = resp.json()
+        assert body["ok"] is False
+        assert body["error"] == "bad-input"
+        assert "no-such-tenant" in body["detail"]

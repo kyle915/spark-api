@@ -4732,6 +4732,62 @@ class BackfillStoreRecapNamesView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class OffboardClientUsersView(View):
+    """POST `/internal/cron/offboard-client-users`.
+
+    Fires `offboard_client_users` — deactivates people who left a client
+    brand, drops them from recap mail, and hands their upcoming requests and
+    events to `reassign_to`. DRY-RUN by default; only `apply=true` writes.
+
+    Params (query or POST): tenant_slug, emails (comma-separated) required;
+    reassign_to, apply/execute optional.
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _bool(name: str) -> bool:
+            raw = (request.GET.get(name) or request.POST.get(name) or "").lower()
+            return raw in ("1", "true", "yes", "on")
+
+        def _str(name: str) -> str:
+            return (request.GET.get(name) or request.POST.get(name) or "").strip()
+
+        apply = _bool("apply") or _bool("execute")
+        kwargs: dict[str, Any] = {
+            "apply": apply,
+            "tenant_slug": _str("tenant_slug"),
+            "emails": _str("emails"),
+            "reassign_to": _str("reassign_to"),
+        }
+
+        out = io.StringIO()
+        try:
+            call_command("offboard_client_users", stdout=out, **kwargs)
+        except CommandError as exc:
+            return JsonResponse(
+                {"ok": False, "error": "bad-input", "detail": str(exc), "log": out.getvalue()},
+                status=400,
+            )
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("offboard-client-users cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc),
+                 "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse({"ok": True, "applied": apply, "log": out.getvalue()})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class DescribeSheetTabsView(View):
     """GET/POST `/internal/cron/describe-sheet-tabs` — read-only.
 
@@ -9885,6 +9941,7 @@ def _registered_views() -> dict[str, Any]:
         "export-girlbeer-summary": ExportGirlbeerSummaryView,
         "backfill-recap-retailers": BackfillRecapRetailersView,
     "backfill-store-recap-names": BackfillStoreRecapNamesView,
+    "offboard-client-users": OffboardClientUsersView,
         "describe-sheet-tabs": DescribeSheetTabsView,
         "fix-ld-kpi-totals": FixLdKpiTotalsView,
         "add-ld-others-row": AddLdOthersRowView,

@@ -294,6 +294,8 @@ def _collect_recap_approved_recipients(
 
     event = recap.event
     rmm_user = getattr(event, "rmm_asigned", None)
+    if rmm_user is not None and not rmm_user.is_active:
+        rmm_user = None
     fallback_reply_to = "events@igniteproductions.co"
     reply_to_email = (
         getattr(rmm_user, "email", None) or ""
