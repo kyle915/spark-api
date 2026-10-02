@@ -173,6 +173,23 @@ class TestTorchDryDemo(AmbassadorsGraphQLTestCase):
             == 2
         )
 
+    def test_walkup_form_check_shows_new_fields(self):
+        event_models.Event.objects.create(
+            name="walk-in",
+            tenant=self.tenant,
+            address="1 Main St",
+            event_type=self.etype,
+            created_by=self.sys,
+            updated_by=self.sys,
+        )
+        out = StringIO()
+        call_command("add_torch_dry_demo_fields", apply=True, stdout=out)
+        check = out.getvalue().split("Walk-up form check")[1]
+        assert f"template [{self.template.id}]" in check
+        assert "'Dry demo? (no product tasted)' options=['No', 'Yes']" in check
+        assert "'People engaged'" in check
+        assert SAMPLED_PLACEHOLDER in check
+
     def test_add_fields_resolves_request_url_name(self):
         out = StringIO()
         call_command("add_torch_dry_demo_fields", tenant="keee-torch-thc", stdout=out)
