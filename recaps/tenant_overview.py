@@ -60,6 +60,7 @@ from recaps.report_service import _format_date_range, _leading_int
 from recaps.types import (
     _consumers_sampled_from_fields,
     _is_dry_demo_from_fields,
+    _people_engaged_from_fields,
     _samples_given_from_fields,
     _sold_units_from_fields,
 )
@@ -408,8 +409,8 @@ _CUSTOM_KPI_NAME_RE = re.compile(
     # Girl Beer vocabulary: demographics sampled totals + free-text
     # samples headline (see recaps.types._SAMPLED_TOTAL_RE/_SAMPLES_GIVEN_RE)
     r"|who sampled|samples? (given|distributed|handed)"
-    # "Dry demo?" flag: CONV skips recaps where no product was tasted.
-    r"|dry ?demo",
+    # Dry demos: flag + People engaged (their CONV base, nobody tasted).
+    r"|dry ?demo|people engaged",
     re.IGNORECASE,
 )
 
@@ -1963,7 +1964,10 @@ def tenant_conversion_kpis(
     sampled on approved, non-archived recaps whose activation type (Request
     type, else Event type, else template name) classifies as Retail or
     On-Premise (Event / Seeding / unclassified excluded). Sold and base are
-    paired per recap: a recap with no sampled base adds neither. Matches
+    paired per recap: a recap with no sampled base adds neither. Dry demos
+    (no product tasted) count with People engaged as their base, else their
+    consumers-sampled value; ``dry_*`` keys break that share out, and dry
+    demos with neither are listed in ``unpaired_dry_recap_ids``. Matches
     Recaps list CONV — never sold÷engagements. Returns current + previous
     equal-length windows so Insights can show a period delta without a
     second round-trip.
@@ -1979,6 +1983,10 @@ def tenant_conversion_kpis(
             "previous_sold": 0,
             "previous_engagements": 0,
             "previous_pct": None,
+            "dry_sold": 0,
+            "dry_engagements": 0,
+            "dry_recaps": 0,
+            "unpaired_dry_recap_ids": [],
             "current_label": None,
             "previous_label": None,
             "start_date": None,
@@ -1989,7 +1997,7 @@ def tenant_conversion_kpis(
     prev_end = start - timedelta(days=1)
     prev_start = prev_end - timedelta(days=days - 1)
 
-    def _window_totals(w_start: date, w_end: date) -> tuple[int, int]:
+    def _window_totals(w_start: date, w_end: date) -> dict:
         window = _inclusive_dates_to_window(w_start, w_end)
 
         # Activation type: the Request's type, else the Event's own type
@@ -2101,9 +2109,25 @@ def tenant_conversion_kpis(
                     row["qty"] or 0
                 )
 
+        dry_sold = 0
+        dry_base = 0
+        dry_n = 0
+        unpaired: list[int] = []
         for rid in custom_ids:
             pairs = per_recap.get(rid, [])
             if _is_dry_demo_from_fields(pairs):
+                # Dry demo: nobody tasted, so the base is the shoppers
+                # pitched — People engaged, else the consumers-sampled
+                # value (historically the talked-to count). No base, no
+                # pairing: listed, kept out of the rate.
+                base = _people_engaged_from_fields(pairs) or _consumers_sampled_from_fields(pairs)
+                units = _sold_units_from_fields(pairs)
+                if not base or base <= 0:
+                    unpaired.append(int(rid))
+                    continue
+                dry_base += int(base)
+                dry_sold += max(0, int(units or 0))
+                dry_n += 1
                 continue
             base = _conversion_sample_base_from_fields(pairs)
             if base is None:
@@ -2116,10 +2140,19 @@ def tenant_conversion_kpis(
             if units is not None:
                 sold += max(0, int(units))
 
-        return sold, sampled
+        return {
+            "sold": sold + dry_sold,
+            "base": sampled + dry_base,
+            "dry_sold": dry_sold,
+            "dry_base": dry_base,
+            "dry_n": dry_n,
+            "unpaired": sorted(unpaired),
+        }
 
-    cur_sold, cur_sampled = _window_totals(start, end)
-    prev_sold, prev_sampled = _window_totals(prev_start, prev_end)
+    cur = _window_totals(start, end)
+    prev = _window_totals(prev_start, prev_end)
+    cur_sold, cur_sampled = cur["sold"], cur["base"]
+    prev_sold, prev_sampled = prev["sold"], prev["base"]
 
     def _label(a: date, b: date) -> str:
         if a.year == b.year and a.month == b.month and a.day == b.day:
@@ -2135,6 +2168,10 @@ def tenant_conversion_kpis(
         "previous_sold": int(prev_sold),
         "previous_engagements": int(prev_sampled),
         "previous_pct": _conversion_pct(prev_sold, prev_sampled),
+        "dry_sold": int(cur["dry_sold"]),
+        "dry_engagements": int(cur["dry_base"]),
+        "dry_recaps": int(cur["dry_n"]),
+        "unpaired_dry_recap_ids": cur["unpaired"],
         "current_label": _label(start, end),
         "previous_label": _label(prev_start, prev_end),
         "start_date": start.isoformat(),

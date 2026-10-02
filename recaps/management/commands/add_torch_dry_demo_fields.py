@@ -1,9 +1,9 @@
 """Torch THC: add "Dry demo?" and "People engaged" to the retail recap.
 
 A dry demo is a shift where no product was tasted (no non-dosed cans on
-hand, store won't allow sampling). Those recaps stay visible but are left
-out of conversion, and "People engaged" keeps the talked-with count without
-overloading "Total number of consumers sampled".
+hand, store won't allow sampling). Their purchases still count toward
+conversion, paired with "People engaged" (shoppers pitched) instead of
+"Total number of consumers sampled".
 
 Adds both fields to Consumer Engagement on ``Torch THC-Retail Sampling``,
 right around the consumers-sampled question:
@@ -229,6 +229,42 @@ class Command(BaseCommand):
             self.stdout.write(
                 self.style.WARNING("DRY-RUN complete — re-run with --apply to write.")
             )
+        self._walkup_check(tenant)
+
+    def _walkup_check(self, tenant) -> None:
+        """Print the recap form exactly as the walk-up page receives it
+        (``serialize_template``) for the tenant's latest walk-up event.
+        Read-only."""
+        from ambassadors.checkin_web import serialize_template
+        from events.models import Event
+
+        event = (
+            Event.objects.filter(tenant_id=tenant.id, request__isnull=True)
+            .order_by("-id")
+            .first()
+        )
+        self.stdout.write("=" * 68)
+        if event is None:
+            self.stdout.write("Walk-up form check: no walk-up event on this tenant yet.")
+            return
+        payload = serialize_template(event)
+        if payload is None:
+            self.stdout.write(f"Walk-up form check: event [{event.id}] resolves no template.")
+            return
+        self.stdout.write(
+            f"Walk-up form check — event [{event.id}] -> template [{payload['id']}] "
+            f"{payload['name']!r}:"
+        )
+        for sec in payload["sections"]:
+            if sec["name"].lower() != SECTION_NAME.lower():
+                continue
+            for f in sec["fields"]:
+                extra = f" options={f['options']}" if f["options"] else ""
+                hint = f" placeholder={f['placeholder']!r}" if f["placeholder"] else ""
+                self.stdout.write(
+                    f"    [{f['id']}] {f['type']:<16} req={f['required']!s:<5} "
+                    f"{f['name']!r}{extra}{hint}"
+                )
 
     def _print_field(self, f) -> None:
         ftype = getattr(f.custom_field_type, "name", "?")
