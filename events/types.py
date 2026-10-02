@@ -1070,7 +1070,7 @@ class Event(Node):
              in the dashboard points straight at the template);
           3. the tenant's template for this event's event type — the same
              tenant + event_type match the desktop recap form uses;
-          4. the tenant's sole template, if it has exactly one.
+          4. the tenant's sole template (or sole non-Event-Activation one).
 
         Nearly all events have no direct `custom_recap_template_id` FK, so
         without this fallback `customRecapTemplate` was null for them. The
@@ -1120,11 +1120,10 @@ class Event(Node):
                 if match:
                     return match
             # Last resort: the event carries no (or a non-matching) event
-            # type, but the tenant has exactly ONE template — unambiguous, so
-            # use it. 2+ templates → we can't guess which, so stay null.
-            if tenant_qs.count() == 1:
-                return tenant_qs.first()
-            return None
+            # type — see recaps.template_fallback.
+            from recaps.template_fallback import fallback_template
+
+            return fallback_template(tenant_qs)
 
         return await sync_to_async(_resolve, thread_sensitive=True)()
 

@@ -78,7 +78,8 @@ def resolve_template_for_event(event):
     """The recap template for an event — mirrors the resolution order in
     ``events/types.py::custom_recap_template`` (direct FK → template of a recap
     already filed for this event → tenant+event_type match → tenant's sole
-    template) so the web check-in renders the SAME template as app + desktop."""
+    (non-activation) template) so the web check-in renders the SAME template
+    as app + desktop."""
     from recaps.models import CustomRecap, CustomRecapTemplate
 
     if getattr(event, "custom_recap_template_id", None):
@@ -102,9 +103,9 @@ def resolve_template_for_event(event):
         match = tenant_qs.filter(event_type_id=event.event_type_id).order_by("id").first()
         if match:
             return match
-    if tenant_qs.count() == 1:
-        return tenant_qs.first()
-    return None
+    from recaps.template_fallback import fallback_template
+
+    return fallback_template(tenant_qs)
 
 
 def _product_payload(product) -> dict | None:
@@ -1032,9 +1033,21 @@ def compose_shift_recap_name(event_name: str, shift_label: str) -> str:
     return f"{base} · {label}"[:255]
 
 
-def requires_store_identity(tenant) -> bool:
-    """Brands whose recap title must be "Store Name #1234" (client ask)."""
-    return is_torch_tenant(tenant)
+def is_event_activation_type(event_type) -> bool:
+    """True for an "Event Activation" program (festival / venue, not a store)."""
+    name = (getattr(event_type, "name", None) or "").strip()
+    return bool(re.search(r"\bactivation\b", name, re.I))
+
+
+def requires_store_identity(tenant, event=None) -> bool:
+    """Brands whose recap title must be "Store Name #1234" (client ask).
+
+    Torch store demos only — an Event Activation happens at a festival or
+    venue with no store number, so it keeps the event title.
+    """
+    if not is_torch_tenant(tenant):
+        return False
+    return not is_event_activation_type(getattr(event, "event_type", None))
 
 
 def compose_store_recap_name(store_name: str, store_number: str = "") -> str:
@@ -1830,7 +1843,7 @@ def build_public_context(event, ambassador=None) -> dict:
         # and hides Log this stop.
         "locationMode": tenant_location_mode(tenant),
     }
-    if requires_store_identity(tenant):
+    if requires_store_identity(tenant, event):
         payload["storeIdentity"] = store_identity_prefill(event)
     # Which program this event is — so a BA who picked one can see the page
     # agreed with them before they start filling in a 15-field form.
@@ -2587,8 +2600,11 @@ def build_tenant_context(tenant, *, recap_only: bool = False) -> dict:
         # The programs on offer. Fewer than two and the page must ask nothing —
         # a one-option dropdown is a worse version of no dropdown, and brands
         # with a single program (Total Wireless, Feel Free) have to look exactly
-        # as they do today.
-        "eventTypes": [
+        # as they do today. The 3rd-party agency twin stays on the tenant
+        # default program (Torch TH-AGENCY = store demos only).
+        "eventTypes": []
+        if recap_only
+        else [
             {"id": str(t.id), "name": t.name or ""}
             for t in selectable_event_types(tenant)
         ],

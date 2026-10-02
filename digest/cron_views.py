@@ -6466,6 +6466,58 @@ class RenameTorchOnshelfBucketView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class SetupTorchEventActivationView(View):
+    """GET/POST `/internal/cron/setup-torch-event-activation`.
+
+    Torch THC: add Event Activation to the TH-2HRV3D walk-up (never
+    reminted) and seed the sampling-only ``Torch THC-Event Activation``
+    recap template. Retail Sampling and TH-AGENCY are left alone.
+
+    Idempotent. DRY-RUN unless `apply` is truthy.
+    Params: apply, tenant (exact slug / request_url_name, default torch-thc).
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _str(name: str) -> str:
+            return (request.GET.get(name) or request.POST.get(name) or "").strip()
+
+        kwargs: dict = {}
+        if _str("apply").lower() in ("1", "true", "yes", "on"):
+            kwargs["apply"] = True
+        if _str("tenant"):
+            kwargs["tenant"] = _str("tenant")
+
+        out = io.StringIO()
+        try:
+            call_command("setup_torch_event_activation", stdout=out, **kwargs)
+        except CommandError as exc:
+            return JsonResponse(
+                {"ok": False, "error": "bad-input", "detail": str(exc), "log": out.getvalue()},
+                status=400,
+            )
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("setup-torch-event-activation cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc),
+                 "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse(
+            {"ok": True, "applied": bool(kwargs.get("apply")), "log": out.getvalue()}
+        )
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class AddTorchCompetitorFeedbackView(View):
     """GET/POST `/internal/cron/add-torch-competitor-feedback`.
 
@@ -10095,6 +10147,7 @@ def _registered_views() -> dict[str, Any]:
         "add-torch-competitor-feedback": AddTorchCompetitorFeedbackView,
         "add-torch-dry-demo-fields": AddTorchDryDemoFieldsView,
         "tag-torch-dry-demos": TagTorchDryDemosView,
+        "setup-torch-event-activation": SetupTorchEventActivationView,
         "clone-recap-template": CloneRecapTemplateView,
         "attach-fpo-recap-images": AttachFpoRecapImagesView,
         "add-recap-template-fields": AddRecapTemplateFieldsView,

@@ -444,10 +444,18 @@ def public_checkin_identify(request: HttpRequest, code: str) -> HttpResponse:
         # skip pre-recap location (drop-off address + mileage live on the form).
         # Tenant-scoped: a forged id can't reach another brand's type / template.
         # Unresolvable → unanswered → tenant pinned default (pre-selector behaviour).
-        chosen_type = checkin_web.resolve_checkin_event_type(
-            target, data.get("eventTypeId") or data.get("event_type_id")
+        chosen_type = (
+            None
+            if recap_only
+            else checkin_web.resolve_checkin_event_type(
+                target, data.get("eventTypeId") or data.get("event_type_id")
+            )
         )
-        if chosen_type is None and len(checkin_web.selectable_event_types(target)) > 1:
+        if (
+            chosen_type is None
+            and not recap_only
+            and len(checkin_web.selectable_event_types(target)) > 1
+        ):
             logger.info(
                 "checkin identify: no valid event type on a multi-program link "
                 "code=%s raw=%r — using the tenant default",
@@ -869,7 +877,7 @@ def public_checkin_recap(request: HttpRequest, code: str) -> HttpResponse:
             # the Store boxes; the page enforces them for store-identity brands.
             store_name=(
                 _str_field(data, "storeName")
-                if checkin_web.requires_store_identity(event.tenant)
+                if checkin_web.requires_store_identity(event.tenant, event)
                 else ""
             ),
             store_number=_str_field(data, "storeNumber"),
