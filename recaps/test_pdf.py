@@ -193,6 +193,33 @@ def test_build_recap_pdf_html_keeps_default_fields_for_other_tenants():
     assert "Was Corporate Card Used?" not in html
 
 
+def test_event_activation_custom_recap_skips_empty_sales_card():
+    def recap(template_name, sales):
+        return SimpleNamespace(
+            name="Fest",
+            approved=True,
+            ambassador=None,
+            custom_recap_template=SimpleNamespace(name=template_name, event_type=None),
+            total_engagements=312,
+            event=SimpleNamespace(
+                name="Fest",
+                date=datetime(2026, 9, 26, 14, 0),
+                tenant=SimpleNamespace(slug="torch-thc"),
+            ),
+            custom_recap_product_sample=RelatedList([]),
+            custom_recap_sale_performance=RelatedList(sales),
+            custom_field_value=RelatedList([]),
+        )
+
+    activation = "Torch THC-Event Activation"
+    assert "Sales Performance" not in build_recap_pdf_html(recap(activation, []), [])
+    assert "Sales Performance" in build_recap_pdf_html(recap("Torch THC-Retail Sampling", []), [])
+    sale = SimpleNamespace(
+        product=SimpleNamespace(name="Can"), type_of_good=SimpleNamespace(name="Single"), price=5
+    )
+    assert "Sales Performance" in build_recap_pdf_html(recap(activation, [sale]), [])
+
+
 def test_build_recap_pdf_html_groups_custom_fields_by_recap_section():
     account_section = SimpleNamespace(name="Account Feedback")
     consumer_section = SimpleNamespace(name="Consumer Feedback")

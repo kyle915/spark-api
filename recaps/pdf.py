@@ -797,14 +797,13 @@ def build_recap_pdf_html(
     # branches keep their inline copies, so their output is unchanged.
     samples_sales_html = ""
     if is_custom_recap:
-        samples_sales_html = f"""
-    <section class="card">
-      <h2>Product Samples</h2>
-      <ul class="list">
-        {"".join(f"<li>{safe(item)}</li>" for item in samples) or "<li>N/A</li>"}
-      </ul>
-    </section>
+        # Event Activations never sell, so they skip the always-empty card.
+        from recaps.template_fallback import is_activation_template
 
+        template = getattr(recap, "custom_recap_template", None)
+        show_sales = bool(sales) or template is None or not is_activation_template(template)
+        sales_card = (
+            f"""
     <section class="card">
       <h2>Sales Performance</h2>
       <ul class="list">
@@ -812,6 +811,17 @@ def build_recap_pdf_html(
       </ul>
     </section>
 """
+            if show_sales
+            else ""
+        )
+        samples_sales_html = f"""
+    <section class="card">
+      <h2>Product Samples</h2>
+      <ul class="list">
+        {"".join(f"<li>{safe(item)}</li>" for item in samples) or "<li>N/A</li>"}
+      </ul>
+    </section>
+{sales_card}"""
 
     if public_share:
         eyebrow_html = (

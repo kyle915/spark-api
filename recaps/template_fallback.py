@@ -11,11 +11,12 @@ import re
 _ACTIVATION_RE = re.compile(r"\bactivation\b", re.I)
 
 
-def _is_activation_template(template) -> bool:
+def is_activation_template(template) -> bool:
+    """True when a template's event type or name is an Event Activation."""
     etype = getattr(template, "event_type", None)
     return bool(
         _ACTIVATION_RE.search(getattr(etype, "name", "") or "")
-        or _ACTIVATION_RE.search(template.name or "")
+        or _ACTIVATION_RE.search(getattr(template, "name", "") or "")
     )
 
 
@@ -30,7 +31,7 @@ def fallback_template(tenant_qs):
     templates = list(tenant_qs.select_related("event_type").order_by("id")[:50])
     if len(templates) == 1:
         return templates[0]
-    candidates = [t for t in templates if not _is_activation_template(t)]
+    candidates = [t for t in templates if not is_activation_template(t)]
     if len(candidates) == 1:
         return candidates[0]
     return None
