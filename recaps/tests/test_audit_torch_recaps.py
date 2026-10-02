@@ -95,10 +95,29 @@ class TestAuditTorchRecaps(AmbassadorsGraphQLTestCase):
         )
         log = self._run()
         assert "sold 0 ÷ sampled 80 = 0.0%" in log
-        assert "insights_excludes_from_conv" in log
+        assert "insights_excludes_from_conv" not in log
         assert "notes_sold_mismatch(notes=[14],field=0)" in log
         assert f"#{recap.id}" in log
         assert "===CSV-BEGIN===" in log
+
+    def test_dry_demo_split_out(self):
+        self._walkup_recap(
+            {
+                "Total number of consumers sampled": "30",
+                "How many single cans did consumers purchase?": "25",
+                "General notes": "For this gig I didn't have samples, they bought on my word.",
+            }
+        )
+        self._walkup_recap(
+            {
+                "Total number of consumers sampled": "50",
+                "How many single cans did consumers purchase?": "5",
+            }
+        )
+        log = self._run(no_csv=True)
+        assert "live-sampled only: 5/50 = 10.0% (n=1)" in log
+        assert "dry demos: 25/30 = 83.3% (n=1)" in log
+        assert "dry_demo_no_tasting" in log
 
     def test_needs_review_reported_separately(self):
         self._walkup_recap(

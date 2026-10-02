@@ -42,7 +42,7 @@ import re
 from dataclasses import dataclass, fields as dataclass_fields
 from datetime import date, timedelta
 
-from django.db.models import Count, Exists, Max, Min, OuterRef, Q, Sum
+from django.db.models import Count, Exists, Max, Min, OuterRef, Q, Sum, TextField
 from django.db.models.functions import Coalesce, TruncMonth
 from django.utils import timezone
 
@@ -1957,9 +1957,11 @@ def tenant_conversion_kpis(
     """Retail + On-Premise conversion for an inclusive date window + prior twin.
 
     Sold (products purchased / cans+packs) ÷ samples given / consumers
-    sampled on approved recaps whose Request type classifies as Retail or
-    On-Premise (Event / Seeding / unclassified excluded). Matches Recaps
-    list CONV — never sold÷engagements. Returns current + previous
+    sampled on approved, non-archived recaps whose activation type (Request
+    type, else Event type, else template name) classifies as Retail or
+    On-Premise (Event / Seeding / unclassified excluded). Sold and base are
+    paired per recap: a recap with no sampled base adds neither. Matches
+    Recaps list CONV — never sold÷engagements. Returns current + previous
     equal-length windows so Insights can show a period delta without a
     second round-trip.
 
@@ -1986,64 +1988,95 @@ def tenant_conversion_kpis(
 
     def _window_totals(w_start: date, w_end: date) -> tuple[int, int]:
         window = _inclusive_dates_to_window(w_start, w_end)
-        type_q = _retail_onprem_type_q("event__request__request_type__name")
 
-        legacy = _approved_only(
-            _filter_event_window(
-                Recap.objects.filter(event__tenant_id=tenant_id).filter(type_q),
-                "event__",
-                window,
-            ),
-            "",
-        )
-        sold = _sum(legacy, "products_sold")
-        # Prefer consumers sampled (ConsumerEngagements), then structured
-        # ProductSamples qty, then typed total_engagements as last resort.
-        legacy_ids = list(legacy.values_list("id", flat=True))
-        sampled = 0
-        if legacy_ids:
-            consumers = _sum(
-                ConsumerEngagements.objects.filter(recap_id__in=legacy_ids),
-                "total_consumer",
-            )
-            product_samples = _sum(
-                ProductSamples.objects.filter(recap_id__in=legacy_ids),
-                "quantity",
-            )
-            engagements_fallback = _sum(legacy, "total_engagements")
-            sampled = consumers or product_samples or engagements_fallback
-
-        custom = _approved_only(
-            _filter_event_window(
-                CustomRecap.objects.filter(tenant_id=tenant_id).filter(
-                    _retail_onprem_type_q("event__request__request_type__name")
+        # Activation type: the Request's type, else the Event's own type
+        # (standing walk-up / agency events have no Request), else the
+        # recap template's name. Keying on the Request alone dropped every
+        # walk-up recap from CONV.
+        legacy = (
+            _approved_only(
+                _filter_event_window(
+                    Recap.objects.filter(
+                        event__tenant_id=tenant_id, archived_at__isnull=True
+                    ),
+                    "event__",
+                    window,
                 ),
-                "event__",
-                window,
-            ),
-            "",
+                "",
+            )
+            .annotate(
+                _conv_type=Coalesce(
+                    "event__request__request_type__name",
+                    "event__event_type__name",
+                    output_field=TextField(),
+                )
+            )
+            .filter(_retail_onprem_type_q("_conv_type"))
         )
-        custom_ids = list(custom.values_list("id", flat=True))
+        # Per recap: consumers sampled (ConsumerEngagements), then structured
+        # ProductSamples qty, then typed total_engagements as last resort.
+        # Sold only counts where that recap has a sampled base, so a recap
+        # with nobody sampled can't add purchases with no denominator.
+        legacy_rows = list(legacy.values("id", "products_sold", "total_engagements"))
+        sold = 0
+        sampled = 0
+        if legacy_rows:
+            legacy_ids = [row["id"] for row in legacy_rows]
+            consumers_by_recap = {
+                int(row["recap_id"]): int(row["qty"] or 0)
+                for row in ConsumerEngagements.objects.filter(recap_id__in=legacy_ids)
+                .values("recap_id")
+                .annotate(qty=Coalesce(Sum("total_consumer"), 0))
+            }
+            samples_by_recap = {
+                int(row["recap_id"]): int(row["qty"] or 0)
+                for row in ProductSamples.objects.filter(recap_id__in=legacy_ids)
+                .values("recap_id")
+                .annotate(qty=Coalesce(Sum("quantity"), 0))
+            }
+            for row in legacy_rows:
+                rid = int(row["id"])
+                base = (
+                    consumers_by_recap.get(rid)
+                    or samples_by_recap.get(rid)
+                    or int(row["total_engagements"] or 0)
+                )
+                if base > 0:
+                    sampled += base
+                    sold += max(0, int(row["products_sold"] or 0))
+
+        custom = (
+            _approved_only(
+                _filter_event_window(
+                    CustomRecap.objects.filter(
+                        tenant_id=tenant_id, archived_at__isnull=True
+                    ),
+                    "event__",
+                    window,
+                ),
+                "",
+            )
+            .annotate(
+                _conv_type=Coalesce(
+                    "event__request__request_type__name",
+                    "event__event_type__name",
+                    "custom_recap_template__name",
+                    output_field=TextField(),
+                )
+            )
+            .filter(_retail_onprem_type_q("_conv_type"))
+        )
         custom_eng_fallback = {
             row["id"]: int(row["total_engagements"] or 0)
             for row in custom.values("id", "total_engagements")
         }
+        custom_ids = list(custom_eng_fallback)
 
-        custom_type_q = _retail_onprem_type_q(
-            "custom_recap__event__request__request_type__name"
-        )
         # Free-text sold + sample base on retail/on-prem custom recaps only.
         rows = (
-            _approved_only(
-                _filter_event_window(
-                    CustomFieldValue.objects.filter(
-                        custom_recap__tenant_id=tenant_id,
-                        custom_field__name__iregex=_CUSTOM_KPI_NAME_RE.pattern,
-                    ).filter(custom_type_q),
-                    "custom_recap__event__",
-                    window,
-                ),
-                "custom_recap__",
+            CustomFieldValue.objects.filter(
+                custom_recap_id__in=custom_ids,
+                custom_field__name__iregex=_CUSTOM_KPI_NAME_RE.pattern,
             )
             .values_list("custom_recap_id", "custom_field__name", "value")
             .order_by("custom_recap_id")
@@ -2067,15 +2100,16 @@ def tenant_conversion_kpis(
 
         for rid in custom_ids:
             pairs = per_recap.get(rid, [])
-            units = _sold_units_from_fields(pairs)
-            if units is not None:
-                sold += int(units)
             base = _conversion_sample_base_from_fields(pairs)
             if base is None:
                 structured = structured_by_recap.get(rid, 0)
                 base = structured or custom_eng_fallback.get(rid, 0) or None
-            if base:
-                sampled += int(base)
+            if not base or base <= 0:
+                continue
+            sampled += int(base)
+            units = _sold_units_from_fields(pairs)
+            if units is not None:
+                sold += max(0, int(units))
 
         return sold, sampled
 
