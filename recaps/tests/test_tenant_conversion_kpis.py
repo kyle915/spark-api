@@ -259,11 +259,11 @@ class TestTenantConversionSampledBase(AmbassadorsGraphQLTestCase):
         assert data["engagements"] == 50
         assert data["pct"] == 20.0
 
-    def test_dry_demo_recap_excluded_from_both_sides(self):
+    def test_dry_demo_counts_against_people_engaged(self):
         self._walkup_recap(
             fields=[
-                ("Total number of consumers sampled", "30"),
-                ("How many packs did consumers purchase?", "25"),
+                ("Total number of consumers sampled", "0"),
+                ("How many packs did consumers purchase?", "6"),
                 ("Dry demo? (no product tasted)", "Yes"),
                 ("People engaged", "30"),
             ]
@@ -276,9 +276,56 @@ class TestTenantConversionSampledBase(AmbassadorsGraphQLTestCase):
             ]
         )
         data = tenant_conversion_kpis(self.tenant.id, start=self.start, end=self.end)
-        assert data["sold"] == 10
-        assert data["engagements"] == 50
+        assert data["sold"] == 16
+        assert data["engagements"] == 80
         assert data["pct"] == 20.0
+        assert data["dry_sold"] == 6
+        assert data["dry_engagements"] == 30
+        assert data["dry_recaps"] == 1
+        assert data["unpaired_dry_recap_ids"] == []
+
+    def test_dry_demo_without_people_engaged_falls_back_to_sampled(self):
+        self._walkup_recap(
+            fields=[
+                ("Total number of consumers sampled", "25"),
+                ("How many packs did consumers purchase?", "5"),
+                ("Dry demo? (no product tasted)", "Yes"),
+            ]
+        )
+        data = tenant_conversion_kpis(self.tenant.id, start=self.start, end=self.end)
+        assert (data["sold"], data["engagements"]) == (5, 25)
+        assert data["dry_engagements"] == 25
+
+    def test_dry_demo_with_no_base_is_listed_not_paired(self):
+        recap = self._walkup_recap(
+            fields=[
+                ("Total number of consumers sampled", "0"),
+                ("How many packs did consumers purchase?", "17"),
+                ("Dry demo? (no product tasted)", "Yes"),
+            ]
+        )
+        self._walkup_recap(
+            fields=[
+                ("Total number of consumers sampled", "50"),
+                ("How many packs did consumers purchase?", "10"),
+            ]
+        )
+        data = tenant_conversion_kpis(self.tenant.id, start=self.start, end=self.end)
+        assert (data["sold"], data["engagements"]) == (10, 50)
+        assert data["unpaired_dry_recap_ids"] == [recap.id]
+
+    def test_dry_demo_event_activation_still_excluded(self):
+        self._walkup_recap(
+            event_type_name="Event Activation",
+            fields=[
+                ("Total number of consumers sampled", "0"),
+                ("How many packs did consumers purchase?", "9"),
+                ("Dry demo? (no product tasted)", "Yes"),
+                ("People engaged", "40"),
+            ],
+        )
+        data = tenant_conversion_kpis(self.tenant.id, start=self.start, end=self.end)
+        assert (data["sold"], data["engagements"], data["dry_recaps"]) == (0, 0, 0)
 
     def test_archived_recap_excluded(self):
         recap = self._custom_recap(

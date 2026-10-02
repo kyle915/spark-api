@@ -3,7 +3,7 @@
 For each ``--ids`` CustomRecap whose OWN notes say no product was tasted,
 writes ``Dry demo? = Yes`` and copies the current consumers-sampled count
 into ``People engaged``. Consumers sampled and every other value is left
-untouched; the tag only takes the recap out of conversion.
+untouched; conversion then pairs the recap's purchases with People engaged.
 
 Guards, per recap:
   * must be a Torch recap on the template that has both new fields

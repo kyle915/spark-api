@@ -1,9 +1,9 @@
 """Torch THC: add "Dry demo?" and "People engaged" to the retail recap.
 
 A dry demo is a shift where no product was tasted (no non-dosed cans on
-hand, store won't allow sampling). Those recaps stay visible but are left
-out of conversion, and "People engaged" keeps the talked-with count without
-overloading "Total number of consumers sampled".
+hand, store won't allow sampling). Their purchases still count toward
+conversion, paired with "People engaged" (shoppers pitched) instead of
+"Total number of consumers sampled".
 
 Adds both fields to Consumer Engagement on ``Torch THC-Retail Sampling``,
 right around the consumers-sampled question:

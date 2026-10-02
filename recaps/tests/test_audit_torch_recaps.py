@@ -94,27 +94,35 @@ class TestAuditTorchRecaps(AmbassadorsGraphQLTestCase):
             }
         )
         log = self._run()
-        assert "sold 0 ÷ sampled 80 = 0.0%" in log
+        assert "sold 0 ÷ base 80 = 0.0%" in log
         assert "insights_excludes_from_conv" not in log
         assert "notes_sold_mismatch(notes=[14],field=0)" in log
         assert f"#{recap.id}" in log
         assert "===CSV-BEGIN===" in log
         assert "updated_by" in log
 
-    def test_tagged_dry_demo_excluded_and_untagged_notes_flagged(self):
+    def test_dry_demo_pooled_vs_people_engaged_and_unpaired_listed(self):
         select = recap_models.CustomRecapFieldType.objects.create(name="select", created_by=self.sys)
-        self.fields["Dry demo? (no product tasted)"] = recap_models.CustomField.objects.create(
-            name="Dry demo? (no product tasted)",
-            custom_recap_template=self.template,
-            custom_field_type=select,
-            recap_section=self.section,
-            options=["No", "Yes"],
-            created_by=self.sys,
-        )
+        for name, ftype in (("Dry demo? (no product tasted)", select), ("People engaged", self.num)):
+            self.fields[name] = recap_models.CustomField.objects.create(
+                name=name,
+                custom_recap_template=self.template,
+                custom_field_type=ftype,
+                recap_section=self.section,
+                created_by=self.sys,
+            )
         self._walkup_recap(
             {
-                "Total number of consumers sampled": "30",
-                "How many single cans did consumers purchase?": "25",
+                "Total number of consumers sampled": "0",
+                "How many single cans did consumers purchase?": "6",
+                "Dry demo? (no product tasted)": "Yes",
+                "People engaged": "30",
+            }
+        )
+        unpaired = self._walkup_recap(
+            {
+                "Total number of consumers sampled": "0",
+                "How many single cans did consumers purchase?": "4",
                 "Dry demo? (no product tasted)": "Yes",
             }
         )
@@ -132,9 +140,11 @@ class TestAuditTorchRecaps(AmbassadorsGraphQLTestCase):
             }
         )
         log = self._run(no_csv=True)
-        assert "excl. dry demos: sold 7 ÷ sampled 70 = 10.0% (n=2)" in log
-        assert "tagged dry demos (excluded): 25/30 (n=1)" in log
+        assert "sold 13 ÷ base 100 = 13.0% (n=3)" in log
+        assert "live-sampled: 7/70 = 10.0% (n=2)" in log
+        assert "dry demos vs people engaged: 6/30 = 20.0% (n=1)" in log
         assert "notes say dry but untagged: n=1" in log
+        assert f"4 units on #{unpaired.id}" in log
         assert "dry_demo_tagged" in log
         assert "dry_demo_notes_untagged" in log
 
