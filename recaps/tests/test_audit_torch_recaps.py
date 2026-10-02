@@ -99,6 +99,7 @@ class TestAuditTorchRecaps(AmbassadorsGraphQLTestCase):
         assert "notes_sold_mismatch(notes=[14],field=0)" in log
         assert f"#{recap.id}" in log
         assert "===CSV-BEGIN===" in log
+        assert "updated_by" in log
 
     def test_dry_demo_split_out(self):
         self._walkup_recap(

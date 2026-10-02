@@ -208,6 +208,8 @@ class Command(BaseCommand):
                 "ambassador__user",
                 "retailer",
                 "created_by",
+                "updated_by",
+                "approved_by",
             )
             .prefetch_related(
                 "custom_field_value__custom_field__custom_field_type",
@@ -445,6 +447,10 @@ class Command(BaseCommand):
                     "kpi_fields": json.dumps(kpi, ensure_ascii=False),
                     "notes": note_text[:1500],
                     "dry_demo": dry_demo,
+                    "updated_at": r.updated_at.isoformat() if r.updated_at else "",
+                    "updated_by": getattr(getattr(r, "updated_by", None), "email", "") or "",
+                    "approved_at": r.approved_at.isoformat() if r.approved_at else "",
+                    "approved_by": getattr(getattr(r, "approved_by", None), "email", "") or "",
                     "data_quality_flags": r.data_quality_flags or "",
                 }
             )
@@ -669,6 +675,10 @@ class Command(BaseCommand):
                 f"given={r.get('samples_given_field')} purchased={r.get('purchases')} conv={_fmt_pct(r.get('conv_pct'))} "
                 f"skus=[{r.get('skus', '')}] files=[{r.get('files', '')}] spend={r.get('account_spend')}"
             )
+            w(
+                f"    updated={r.get('updated_at', '')} by {r.get('updated_by', '')!r} "
+                f"approved={r.get('approved_at', '')} by {r.get('approved_by', '')!r}"
+            )
             w(f"    kpi={r.get('kpi_fields', '')}")
             if r.get("flags"):
                 w(f"    flags: {r['flags']}")
@@ -683,7 +693,8 @@ class Command(BaseCommand):
                 "address", "state", "ba", "total_engagements", "consumers_sampled", "samples_given_field",
                 "purchases", "conv_pct", "skus", "sku_qty_total", "files", "account_spend", "flags",
                 "dry_demo", "note_sold_mentions", "note_sampled_mentions", "kpi_fields", "notes", "submitted_at",
-                "created_at", "data_quality_flags",
+                "created_at", "updated_at", "updated_by", "approved_at", "approved_by",
+                "data_quality_flags",
             ]
             buf = io.StringIO()
             writer = csv.DictWriter(buf, fieldnames=cols, extrasaction="ignore")
