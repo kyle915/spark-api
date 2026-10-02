@@ -95,8 +95,9 @@ def _presets() -> dict[str, list[dict]]:
         # checkin_training_url from the first pdf/link; the full list is also
         # rendered as separate email CTAs.
         #
-        # Sampling Guide is BA-clock only (TH-2HRV3D + confirmation emails).
-        # The agency twin TH-AGENCY keeps Product Sales Sheets via
+        # Sampling Guide and Demo Playbook are BA-clock only (TH-2HRV3D +
+        # confirmation emails). The agency twin TH-AGENCY keeps Product Sales
+        # Sheets via
         # hideOnRecapOnly — do not remint either code.
         "torch": [
             {
@@ -104,6 +105,13 @@ def _presets() -> dict[str, list[dict]]:
                 "kind": "pdf",
                 "url": f"{base}/training/torch/ba-sampling-guide.pdf",
                 "note": "Setup, talking points, and shift checklist",
+                "hideOnRecapOnly": True,
+            },
+            {
+                "label": "Torch Demo Playbook",
+                "kind": "pdf",
+                "url": f"{base}/training/torch/torch-demo-playbook.pdf",
+                "note": "Stop them, sample them, sell them",
                 "hideOnRecapOnly": True,
             },
             {
