@@ -1385,3 +1385,46 @@ class TestOffboardClientUsersCronView:
         assert body["ok"] is False
         assert body["error"] == "bad-input"
         assert "no-such-tenant" in body["detail"]
+
+
+@pytest.mark.django_db
+class TestAuditTorchRecapsCronView:
+    """`/internal/cron/audit-torch-recaps` — secret-gated, read-only."""
+
+    URL = "/internal/cron/audit-torch-recaps"
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        self.client = Client()
+
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    @patch("digest.cron_views.call_command")
+    def test_requires_secret(self, mock_call):
+        resp = self.client.post(self.URL, HTTP_X_CRON_SECRET="wrong")
+        assert resp.status_code == 401
+        mock_call.assert_not_called()
+
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    @patch("digest.cron_views.call_command")
+    def test_blank_dates_mean_all_time(self, mock_call):
+        resp = self.client.post(
+            self.URL,
+            {"since": "", "until": "", "focus_since": "2026-09-30"},
+            HTTP_X_CRON_SECRET=VALID_SECRET,
+        )
+        assert resp.status_code == 200
+        args, kwargs = mock_call.call_args
+        assert args[0] == "audit_torch_recaps"
+        assert kwargs["tenant"] == "keee-torch-thc"
+        assert "since" not in kwargs and "until" not in kwargs
+        assert kwargs["focus_since"] == "2026-09-30"
+
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    @patch("digest.cron_views.call_command")
+    def test_command_error_is_400(self, mock_call):
+        from django.core.management.base import CommandError
+
+        mock_call.side_effect = CommandError("tenant-not-found: x")
+        resp = self.client.post(self.URL, {"tenant": "x"}, HTTP_X_CRON_SECRET=VALID_SECRET)
+        assert resp.status_code == 400
+        assert resp.json()["error"] == "bad-input"
