@@ -572,7 +572,7 @@ class TenantConversionKpis:
 
     Numerator is products purchased / cans+packs sold. Denominator is
     samples given or consumers sampled (never raw engagements when a
-    sampled count exists). Event / Seeding / unclassified activations are
+    sampled count exists); dry demos use People engaged. Event / Seeding / unclassified activations are
     excluded. ``pct`` is null when either side is zero — never invent a
     rate. ``previous_*`` is the equal-length window immediately before
     ``start_date``/``end_date``. ``engagements`` is the CONV denominator
@@ -589,6 +589,13 @@ class TenantConversionKpis:
     previous_label: str | None = None
     start_date: str | None = None
     end_date: str | None = None
+    # Dry-demo share of the current window (already inside sold /
+    # engagements): purchases, People-engaged base, recap count, and dry
+    # demos with no base that couldn't be paired (kept out of the rate).
+    dry_sold: int = 0
+    dry_engagements: int = 0
+    dry_recaps: int = 0
+    unpaired_dry_recaps: int = 0
 
 
 @strawberry.type
@@ -635,6 +642,10 @@ def _build_conversion_kpis(
         previous_label=data.get("previous_label"),
         start_date=data.get("start_date"),
         end_date=data.get("end_date"),
+        dry_sold=int(data.get("dry_sold") or 0),
+        dry_engagements=int(data.get("dry_engagements") or 0),
+        dry_recaps=int(data.get("dry_recaps") or 0),
+        unpaired_dry_recaps=len(data.get("unpaired_dry_recap_ids") or []),
     )
 
 

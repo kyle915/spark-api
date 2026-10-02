@@ -576,10 +576,17 @@ class Command(BaseCommand):
         w("  by event type (filed): " + json.dumps(Counter(r.get("event_type", "") or "(none)" for r in rows_w if r["status"] != "draft_unfiled")))
 
         # ---------------------------------------------------------- conversion
+        def _base(r):
+            # Dry demos: People engaged, else consumers sampled (the
+            # talked-to count on historical dry demos).
+            if r.get("dry_demo"):
+                return r.get("people_engaged") or r.get("consumers_sampled") or 0
+            return r.get("consumers_sampled") or 0
+
         def _pool(subset, require_sold=False):
             sold = sampled = n = 0
             for r in subset:
-                cs = r.get("consumers_sampled")
+                cs = _base(r)
                 if not cs or cs <= 0:
                     continue
                 if require_sold and r.get("purchases") is None:
@@ -589,25 +596,34 @@ class Command(BaseCommand):
                 n += 1
             return sold, sampled, n
 
-        def _conv_rows(subset, include_dry=False):
+        def _conv_rows(subset):
             return [
                 r
                 for r in subset
-                if r.get("bucket_audit") in ("retail", "onprem")
-                and r.get("status") == "approved"
-                and (include_dry or not r.get("dry_demo"))
+                if r.get("bucket_audit") in ("retail", "onprem") and r.get("status") == "approved"
             ]
 
         def _conv_line(label, subset):
-            rows_c = _conv_rows(subset, include_dry=True)
-            s, b, n = _pool([r for r in rows_c if not r.get("dry_demo")])
+            rows_c = _conv_rows(subset)
+            s, b, n = _pool(rows_c)
+            ls, lb, ln = _pool([r for r in rows_c if not r.get("dry_demo")])
             ds, db, dn = _pool([r for r in rows_c if r.get("dry_demo")])
+            unpaired = [r for r in rows_c if r.get("dry_demo") and not _base(r)]
             un = sum(1 for r in rows_c if r.get("dry_demo_notes") and not r.get("dry_demo"))
-            return (
-                f"  {label:24} approved retail/on-prem excl. dry demos: sold {s} ÷ sampled {b} = "
-                f"{_fmt_pct(_pct(s, b))} (n={n}) | tagged dry demos (excluded): {ds}/{db} (n={dn}) "
+            line = (
+                f"  {label:24} approved retail/on-prem: sold {s} ÷ base {b} = {_fmt_pct(_pct(s, b))} "
+                f"(n={n}) | live-sampled: {ls}/{lb} = {_fmt_pct(_pct(ls, lb))} (n={ln}) "
+                f"| dry demos vs people engaged: {ds}/{db} = {_fmt_pct(_pct(ds, db))} (n={dn}) "
                 f"| notes say dry but untagged: n={un}"
             )
+            if unpaired:
+                units = sum(max(0, r.get("purchases") or 0) for r in unpaired)
+                line += (
+                    f"\n  {'':24} unpaired dry demos (no people engaged / sampled; units kept in "
+                    f"totals, out of the rate): {units} units on "
+                    + ", ".join(f"#{r['id']}" for r in unpaired)
+                )
+            return line
 
         w("\n## Conversion — audited basis (approved, non-archived, Retail + On-Premise by request→event→template type; purchases ÷ consumers sampled)")
         w(_conv_line("WINDOW", rows_w))
@@ -618,7 +634,7 @@ class Command(BaseCommand):
 
         w("\n## Conversion incl. Needs-review (what it would be if pending recaps are approved as-is)")
         def _conv_line_nr(label, subset):
-            sub = [r for r in subset if r.get("bucket_audit") in ("retail", "onprem") and r.get("status") in ("approved", "needs_review") and not r.get("dry_demo")]
+            sub = [r for r in subset if r.get("bucket_audit") in ("retail", "onprem") and r.get("status") in ("approved", "needs_review")]
             s, b, n = _pool(sub)
             return f"  {label:24} sold {s} ÷ sampled {b} = {_fmt_pct(_pct(s, b))} (n={n})"
         w(_conv_line_nr("WINDOW", rows_w))
