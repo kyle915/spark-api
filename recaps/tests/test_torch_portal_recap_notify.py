@@ -105,6 +105,22 @@ class TestTorchPortalRecapNotify(EventsGraphQLTestCase):
         recap = self._make_recap(tenant=self.ld, event=event, name="LD")
         assert is_torch_portal_recap(recap) is False
 
+    def test_approved_mail_skips_deactivated_rmm(self):
+        gone = self.create_user(
+            username="t.reed@liquiddeath.com",
+            email="t.reed@liquiddeath.com",
+            role=self.roles["client"],
+        )
+        gone.is_active = False
+        gone.save(update_fields=["is_active"])
+        event = self.create_event(name="LD demo", tenant=self.ld, address="NY")
+        event.rmm_asigned = gone
+        event.save(update_fields=["rmm_asigned"])
+        recap = self._make_recap(tenant=self.ld, event=event, name="LD")
+        recipients, reply_to = _collect_recap_approved_recipients(recap)
+        assert "t.reed@liquiddeath.com" not in [e.lower() for e, _ in recipients]
+        assert reply_to == "events@igniteproductions.co"
+
     def test_girl_beer_recap_is_not_torch_portal(self):
         event = self.create_event(
             name="GB demo", tenant=self.girl, address="Austin"
