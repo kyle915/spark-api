@@ -6516,6 +6516,74 @@ class AddTorchCompetitorFeedbackView(View):
         return self._run(request)
 
 
+def _run_dry_run_command(
+    request: HttpRequest, command: str, params: tuple[str, ...]
+) -> HttpResponse:
+    deny = _check_secret(request)
+    if deny is not None:
+        return deny
+
+    kwargs: dict = {}
+    raw = (request.GET.get("apply") or request.POST.get("apply") or "").lower()
+    if raw in ("1", "true", "yes", "on"):
+        kwargs["apply"] = True
+    for name in params:
+        value = (request.GET.get(name) or request.POST.get(name) or "").strip()
+        if value:
+            kwargs[name] = value
+
+    out = io.StringIO()
+    try:
+        call_command(command, stdout=out, **kwargs)
+    except CommandError as exc:
+        return JsonResponse(
+            {"ok": False, "error": "bad-request", "detail": str(exc), "log": out.getvalue()},
+            status=400,
+        )
+    except Exception as exc:  # noqa: BLE001 — surface to caller
+        logger.exception("%s cron failed", command)
+        return JsonResponse(
+            {"ok": False, "error": "command-failed", "detail": str(exc), "log": out.getvalue()},
+            status=500,
+        )
+    return JsonResponse({"ok": True, "log": out.getvalue()})
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class AddTorchDryDemoFieldsView(View):
+    """GET/POST `/internal/cron/add-torch-dry-demo-fields`.
+
+    Torch THC: ensure "Dry demo?" + "People engaged" on the retail recap
+    template. Does not remint TH-2HRV3D / TH-AGENCY.
+
+    Idempotent. DRY-RUN unless `apply` is truthy. Params: apply, tenant.
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return _run_dry_run_command(request, "add_torch_dry_demo_fields", ("tenant",))
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self.post(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class TagTorchDryDemosView(View):
+    """GET/POST `/internal/cron/tag-torch-dry-demos`.
+
+    Torch THC: tag reviewed recap ids as dry demos (Dry demo? = Yes, People
+    engaged = consumers sampled) when each recap's own notes say no product
+    was tasted. Logs before/after per recap.
+
+    DRY-RUN unless `apply` is truthy. Params: ids (required), apply, tenant.
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return _run_dry_run_command(request, "tag_torch_dry_demos", ("ids", "tenant"))
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self.post(request)
+
+
 @method_decorator(csrf_exempt, name="dispatch")
 class DeleteTenantView(View):
     """GET/POST `/internal/cron/delete-tenant`.
@@ -10025,6 +10093,8 @@ def _registered_views() -> dict[str, Any]:
         "migrate-torch-product-spend": MigrateTorchProductSpendView,
         "rename-torch-onshelf-bucket": RenameTorchOnshelfBucketView,
         "add-torch-competitor-feedback": AddTorchCompetitorFeedbackView,
+        "add-torch-dry-demo-fields": AddTorchDryDemoFieldsView,
+        "tag-torch-dry-demos": TagTorchDryDemosView,
         "clone-recap-template": CloneRecapTemplateView,
         "attach-fpo-recap-images": AttachFpoRecapImagesView,
         "add-recap-template-fields": AddRecapTemplateFieldsView,

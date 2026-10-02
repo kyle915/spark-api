@@ -59,6 +59,7 @@ from recaps.models import (
 from recaps.report_service import _format_date_range, _leading_int
 from recaps.types import (
     _consumers_sampled_from_fields,
+    _is_dry_demo_from_fields,
     _samples_given_from_fields,
     _sold_units_from_fields,
 )
@@ -406,7 +407,9 @@ _CUSTOM_KPI_NAME_RE = re.compile(
     r"|sold|bought|purchase[ds]?"
     # Girl Beer vocabulary: demographics sampled totals + free-text
     # samples headline (see recaps.types._SAMPLED_TOTAL_RE/_SAMPLES_GIVEN_RE)
-    r"|who sampled|samples? (given|distributed|handed)",
+    r"|who sampled|samples? (given|distributed|handed)"
+    # "Dry demo?" flag: CONV skips recaps where no product was tasted.
+    r"|dry ?demo",
     re.IGNORECASE,
 )
 
@@ -2100,6 +2103,8 @@ def tenant_conversion_kpis(
 
         for rid in custom_ids:
             pairs = per_recap.get(rid, [])
+            if _is_dry_demo_from_fields(pairs):
+                continue
             base = _conversion_sample_base_from_fields(pairs)
             if base is None:
                 structured = structured_by_recap.get(rid, 0)

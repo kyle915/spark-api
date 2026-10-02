@@ -131,6 +131,10 @@ _ACCOUNT_SPEND_RE = re.compile(
     re.IGNORECASE,
 )
 
+_DRY_DEMO_FIELD_RE = re.compile(r"\bdry\s*demo\b", re.IGNORECASE)
+_PEOPLE_ENGAGED_RE = re.compile(r"^\s*people\s+engaged\b", re.IGNORECASE)
+_YES_VALUES = frozenset({"yes", "y", "true", "1"})
+
 # Custom field that names the brand ambassador — the export's BA-name
 # fallback for recaps with no linked Spark ambassador and no typed
 # external_ba_name (imported / form-entered BAs). Conservative on purpose:
@@ -391,6 +395,35 @@ def _account_spend_from_fields(
             total += parsed
             matched = True
     return total if matched else None
+
+
+def _is_dry_demo_from_fields(
+    fields: Iterable[tuple[str | None, str | None]],
+) -> bool:
+    """True when a "Dry demo?" field on the recap is answered yes. A dry demo
+    is a shift where no product was tasted, so the recap stays visible but
+    is left out of conversion (purchases ÷ consumers sampled)."""
+    for name, value in fields:
+        if not name or not _DRY_DEMO_FIELD_RE.search(name):
+            continue
+        if (value or "").strip().lower() in _YES_VALUES:
+            return True
+    return False
+
+
+def _people_engaged_from_fields(
+    fields: Iterable[tuple[str | None, str | None]],
+) -> int | None:
+    """Value of the first "People engaged" field, else None. Separate from
+    consumers sampled: on a dry demo nobody tasted, but the BA still talked
+    with people."""
+    for name, value in fields:
+        if not name or not _PEOPLE_ENGAGED_RE.search(name):
+            continue
+        parsed = _parse_recap_int(value)
+        if parsed is not None:
+            return parsed
+    return None
 
 
 def _ba_name_from_fields(
@@ -1215,6 +1248,45 @@ class CustomRecap(Node):
                 for v in values
             ]
             return _consumers_sampled_from_fields(pairs)
+
+        cached = _prefetched(self, "custom_field_value")
+        if cached is not None:
+            return _compute(cached)
+        return await sync_to_async(
+            lambda: _compute(self.custom_field_value.all()),
+            thread_sensitive=True,
+        )()
+
+    @strawberry.field
+    async def is_dry_demo(self) -> bool:
+        """True when the BA answered "Dry demo?" = Yes (no product tasted).
+        Such recaps are left out of conversion everywhere."""
+
+        def _compute(values):
+            pairs = [
+                (getattr(v.custom_field, "name", None), v.value)
+                for v in values
+            ]
+            return _is_dry_demo_from_fields(pairs)
+
+        cached = _prefetched(self, "custom_field_value")
+        if cached is not None:
+            return _compute(cached)
+        return await sync_to_async(
+            lambda: _compute(self.custom_field_value.all()),
+            thread_sensitive=True,
+        )()
+
+    @strawberry.field
+    async def people_engaged(self) -> int | None:
+        """Value of the "People engaged" custom field, else None."""
+
+        def _compute(values):
+            pairs = [
+                (getattr(v.custom_field, "name", None), v.value)
+                for v in values
+            ]
+            return _people_engaged_from_fields(pairs)
 
         cached = _prefetched(self, "custom_field_value")
         if cached is not None:

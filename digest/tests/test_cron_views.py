@@ -1428,3 +1428,57 @@ class TestAuditTorchRecapsCronView:
         resp = self.client.post(self.URL, {"tenant": "x"}, HTTP_X_CRON_SECRET=VALID_SECRET)
         assert resp.status_code == 400
         assert resp.json()["error"] == "bad-input"
+
+
+class TestTorchDryDemoCronViews:
+    """`add-torch-dry-demo-fields` + `tag-torch-dry-demos` — secret-gated, dry-run default."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        self.client = Client()
+
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    @patch("digest.cron_views.call_command")
+    def test_requires_secret(self, mock_call):
+        for url in ("/internal/cron/add-torch-dry-demo-fields", "/internal/cron/tag-torch-dry-demos"):
+            resp = self.client.post(url, {"apply": "true"}, HTTP_X_CRON_SECRET="wrong")
+            assert resp.status_code == 401
+        mock_call.assert_not_called()
+
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    @patch("digest.cron_views.call_command")
+    def test_fields_dry_run_by_default(self, mock_call):
+        resp = self.client.post(
+            "/internal/cron/add-torch-dry-demo-fields",
+            {"apply": "false", "tenant": "torch-thc"},
+            HTTP_X_CRON_SECRET=VALID_SECRET,
+        )
+        assert resp.status_code == 200
+        args, kwargs = mock_call.call_args
+        assert args[0] == "add_torch_dry_demo_fields"
+        assert "apply" not in kwargs
+        assert kwargs["tenant"] == "torch-thc"
+
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    @patch("digest.cron_views.call_command")
+    def test_tag_passes_ids_and_apply(self, mock_call):
+        resp = self.client.post(
+            "/internal/cron/tag-torch-dry-demos",
+            {"ids": "1152,1156", "apply": "true"},
+            HTTP_X_CRON_SECRET=VALID_SECRET,
+        )
+        assert resp.status_code == 200
+        args, kwargs = mock_call.call_args
+        assert args[0] == "tag_torch_dry_demos"
+        assert kwargs["ids"] == "1152,1156"
+        assert kwargs["apply"] is True
+
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    @patch("digest.cron_views.call_command")
+    def test_tag_command_error_is_400(self, mock_call):
+        from django.core.management.base import CommandError
+
+        mock_call.side_effect = CommandError("--ids is required")
+        resp = self.client.post("/internal/cron/tag-torch-dry-demos", HTTP_X_CRON_SECRET=VALID_SECRET)
+        assert resp.status_code == 400
+        assert resp.json()["error"] == "bad-request"
