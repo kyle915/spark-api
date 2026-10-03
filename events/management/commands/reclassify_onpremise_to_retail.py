@@ -250,8 +250,9 @@ class Command(BaseCommand):
                     if refs:
                         kept.append(f"{t.name} ({refs} refs)")
                         continue
+                    label = f"{model.__name__} [{t.id}] {t.name}"
                     t.delete()
-                    retired.append(f"{model.__name__} [{t.id}] {t.name}")
+                    retired.append(label)
         w(f"\nAPPLIED — moved {n_req} request(s), {n_ev} event(s), {n_tmpl} template(s) to {RETAIL_NAME!r}.")
         if retire:
             w(f"retired for this tenant: {retired or 'none'}")

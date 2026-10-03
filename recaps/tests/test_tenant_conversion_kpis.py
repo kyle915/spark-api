@@ -340,3 +340,19 @@ class TestTenantConversionSampledBase(AmbassadorsGraphQLTestCase):
         data = tenant_conversion_kpis(self.tenant.id, start=self.start, end=self.end)
         assert data["sold"] == 0
         assert data["engagements"] == 0
+
+
+def test_sold_units_count_each_can_and_pack_as_one_unit():
+    from recaps.types import _sold_unit_lines, _sold_units_from_fields
+
+    pairs = [
+        ("How many single cans did consumers purchase?", "3"),
+        ("How many packs did consumers purchase?", "2"),
+        ("Peach 4-packs sold", "1"),
+        ("Account Spend Amount", "120"),
+        ("Total number of consumers sampled", "40"),
+    ]
+    assert _sold_units_from_fields(pairs) == 6
+    assert [n for _, n in _sold_unit_lines(pairs)] == [3, 2, 1]
+    assert _sold_units_from_fields([("How many packs did consumers purchase?", "2")]) == 2
+    assert _sold_units_from_fields([("Account Spend Amount", "120")]) is None
