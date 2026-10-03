@@ -1076,17 +1076,6 @@
    "notes": "SKUs to sample: \"10mg Watermelon limeade, 10mg Strawberry lemonade, 10mg Peach iced tea, 10mg Black cherry\""
   },
   {
-   "source_row": 95,
-   "name": "Bills Liquors & Fine Wine",
-   "date": "09/19/2026",
-   "start_time": "15:00",
-   "end_time": "18:00",
-   "address": "132 Sea Island Pkwy, Beaufort, SC 29907, USA",
-   "state_code": "SC",
-   "timezone_code": "EDT",
-   "notes": "SKUs to sample: Peach Iced Tea 5mg 12oz, Black Cherry 5mg 12oz, Fruit Punch 25mg 12oz"
-  },
-  {
    "source_row": 96,
    "name": "Ownes Liquor",
    "date": "09/19/2026",
@@ -1192,17 +1181,6 @@
    "start_time": "11:00",
    "end_time": "14:00",
    "address": "4201 Main Street, Kansas City, MO 64111",
-   "state_code": "MO",
-   "timezone_code": "CDT",
-   "notes": "SKUs to sample: Non-Active SKUs"
-  },
-  {
-   "source_row": 99,
-   "name": "Total Wine & More (Brentwood)",
-   "date": "09/20/2026",
-   "start_time": "14:00",
-   "end_time": "17:00",
-   "address": "90 Brentwood Promenade Court, Brentwood, MO 63144",
    "state_code": "MO",
    "timezone_code": "CDT",
    "notes": "SKUs to sample: Non-Active SKUs"
