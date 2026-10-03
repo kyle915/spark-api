@@ -1953,6 +1953,247 @@ def _conversion_sample_base_from_fields(
     return None
 
 
+def conversion_window_totals(
+    tenant_id: int,
+    w_start: date | None,
+    w_end: date | None,
+    *,
+    detail: bool = False,
+) -> dict:
+    """Retail + On-Premise CONV totals for one inclusive window.
+
+    The single source of truth behind :func:`tenant_conversion_kpis`.
+    ``detail=True`` adds ``recaps``: one row per recap the conversion
+    queryset selected (approved, non-archived, in-window, Retail/On-Prem
+    by Request type → Event type → template name) with its base, units and
+    whether it landed in the rate — so audits reconcile against the exact
+    set Insights counts instead of re-deriving it.
+    """
+    window = _inclusive_dates_to_window(w_start, w_end)
+    detail_rows: list[dict] = []
+
+    # Activation type: the Request's type, else the Event's own type
+    # (standing walk-up / agency events have no Request), else the
+    # recap template's name. Keying on the Request alone dropped every
+    # walk-up recap from CONV.
+    legacy = (
+        _approved_only(
+            _filter_event_window(
+                Recap.objects.filter(
+                    event__tenant_id=tenant_id, archived_at__isnull=True
+                ),
+                "event__",
+                window,
+            ),
+            "",
+        )
+        .annotate(
+            _conv_type=Coalesce(
+                "event__request__request_type__name",
+                "event__event_type__name",
+                output_field=TextField(),
+            )
+        )
+        .filter(_retail_onprem_type_q("_conv_type"))
+    )
+    # Per recap: consumers sampled (ConsumerEngagements), then structured
+    # ProductSamples qty, then typed total_engagements as last resort.
+    # Sold only counts where that recap has a sampled base, so a recap
+    # with nobody sampled can't add purchases with no denominator.
+    legacy_rows = list(
+        legacy.values("id", "products_sold", "total_engagements", "_conv_type")
+    )
+    sold = 0
+    sampled = 0
+    if legacy_rows:
+        legacy_ids = [row["id"] for row in legacy_rows]
+        consumers_by_recap = {
+            int(row["recap_id"]): int(row["qty"] or 0)
+            for row in ConsumerEngagements.objects.filter(recap_id__in=legacy_ids)
+            .values("recap_id")
+            .annotate(qty=Coalesce(Sum("total_consumer"), 0))
+        }
+        samples_by_recap = {
+            int(row["recap_id"]): int(row["qty"] or 0)
+            for row in ProductSamples.objects.filter(recap_id__in=legacy_ids)
+            .values("recap_id")
+            .annotate(qty=Coalesce(Sum("quantity"), 0))
+        }
+        for row in legacy_rows:
+            rid = int(row["id"])
+            base = (
+                consumers_by_recap.get(rid)
+                or samples_by_recap.get(rid)
+                or int(row["total_engagements"] or 0)
+            )
+            units = max(0, int(row["products_sold"] or 0))
+            if base > 0:
+                sampled += base
+                sold += units
+            if detail:
+                detail_rows.append(
+                    {
+                        "kind": "legacy",
+                        "id": rid,
+                        "conv_type": row["_conv_type"],
+                        "dry": False,
+                        "base": base if base > 0 else None,
+                        "units": units,
+                        "counted": base > 0,
+                        "reason": "" if base > 0 else "no_base",
+                    }
+                )
+
+    custom = (
+        _approved_only(
+            _filter_event_window(
+                CustomRecap.objects.filter(
+                    tenant_id=tenant_id, archived_at__isnull=True
+                ),
+                "event__",
+                window,
+            ),
+            "",
+        )
+        .annotate(
+            _conv_type=Coalesce(
+                "event__request__request_type__name",
+                "event__event_type__name",
+                "custom_recap_template__name",
+                output_field=TextField(),
+            )
+        )
+        .filter(_retail_onprem_type_q("_conv_type"))
+    )
+    custom_meta = {
+        row["id"]: row for row in custom.values("id", "total_engagements", "_conv_type")
+    }
+    custom_ids = list(custom_meta)
+    rows_out = custom_conversion_rows(
+        custom_ids,
+        {rid: int(row["total_engagements"] or 0) for rid, row in custom_meta.items()},
+    )
+
+    dry_sold = 0
+    dry_base = 0
+    dry_n = 0
+    unpaired: list[int] = []
+    for row in rows_out:
+        if row["counted"]:
+            if row["dry"]:
+                dry_base += row["base"]
+                dry_sold += row["units"]
+                dry_n += 1
+            else:
+                sampled += row["base"]
+                sold += row["units"]
+        elif row["dry"]:
+            unpaired.append(row["id"])
+        if detail:
+            detail_rows.append(
+                {"kind": "custom", "conv_type": custom_meta[row["id"]]["_conv_type"], **row}
+            )
+
+    out = {
+        "sold": sold + dry_sold,
+        "base": sampled + dry_base,
+        "dry_sold": dry_sold,
+        "dry_base": dry_base,
+        "dry_n": dry_n,
+        "unpaired": sorted(unpaired),
+    }
+    if detail:
+        out["recaps"] = detail_rows
+    return out
+
+
+def custom_conversion_rows(
+    custom_ids: list[int],
+    engagements_fallback: dict[int, int] | None = None,
+) -> list[dict]:
+    """Per-recap CONV base + units for custom recaps (the Insights rule).
+
+    Live: samples given, else consumers sampled, else structured product
+    sample qty, else ``total_engagements``. Dry demo (no product tasted):
+    People engaged, else the consumers-sampled value; neither → unpaired
+    (kept out of the rate). ``counted`` is whether the recap lands in the
+    rate; units are reported either way.
+    """
+    if not custom_ids:
+        return []
+    fallback = engagements_fallback
+    if fallback is None:
+        fallback = {
+            row["id"]: int(row["total_engagements"] or 0)
+            for row in CustomRecap.objects.filter(id__in=custom_ids).values(
+                "id", "total_engagements"
+            )
+        }
+
+    # Free-text sold + sample base on the selected recaps only.
+    per_recap: dict[int, list[tuple[str | None, str | None]]] = {}
+    for recap_id, name, value in (
+        CustomFieldValue.objects.filter(
+            custom_recap_id__in=custom_ids,
+            custom_field__name__iregex=_CUSTOM_KPI_NAME_RE.pattern,
+        )
+        .values_list("custom_recap_id", "custom_field__name", "value")
+        .order_by("custom_recap_id")
+        .iterator()
+    ):
+        per_recap.setdefault(recap_id, []).append((name, value))
+
+    structured_by_recap: dict[int, int] = {}
+    for row in (
+        CustomRecapProductSample.objects.filter(custom_recap_id__in=custom_ids)
+        .values("custom_recap_id")
+        .annotate(qty=Coalesce(Sum("quantity"), 0))
+    ):
+        structured_by_recap[int(row["custom_recap_id"])] = int(row["qty"] or 0)
+
+    out: list[dict] = []
+    for rid in custom_ids:
+        pairs = per_recap.get(rid, [])
+        units_raw = _sold_units_from_fields(pairs)
+        units = max(0, int(units_raw)) if units_raw is not None else 0
+        if _is_dry_demo_from_fields(pairs):
+            # Dry demo: nobody tasted, so the base is the shoppers pitched
+            # — People engaged, else the consumers-sampled value
+            # (historically the talked-to count). No base, no pairing:
+            # listed, kept out of the rate.
+            base = _people_engaged_from_fields(pairs) or _consumers_sampled_from_fields(pairs)
+            ok = bool(base) and base > 0
+            out.append(
+                {
+                    "id": int(rid),
+                    "dry": True,
+                    "base": int(base) if ok else None,
+                    "units": units,
+                    "units_blank": units_raw is None,
+                    "counted": ok,
+                    "reason": "" if ok else "unpaired_dry_demo",
+                }
+            )
+            continue
+        base = _conversion_sample_base_from_fields(pairs)
+        if base is None:
+            structured = structured_by_recap.get(rid, 0)
+            base = structured or fallback.get(rid, 0) or None
+        ok = bool(base) and base > 0
+        out.append(
+            {
+                "id": int(rid),
+                "dry": False,
+                "base": int(base) if ok else None,
+                "units": units,
+                "units_blank": units_raw is None,
+                "counted": ok,
+                "reason": "" if ok else "no_base",
+            }
+        )
+    return out
+
+
 def tenant_conversion_kpis(
     tenant_id: int,
     start: date | None,
@@ -1997,160 +2238,8 @@ def tenant_conversion_kpis(
     prev_end = start - timedelta(days=1)
     prev_start = prev_end - timedelta(days=days - 1)
 
-    def _window_totals(w_start: date, w_end: date) -> dict:
-        window = _inclusive_dates_to_window(w_start, w_end)
-
-        # Activation type: the Request's type, else the Event's own type
-        # (standing walk-up / agency events have no Request), else the
-        # recap template's name. Keying on the Request alone dropped every
-        # walk-up recap from CONV.
-        legacy = (
-            _approved_only(
-                _filter_event_window(
-                    Recap.objects.filter(
-                        event__tenant_id=tenant_id, archived_at__isnull=True
-                    ),
-                    "event__",
-                    window,
-                ),
-                "",
-            )
-            .annotate(
-                _conv_type=Coalesce(
-                    "event__request__request_type__name",
-                    "event__event_type__name",
-                    output_field=TextField(),
-                )
-            )
-            .filter(_retail_onprem_type_q("_conv_type"))
-        )
-        # Per recap: consumers sampled (ConsumerEngagements), then structured
-        # ProductSamples qty, then typed total_engagements as last resort.
-        # Sold only counts where that recap has a sampled base, so a recap
-        # with nobody sampled can't add purchases with no denominator.
-        legacy_rows = list(legacy.values("id", "products_sold", "total_engagements"))
-        sold = 0
-        sampled = 0
-        if legacy_rows:
-            legacy_ids = [row["id"] for row in legacy_rows]
-            consumers_by_recap = {
-                int(row["recap_id"]): int(row["qty"] or 0)
-                for row in ConsumerEngagements.objects.filter(recap_id__in=legacy_ids)
-                .values("recap_id")
-                .annotate(qty=Coalesce(Sum("total_consumer"), 0))
-            }
-            samples_by_recap = {
-                int(row["recap_id"]): int(row["qty"] or 0)
-                for row in ProductSamples.objects.filter(recap_id__in=legacy_ids)
-                .values("recap_id")
-                .annotate(qty=Coalesce(Sum("quantity"), 0))
-            }
-            for row in legacy_rows:
-                rid = int(row["id"])
-                base = (
-                    consumers_by_recap.get(rid)
-                    or samples_by_recap.get(rid)
-                    or int(row["total_engagements"] or 0)
-                )
-                if base > 0:
-                    sampled += base
-                    sold += max(0, int(row["products_sold"] or 0))
-
-        custom = (
-            _approved_only(
-                _filter_event_window(
-                    CustomRecap.objects.filter(
-                        tenant_id=tenant_id, archived_at__isnull=True
-                    ),
-                    "event__",
-                    window,
-                ),
-                "",
-            )
-            .annotate(
-                _conv_type=Coalesce(
-                    "event__request__request_type__name",
-                    "event__event_type__name",
-                    "custom_recap_template__name",
-                    output_field=TextField(),
-                )
-            )
-            .filter(_retail_onprem_type_q("_conv_type"))
-        )
-        custom_eng_fallback = {
-            row["id"]: int(row["total_engagements"] or 0)
-            for row in custom.values("id", "total_engagements")
-        }
-        custom_ids = list(custom_eng_fallback)
-
-        # Free-text sold + sample base on retail/on-prem custom recaps only.
-        rows = (
-            CustomFieldValue.objects.filter(
-                custom_recap_id__in=custom_ids,
-                custom_field__name__iregex=_CUSTOM_KPI_NAME_RE.pattern,
-            )
-            .values_list("custom_recap_id", "custom_field__name", "value")
-            .order_by("custom_recap_id")
-        )
-        per_recap: dict[int, list[tuple[str | None, str | None]]] = {}
-        for recap_id, name, value in rows.iterator():
-            per_recap.setdefault(recap_id, []).append((name, value))
-
-        structured_by_recap: dict[int, int] = {}
-        if custom_ids:
-            for row in (
-                CustomRecapProductSample.objects.filter(
-                    custom_recap_id__in=custom_ids
-                )
-                .values("custom_recap_id")
-                .annotate(qty=Coalesce(Sum("quantity"), 0))
-            ):
-                structured_by_recap[int(row["custom_recap_id"])] = int(
-                    row["qty"] or 0
-                )
-
-        dry_sold = 0
-        dry_base = 0
-        dry_n = 0
-        unpaired: list[int] = []
-        for rid in custom_ids:
-            pairs = per_recap.get(rid, [])
-            if _is_dry_demo_from_fields(pairs):
-                # Dry demo: nobody tasted, so the base is the shoppers
-                # pitched — People engaged, else the consumers-sampled
-                # value (historically the talked-to count). No base, no
-                # pairing: listed, kept out of the rate.
-                base = _people_engaged_from_fields(pairs) or _consumers_sampled_from_fields(pairs)
-                units = _sold_units_from_fields(pairs)
-                if not base or base <= 0:
-                    unpaired.append(int(rid))
-                    continue
-                dry_base += int(base)
-                dry_sold += max(0, int(units or 0))
-                dry_n += 1
-                continue
-            base = _conversion_sample_base_from_fields(pairs)
-            if base is None:
-                structured = structured_by_recap.get(rid, 0)
-                base = structured or custom_eng_fallback.get(rid, 0) or None
-            if not base or base <= 0:
-                continue
-            sampled += int(base)
-            units = _sold_units_from_fields(pairs)
-            if units is not None:
-                sold += max(0, int(units))
-
-        return {
-            "sold": sold + dry_sold,
-            "base": sampled + dry_base,
-            "dry_sold": dry_sold,
-            "dry_base": dry_base,
-            "dry_n": dry_n,
-            "unpaired": sorted(unpaired),
-        }
-
-    cur = _window_totals(start, end)
-    prev = _window_totals(prev_start, prev_end)
+    cur = conversion_window_totals(tenant_id, start, end)
+    prev = conversion_window_totals(tenant_id, prev_start, prev_end)
     cur_sold, cur_sampled = cur["sold"], cur["base"]
     prev_sold, prev_sampled = prev["sold"], prev["base"]
 

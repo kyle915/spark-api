@@ -142,6 +142,12 @@ class Command(BaseCommand):
             help="Extra window called out separately (default 2026-09-30 → --until).",
         )
         parser.add_argument("--no-csv", action="store_true")
+        parser.add_argument(
+            "--under",
+            type=float,
+            default=20.0,
+            help="Flag rated retail/on-prem recaps whose own conversion is below this %% (default 20).",
+        )
 
     # ------------------------------------------------------------------ helpers
     def _tenant(self, ident: str):
@@ -158,6 +164,221 @@ class Command(BaseCommand):
         if tenant is None:
             raise CommandError(f"tenant-not-found: {ident}")
         return tenant
+
+    def _coverage_and_under(self, tenant, rows, rows_w, since, until, under: float, *, emit_csv: bool = True) -> None:
+        """Reconcile retail recaps against the exact Insights CONV set, then
+        list rated recaps whose own conversion is under ``under``%.
+
+        "Counted" comes from :func:`conversion_window_totals` (the function
+        ``tenantConversionKpis`` calls) with ``detail=True`` — not re-derived.
+        Per-recap base/units for every status use
+        :func:`custom_conversion_rows` (the same per-recap rule).
+        """
+        from recaps.tenant_overview import conversion_window_totals, custom_conversion_rows
+
+        w = self.stdout.write
+        dated = [datetime.date.fromisoformat(r["date"]) for r in rows if r.get("date")]
+        first = since or (min(dated) if dated else until)
+        win = conversion_window_totals(tenant.id, first, until, detail=True)
+        nowin = conversion_window_totals(tenant.id, None, None, detail=True)
+        win_by = {(d["kind"], d["id"]): d for d in win["recaps"]}
+        nowin_by = {(d["kind"], d["id"]): d for d in nowin["recaps"]}
+
+        def _type_is_retail(name: str | None) -> bool:
+            text = name or ""
+            if _SEEDING_RE.search(text):
+                return False
+            return bool(re.search(r"retail", text, re.I) or re.search(r"on[-\s]?prem", text, re.I)
+                        or re.search(r"bar|venue", text, re.I))
+
+        universe = [
+            r
+            for r in rows_w
+            if r.get("bucket_audit") in ("retail", "onprem")
+            or r.get("template_bucket") in ("retail", "onprem")
+            or (r["kind"], r["id"]) in win_by
+        ]
+        per = {
+            row["id"]: row
+            for row in custom_conversion_rows([r["id"] for r in universe if r["kind"] == "custom"])
+        }
+
+        def _reason(r) -> tuple[str, bool]:
+            """(why not counted, should-count-but-doesn't)."""
+            key = (r["kind"], r["id"])
+            if key in win_by:
+                return win_by[key]["reason"] or "?", False
+            st = r.get("status")
+            if st == "draft_unfiled":
+                return "draft / never submitted", False
+            if st == "archived":
+                return "archived" + (f" ({r.get('archive_reason')})" if r.get("archive_reason") else ""), False
+            if st == "needs_review":
+                return "needs review (not approved)", False
+            if not r.get("has_event"):
+                return "no event linked", True
+            if r.get("excluded_from_dashboard"):
+                return "event flagged exclude_from_dashboard", False
+            if r.get("request_deleted"):
+                return "request soft-deleted", False
+            if r.get("event_date_missing"):
+                return "event has no date", True
+            if not _type_is_retail(r.get("conv_type")):
+                tb = r.get("template_bucket")
+                return (
+                    f"activation typed {r.get('conv_type')!r} (Insights uses Request→Event type→template)",
+                    tb in ("retail", "onprem"),
+                )
+            if key in nowin_by:
+                return f"event date {r.get('date')} outside window {first}→{until}", True
+            return "UNEXPLAINED — not in Insights set", True
+
+        counted, not_counted, suspicious = [], [], []
+        for r in universe:
+            key = (r["kind"], r["id"])
+            d = win_by.get(key)
+            if d and d["counted"]:
+                counted.append(r)
+                if r.get("template_bucket") == "event":
+                    suspicious.append((r, "counted, but template is Event — check activation type"))
+                continue
+            reason, bug = _reason(r)
+            not_counted.append((r, reason, bug))
+        dup_counted = [r for r in counted if "duplicate_of" in (r.get("flags") or "")]
+
+        w("\n## Coverage — retail/on-prem recaps vs the exact Insights CONV set (tenantConversionKpis)")
+        w(f"  window {first} → {until}  Insights: sold {win['sold']} ÷ base {win['base']} = {_fmt_pct(_pct(win['sold'], win['base']))}"
+          f"  (no-window check: {nowin['sold']}/{nowin['base']})")
+        w(f"  retail/on-prem recaps, all statuses: {len(universe)}  (by status: "
+          + json.dumps(Counter(r.get('status') for r in universe)) + ")")
+        w(f"  counted in Insights rate: {len(counted)}  "
+          f"(live {sum(1 for r in counted if not win_by[(r['kind'], r['id'])]['dry'])}, "
+          f"dry demo {sum(1 for r in counted if win_by[(r['kind'], r['id'])]['dry'])})")
+        w(f"  NOT counted: {len(not_counted)}")
+        by_reason = defaultdict(list)
+        for r, reason, bug in not_counted:
+            label = re.sub(r" \(.*", "", reason) if reason.startswith("archived") else reason
+            by_reason[(label, bug)].append(r)
+        for (label, bug), rs in sorted(by_reason.items(), key=lambda kv: (not kv[0][1], -len(kv[1]))):
+            w(f"   {'** SHOULD COUNT ** ' if bug else ''}{label}: {len(rs)}  ids=" + ",".join(f"#{r['id']}" for r in rs))
+        for r, reason, bug in not_counted:
+            if r.get("status") in ("approved",):
+                w(f"   - #{r['id']} {r.get('date')} [{r.get('status')}] type={r.get('conv_type')!r} tmpl={r.get('template')!r} "
+                  f"store={r.get('store')!r} → {reason}")
+        if dup_counted:
+            w("  counted but flagged possible duplicate: " + ", ".join(f"#{r['id']} ({r.get('flags', '').split('duplicate_of')[1].split(')')[0].strip('(')})" for r in dup_counted))
+        for r, why in suspicious:
+            w(f"  suspicious: #{r['id']} {why} (type={r.get('conv_type')!r} tmpl={r.get('template')!r})")
+        bugs = [x for x in not_counted if x[2]]
+        w(f"  should-count-but-doesn't: {len(bugs)}" + ("" if not bugs else "  ids=" + ",".join(f"#{r['id']}" for r, _, _ in bugs)))
+
+        # ------------------------------------------------ per-recap under-X%
+        _TAGS = (
+            ("not on shelf / out of stock", r"out of stock|\bOOS\b|not on (the )?shel|no (product|inventory|stock) (on|in)|wasn.?t on (the )?shel|not (carried|in stock)|sold out|didn.?t have (the )?(product|stock)|no product (was )?(available|on)"),
+            ("low traffic", r"slow|low (foot )?traffic|not (very |too )?busy|dead\b|quiet|few (customers|people|shoppers)|not many (customers|people|shoppers)|foot traffic"),
+            ("price", r"price|expensive|pric(e|ey)|cost"),
+            ("weather", r"\brain|weather|storm|heat\b|\bhot\b"),
+            ("dry demo / no samples", r"dry demo|no samples|didn.?t have (any )?samples|could(n.?t| not) (sample|taste)"),
+            ("THC hesitancy", r"\bthc\b.{0,40}(hesit|nervous|scared|not into|don.?t|afraid|skeptic)|(hesit|nervous|skeptic).{0,40}\bthc\b|sober|don.?t drink"),
+            ("store / setup issue", r"manager|not allowed|no table|setup|set up late|wouldn.?t let|kicked"),
+        )
+
+        def _tags(text: str) -> str:
+            return "; ".join(lbl for lbl, rx in _TAGS if re.search(rx, text or "", re.I))
+
+        def _store_label(r) -> str:
+            s = (r.get("store") or "").strip()
+            no = (r.get("store_number") or "").strip()
+            if no and f"#{no}" not in s.replace("# ", "#"):
+                s = f"{s} #{no}".strip()
+            return s
+
+        listable = [r for r in universe if r.get("status") in ("approved", "needs_review") and r["kind"] == "custom"]
+        legacy_n = sum(1 for r in universe if r["kind"] == "legacy")
+        out_rows = []
+        for r in listable:
+            p = per.get(r["id"])
+            if p is None:
+                continue
+            base, units = p["base"], p["units"]
+            conv = _pct(units, base) if base else None
+            key = (r["kind"], r["id"])
+            d = win_by.get(key)
+            reason = "" if (d and d["counted"]) else next((x[1] for x in not_counted if x[0] is r), "")
+            out_rows.append({
+                "id": r["id"], "date": r.get("date") or "", "store": _store_label(r), "ba": r.get("ba") or "",
+                "status": r.get("status"), "dry_demo": bool(p["dry"]),
+                "base_label": "people engaged" if p["dry"] and r.get("people_engaged") else ("consumers sampled"),
+                "base": base, "consumers_sampled": r.get("consumers_sampled"),
+                "people_engaged": r.get("people_engaged"), "units": units, "units_blank": p["units_blank"],
+                "conv_pct": conv, "counted_in_insights": bool(d and d["counted"]),
+                "not_counted_reason": reason, "activation_type": r.get("conv_type") or "",
+                "note_tags": _tags(r.get("notes") or ""), "notes": (r.get("notes") or "")[:600],
+            })
+        rated = [x for x in out_rows if x["base"]]
+        unrated = [x for x in out_rows if not x["base"]]
+        low = [x for x in rated if x["conv_pct"] is not None and x["conv_pct"] < under]
+        for x in out_rows:
+            x["section"] = (
+                ("under" if x in low else "rated_ok") if x["base"] else "unrated"
+            ) + "_" + x["status"]
+
+        def _share(subset, pool):
+            su, sb = sum(x["units"] for x in subset), sum(x["base"] for x in subset)
+            pu, pb = sum(x["units"] for x in pool), sum(x["base"] for x in pool)
+            return (f"{len(subset)}/{len(pool)} recaps; units {su}/{pu} ({_fmt_pct(_pct(su, pu))}); "
+                    f"base {sb}/{pb} ({_fmt_pct(_pct(sb, pb))}); their pooled conv {_fmt_pct(_pct(su, sb))}")
+
+        w(f"\n## Recaps under {under:g}% conversion (per recap; units ÷ consumers sampled, dry demos ÷ people engaged → sampled)")
+        if legacy_n:
+            w(f"  note: {legacy_n} legacy Recap rows in scope are not listed (custom recaps only)")
+        for st in ("approved", "needs_review"):
+            pool = [x for x in rated if x["status"] == st]
+            sub = sorted([x for x in low if x["status"] == st], key=lambda x: (x["date"], x["id"]), reverse=True)
+            w(f"  [{st}] rated {len(pool)}; under {under:g}%: {_share(sub, pool)}")
+            for x in sub:
+                w(f"   #{x['id']} {x['date']} {x['store']!r} ba={x['ba']!r} {'DRY ' if x['dry_demo'] else ''}"
+                  f"{x['base_label']}={x['base']} units={x['units']}{' (blank)' if x['units_blank'] else ''} "
+                  f"conv={_fmt_pct(x['conv_pct'])} counted={x['counted_in_insights']} tags=[{x['note_tags']}]")
+                if x["notes"]:
+                    w(f"      notes: {x['notes'][:400]}")
+        w(f"  [all approved+needs_review] {_share(low, rated)}")
+        w("\n## Unrated retail/on-prem recaps (no denominator — not in the under-X% list)")
+        for x in sorted(unrated, key=lambda x: (x["status"], x["date"]), reverse=True):
+            w(f"   #{x['id']} {x['date']} [{x['status']}] {x['store']!r} ba={x['ba']!r} {'DRY ' if x['dry_demo'] else ''}"
+              f"sampled={x['consumers_sampled']} people_engaged={x['people_engaged'] or '-'} units={x['units']} tags=[{x['note_tags']}]")
+
+        if not emit_csv:
+            return
+        cols = ["section", "id", "date", "status", "store", "ba", "activation_type", "dry_demo", "base_label", "base",
+                "consumers_sampled", "people_engaged", "units", "units_blank", "conv_pct", "counted_in_insights",
+                "not_counted_reason", "note_tags", "notes"]
+        buf = io.StringIO()
+        writer = csv.DictWriter(buf, fieldnames=cols, extrasaction="ignore")
+        writer.writeheader()
+        order = {"under_approved": 0, "under_needs_review": 1, "unrated_approved": 2, "unrated_needs_review": 3,
+                 "rated_ok_approved": 4, "rated_ok_needs_review": 5}
+        for x in sorted(out_rows, key=lambda x: (order.get(x["section"], 9), x["date"], x["id"]), reverse=False):
+            writer.writerow({c: ("" if x.get(c) is None else x.get(c)) for c in cols})
+        w("\n===U20-CSV-BEGIN===")
+        w(buf.getvalue().rstrip("\n"))
+        w("===U20-CSV-END===")
+
+        cov_cols = ["id", "kind", "date", "status", "store", "ba", "activation_type", "template", "counted", "reason", "should_count"]
+        buf = io.StringIO()
+        writer = csv.DictWriter(buf, fieldnames=cov_cols)
+        writer.writeheader()
+        for r in counted:
+            writer.writerow({"id": r["id"], "kind": r["kind"], "date": r.get("date") or "", "status": r.get("status"),
+                             "store": r.get("store") or "", "ba": r.get("ba") or "", "activation_type": r.get("conv_type") or "",
+                             "template": r.get("template") or "", "counted": True, "reason": "", "should_count": True})
+        for r, reason, bug in not_counted:
+            writer.writerow({"id": r["id"], "kind": r["kind"], "date": r.get("date") or "", "status": r.get("status"),
+                             "store": r.get("store") or "", "ba": r.get("ba") or "", "activation_type": r.get("conv_type") or "",
+                             "template": r.get("template") or "", "counted": False, "reason": reason, "should_count": bug})
+        w("\n===COVERAGE-CSV-BEGIN===")
+        w(buf.getvalue().rstrip("\n"))
+        w("===COVERAGE-CSV-END===")
 
     def handle(self, *args, **opts):
         from recaps.filed import custom_filed_q
@@ -461,6 +682,12 @@ class Command(BaseCommand):
                     "approved_at": r.approved_at.isoformat() if r.approved_at else "",
                     "approved_by": getattr(getattr(r, "approved_by", None), "email", "") or "",
                     "data_quality_flags": r.data_quality_flags or "",
+                    "template_bucket": tmpl_bucket,
+                    "conv_type": req_type or ev_type or tmpl,
+                    "has_event": ev is not None,
+                    "excluded_from_dashboard": bool(ev is not None and ev.exclude_from_dashboard),
+                    "request_deleted": req_deleted,
+                    "event_date_missing": ev is not None and ev_date is None,
                 }
             )
 
@@ -489,6 +716,10 @@ class Command(BaseCommand):
                     "total_engagements": lr.total_engagements,
                     "purchases": lr.products_sold,
                     "flags": "legacy_recap_model",
+                    "conv_type": getattr(getattr(req, "request_type", None), "name", "") if req else "",
+                    "has_event": ev is not None,
+                    "excluded_from_dashboard": bool(ev is not None and ev.exclude_from_dashboard),
+                    "request_deleted": bool(req is not None and req.deleted_at is not None),
                 }
             )
 
@@ -690,6 +921,10 @@ class Command(BaseCommand):
         for key in sorted(issue_ids, key=lambda k: -len(issue_ids[k])):
             ids = issue_ids[key]
             w(f"  {key:40} {len(ids):>4}  ids={','.join(map(str, ids[:400]))}")
+
+        self._coverage_and_under(
+            tenant, rows, rows_w, since, until, float(opts.get("under") or 20.0), emit_csv=not opts.get("no_csv")
+        )
 
         w("\n## Recap detail (window, filed only)")
         for r in rows_w:
