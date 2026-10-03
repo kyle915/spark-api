@@ -6656,6 +6656,25 @@ class ExcludeThirdPartyFromAggregatesView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class ReclassifyOnpremiseToRetailView(View):
+    """GET/POST `/internal/cron/reclassify-onpremise-to-retail`.
+
+    Moves one tenant's On-Premise requests / events / templates onto its own
+    Retail Sampling RequestType / EventType and retires the tenant's
+    now-unreferenced on-prem types so they leave its pickers. Never touches
+    recap metrics, approval, or other tenants. Logs before/after per row.
+
+    DRY-RUN unless `apply` is truthy. Params: tenant, apply.
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return _run_dry_run_command(request, "reclassify_onpremise_to_retail", ("tenant",))
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self.post(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class DeleteTenantView(View):
     """GET/POST `/internal/cron/delete-tenant`.
 
@@ -10167,6 +10186,7 @@ def _registered_views() -> dict[str, Any]:
         "add-torch-dry-demo-fields": AddTorchDryDemoFieldsView,
         "tag-torch-dry-demos": TagTorchDryDemosView,
         "exclude-third-party-from-aggregates": ExcludeThirdPartyFromAggregatesView,
+        "reclassify-onpremise-to-retail": ReclassifyOnpremiseToRetailView,
         "setup-torch-event-activation": SetupTorchEventActivationView,
         "clone-recap-template": CloneRecapTemplateView,
         "attach-fpo-recap-images": AttachFpoRecapImagesView,
