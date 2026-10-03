@@ -32,6 +32,9 @@ Schedules live in events/management/commands/data/<key>.json with shape:
                     won't equal what Spark stored),
      "mirror_to_sheet" (optional, default true — false skips the per-save
                         linked-Sheet mirror for big imports),
+     "link_walkin_events" (optional — a row a BA already worked off a
+                           standing walk-up link adopts that request-less
+                           Event instead of getting a second one),
      "rows": [{name, date(mm/dd/yyyy), start_time(HH:MM), end_time(HH:MM),
                address, store_number, retailer_name, city, state,
                store_manager_phone, notes,
@@ -56,6 +59,7 @@ from openpyxl import Workbook
 from ambassadors.checkin_web import (
     address_core_parts,
     addresses_fuzzy_match,
+    event_calendar_date,
     normalize_place,
 )
 from events.batch_requests import (
@@ -65,6 +69,7 @@ from events.batch_requests import (
     import_requests_from_excel_bytes,
 )
 from events.models import (
+    Event,
     EventStatus,
     EventType,
     Request,
@@ -268,17 +273,39 @@ class Command(BaseCommand):
             f"{(stored_utc + datetime.timedelta(minutes=off_min)).strftime('%H:%M')}"
         )
 
+        report: list[dict] = []
         if spec.get("fuzzy_dedup"):
-            rows, fuzzy_skips = _drop_rows_already_in_spark(rows, tenant.id, tz)
-            w(f"  fuzzy dedup  : {len(fuzzy_skips)} row(s) already in Spark")
-            for label, uuid in fuzzy_skips[:25]:
-                w(f"   - {label} → request {uuid}")
-            if len(fuzzy_skips) > 25:
-                w(f"   …and {len(fuzzy_skips) - 25} more.")
+            rows, matches = _match_rows_to_spark(rows, tenant.id, tz)
+            w(f"  fuzzy dedup  : {len(matches)} row(s) already in Spark")
+            for m in matches[:25]:
+                r = m["row"]
+                w(
+                    f"   - {r['date']} {r['start_time']} {r.get('name')} → request "
+                    f"{m['request_uuid']} ({m['tier']})"
+                )
+            if len(matches) > 25:
+                w(f"   …and {len(matches) - 25} more.")
+            report.extend(
+                {
+                    "source_row": m["row"].get("source_row"),
+                    "outcome": "present",
+                    "match": m["tier"],
+                    "request_id": m["request_id"],
+                    "request_uuid": m["request_uuid"],
+                    "request_status": m["request_status"],
+                }
+                for m in matches
+            )
             if not rows:
                 w("")
                 w(self.style.SUCCESS("Nothing to import — every row is already in Spark."))
+                w("JSON_REPORT:" + json.dumps(report))
                 return
+
+        link_event_ids: dict[int, int] = {}
+        if spec.get("link_walkin_events"):
+            link_event_ids = _walkin_events_for_rows(rows, tenant.id)
+            w(f"  walk-ins     : {len(link_event_ids)} row(s) attach an existing walk-up event")
 
         # ---- Build the importer's XLSX in memory ---------------------------
         xlsx_bytes = _build_xlsx(
@@ -301,7 +328,28 @@ class Command(BaseCommand):
                 sheet_name="Requests",
                 dry_run=not commit,
                 rollback_on_error=True,
+                link_event_ids=link_event_ids,
             )
+
+        for res in result.rows:
+            src = rows[res.row_number - 2] if 0 <= res.row_number - 2 < len(rows) else {}
+            entry: dict = {"source_row": src.get("source_row")}
+            if res.success:
+                entry["outcome"] = "created" if commit else "would_create"
+                if res.request_uuid:
+                    entry["request_id"] = res.request_id
+                    entry["request_uuid"] = res.request_uuid
+                linked = res.linked_event_id or link_event_ids.get(res.row_number - 2)
+                if linked:
+                    entry["linked_event_id"] = linked
+            elif res.skipped:
+                entry["outcome"] = "present" if "already in Spark" in res.message else "duplicate_row"
+                entry["match"] = "exact"
+                entry["message"] = res.message
+            else:
+                entry["outcome"] = "failed"
+                entry["message"] = res.message
+            report.append(entry)
 
         w("")
         w(self.style.SUCCESS("Result"))
@@ -331,6 +379,7 @@ class Command(BaseCommand):
                     "--commit (execute=true) to create them."
                 )
             )
+        w("JSON_REPORT:" + json.dumps(report))
 
     def _resolve_timezone(self, forced_code):
         if forced_code:
@@ -361,61 +410,156 @@ class Command(BaseCommand):
         return sorted(eastern, key=lambda t: t.id)[0]
 
 
+def _same_place(row: dict, name: str, address: str) -> bool:
+    """Same street address, or — only when either side has no street number —
+    the same store name. Generic banners ("Total Wine & More") repeat across
+    cities, so names only decide when an address can't."""
+    row_addr = row.get("address") or ""
+    if addresses_fuzzy_match(row_addr, address or ""):
+        return True
+    name_key = normalize_place(row.get("name") or "")
+    has_street = bool(address_core_parts(row_addr)[0])
+    return bool(
+        name_key
+        and not (has_street and address_core_parts(address or "")[0])
+        and normalize_place(name or "") == name_key
+    )
+
+
+def _row_window(row: dict, tz: TimeZone) -> tuple[datetime.datetime, datetime.datetime, datetime.datetime]:
+    """(start, local-day start, local-day end) as UTC instants."""
+    day = _parse_date(row["date"])
+    start = _local_datetime_to_utc(
+        datetime.datetime.combine(day, _parse_time(row["start_time"])), tz.offset
+    )
+    day_lo = _local_datetime_to_utc(datetime.datetime.combine(day, datetime.time(0, 0)), tz.offset)
+    return start, day_lo, day_lo + datetime.timedelta(days=1)
+
+
+def _match_rows_to_spark(
+    rows: list, tenant_id: int, default_tz: TimeZone
+) -> tuple[list, list[dict]]:
+    """Split rows into (to_import, matches).
+
+    A row is already in Spark when a live request for the tenant is at the
+    same place (see _same_place) and either starts within an hour of it, or —
+    second pass, for rows the sheet re-timed after Spark booked them — on the
+    same local day. Each request satisfies at most one row, so two shifts at
+    one store on one day never collapse onto a single request.
+    """
+    tz_by_code: dict[str, TimeZone | None] = {}
+
+    def tz_for(r: dict) -> TimeZone | None:
+        code = (r.get("timezone_code") or default_tz.code).strip().upper()
+        if code not in tz_by_code:
+            tz_by_code[code] = TimeZone.objects.filter(code__iexact=code).order_by("id").first()
+        return tz_by_code[code]
+
+    windows: dict[int, tuple] = {}
+    for i, r in enumerate(rows):
+        tz = tz_for(r)
+        if tz is not None:
+            windows[i] = _row_window(r, tz)
+    if not windows:
+        return list(rows), []
+
+    lo = min(w[1] for w in windows.values())
+    hi = max(w[2] for w in windows.values())
+    candidates = list(
+        Request.objects.filter(
+            tenant_id=tenant_id,
+            deleted_at__isnull=True,
+            start_time__gte=lo - _FUZZY_DEDUP_WINDOW,
+            start_time__lt=hi + _FUZZY_DEDUP_WINDOW,
+        )
+        .select_related("status")
+        .order_by("start_time", "id")
+    )
+
+    claimed: set[int] = set()
+    matched: dict[int, dict] = {}
+    passes = (
+        ("time", lambda req, w: abs(req.start_time - w[0]) <= _FUZZY_DEDUP_WINDOW),
+        ("day", lambda req, w: w[1] <= req.start_time < w[2]),
+    )
+    for tier, fits in passes:
+        for i, w in windows.items():
+            if i in matched:
+                continue
+            row = rows[i]
+            hit = next(
+                (
+                    req
+                    for req in candidates
+                    if req.id not in claimed
+                    and fits(req, w)
+                    and _same_place(row, req.name, req.address)
+                ),
+                None,
+            )
+            if hit is None:
+                continue
+            claimed.add(hit.id)
+            matched[i] = {
+                "row": row,
+                "tier": tier,
+                "request_id": hit.id,
+                "request_uuid": str(hit.uuid),
+                "request_status": getattr(hit.status, "slug", None) or "",
+            }
+
+    kept = [r for i, r in enumerate(rows) if i not in matched]
+    return kept, [matched[i] for i in sorted(matched)]
+
+
 def _drop_rows_already_in_spark(
     rows: list, tenant_id: int, default_tz: TimeZone
 ) -> tuple[list, list[tuple[str, str]]]:
-    """Split rows into (to_import, [(label, existing_uuid)]).
+    kept, matches = _match_rows_to_spark(rows, tenant_id, default_tz)
+    return kept, [
+        (f"{m['row']['date']} {m['row']['start_time']} {m['row'].get('name')}", m["request_uuid"])
+        for m in matches
+    ]
 
-    A row is already in Spark when a live request for the tenant starts
-    within an hour of it at the same street address (or, when either side
-    has no street number, the same store name). The importer's own dedup
-    needs the exact address string.
+
+def _walkin_events_for_rows(rows: list, tenant_id: int) -> dict[int, int]:
+    """{row index: event id} for rows a BA already worked off a standing
+    walk-up link before the shift was on the tracker.
+
+    Those walk-ins opened request-less Events (same place, same calendar
+    day). Creating a fresh Request+Event for the row would leave the recap on
+    the orphan and a second, unworked-looking event on the tracker — so the
+    importer attaches the orphan to the new Request instead. Each event is
+    claimed by one row at most.
     """
-    tz_by_code: dict[str, TimeZone | None] = {}
-    kept: list = []
-    skipped: list[tuple[str, str]] = []
-    for r in rows:
-        code = (r.get("timezone_code") or default_tz.code).strip().upper()
-        if code not in tz_by_code:
-            tz_by_code[code] = (
-                TimeZone.objects.filter(code__iexact=code).order_by("id").first()
-            )
-        tz = tz_by_code[code]
-        if tz is None:
-            kept.append(r)
-            continue
-        start = _local_datetime_to_utc(
-            datetime.datetime.combine(_parse_date(r["date"]), _parse_time(r["start_time"])),
-            tz.offset,
-        )
-        address = r.get("address") or ""
-        has_street = bool(address_core_parts(address)[0])
-        name_key = normalize_place(r.get("name") or "")
-        match = next(
+    days = {_parse_date(r["date"]) for r in rows}
+    if not days:
+        return {}
+    lo = datetime.datetime.combine(min(days), datetime.time(0, 0), tzinfo=datetime.timezone.utc)
+    hi = datetime.datetime.combine(max(days), datetime.time(23, 59), tzinfo=datetime.timezone.utc)
+    orphans = list(
+        Event.objects.filter(
+            tenant_id=tenant_id, request__isnull=True, date__gte=lo, date__lte=hi
+        ).order_by("id")
+    )
+    claimed: set[int] = set()
+    out: dict[int, int] = {}
+    for i, r in enumerate(rows):
+        day = _parse_date(r["date"])
+        hit = next(
             (
-                uuid
-                for uuid, name, addr in Request.objects.filter(
-                    tenant_id=tenant_id,
-                    deleted_at__isnull=True,
-                    start_time__gte=start - _FUZZY_DEDUP_WINDOW,
-                    start_time__lte=start + _FUZZY_DEDUP_WINDOW,
-                ).values_list("uuid", "name", "address")
-                if addresses_fuzzy_match(address, addr or "")
-                # Generic banners ("Total Wine & More") repeat across
-                # cities, so names only decide when an address can't.
-                or (
-                    name_key
-                    and not (has_street and address_core_parts(addr or "")[0])
-                    and normalize_place(name or "") == name_key
-                )
+                ev
+                for ev in orphans
+                if ev.id not in claimed
+                and event_calendar_date(ev) == day
+                and _same_place(r, ev.name, ev.address)
             ),
             None,
         )
-        if match:
-            skipped.append((f"{r['date']} {r['start_time']} {r.get('name')}", str(match)))
-        else:
-            kept.append(r)
-    return kept, skipped
+        if hit is not None:
+            claimed.add(hit.id)
+            out[i] = hit.id
+    return out
 
 
 def _slugify(name: str) -> str:

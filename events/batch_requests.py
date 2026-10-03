@@ -99,6 +99,9 @@ class BatchRequestRowResult:
     # earlier row in the same file) and intentionally NOT created. Skipped
     # rows are not failures — they don't trigger a rollback.
     skipped: bool = False
+    # Set when the row adopted an existing request-less Event (link_event_ids)
+    # instead of creating one.
+    linked_event_id: int | None = None
 
 
 @dataclass
@@ -290,6 +293,7 @@ def import_requests_from_excel_bytes(
     sheet_name: str | int = 0,
     dry_run: bool = False,
     rollback_on_error: bool = True,
+    link_event_ids: dict[int, int] | None = None,
 ) -> BatchRequestImportResult:
     tenant = Tenant.objects.filter(id=tenant_id).first()
     if not tenant:
@@ -330,6 +334,7 @@ def import_requests_from_excel_bytes(
         default_request_type_id=default_request_type_id,
         dry_run=dry_run,
         rollback_on_error=rollback_on_error,
+        link_event_ids=link_event_ids,
     )
 
 
@@ -496,6 +501,7 @@ def _import_requests_from_rows(
     default_request_type_id: int | None,
     dry_run: bool,
     rollback_on_error: bool,
+    link_event_ids: dict[int, int] | None = None,
 ) -> BatchRequestImportResult:
     missing_columns = [col for col in REQUIRED_COLUMNS if col not in headers]
     if missing_columns:
@@ -608,6 +614,7 @@ def _import_requests_from_rows(
                     state_id=parsed["state_id"],
                 )
 
+                linked_event_id = None
                 if not dry_run:
                     # Link (or create) the Retailer account so the event is
                     # reportable by account. Only on a real import — never in
@@ -648,25 +655,35 @@ def _import_requests_from_rows(
                             created_by=created_by,
                         )
 
-                    Event.objects.create(
-                        tenant_id=tenant_id,
-                        request=request,
-                        event_type_id=parsed["event_type_id"],
-                        status=approved_event_status,
-                        timezone_id=parsed["timezone_id"],
-                        name=parsed["name"],
-                        date=parsed["date"],
-                        start_time=parsed["start_time"],
-                        end_time=parsed["end_time"],
-                        address=parsed["address"],
-                        notes=parsed["notes"],
-                        coordinates=parsed["coordinates_event"],
-                        retailer_id=request.retailer_id,
-                        distributor_id=parsed["distributor_id"],
-                        location_id=parsed["location_id"],
-                        state_id=parsed["state_id"],
-                        created_by=created_by,
-                    )
+                    # {row index: event id} — the row adopts that existing
+                    # request-less Event (a walk-up the BA already worked)
+                    # instead of getting a second one. .update() keeps the
+                    # adoption free of Event post_save side effects.
+                    link_id = (link_event_ids or {}).get(idx)
+                    if link_id and Event.objects.filter(
+                        id=link_id, tenant_id=tenant_id, request__isnull=True
+                    ).update(request=request):
+                        linked_event_id = link_id
+                    else:
+                        Event.objects.create(
+                            tenant_id=tenant_id,
+                            request=request,
+                            event_type_id=parsed["event_type_id"],
+                            status=approved_event_status,
+                            timezone_id=parsed["timezone_id"],
+                            name=parsed["name"],
+                            date=parsed["date"],
+                            start_time=parsed["start_time"],
+                            end_time=parsed["end_time"],
+                            address=parsed["address"],
+                            notes=parsed["notes"],
+                            coordinates=parsed["coordinates_event"],
+                            retailer_id=request.retailer_id,
+                            distributor_id=parsed["distributor_id"],
+                            location_id=parsed["location_id"],
+                            state_id=parsed["state_id"],
+                            created_by=created_by,
+                        )
 
                 success_count += 1
                 results.append(
@@ -676,6 +693,7 @@ def _import_requests_from_rows(
                         message="Validated (dry-run)." if dry_run else "Imported.",
                         request_id=request.id if not dry_run else None,
                         request_uuid=str(request.uuid) if not dry_run else None,
+                        linked_event_id=linked_event_id,
                     )
                 )
             except Exception as exc:
@@ -705,6 +723,7 @@ def _import_requests_from_rows(
                 row.success = False
                 row.request_id = None
                 row.request_uuid = None
+                row.linked_event_id = None
                 row.message = "Rolled back because another row failed."
         # Recount failures from real failures only — skipped duplicates
         # were never created, so they aren't "failed".
