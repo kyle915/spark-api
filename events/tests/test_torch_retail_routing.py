@@ -95,6 +95,77 @@ class TestTorchRetailStateRouting(EventsGraphQLTestCase):
         assert "skylar@torchdrinks.com" not in emails
         assert "bobby@torchdrinks.com" not in emails
 
+    def test_ohio_includes_jason_plus_always_on(self):
+        for address in (
+            "1 Easton Way, Columbus, OH 43219",
+            "1 Easton Way, Columbus, Ohio, United States",
+        ):
+            recap = self._recap(address=address, name=f"OH {address}")
+            emails = {
+                e.lower() for e, _ in _collect_recap_approved_recipients(recap)[0]
+            }
+            assert emails == {
+                "john@torchdrinks.com",
+                "doug@torchdrinks.com",
+                "liberty@torchdrinks.com",
+                "jason@torchdrinks.com",
+            }
+
+    def test_non_ohio_excludes_jason(self):
+        recap = self._recap(address="100 Ocean Dr, Miami Beach, FL 33139")
+        emails = {e.lower() for e, _ in _collect_recap_approved_recipients(recap)[0]}
+        assert "jason@torchdrinks.com" not in emails
+        assert "jason@torchdrinks.com" not in torch_retail_recap_emails("MO")
+        assert "jason@torchdrinks.com" in torch_retail_recap_emails("oh")
+        assert "jason@torchdrinks.com" in torch_weekly_digest_emails()
+
+    def test_ohio_event_activation_custom_recap_includes_jason(self):
+        event = self.create_event(
+            name="OH activation",
+            tenant=self.torch,
+            address="500 Vine St, Cincinnati, OH 45202",
+        )
+        template = recap_models.CustomRecapTemplate.objects.create(
+            name="Torch THC-Event Activation",
+            event_type=self.create_event_type(
+                name="Event Activation", tenant=self.torch
+            ),
+            tenant=self.torch,
+            created_by=self.system_user,
+        )
+        recap = recap_models.CustomRecap.objects.create(
+            name="OH activation",
+            event=event,
+            tenant=self.torch,
+            custom_recap_template=template,
+            created_by=self.spark_user,
+            updated_by=self.spark_user,
+        )
+        emails = {e.lower() for e, _ in _collect_recap_approved_recipients(recap)[0]}
+        assert "jason@torchdrinks.com" in emails
+        assert "john@torchdrinks.com" in emails
+
+    def test_portal_ohio_includes_jason_and_requestor(self):
+        req = em.Request.objects.create(
+            name="Torch portal OH demo",
+            address="1 Easton Way, Columbus, OH 43219",
+            tenant=self.torch,
+            status=self.req_approved,
+            request_type=self.request_type,
+            requestor_email="buyer@store.com",
+            created_by=None,
+        )
+        recap = self._recap(
+            address="1 Easton Way, Columbus, OH 43219",
+            request=req,
+            name="Portal OH",
+        )
+        assert is_torch_portal_recap(recap) is True
+        emails = {e.lower() for e, _ in _collect_recap_approved_recipients(recap)[0]}
+        assert "jason@torchdrinks.com" in emails
+        assert "buyer@store.com" in emails
+        assert "events@igniteproductions.co" in emails
+
     def test_unknown_state_gets_all_states_only(self):
         recap = self._recap(address="Warehouse bay 3")
         emails = {e.lower() for e, _ in _collect_recap_approved_recipients(recap)[0]}
