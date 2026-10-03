@@ -814,6 +814,20 @@ def build_recap_pdf_html(
         from recaps.template_fallback import is_activation_template
 
         template = getattr(recap, "custom_recap_template", None)
+        if not sales:
+            from recaps.types import _sold_unit_lines
+
+            unit_lines = _sold_unit_lines(
+                (
+                    getattr(getattr(cfv, "custom_field", None), "name", None),
+                    getattr(cfv, "value", None),
+                )
+                for cfv in _related_items(recap, "custom_field_value")
+            )
+            if unit_lines:
+                sales = [f"{_display_field_label(name)}: {n:,}" for name, n in unit_lines]
+                total = sum(n for _, n in unit_lines)
+                sales.append(f"Total units sold: {total:,}")
         show_sales = bool(sales) or template is None or not is_activation_template(template)
         sales_card = (
             f"""

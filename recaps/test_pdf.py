@@ -670,3 +670,22 @@ def test_internal_pdf_still_prints_draft_chip():
     html = build_recap_pdf_html(_share_recap(approved=False), [])
     assert "DRAFT" in html
     assert "badge-draft" in html
+
+
+def test_torch_retail_pdf_sales_card_counts_cans_and_packs_as_one_unit_each():
+    recap = _activation_recap(
+        layout={},
+        samples=[],
+        values=[
+            ("How many single cans did consumers purchase?", "3"),
+            ("How many packs did consumers purchase?", "2"),
+            ("Account Spend Amount", "45"),
+        ],
+    )
+    recap.custom_recap_template.name = "Torch THC-Retail Sampling"
+    html = build_recap_pdf_html(recap, [])
+    sales_card = html.split("<h2>Sales Performance</h2>", 1)[1].split("</section>", 1)[0]
+    assert "How many single cans did consumers purchase?: 3" in sales_card
+    assert "How many packs did consumers purchase?: 2" in sales_card
+    assert "Total units sold: 5" in sales_card
+    assert "45" not in sales_card

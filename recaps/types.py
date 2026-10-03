@@ -195,11 +195,19 @@ def _sold_units_from_fields(
     Returns None when neither tier finds a numeric match, so non-sales
     templates show "—" rather than a misleading 0.
     """
+    lines = _sold_unit_lines(fields)
+    return sum(n for _, n in lines) if lines else None
+
+
+def _sold_unit_lines(
+    fields: Iterable[tuple[str | None, str | None]],
+) -> list[tuple[str, int]]:
+    """The (field name, parsed count) pairs `_sold_units_from_fields` sums —
+    each counted as-is (a pack is 1 unit, never multiplied by pack size)."""
     pairs = list(fields)
 
-    def _sum(pattern, exclude=None):
-        total = 0
-        matched = False
+    def _match(pattern, exclude=None):
+        out = []
         for name, value in pairs:
             if not name or not pattern.search(name):
                 continue
@@ -207,17 +215,14 @@ def _sold_units_from_fields(
                 continue
             parsed = _parse_recap_int(value)
             if parsed is not None:
-                total += parsed
-                matched = True
-        return total if matched else None
+                out.append((name, parsed))
+        return out
 
-    sku_lines = _sum(_SOLD_SKU_LINE_RE, exclude=_SOLD_EXCLUDE_RE)
-    if sku_lines is not None:
-        return sku_lines
-    primary = _sum(_SOLD_FIELD_RE)
-    if primary is not None:
-        return primary
-    return _sum(_SOLD_FALLBACK_RE, exclude=_SOLD_EXCLUDE_RE)
+    return (
+        _match(_SOLD_SKU_LINE_RE, exclude=_SOLD_EXCLUDE_RE)
+        or _match(_SOLD_FIELD_RE)
+        or _match(_SOLD_FALLBACK_RE, exclude=_SOLD_EXCLUDE_RE)
+    )
 
 
 def _is_clean_count(value: str | None) -> bool:
