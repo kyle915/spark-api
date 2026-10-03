@@ -286,6 +286,7 @@ class Command(BaseCommand):
 
         recaps = (
             CustomRecap.objects.filter(tenant=tenant, event__isnull=False)
+            .exclude(event__event_type__name__icontains="activation")
             .select_related("event", "event__request", "retailer")
             .order_by("id")
         )
