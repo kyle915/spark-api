@@ -347,7 +347,16 @@ def _normalize_category_name(name: str | None) -> str:
 # Identity — get-or-create a lightweight (pending) walk-up BA
 # --------------------------------------------------------------------------
 def _normalize_phone(phone: str | None) -> str:
-    return re.sub(r"\D", "", phone or "")
+    """Digits only, with a US country code folded away.
+
+    "+1 (305) 555-0100" and "305-555-0100" are the same BA. Keyed on raw
+    digits they minted two stubs, and the second one could not see the open
+    shift the first one clocked in on.
+    """
+    digits = re.sub(r"\D", "", phone or "")
+    if len(digits) == 11 and digits.startswith("1"):
+        return digits[1:]
+    return digits
 
 
 def _synth_email(phone_digits: str) -> str:
@@ -356,6 +365,31 @@ def _synth_email(phone_digits: str) -> str:
     an unusable password and stays pending until an admin confirms it."""
     token = phone_digits or secrets.token_hex(5)
     return f"checkin-{token}@walkup.spark"
+
+
+def _stub_emails(phone_digits: str) -> list[str]:
+    """Stub emails this phone may be keyed on, canonical first.
+
+    Stubs minted before ``_normalize_phone`` folded the US country code are
+    keyed on the 11-digit spelling; a returning BA must still land on them.
+    """
+    if not phone_digits:
+        return []
+    emails = [_synth_email(phone_digits)]
+    if len(phone_digits) == 10:
+        emails.append(_synth_email("1" + phone_digits))
+    return emails
+
+
+def _stub_users(phone_digits: str) -> list:
+    emails = _stub_emails(phone_digits)
+    if not emails:
+        return []
+    by_email = {
+        (u.email or "").lower(): u
+        for u in User.objects.filter(email__in=emails)
+    }
+    return [by_email[e] for e in emails if e in by_email]
 
 
 def get_or_create_checkin_ambassador(
@@ -386,7 +420,8 @@ def get_or_create_checkin_ambassador(
     from django.db import IntegrityError
 
     with transaction.atomic():
-        user = User.objects.filter(email__iexact=lookup_email).first()
+        existing = _stub_users(phone_digits)
+        user = existing[0] if existing else None
         created = False
         if user is None:
             try:
@@ -449,16 +484,56 @@ def find_checkin_ambassador(*, phone: str):
     someone opened the standing link. Identity is the same phone-derived
     ``@walkup.spark`` email ``get_or_create_checkin_ambassador`` uses.
     """
+    found = find_checkin_ambassadors(phone=phone)
+    return found[0] if found else None
+
+
+def find_checkin_ambassadors(*, phone: str) -> list:
+    """Every walk-up stub this phone maps to (canonical spelling first).
+
+    Usually one. Two when the same BA checked in once as "+1 305…" and once
+    as "305…" before the country code was folded — both must be searched for
+    an open shift or the second spelling strands the first one's hours.
+    """
     from ambassadors.models import Ambassador
 
-    phone_digits = _normalize_phone(phone)
-    if not phone_digits:
-        return None
-    lookup_email = _synth_email(phone_digits)
-    user = User.objects.filter(email__iexact=lookup_email).first()
-    if user is None:
-        return None
-    return Ambassador.objects.filter(user=user).first()
+    users = _stub_users(_normalize_phone(phone))
+    if not users:
+        return []
+    by_user = {
+        a.user_id: a
+        for a in Ambassador.objects.select_related("user").filter(user__in=users)
+    }
+    return [by_user[u.id] for u in users if u.id in by_user]
+
+
+def open_shift_for_phone(*, phone: str, tenant, on_date=None):
+    """``(ambassador, event)`` for the shift this phone is clocked in on, or None.
+
+    Lookup only — never mints a stub. This is what lets a BA who reopened the
+    standing link in another browser (texting app vs Safari, private tab, new
+    phone) get back to the shift they started by typing their number, instead
+    of a blank clock-in form that reads as "you never clocked in".
+    """
+    for ambassador in find_checkin_ambassadors(phone=phone):
+        event = open_shift_event_for(
+            ambassador=ambassador, tenant=tenant, on_date=on_date
+        )
+        if event is not None:
+            return ambassador, event
+    return None
+
+
+def open_shift_summary(*, ambassador, event) -> dict:
+    """What the identify step shows before the BA taps Continue my shift."""
+    clock = clock_state(ambassador_id=ambassador.id, event_id=event.id)
+    cal = event_calendar_date(event)
+    return {
+        "eventDate": cal.isoformat() if cal else None,
+        "name": event.name or "",
+        "address": event.address or "",
+        "clockInAt": clock.get("clockInAt"),
+    }
 
 
 # --------------------------------------------------------------------------

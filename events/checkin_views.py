@@ -386,8 +386,12 @@ def public_checkin_identify(request: HttpRequest, code: str) -> HttpResponse:
         last_name = last_name.strip()
 
     recap_only = kind == "tenant" and checkin_web.is_recap_only_code(code, target)
+    # "Continue my shift": find the shift this phone is already clocked in on
+    # and hand back its session — never mint a stub or an event. The name is
+    # optional here because the stub already carries it.
+    resume_only = bool(data.get("resumeOnly")) and kind == "tenant" and not recap_only
 
-    if not first_name:
+    if not first_name and not resume_only:
         return _err("Enter your name so we can credit your work.")
     if not phone:
         if recap_only:
@@ -397,21 +401,10 @@ def public_checkin_identify(request: HttpRequest, code: str) -> HttpResponse:
         else:
             return _err("Enter a phone number so your lead can confirm you.")
 
-    # Identify the BA FIRST. On a standing tenant link the event may not exist
-    # yet and Event.created_by is NOT NULL, so we need a real user in hand
-    # before creating one — and attributing it to the BA who opened it is what
-    # the Walk-ups queue wants to show anyway.
-    try:
-        ambassador, _ = checkin_web.get_or_create_checkin_ambassador(
-            first_name=first_name, last_name=last_name, phone=phone, email=email
-        )
-    except Exception:  # noqa: BLE001
-        logger.exception("checkin identify failed code=%s", code)
-        return _err("Couldn't start your check-in. Try again.", status=500, code="server")
-
     # A standing tenant link carries no event, so the BA supplies the store and
     # the date and we find-or-create it. Several BAs at the same store on the
     # same day resolve to the SAME event (see find_or_create_walkin_event).
+    ambassador = None
     event = target if kind == "event" else None
     on_date = None
     if kind == "tenant":
@@ -426,16 +419,36 @@ def public_checkin_identify(request: HttpRequest, code: str) -> HttpResponse:
         resumed = (
             None
             if recap_only
-            else checkin_web.open_shift_event_for(
-                ambassador=ambassador, tenant=target, on_date=on_date
+            else checkin_web.open_shift_for_phone(
+                phone=phone, tenant=target, on_date=on_date
             )
         )
         if resumed is not None:
-            event = resumed
+            ambassador, event = resumed
             logger.info(
                 "checkin identify resumed open shift ambassador=%s event=%s on_date=%s",
-                ambassador.id, resumed.id, on_date,
+                ambassador.id, event.id, on_date,
             )
+        elif resume_only:
+            return _err(
+                "You're not clocked in on this link today.",
+                status=404,
+                code="no_open_shift",
+            )
+
+    # Identify the BA before creating anything. On a standing tenant link the
+    # event may not exist yet and Event.created_by is NOT NULL, so we need a
+    # real user in hand before creating one — and attributing it to the BA who
+    # opened it is what the Walk-ups queue wants to show anyway.
+    if ambassador is None:
+        try:
+            ambassador, _ = checkin_web.get_or_create_checkin_ambassador(
+                first_name=first_name, last_name=last_name, phone=phone, email=email
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("checkin identify failed code=%s", code)
+            return _err("Couldn't start your check-in. Try again.", status=500, code="server")
+
     if kind == "tenant" and event is None:
         address = (data.get("address") or data.get("storeAddress") or "").strip()
         store_name = (data.get("storeName") or data.get("eventName") or "").strip()
@@ -592,22 +605,35 @@ def public_checkin_unfiled_recaps(request: HttpRequest, code: str) -> HttpRespon
 
     kind, target = checkin_web.resolve_checkin_target(code)
     if kind != "tenant" or checkin_web.is_recap_only_code(code, target):
-        return JsonResponse({"shifts": []})
+        return JsonResponse({"shifts": [], "openShift": None})
 
     data = _body(request)
     phone = (data.get("phone") or "").strip()
     if not phone:
-        return JsonResponse({"shifts": []})
+        return JsonResponse({"shifts": [], "openShift": None})
 
     ambassador = checkin_web.find_checkin_ambassador(phone=phone)
     if ambassador is None:
-        return JsonResponse({"shifts": []})
+        return JsonResponse({"shifts": [], "openShift": None})
 
+    # Already on the clock today? The page leads with "Continue my shift"
+    # instead of a fresh clock-in form.
+    on_date = _parse_iso_date((data.get("eventDate") or "").strip())
+    open_hit = checkin_web.open_shift_for_phone(
+        phone=phone, tenant=target, on_date=on_date
+    )
     return JsonResponse(
         {
             "shifts": checkin_web.unfiled_shifts_for(
                 ambassador=ambassador, tenant=target
-            )
+            ),
+            "openShift": (
+                checkin_web.open_shift_summary(
+                    ambassador=open_hit[0], event=open_hit[1]
+                )
+                if open_hit
+                else None
+            ),
         }
     )
 
