@@ -29,6 +29,7 @@ from . import types, inputs
 from .services import DashboardQueriesService
 from .goals_service import build_goals_progress, get_goals, get_current_values_for_user
 from events import models as event_models
+from recaps.aggregates import exclude_non_aggregate_recaps
 from tenants import models as tenant_models
 
 
@@ -451,6 +452,9 @@ class DashboardQueries:
                 Q(request__date__date__gte=start_date,
                   request__date__date__lte=end_date)
             )
+            # Agency-only events (every recap exclude_from_aggregates) don't
+            # count as activations or feed any KPI below.
+            base_queryset = exclude_non_aggregate_recaps(base_queryset, "")
 
             # Section short-circuit: None → full dashboard; otherwise only
             # compute requested sections and stub the rest.
@@ -555,7 +559,8 @@ class DashboardQueries:
                                 "willing_rows": 0,    # matched intent fields
                                 "products_sold": 0}   # two-tier SOLD (shared helper)
                         rows = recap_models.CustomFieldValue.objects.filter(
-                            custom_recap__event__in=base_queryset
+                            custom_recap__event__in=base_queryset,
+                            custom_recap__exclude_from_aggregates=False,
                         ).values_list(
                             "custom_recap_id", "custom_field__name", "value"
                         )
@@ -685,6 +690,7 @@ class DashboardQueries:
                             Q(request__date__date__gte=prev_start,
                               request__date__date__lte=prev_end)
                         )
+                        prev_events = exclude_non_aggregate_recaps(prev_events, "")
 
                         # Same "events with a recap" basis as total_events, so the
                         # period-over-period comparison stays apples-to-apples.
@@ -1611,7 +1617,7 @@ class DashboardQueries:
             approved_recaps_queryset = base_queryset.filter(approved=True)
 
             approved_custom_recaps_queryset = recap_models.CustomRecap.objects.filter(
-                approved=True
+                approved=True, exclude_from_aggregates=False
             )
             approved_custom_recaps_queryset = service._apply_recap_dashboard_filters(
                 approved_custom_recaps_queryset, filters

@@ -172,7 +172,7 @@ def compute_ld_summary(tenant) -> LdSummary:
     in-app dashboard and the campaign report."""
     summary = LdSummary()
     recaps = (
-        CustomRecap.objects.filter(tenant=tenant)
+        CustomRecap.objects.filter(tenant=tenant, exclude_from_aggregates=False)
         .select_related("event", "ambassador", "ambassador__user", "state")
         .prefetch_related(
             "custom_field_value__custom_field", "custom_recap_product_sample"
@@ -346,6 +346,9 @@ def compute_ld_program_kpis(tenant, year: int | None = None) -> ProgramKpis:
             | Q(start_time__date__gte=s, start_time__date__lte=e)
             | Q(request__date__date__gte=s, request__date__date__lte=e)
         )
+    from recaps.aggregates import exclude_non_aggregate_recaps
+
+    base = exclude_non_aggregate_recaps(base, "")
     events_with_recaps = base.filter(recaps__isnull=False).distinct()
 
     k.events_run = (
@@ -364,7 +367,9 @@ def compute_ld_program_kpis(tenant, year: int | None = None) -> ProgramKpis:
 
     cust = {"consumers": 0, "brand": 0, "willing": 0, "cans": 0, "packs": 0, "pack_cans": 0, "products": 0}
     try:
-        rows = CustomFieldValue.objects.filter(custom_recap__event__in=base).values_list(
+        rows = CustomFieldValue.objects.filter(
+            custom_recap__event__in=base, custom_recap__exclude_from_aggregates=False
+        ).values_list(
             "custom_recap_id", "custom_field__name", "value"
         )
         by_recap: dict = {}

@@ -191,16 +191,20 @@ class Command(BaseCommand):
             return bool(re.search(r"retail", text, re.I) or re.search(r"on[-\s]?prem", text, re.I)
                         or re.search(r"bar|venue", text, re.I))
 
-        universe = [
+        retail_all = [
             r
             for r in rows_w
             if r.get("bucket_audit") in ("retail", "onprem")
             or r.get("template_bucket") in ("retail", "onprem")
             or (r["kind"], r["id"]) in win_by
         ]
+        # 3rd-party (agency link) recaps are intentionally out of every
+        # aggregate; reconcile them separately.
+        third = [r for r in retail_all if r.get("third_party")]
+        universe = [r for r in retail_all if not r.get("third_party")]
         per = {
             row["id"]: row
-            for row in custom_conversion_rows([r["id"] for r in universe if r["kind"] == "custom"])
+            for row in custom_conversion_rows([r["id"] for r in retail_all if r["kind"] == "custom"])
         }
 
         def _reason(r) -> tuple[str, bool]:
@@ -271,6 +275,14 @@ class Command(BaseCommand):
             w(f"  suspicious: #{r['id']} {why} (type={r.get('conv_type')!r} tmpl={r.get('template')!r})")
         bugs = [x for x in not_counted if x[2]]
         w(f"  should-count-but-doesn't: {len(bugs)}" + ("" if not bugs else "  ids=" + ",".join(f"#{r['id']}" for r, _, _ in bugs)))
+        leaked = [r for r in third if (r["kind"], r["id"]) in win_by]
+        w(f"\n  3rd-party recaps (intentionally excluded): {len(third)}  (by status: "
+          + json.dumps(Counter(r.get('status') for r in third)) + ")"
+          + f"  flagged exclude_from_aggregates: {sum(1 for r in third if r.get('exclude_agg'))}"
+          + f"  still in Insights set: {len(leaked)}" + ("" if not leaked else " ids=" + ",".join(f"#{r['id']}" for r in leaked)))
+        for r in third:
+            w(f"   - #{r['id']} {r.get('date')} [{r.get('status')}] store={r.get('store')!r} ba={r.get('ba')!r} "
+              f"sampled={r.get('consumers_sampled')} units={r.get('purchases')} excluded_flag={r.get('exclude_agg')}")
 
         # ------------------------------------------------ per-recap under-X%
         _TAGS = (
@@ -293,7 +305,7 @@ class Command(BaseCommand):
                 s = f"{s} #{no}".strip()
             return s
 
-        listable = [r for r in universe if r.get("status") in ("approved", "needs_review") and r["kind"] == "custom"]
+        listable = [r for r in retail_all if r.get("status") in ("approved", "needs_review") and r["kind"] == "custom"]
         legacy_n = sum(1 for r in universe if r["kind"] == "legacy")
         out_rows = []
         for r in listable:
@@ -306,6 +318,7 @@ class Command(BaseCommand):
             d = win_by.get(key)
             reason = "" if (d and d["counted"]) else next((x[1] for x in not_counted if x[0] is r), "")
             out_rows.append({
+                "third_party": bool(r.get("third_party")),
                 "id": r["id"], "date": r.get("date") or "", "store": _store_label(r), "ba": r.get("ba") or "",
                 "status": r.get("status"), "dry_demo": bool(p["dry"]),
                 "base_label": "people engaged" if p["dry"] and r.get("people_engaged") else ("consumers sampled"),
@@ -315,10 +328,19 @@ class Command(BaseCommand):
                 "not_counted_reason": reason, "activation_type": r.get("conv_type") or "",
                 "note_tags": _tags(r.get("notes") or ""), "notes": (r.get("notes") or "")[:600],
             })
-        rated = [x for x in out_rows if x["base"]]
-        unrated = [x for x in out_rows if not x["base"]]
+        rated = [x for x in out_rows if x["base"] and not x["third_party"]]
+        unrated = [x for x in out_rows if not x["base"] and not x["third_party"]]
         low = [x for x in rated if x["conv_pct"] is not None and x["conv_pct"] < under]
+        tp_low = [
+            x for x in out_rows
+            if x["third_party"] and x["base"] and x["conv_pct"] is not None and x["conv_pct"] < under
+        ]
         for x in out_rows:
+            if x["third_party"]:
+                x["section"] = "third_party_" + (
+                    ("under" if x in tp_low else "rated_ok") if x["base"] else "unrated"
+                ) + "_" + x["status"]
+                continue
             x["section"] = (
                 ("under" if x in low else "rated_ok") if x["base"] else "unrated"
             ) + "_" + x["status"]
@@ -343,6 +365,10 @@ class Command(BaseCommand):
                 if x["notes"]:
                     w(f"      notes: {x['notes'][:400]}")
         w(f"  [all approved+needs_review] {_share(low, rated)}")
+        w(f"\n## 3rd-party recaps under {under:g}% (info only — not in conversion)")
+        for x in sorted(tp_low, key=lambda x: (x["date"], x["id"]), reverse=True):
+            w(f"   #{x['id']} {x['date']} [{x['status']}] {x['store']!r} ba={x['ba']!r} "
+              f"{x['base_label']}={x['base']} units={x['units']} conv={_fmt_pct(x['conv_pct'])}")
         w("\n## Unrated retail/on-prem recaps (no denominator — not in the under-X% list)")
         for x in sorted(unrated, key=lambda x: (x["status"], x["date"]), reverse=True):
             w(f"   #{x['id']} {x['date']} [{x['status']}] {x['store']!r} ba={x['ba']!r} {'DRY ' if x['dry_demo'] else ''}"
@@ -350,7 +376,7 @@ class Command(BaseCommand):
 
         if not emit_csv:
             return
-        cols = ["section", "id", "date", "status", "store", "ba", "activation_type", "dry_demo", "base_label", "base",
+        cols = ["section", "id", "date", "status", "store", "ba", "third_party", "activation_type", "dry_demo", "base_label", "base",
                 "consumers_sampled", "people_engaged", "units", "units_blank", "conv_pct", "counted_in_insights",
                 "not_counted_reason", "note_tags", "notes"]
         buf = io.StringIO()
@@ -358,6 +384,7 @@ class Command(BaseCommand):
         writer.writeheader()
         order = {"under_approved": 0, "under_needs_review": 1, "unrated_approved": 2, "unrated_needs_review": 3,
                  "rated_ok_approved": 4, "rated_ok_needs_review": 5}
+        order.update({f"third_party_{k}": 6 + v for k, v in list(order.items())})
         for x in sorted(out_rows, key=lambda x: (order.get(x["section"], 9), x["date"], x["id"]), reverse=False):
             writer.writerow({c: ("" if x.get(c) is None else x.get(c)) for c in cols})
         w("\n===U20-CSV-BEGIN===")
@@ -383,7 +410,11 @@ class Command(BaseCommand):
     def handle(self, *args, **opts):
         from recaps.filed import custom_filed_q
         from recaps.models import CustomField, CustomRecap, Recap
-        from recaps.tenant_overview import tenant_conversion_kpis
+        from recaps.tenant_overview import (
+            _inclusive_dates_to_window,
+            _tenant_kpi_totals_window,
+            tenant_conversion_kpis,
+        )
         from recaps.types import (
             _account_spend_from_fields,
             _consumers_sampled_from_fields,
@@ -683,6 +714,8 @@ class Command(BaseCommand):
                     "approved_by": getattr(getattr(r, "approved_by", None), "email", "") or "",
                     "data_quality_flags": r.data_quality_flags or "",
                     "template_bucket": tmpl_bucket,
+                    "third_party": bool(r.is_third_party),
+                    "exclude_agg": bool(r.exclude_from_aggregates),
                     "conv_type": req_type or ev_type or tmpl,
                     "has_event": ev is not None,
                     "excluded_from_dashboard": bool(ev is not None and ev.exclude_from_dashboard),
@@ -827,11 +860,14 @@ class Command(BaseCommand):
                 n += 1
             return sold, sampled, n
 
-        def _conv_rows(subset):
+        def _conv_rows(subset, include_third_party=False):
+            # 3rd-party (agency link) recaps never count toward conversion.
             return [
                 r
                 for r in subset
-                if r.get("bucket_audit") in ("retail", "onprem") and r.get("status") == "approved"
+                if r.get("bucket_audit") in ("retail", "onprem")
+                and r.get("status") == "approved"
+                and (include_third_party or not r.get("third_party"))
             ]
 
         def _conv_line(label, subset):
@@ -841,11 +877,20 @@ class Command(BaseCommand):
             ds, db, dn = _pool([r for r in rows_c if r.get("dry_demo")])
             unpaired = [r for r in rows_c if r.get("dry_demo") and not _base(r)]
             un = sum(1 for r in rows_c if r.get("dry_demo_notes") and not r.get("dry_demo"))
+            all_rows = _conv_rows(subset, include_third_party=True)
+            xs, xb, xn = _pool(all_rows)
+            tp = [r for r in all_rows if r.get("third_party")]
+            ts, tb, tn = _pool(tp)
+            cs_excl = sum(max(0, r.get("consumers_sampled") or 0) for r in rows_c)
+            cs_incl = sum(max(0, r.get("consumers_sampled") or 0) for r in all_rows)
             line = (
                 f"  {label:24} approved retail/on-prem: sold {s} ÷ base {b} = {_fmt_pct(_pct(s, b))} "
                 f"(n={n}) | live-sampled: {ls}/{lb} = {_fmt_pct(_pct(ls, lb))} (n={ln}) "
                 f"| dry demos vs people engaged: {ds}/{db} = {_fmt_pct(_pct(ds, db))} (n={dn}) "
                 f"| notes say dry but untagged: n={un}"
+                f"\n  {'':24} 3rd-party excluded: {ts}/{tb} = {_fmt_pct(_pct(ts, tb))} (n={tn}, {len(tp)} recaps) "
+                f"| BEFORE (incl. 3rd-party): {xs}/{xb} = {_fmt_pct(_pct(xs, xb))} (n={xn}) "
+                f"| consumers sampled (retail/on-prem approved): {cs_excl} excl. vs {cs_incl} incl. 3rd-party"
             )
             if unpaired:
                 units = sum(max(0, r.get("purchases") or 0) for r in unpaired)
@@ -865,7 +910,12 @@ class Command(BaseCommand):
 
         w("\n## Conversion incl. Needs-review (what it would be if pending recaps are approved as-is)")
         def _conv_line_nr(label, subset):
-            sub = [r for r in subset if r.get("bucket_audit") in ("retail", "onprem") and r.get("status") in ("approved", "needs_review")]
+            sub = [
+                r for r in subset
+                if r.get("bucket_audit") in ("retail", "onprem")
+                and r.get("status") in ("approved", "needs_review")
+                and not r.get("third_party")
+            ]
             s, b, n = _pool(sub)
             return f"  {label:24} sold {s} ÷ sampled {b} = {_fmt_pct(_pct(s, b))} (n={n})"
         w(_conv_line_nr("WINDOW", rows_w))
@@ -885,7 +935,12 @@ class Command(BaseCommand):
             windows.append((mth, lo, min(hi, until)))
         for label, lo, hi in windows:
             k = tenant_conversion_kpis(tenant.id, start=lo, end=hi)
-            w(f"  {label:24} sold {k['sold']} ÷ base {k['engagements']} = {_fmt_pct(k['pct'])}")
+            t = _tenant_kpi_totals_window(tenant.id, _inclusive_dates_to_window(lo, hi))
+            w(
+                f"  {label:24} sold {k['sold']} ÷ base {k['engagements']} = {_fmt_pct(k['pct'])} "
+                f"| tenantKpis consumers reached {t.consumers_reached}, samples {t.samples_distributed}, "
+                f"engagements {t.total_engagements}, products sold {t.products_sold}"
+            )
 
         w("\n## Per store (approved retail/on-prem, window)")
         by_store = defaultdict(list)

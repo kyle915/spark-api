@@ -151,6 +151,10 @@ class Tenant(Asyncable, models.Model):
     checkin_recap_code = models.CharField(
         max_length=32, null=True, blank=True, unique=True, db_index=True
     )
+    # Recaps filed through `checkin_recap_code` stay visible in Recaps but
+    # are stamped CustomRecap.exclude_from_aggregates, so their numbers never
+    # roll into Insights, dashboards, list totals, or summary exports.
+    checkin_recap_excludes_aggregates = models.BooleanField(default=False)
     # Mileage defaults stamped onto events the STANDING CHECK-IN LINK creates.
     #
     # Mileage is a per-gig toggle (Event.track_mileage / mileage_rate), which

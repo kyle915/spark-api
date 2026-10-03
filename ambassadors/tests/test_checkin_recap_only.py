@@ -252,6 +252,34 @@ class TestRecapOnlyCheckinLink(AmbassadorsGraphQLTestCase):
         assert all(r.store_mapping_status == "unmatched" for r in recaps)
         assert all(r.typed_store_address for r in recaps)
 
+    def _file_agency_recap(self):
+        body = self._identify().json()
+        event = Event.objects.get(uuid=body["event"]["uuid"])
+        res = self.http.post(
+            reverse("events.public_checkin_recap", kwargs={"code": self.recap_code}),
+            data={
+                "session": body["sessionToken"],
+                "fieldValues": [],
+                "files": [{"blobName": f"recap_files/checkin/{event.uuid}/a.jpg"}],
+            },
+            content_type="application/json",
+        )
+        assert res.status_code == 200, res.content
+        return CustomRecap.objects.get(event=event)
+
+    def test_agency_recap_stamped_out_of_aggregates_when_tenant_opts_in(self):
+        self.tenant.checkin_recap_excludes_aggregates = True
+        self.tenant.save(update_fields=["checkin_recap_excludes_aggregates"])
+        recap = self._file_agency_recap()
+        assert recap.is_third_party is True
+        assert recap.exclude_from_aggregates is True
+        assert recap.approved is False
+
+    def test_agency_recap_counts_when_tenant_has_not_opted_in(self):
+        recap = self._file_agency_recap()
+        assert recap.is_third_party is True
+        assert recap.exclude_from_aggregates is False
+
     def test_clock_code_recap_is_not_third_party(self):
         res = self.http.post(
             reverse(
