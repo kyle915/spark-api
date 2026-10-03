@@ -2814,6 +2814,35 @@ def notify_checkin_recap_submitted(recap) -> None:
 # resuming it would attach today's work to yesterday's event.
 OPEN_SHIFT_RESUME_HOURS = 18
 
+# The latest US calendar day. An event dated before today HERE is over for
+# every BA we staff, whatever their market timezone.
+_LATEST_US_TZ = "Pacific/Honolulu"
+
+
+def clock_in_is_for_a_past_day(event, *, when=None) -> bool:
+    """True when a clock-in at ``when`` would land on a day that already ended.
+
+    From the field (Torch, Weni, Oct 2026): she picked Oct 1 on the standing
+    link to file that shift's recap, the page only offered File recap after
+    Clock in, so she clocked in on Saturday morning onto Thursday's event and
+    the punch ran open all day — live hours on a day that was long over.
+
+    A shift that crosses midnight is still fine: a scheduled start within
+    OPEN_SHIFT_RESUME_HOURS of the punch keeps yesterday's event clockable.
+    """
+    from zoneinfo import ZoneInfo
+
+    cal = event_calendar_date(event)
+    if cal is None:
+        return False
+    when = when or dj_tz.now()
+    if cal >= when.astimezone(ZoneInfo(_LATEST_US_TZ)).date():
+        return False
+    start = getattr(event, "start_time", None)
+    if start is not None and abs(when - start) <= timedelta(hours=OPEN_SHIFT_RESUME_HOURS):
+        return False
+    return True
+
 
 def open_shift_event_for(*, ambassador, tenant, on_date=None):
     """The event this BA is currently CLOCKED IN on for ``tenant``, or None.

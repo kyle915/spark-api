@@ -2682,6 +2682,14 @@ async def _do_attendance(info, input, *, kind: str) -> "ShiftAttendanceResponse"
         )
         if own_user_id and getattr(actor, "id", None) != own_user_id:
             return None, "Not your shift."
+        if kind == "clock_in":
+            from ambassadors.checkin_web import clock_in_is_for_a_past_day
+
+            if clock_in_is_for_a_past_day(amb_event.event):
+                return None, (
+                    "That shift's day is over, so there's no clock to start. "
+                    "Ask your lead to add the hours."
+                )
         coords = None
         if input.latitude is not None and input.longitude is not None:
             coords = [float(input.latitude), float(input.longitude)]

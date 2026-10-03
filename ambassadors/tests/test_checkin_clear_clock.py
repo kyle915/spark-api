@@ -112,16 +112,15 @@ class TestClearLeftoverClock(AmbassadorsGraphQLTestCase):
         leftover_uuid = sat.json()["event"]["uuid"]
         token = sat.json()["sessionToken"]
 
-        clocked = self.http.post(
-            reverse(
-                "events.public_checkin_clock",
-                kwargs={"code": self.tenant.checkin_code},
-            ),
-            data={"session": token, "kind": "in"},
-            content_type="application/json",
+        # Seeded directly: a live clock-in onto a past day is refused now, but
+        # punches left open from before that guard still need clearing.
+        leftover = Event.objects.get(uuid=leftover_uuid)
+        Attendance.objects.create(
+            ambassador=leftover.ambassadors_events.get().ambassador,
+            event=leftover,
+            source=Source.objects.get_or_create(name="clock_in")[0],
+            clock_time=dj_tz.now() - _dt.timedelta(hours=2),
         )
-        assert clocked.status_code == 200, clocked.content
-        assert clocked.json()["clock"]["state"] == "clocked_in"
 
         res = self.http.post(
             reverse(
