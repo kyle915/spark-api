@@ -20,6 +20,9 @@ from recaps.management.commands.setup_torch_event_activation import (
     COMPETITOR_FIELD,
     EVENT_LABEL,
     SALES_FIELD_RE,
+    SAMPLE_QTY_LAYOUT,
+    SERVED_FIELD,
+    SERVED_OPTS,
     SPEC,
     TEMPLATE_NAME,
     build_spec,
@@ -66,6 +69,12 @@ class TestSpec:
             "Products Sampled",
         ]
         assert COMPETITOR_FIELD in _labels()
+
+    def test_samples_served_is_active_vs_non_active_multiselect(self):
+        field = next(f for _, fields in SPEC for f in fields if f[0] == SERVED_FIELD)
+        name, kind, required, options, _ = field
+        assert (kind, required) == ("multiselect", True)
+        assert options == ["Active Product", "Non-Active Product"] == SERVED_OPTS
 
     def test_products_sampled_from_catalog(self):
         opts = ["Lite — Black Cherry 5mg 12oz", "Classic — Iced Tea Lemonade 10mg 12oz"]
@@ -179,6 +188,7 @@ class TestSetupCommand(AmbassadorsGraphQLTestCase):
         tpl = self._ea_template()
         assert tpl.event_type.name == EVENT_LABEL
         assert tpl.product_samples is True and tpl.sales_performance is False
+        assert tpl.layout == SAMPLE_QTY_LAYOUT
         fields = CustomField.objects.filter(custom_recap_template=tpl)
         assert sorted(f.name for f in fields) == sorted(_labels())
         assert not fields.filter(recap_section=self.retail_section).exists()
@@ -204,6 +214,46 @@ class TestSetupCommand(AmbassadorsGraphQLTestCase):
         assert before == after
         assert "+0 ~0" in log
         assert CustomRecapTemplate.objects.filter(tenant=self.tenant).count() == 2
+
+    def test_old_served_select_updates_in_place(self):
+        from recaps.models import CustomFieldValue
+
+        self._run("--apply")
+        tpl = self._ea_template()
+        field = CustomField.objects.get(custom_recap_template=tpl, name=SERVED_FIELD)
+        select = CustomRecapFieldType.objects.create(name="select", created_by=self.sys)
+        field.custom_field_type = select
+        field.options = ["Chilled cans", "Poured sample cups", "Both"]
+        field.save()
+        tpl.layout = {}
+        tpl.save(update_fields=["layout"])
+        event = self.create_event(name="Fest", tenant=self.tenant, event_type=tpl.event_type)
+        recap = CustomRecap.objects.create(
+            name="Fest",
+            event=event,
+            tenant=self.tenant,
+            custom_recap_template=tpl,
+            created_by=self.sys,
+        )
+        CustomFieldValue.objects.create(
+            custom_recap=recap, custom_field=field, value="Both", created_by=self.sys
+        )
+
+        log = self._run()
+        assert f"~ would update [{field.id}]" in log
+        assert "1 existing answer(s)" in log
+        assert "would set" in log
+        field.refresh_from_db()
+        assert field.options == ["Chilled cans", "Poured sample cups", "Both"]
+
+        self._run("--apply")
+        updated = CustomField.objects.get(custom_recap_template=tpl, name=SERVED_FIELD)
+        assert updated.id == field.id
+        assert "multi" in updated.custom_field_type.name
+        assert updated.options == SERVED_OPTS
+        assert CustomFieldValue.objects.filter(custom_field=updated).count() == 1
+        tpl.refresh_from_db()
+        assert tpl.layout == SAMPLE_QTY_LAYOUT
 
     def test_resolves_by_request_url_name(self):
         self.tenant.slug = "torch-prod-slug"
@@ -238,6 +288,10 @@ class TestSetupCommand(AmbassadorsGraphQLTestCase):
         assert checkin_web.requires_store_identity(self.tenant, retail_event)
         assert not checkin_web.requires_store_identity(self.tenant, ea_event)
         assert "storeIdentity" not in checkin_web.build_public_context(ea_event, None)
+        form = checkin_web.serialize_template(ea_event)
+        assert form["sampleQtyLabel"] == "Cans sampled"
+        assert form["sampleQtyTotalLabel"] == "Total cans sampled"
+        assert checkin_web.serialize_template(retail_event)["sampleQtyLabel"] == ""
 
         names = {
             et["name"]

@@ -225,10 +225,15 @@ def serialize_template(event) -> dict | None:
         for f in fields
     )
     include_products = bool(tpl.product_samples) or has_products_sampled_pills
+    from recaps.sample_qty import sample_qty_labels
+
+    qty_label, qty_total_label = sample_qty_labels(tpl)
     return {
         "id": str(tpl.id),
         "name": tpl.name,
         "productSamples": bool(tpl.product_samples),
+        "sampleQtyLabel": qty_label,
+        "sampleQtyTotalLabel": qty_total_label,
         "sections": sections,
         "products": _event_products(event) if include_products else [],
     }
