@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from recaps.pdf import (
     SPARK_MARK_URL,
+    _display_answer,
     _display_field_label,
     _display_product_name,
     _spark_mark_src,
@@ -218,6 +219,74 @@ def test_event_activation_custom_recap_skips_empty_sales_card():
         product=SimpleNamespace(name="Can"), type_of_good=SimpleNamespace(name="Single"), price=5
     )
     assert "Sales Performance" in build_recap_pdf_html(recap(activation, [sale]), [])
+
+
+def _activation_recap(*, layout, samples, values=()):
+    section = SimpleNamespace(name="Feedback & Account Notes")
+    return SimpleNamespace(
+        name="Fest",
+        approved=True,
+        ambassador=None,
+        custom_recap_template=SimpleNamespace(
+            name="Torch THC-Event Activation", event_type=None, layout=layout
+        ),
+        total_engagements=312,
+        event=SimpleNamespace(
+            name="Fest",
+            date=datetime(2026, 9, 26, 14, 0),
+            tenant=SimpleNamespace(slug="torch-thc"),
+        ),
+        custom_recap_product_sample=RelatedList(
+            [
+                SimpleNamespace(product=SimpleNamespace(name=name), quantity=qty)
+                for name, qty in samples
+            ]
+        ),
+        custom_recap_sale_performance=RelatedList([]),
+        custom_field_value=RelatedList(
+            [
+                SimpleNamespace(
+                    value=value,
+                    custom_field=SimpleNamespace(name=label, recap_section=section),
+                )
+                for label, value in values
+            ]
+        ),
+    )
+
+
+def test_custom_recap_pdf_labels_per_sku_cans_from_template_layout():
+    samples = [("Black Cherry 5mg 12oz", 96), ("Blue Razz 25mg 12oz", 1200)]
+    layout = {"sampleQtyLabel": "Cans sampled", "sampleQtyTotalLabel": "Total cans sampled"}
+    html = build_recap_pdf_html(_activation_recap(layout=layout, samples=samples), [])
+    assert "Black Cherry 5mg 12oz · Cans sampled: 96" in html
+    assert "Total cans sampled: 1,296" in html
+    assert "Qty:" not in html
+
+    plain = build_recap_pdf_html(_activation_recap(layout={}, samples=samples), [])
+    assert "Black Cherry 5mg 12oz - Qty: 96" in plain
+    assert "Cans sampled" not in plain
+
+
+def test_display_answer_keeps_prose_dashes():
+    assert _display_answer("Great crowd - lots of families after 6pm") == (
+        "Great crowd - lots of families after 6pm"
+    )
+    assert _display_answer('"Tastes like a real seltzer." - female, ~30') == (
+        '"Tastes like a real seltzer." - female, ~30'
+    )
+    assert _display_answer("Line one - ok\nLINE TWO - FINE") == "Line one - ok\nLINE TWO - FINE"
+    assert _display_answer("SPARKLING WATER - STRAWBERRY TERROR") == (
+        "Sparkling water · Strawberry Terror"
+    )
+    assert _display_answer("JUST SHOUTING TEXT") == "Just Shouting Text"
+
+
+def test_custom_recap_pdf_prose_answer_keeps_spaced_dash():
+    values = [("Consumer Feedback", "Black Cherry won - people loved the 5mg")]
+    html = build_recap_pdf_html(_activation_recap(layout={}, samples=[], values=values), [])
+    assert "Black Cherry won - people loved the 5mg" in html
+    assert "Black Cherry won · people" not in html
 
 
 def test_build_recap_pdf_html_groups_custom_fields_by_recap_section():

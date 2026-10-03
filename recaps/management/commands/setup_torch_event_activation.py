@@ -66,7 +66,14 @@ EVENT_KIND_OPTS = [
     "Other",
 ]
 TRAFFIC_OPTS = ["High", "Medium", "Low"]
-SERVED_OPTS = ["Chilled cans", "Poured sample cups", "Both"]
+SERVED_FIELD = "How were samples served?"
+SERVED_OPTS = ["Active Product", "Non-Active Product"]
+
+# Per-SKU count copy for the walk-up, recap detail, and PDF (template.layout).
+SAMPLE_QTY_LAYOUT = {
+    "sampleQtyLabel": "Cans sampled",
+    "sampleQtyTotalLabel": "Total cans sampled",
+}
 
 COMPETITOR_FIELD = (
     "Ask consumers what competitor products they drink. "
@@ -97,7 +104,13 @@ SPEC_FIELDS: list[tuple[str, list[Field]]] = [
                 list(TRAFFIC_OPTS),
                 "",
             ),
-            ("How were samples served?", "select", True, list(SERVED_OPTS), ""),
+            (
+                SERVED_FIELD,
+                "multiselect",
+                True,
+                list(SERVED_OPTS),
+                "",
+            ),
         ],
     ),
     (
@@ -214,7 +227,7 @@ def build_spec(product_opts: list[str]) -> list[tuple[str, list[Field]]]:
                     "multiselect",
                     True,
                     list(product_opts),
-                    "Pick every SKU you poured, then enter samples given for each",
+                    "Pick every SKU you poured, then enter cans sampled for each",
                 )
             ],
         )
@@ -441,6 +454,37 @@ class Command(BaseCommand):
             tenant_id=tenant.id, name=name, order=order, created_by=creator
         )
 
+    def _preview_field_change(self, template, name, kind, required, options, placeholder):
+        """Dry-run diff for a field that already exists, plus answers it already holds."""
+        from recaps.models import CustomField, CustomFieldValue
+
+        if template is None:
+            return
+        field = (
+            CustomField.objects.filter(custom_recap_template=template, name=name)
+            .select_related("custom_field_type")
+            .first()
+        )
+        if field is None:
+            self.stdout.write("        + would create")
+            return
+        diffs = []
+        type_name = (getattr(field.custom_field_type, "name", "") or "").lower()
+        if not _match_field_type(kind, type_name):
+            diffs.append(f"type {type_name or '?'} -> {kind}")
+        if bool(field.required) != required:
+            diffs.append(f"required -> {required}")
+        if list(field.options or []) != list(options):
+            diffs.append(f"options {list(field.options or [])} -> {list(options)}"[:240])
+        if (field.placeholder or "") != placeholder:
+            diffs.append("placeholder")
+        if diffs:
+            answers = CustomFieldValue.objects.filter(custom_field=field).count()
+            self.stdout.write(
+                f"        ~ would update [{field.id}] ({'; '.join(diffs)}); "
+                f"{answers} existing answer(s) keep their value"
+            )
+
     def _seed_template(self, tenant, event_type, creator, apply: bool) -> None:
         from recaps.models import CustomField, CustomFieldValue, CustomRecapTemplate
 
@@ -475,12 +519,16 @@ class Command(BaseCommand):
                 event_type=event_type,
                 product_samples=True,
                 sales_performance=False,
-                layout={},
+                layout=dict(SAMPLE_QTY_LAYOUT),
                 created_by=creator,
             )
             self.stdout.write(f"\nTemplate   : + {TEMPLATE_NAME!r} [{template.id}]")
         elif template is not None:
             self.stdout.write(f"\nTemplate   : {TEMPLATE_NAME!r} [{template.id}] (exists)")
+            layout = template.layout if isinstance(template.layout, dict) else {}
+            if any(layout.get(k) != v for k, v in SAMPLE_QTY_LAYOUT.items()):
+                verb = "set" if apply else "would set"
+                self.stdout.write(f"  layout   : {verb} {SAMPLE_QTY_LAYOUT}")
             if apply:
                 changed = []
                 if template.event_type_id != event_type.id:
@@ -492,6 +540,10 @@ class Command(BaseCommand):
                 if template.sales_performance:
                     template.sales_performance = False
                     changed.append("sales_performance")
+                layout = dict(template.layout) if isinstance(template.layout, dict) else {}
+                if any(layout.get(k) != v for k, v in SAMPLE_QTY_LAYOUT.items()):
+                    template.layout = {**layout, **SAMPLE_QTY_LAYOUT}
+                    changed.append("layout")
                 if changed:
                     template.save(update_fields=[*changed, "updated_at"])
         else:
@@ -511,6 +563,7 @@ class Command(BaseCommand):
                     extra = f" ({len(options)} options)" if options else " (catalog at render)"
                 self.stdout.write(f"    - {name}  [{kind}] {req}{extra}")
                 if not apply:
+                    self._preview_field_change(template, name, kind, required, options, placeholder)
                     continue
                 ft = self._field_type(kind, creator, apply, ft_cache)
                 field = CustomField.objects.filter(

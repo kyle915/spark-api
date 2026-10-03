@@ -42,6 +42,17 @@ def _display_field_label(raw: str | None) -> str:
     return s
 
 
+_SPACED_DASH = re.compile(r"\s+[-–—]\s+")
+
+
+def _shouting(text: str) -> bool:
+    letters = re.sub(r"[^A-Za-z]", "", text)
+    if len(letters) < 8:
+        return False
+    upper = len(re.sub(r"[^A-Z]", "", letters))
+    return upper / len(letters) >= 0.85
+
+
 def _display_product_name(raw: str | None) -> str:
     """Readable SKU identity: 'SPARKLING WATER - STRAWBERRY TERROR'
     → 'Sparkling water · Strawberry Terror'."""
@@ -49,20 +60,22 @@ def _display_product_name(raw: str | None) -> str:
     if not s:
         return s
 
-    def shouting(text: str) -> bool:
-        letters = re.sub(r"[^A-Za-z]", "", text)
-        if len(letters) < 8:
-            return False
-        upper = len(re.sub(r"[^A-Z]", "", letters))
-        return upper / len(letters) >= 0.85
-
-    parts = re.split(r"\s+[-–—]\s+", s)
+    parts = _SPACED_DASH.split(s)
     if len(parts) == 1:
-        return s.title() if shouting(s) else s
+        return s.title() if _shouting(s) else s
     head, *flavors = parts
-    shown_head = head[:1].upper() + head[1:].lower() if shouting(head) else head
-    shown_flavors = [p.title() if shouting(p) else p for p in flavors]
+    shown_head = head[:1].upper() + head[1:].lower() if _shouting(head) else head
+    shown_flavors = [p.title() if _shouting(p) else p for p in flavors]
     return " · ".join([shown_head, *shown_flavors])
+
+
+def _display_answer(raw: str | None) -> str:
+    """A typed answer. Only an all-caps one-line SKU label gets the product
+    treatment; prose keeps its own dashes ('Great crowd - lots of families')."""
+    s = (raw or "").strip()
+    if _SPACED_DASH.search(s) and ("\n" in s or len(s) > 80 or not _shouting(s)):
+        return s
+    return _display_product_name(s)
 
 
 @lru_cache(maxsize=2)
@@ -575,9 +588,9 @@ def build_recap_pdf_html(
                         _display_product_name(item) for item in parsed
                     )
                 else:
-                    display_value = _display_product_name(value)
+                    display_value = _display_answer(value)
             except Exception:
-                display_value = _display_product_name(value)
+                display_value = _display_answer(value)
         return (
             f"<div><span>{safe(_display_field_label(field_name))}</span>"
             f"<p>{safe(display_value)}</p></div>"
@@ -814,11 +827,28 @@ def build_recap_pdf_html(
             if show_sales
             else ""
         )
+        from recaps.sample_qty import sample_qty_labels
+
+        qty_label, qty_total_label = sample_qty_labels(template)
+        sample_items = [f"<li>{safe(item)}</li>" for item in samples]
+        if qty_label and product_samples:
+            sample_items = [
+                "<li>{name} · {label}: {qty}</li>".format(
+                    name=safe(_display_product_name(getattr(ps.product, "name", "Unknown product"))),
+                    label=safe(qty_label),
+                    qty=safe(ps.quantity),
+                )
+                for ps in product_samples
+            ]
+            total = sum(int(ps.quantity or 0) for ps in product_samples)
+            sample_items.append(
+                f"<li><strong>{safe(qty_total_label)}: {total:,}</strong></li>"
+            )
         samples_sales_html = f"""
     <section class="card">
       <h2>Product Samples</h2>
       <ul class="list">
-        {"".join(f"<li>{safe(item)}</li>" for item in samples) or "<li>N/A</li>"}
+        {"".join(sample_items) or "<li>N/A</li>"}
       </ul>
     </section>
 {sales_card}"""
