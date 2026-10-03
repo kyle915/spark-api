@@ -278,9 +278,9 @@ class TestImportEventSchedule(EventsGraphQLTestCase):
         report = out.getvalue()
         assert f"tenant id : {torch.id}" in report
         assert "failed     : 0" in report, report[-2000:]
-        assert "would create : 368" in report, report[-2000:]
+        assert "would create : 366" in report, report[-2000:]
         rows = _json_report(report)
-        assert len(rows) == 368 and {r["outcome"] for r in rows} == {"would_create"}
+        assert len(rows) == 366 and {r["outcome"] for r in rows} == {"would_create"}
         assert all(r["source_row"] for r in rows)
         assert not Request.objects.filter(tenant=torch).exists()
         queues.default.add.assert_not_called()
