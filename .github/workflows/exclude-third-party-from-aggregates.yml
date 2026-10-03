@@ -1,0 +1,63 @@
+name: Exclude 3rd-party recaps from aggregates (manual)
+
+# Manually fires `/internal/cron/exclude-third-party-from-aggregates` on
+# Cloud Run to run `exclude_third_party_from_aggregates`: turns on the
+# tenant's checkin_recap_excludes_aggregates and stamps its existing
+# 3rd-party (agency link, e.g. Torch TH-AGENCY) recaps
+# exclude_from_aggregates. Recaps stay listed/approvable/shareable; only
+# Insights, dashboards and totals skip them. Never changes a recap metric
+# or a check-in code. Logs before/after per recap. See
+# recaps/management/commands/exclude_third_party_from_aggregates.py.
+#
+# DRY-RUN unless `apply` is checked. Secret-gated via X-Cron-Secret (shared
+# INTERNAL_CRON_SECRET) — a HEADER, never the URL.
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Write the flags (unchecked = dry run)."
+        required: false
+        default: false
+        type: boolean
+      tenant:
+        description: "Tenant slug (exact), else request_url_name."
+        required: false
+        default: "torch-thc"
+        type: string
+
+jobs:
+  fire-exclude-third-party-from-aggregates:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire exclude-third-party-from-aggregates cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/exclude-third-party-from-aggregates
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          APPLY: ${{ github.event.inputs.apply }}
+          TENANT: ${{ github.event.inputs.tenant || 'torch-thc' }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            --max-time 300 \
+            -X POST "$CRON_URL" \
+            --data-urlencode "tenant=$TENANT" \
+            --data-urlencode "apply=$APPLY" \
+            -H "X-Cron-Secret: $CRON_SECRET")
+          echo "HTTP $STATUS"
+          python3 -c "import json; d=json.load(open('/tmp/cron-response.json')); open('/tmp/third-party-aggregates.txt','w').write(d.get('log') or json.dumps(d)); print(d.get('log') or d); print(d.get('detail') or '')"
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS — see body above."
+            exit 1
+          fi
+      - name: Upload log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: third-party-aggregates
+          path: /tmp/third-party-aggregates.txt
+          if-no-files-found: ignore
