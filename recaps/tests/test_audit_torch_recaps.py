@@ -162,6 +162,56 @@ class TestAuditTorchRecaps(AmbassadorsGraphQLTestCase):
         assert "sold 30 ÷ sampled 100 = 30.0%" in log  # incl. needs-review block only
         assert "===CSV-BEGIN===" not in log
 
+    def test_under_threshold_and_coverage_against_insights_set(self):
+        low = self._walkup_recap(
+            {
+                "Total number of consumers sampled": "100",
+                "How many single cans did consumers purchase?": "5",
+                "General notes": "Store was really slow today, low foot traffic.",
+            }
+        )
+        ok = self._walkup_recap(
+            {"Total number of consumers sampled": "40", "How many single cans did consumers purchase?": "12"}
+        )
+        zero = self._walkup_recap({"Total number of consumers sampled": "30"})
+        unrated = self._walkup_recap({"How many single cans did consumers purchase?": "3"})
+        pending = self._walkup_recap(
+            {"Total number of consumers sampled": "50", "How many single cans did consumers purchase?": "2"},
+            approved=False,
+        )
+        event_et = event_models.EventType.objects.create(
+            name="Event Activation", slug="audit-torch-ea", tenant=self.tenant, created_by=self.sys
+        )
+        mistyped = self._walkup_recap(
+            {"Total number of consumers sampled": "20", "How many single cans did consumers purchase?": "1"}
+        )
+        mistyped.event.event_type = event_et
+        mistyped.event.save(update_fields=["event_type"])
+        archived = self._walkup_recap({"Total number of consumers sampled": "10"})
+        archived.archived_at = timezone.now()
+        archived.save(update_fields=["archived_at"])
+
+        log = self._run()
+        cov = log.split("## Coverage")[1].split("## Recaps under")[0]
+        assert "retail/on-prem recaps, all statuses: 7" in cov
+        assert "counted in Insights rate: 3" in cov
+        assert f"needs review (not approved): 1  ids=#{pending.id}" in cov
+        assert f"no_base: 1  ids=#{unrated.id}" in cov
+        assert f"archived: 1  ids=#{archived.id}" in cov
+        assert "** SHOULD COUNT ** activation typed 'Event Activation'" in cov
+        assert f"should-count-but-doesn't: 1  ids=#{mistyped.id}" in cov
+        under = log.split("## Recaps under 20%")[1].split("## Unrated")[0]
+        assert f"#{low.id} " in under and "tags=[low traffic]" in under
+        assert f"#{zero.id} " in under and "conv=0.0%" in under and "(blank)" in under
+        assert f"#{ok.id} " not in under
+        assert f"#{pending.id} " in under.split("[needs_review]")[1]
+        assert f"#{mistyped.id} " in under  # rated 5% even though Insights drops it
+        assert f"#{unrated.id} " in log.split("## Unrated")[1].split("## Recap detail")[0]
+        csv_block = log.split("===U20-CSV-BEGIN===")[1].split("===U20-CSV-END===")[0]
+        assert csv_block.strip().splitlines()[0].startswith("section,id,date")
+        assert f"under_approved,{low.id}," in csv_block
+        assert "===COVERAGE-CSV-BEGIN===" in log
+
     def test_since_until_window(self):
         self._walkup_recap({"Total number of consumers sampled": "50"})
         future = (self.today + timedelta(days=5)).isoformat()
