@@ -88,7 +88,10 @@ jobs:
           echo "HTTP $STATUS"
 
           echo "----- response body (import report) -----"
-          cat /tmp/cron-response.json
+          # The body is one JSON line; unwrap the report so each row prints on
+          # its own line (log viewers drop a single huge line).
+          jq -r '.report // empty' /tmp/cron-response.json 2>/dev/null || true
+          jq -c 'del(.report)' /tmp/cron-response.json 2>/dev/null || cat /tmp/cron-response.json
           echo
           echo "-----------------------------------------"
 
