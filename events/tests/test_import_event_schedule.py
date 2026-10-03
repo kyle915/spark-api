@@ -21,6 +21,8 @@ from events.management.commands.import_event_schedule import (
     Command,
     _build_xlsx,
     _drop_rows_already_in_spark,
+    _match_rows_to_spark,
+    _walkin_events_for_rows,
 )
 from events.batch_requests import import_requests_from_excel_bytes
 from events.models import Event, EventStatus, Request, RequestStatus, State, TimeZone
@@ -52,6 +54,13 @@ _ROWS = [
         "notes": None,
     },
 ]
+
+
+def _json_report(stdout: str) -> list[dict]:
+    import json
+
+    line = next(ln for ln in stdout.splitlines() if ln.startswith("JSON_REPORT:"))
+    return json.loads(line[len("JSON_REPORT:"):])
 
 
 @pytest.mark.django_db(transaction=True)
@@ -259,16 +268,94 @@ class TestImportEventSchedule(EventsGraphQLTestCase):
         with mock.patch("events.signals.queues") as queues:
             call_command(
                 "import_event_schedule",
-                "--schedule", "torch_retail_2026_p01",
+                "--schedule", "torch_retail_sync_2026_10_02_p01",
                 "--owner-email", self.system_user.email,
                 stdout=out,
             )
         report = out.getvalue()
         assert f"tenant id : {torch.id}" in report
         assert "failed     : 0" in report, report[-2000:]
-        assert "would create : 340" in report, report[-2000:]
+        assert "would create : 368" in report, report[-2000:]
+        rows = _json_report(report)
+        assert len(rows) == 368 and {r["outcome"] for r in rows} == {"would_create"}
+        assert all(r["source_row"] for r in rows)
         assert not Request.objects.filter(tenant=torch).exists()
         queues.default.add.assert_not_called()
+
+    def test_fuzzy_dedup_matches_a_retimed_row_on_the_same_day(self):
+        # Spark booked 6/19 at 10:00 EDT; the sheet later moved it to 15:00.
+        existing = self._existing_request(
+            name="Kroger",
+            address=_ROWS[0]["address"],
+            start_utc=datetime.datetime(2026, 6, 19, 14, 0, tzinfo=datetime.timezone.utc),
+        )
+        kept, matches = _match_rows_to_spark(_ROWS, self.tenant.id, self.edt)
+        assert [r["store_number"] for r in kept] == ["526"]
+        assert [(m["request_uuid"], m["tier"]) for m in matches] == [(str(existing.uuid), "day")]
+
+    def test_fuzzy_dedup_claims_each_request_once(self):
+        # Two shifts at one store on one day, only the 15:00 one in Spark:
+        # the 11:00 row must still import rather than ride the same request.
+        early = dict(_ROWS[0], start_time="11:00", end_time="14:00", source_row=7)
+        existing = self._existing_request(
+            name="Kroger",
+            address=_ROWS[0]["address"],
+            start_utc=datetime.datetime(2026, 6, 19, 19, 0, tzinfo=datetime.timezone.utc),
+        )
+        kept, matches = _match_rows_to_spark([early, _ROWS[0]], self.tenant.id, self.edt)
+        assert kept == [early]
+        assert [(m["request_uuid"], m["tier"]) for m in matches] == [(str(existing.uuid), "time")]
+
+    def test_link_walkin_events_adopts_the_orphan_instead_of_a_second_event(self):
+        walkin = Event.objects.create(
+            tenant=self.tenant,
+            name="Kroger — Jun 19",
+            address="12731 South Saginaw Street, Grand Blanc, MI 48439, USA",
+            date=datetime.datetime(2026, 6, 19, 12, 0, tzinfo=datetime.timezone.utc),
+            event_type=self.event_type,
+            created_by=self.system_user,
+        )
+        other_day = Event.objects.create(
+            tenant=self.tenant,
+            name="Kroger — Jun 21",
+            address=_ROWS[1]["address"],
+            date=datetime.datetime(2026, 6, 21, 12, 0, tzinfo=datetime.timezone.utc),
+            event_type=self.event_type,
+            created_by=self.system_user,
+        )
+        assert _walkin_events_for_rows(_ROWS, self.tenant.id) == {0: walkin.id}
+
+        rows = [dict(r, source_row=i + 2) for i, r in enumerate(_ROWS)]
+        spec = {"tenant_name": self.tenant.name, "link_walkin_events": True,
+                "mirror_to_sheet": False, "rows": rows}
+        data_dir = self._write_schedule("test_walkin_link", spec)
+        out = io.StringIO()
+        with mock.patch(
+            "events.management.commands.import_event_schedule._DATA_DIR", data_dir
+        ), mock.patch("events.signals.queues"):
+            call_command(
+                "import_event_schedule", "--schedule", "test_walkin_link",
+                "--owner-email", self.system_user.email, "--commit", stdout=out,
+            )
+        report = _json_report(out.getvalue())
+        walkin.refresh_from_db()
+        other_day.refresh_from_db()
+        assert walkin.request is not None and walkin.request.address == _ROWS[0]["address"]
+        assert other_day.request_id is None
+        assert Event.objects.filter(request=walkin.request).count() == 1
+        assert Event.objects.filter(tenant=self.tenant).count() == 3
+        by_row = {r["source_row"]: r for r in report}
+        assert by_row[2]["outcome"] == "created" and by_row[2]["linked_event_id"] == walkin.id
+        assert by_row[3]["outcome"] == "created" and "linked_event_id" not in by_row[3]
+
+    def _write_schedule(self, key, spec):
+        import json
+        import tempfile
+        from pathlib import Path
+
+        d = Path(tempfile.mkdtemp())
+        (d / f"{key}.json").write_text(json.dumps(spec))
+        return d
 
     def test_suppressed_mirror_never_reads_the_tenant_sheet(self):
         req = mock.Mock()
