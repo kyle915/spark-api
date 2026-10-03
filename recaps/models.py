@@ -527,6 +527,11 @@ class CustomRecap(models.Model):
     # BA who isn't in Spark yet. BA walk-up recaps via checkin_code stay
     # False so Spark can badge agency filings without confusing the two.
     is_third_party = models.BooleanField(default=False)
+    # Kept out of every cross-recap aggregate (Insights, dashboards, list
+    # totals, campaign/summary rollups) while the recap itself stays listed,
+    # approvable, and shareable with its own numbers. Stamped on submit when
+    # the tenant's 3rd-party link has checkin_recap_excludes_aggregates.
+    exclude_from_aggregates = models.BooleanField(default=False, db_index=True)
 
     # Typed store from the 3rd-party agency link (free-text, not a picker).
     # store_mapping_status is "" for normal recaps, "unmatched" until an

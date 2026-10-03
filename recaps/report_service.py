@@ -607,10 +607,15 @@ def build_campaign_report(
         custom_recaps.extend(ev_custom)
         event_rows.append(_event_row(event, len(ev_legacy) + len(ev_custom)))
 
-    kpis.recaps = len(legacy_recaps) + len(custom_recaps)
+    # 3rd-party / agency recaps keep their photos + quotes in the report but
+    # never add to the KPI totals.
+    counted_custom = [
+        r for r in custom_recaps if not getattr(r, "exclude_from_aggregates", False)
+    ]
+    kpis.recaps = len(legacy_recaps) + len(counted_custom)
     for recap in legacy_recaps:
         _accumulate_legacy(recap, kpis)
-    for custom_recap in custom_recaps:
+    for custom_recap in counted_custom:
         _accumulate_custom(custom_recap, kpis)
 
     tenant = getattr(request_obj, "tenant", None)

@@ -1142,6 +1142,7 @@ class CustomRecap(Node):
     ambassador: ambassador_types.Ambassador | None
     external_ba_name: str | None
     is_third_party: bool
+    exclude_from_aggregates: bool
     typed_store_name: str
     typed_store_address: str
     store_mapping_status: str

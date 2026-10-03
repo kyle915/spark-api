@@ -1335,6 +1335,9 @@ def submit_checkin_recap(
             getattr(event, "name", "") or "", getattr(event, "address", "") or ""
         )
         typed_addr = (getattr(event, "address", "") or "").strip()
+        exclude_aggregates = bool(third_party) and bool(
+            getattr(getattr(event, "tenant", None), "checkin_recap_excludes_aggregates", False)
+        )
         # All tenants: walk-up filings stay Needs review (approved=False)
         # until approveCustomRecap. Client Recaps / approved notify only
         # fire on that explicit approve path (Girl Beer still skips client
@@ -1355,6 +1358,7 @@ def submit_checkin_recap(
                 custom_recap_template=template,
                 created_by=actor,
                 is_third_party=third_party,
+                exclude_from_aggregates=exclude_aggregates,
                 typed_store_name=typed_name[:255] if third_party else "",
                 typed_store_address=typed_addr if third_party else "",
                 store_mapping_status="unmatched" if third_party else "",
@@ -1374,6 +1378,8 @@ def submit_checkin_recap(
             recap.updated_by = actor
             if third_party:
                 recap.is_third_party = True
+            if exclude_aggregates:
+                recap.exclude_from_aggregates = True
             update_fields = [
                 "submitted_at",
                 "total_engagements",
@@ -1381,6 +1387,7 @@ def submit_checkin_recap(
                 "updated_by",
                 "updated_at",
                 *(["is_third_party"] if third_party else []),
+                *(["exclude_from_aggregates"] if exclude_aggregates else []),
             ]
             # force_new reusing an empty stub still needs the second-shift
             # title — otherwise admin sees two rows both named the market.

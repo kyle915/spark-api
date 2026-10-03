@@ -212,6 +212,29 @@ class TestAuditTorchRecaps(AmbassadorsGraphQLTestCase):
         assert f"under_approved,{low.id}," in csv_block
         assert "===COVERAGE-CSV-BEGIN===" in log
 
+    def test_third_party_out_of_conversion_and_listed_separately(self):
+        self._walkup_recap(
+            {"Total number of consumers sampled": "100", "How many single cans did consumers purchase?": "25"}
+        )
+        agency = self._walkup_recap(
+            {"Total number of consumers sampled": "50", "How many single cans did consumers purchase?": "2"}
+        )
+        recap_models.CustomRecap.objects.filter(id=agency.id).update(
+            is_third_party=True, exclude_from_aggregates=True
+        )
+        log = self._run()
+        assert "sold 25 ÷ base 100 = 25.0% (n=1)" in log
+        assert "BEFORE (incl. 3rd-party): 27/150 = 18.0% (n=2)" in log
+        assert "consumers sampled (retail/on-prem approved): 100 excl. vs 150 incl. 3rd-party" in log
+        cov = log.split("## Coverage")[1].split("## Recaps under")[0]
+        assert "retail/on-prem recaps, all statuses: 1" in cov
+        assert "3rd-party recaps (intentionally excluded): 1" in cov and "still in Insights set: 0" in cov
+        under = log.split("## Recaps under 20%")[1].split("## 3rd-party recaps under")[0]
+        assert f"#{agency.id} " not in under
+        tp = log.split("## 3rd-party recaps under 20%")[1].split("## Unrated")[0]
+        assert f"#{agency.id} " in tp
+        assert f"third_party_under_approved,{agency.id}," in log
+
     def test_since_until_window(self):
         self._walkup_recap({"Total number of consumers sampled": "50"})
         future = (self.today + timedelta(days=5)).isoformat()

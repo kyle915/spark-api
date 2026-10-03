@@ -239,6 +239,51 @@ class TestEventDashboardQueries(DashboardGraphQLTestCase):
         assert kpis["multiPacksSold"] == 36
 
     @pytest.mark.asyncio
+    async def test_event_dashboard_skips_third_party_recaps_excluded_from_aggregates(self):
+        """A 3rd-party recap flagged exclude_from_aggregates adds nothing to
+        globalKpis even when it shares an event with counted recaps."""
+        from recaps import models as recap_models
+
+        @sync_to_async
+        def add_custom_recaps():
+            system_user = self.get_system_user()
+            template = recap_models.CustomRecapTemplate.objects.create(
+                name="Agency template", event_type=self.event_type,
+                tenant=self.tenant, created_by=system_user,
+            )
+            field_type = recap_models.CustomRecapFieldType.objects.create(
+                name="Number", created_by=system_user,
+            )
+            section = recap_models.RecapSection.objects.create(
+                name="Sampling", tenant=self.tenant, created_by=system_user,
+            )
+            purchase = recap_models.CustomField.objects.create(
+                name="How many products did consumers purchase during the event?",
+                required=False, custom_recap_template=template,
+                custom_field_type=field_type, recap_section=section,
+                created_by=system_user,
+            )
+            for value, excluded in (("12", False), ("100", True)):
+                recap = recap_models.CustomRecap.objects.create(
+                    name="recap", approved=True, event=self.event1,
+                    tenant=self.tenant, custom_recap_template=template,
+                    ambassador=self.ambassador, created_by=system_user,
+                    is_third_party=excluded, exclude_from_aggregates=excluded,
+                )
+                recap_models.CustomFieldValue.objects.create(
+                    custom_recap=recap, custom_field=purchase,
+                    value=value, created_by=system_user,
+                )
+
+        await add_custom_recaps()
+        cache.clear()
+        result = await self._execute_query_authenticated(
+            "query { eventDashboard { globalKpis { productsSold } } }", {}, self.client_user
+        )
+        assert result.errors is None
+        assert result.data["eventDashboard"]["globalKpis"]["productsSold"] == 162
+
+    @pytest.mark.asyncio
     async def test_event_dashboard_with_quarter_filter(self):
         """Test event_dashboard query with quarter filter."""
         from tenants.dashboard.services import DashboardQueriesService

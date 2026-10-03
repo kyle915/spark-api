@@ -491,6 +491,7 @@ def build_recap_field_export(
     drafts = 0
     internal_demo_rows = 0
     structured_sample_total = 0
+    not_in_totals = 0
 
     for recap, ev_date, files in kept:
         meta = _recap_meta(recap, infer_retailer)
@@ -529,7 +530,9 @@ def build_recap_field_export(
             )
 
         samples_label, samples_total = _structured_samples(recap)
-        if samples_total:
+        if getattr(recap, "exclude_from_aggregates", False):
+            not_in_totals += 1
+        elif samples_total:
             structured_sample_total += int(samples_total)
 
         # Data-quality check the submit-time guard does NOT make: a recap
@@ -643,6 +646,8 @@ def build_recap_field_export(
             # Structured sampled quantities — the basis of the dashboard's
             # samplesDistributed KPI. Compare the two before quoting either.
             "structured_samples_total": structured_sample_total,
+            # 3rd-party / agency rows: listed above, left out of the total.
+            "rows_not_in_totals": not_in_totals,
             # Physically impossible rows: more consumers sampled than total
             # engagements. The submit-time guard checks conversion >100% but
             # not this, so it reaches reports unflagged.

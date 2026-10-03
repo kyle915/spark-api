@@ -56,6 +56,7 @@ from recaps.models import (
     ProductSamples,
     Recap,
 )
+from recaps.aggregates import exclude_non_aggregate_recaps
 from recaps.report_service import _format_date_range, _leading_int
 from recaps.types import (
     _consumers_sampled_from_fields,
@@ -283,6 +284,9 @@ def _filter_event_window(queryset, prefix: str, window: tuple | None):
         Q(**{f"{prefix}request__isnull": True})
         | Q(**{f"{prefix}request__deleted_at__isnull": True})
     )
+    # 3rd-party / agency recaps (exclude_from_aggregates) stay in Recaps but
+    # never roll into a total — every Insights path funnels through here.
+    queryset = exclude_non_aggregate_recaps(queryset, prefix)
     if window is None:
         return queryset
     start, end = window
@@ -1022,6 +1026,7 @@ def tenant_monthly_trend(
         headline totals and the hero use. Leaving the upper bound off for the
         trailing (``year=None``) window keeps it open-ended.
         """
+        queryset = exclude_non_aggregate_recaps(queryset, prefix)
         queryset = queryset.annotate(_evtdate=_event_date_expr(prefix))
         queryset = queryset.filter(_evtdate__gte=start)
         if end is not None:

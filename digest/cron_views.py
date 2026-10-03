@@ -6637,6 +6637,25 @@ class TagTorchDryDemosView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class ExcludeThirdPartyFromAggregatesView(View):
+    """GET/POST `/internal/cron/exclude-third-party-from-aggregates`.
+
+    Turns on the tenant's checkin_recap_excludes_aggregates and stamps its
+    existing 3rd-party (agency link) recaps exclude_from_aggregates, so they
+    stay in Recaps but never roll into Insights / dashboards / totals.
+    Logs before/after per recap.
+
+    DRY-RUN unless `apply` is truthy. Params: tenant, apply.
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return _run_dry_run_command(request, "exclude_third_party_from_aggregates", ("tenant",))
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self.post(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class DeleteTenantView(View):
     """GET/POST `/internal/cron/delete-tenant`.
 
@@ -10147,6 +10166,7 @@ def _registered_views() -> dict[str, Any]:
         "add-torch-competitor-feedback": AddTorchCompetitorFeedbackView,
         "add-torch-dry-demo-fields": AddTorchDryDemoFieldsView,
         "tag-torch-dry-demos": TagTorchDryDemosView,
+        "exclude-third-party-from-aggregates": ExcludeThirdPartyFromAggregatesView,
         "setup-torch-event-activation": SetupTorchEventActivationView,
         "clone-recap-template": CloneRecapTemplateView,
         "attach-fpo-recap-images": AttachFpoRecapImagesView,

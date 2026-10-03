@@ -240,6 +240,7 @@ def _custom_feedback_rows(tenant_id: int, year: int | None):
         _filter_year(
             CustomFieldValue.objects.filter(
                 custom_recap__tenant_id=tenant_id,
+                custom_recap__exclude_from_aggregates=False,
                 custom_field__name__iregex=_CUSTOM_FEEDBACK_NAME_IREGEX,
             ),
             "created_at",
