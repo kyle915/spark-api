@@ -682,6 +682,15 @@ def public_checkin_clock(request: HttpRequest, code: str) -> HttpResponse:
             clock_time = checkin_web.parse_client_clock_time(raw_when)
         except checkin_web.ClientClockTimeError as exc:
             return _err(str(exc), status=400, code=exc.reason)
+        # 409 (not 400) so a queued offline clock-in is dropped instead of
+        # retried forever and shown as "on the clock".
+        if checkin_web.clock_in_is_for_a_past_day(event, when=clock_time):
+            return _err(
+                "That day is over, so there's no clock to start. File that "
+                "day's recap, or start today's shift to clock in for today.",
+                status=409,
+                code="past_day",
+            )
 
     # Already on the clock: a queued flush (or a double-tap) must not insert
     # a second clock_in. Same for an idempotency key the client retries.
