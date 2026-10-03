@@ -59,8 +59,11 @@ _ROWS = [
 def _json_report(stdout: str) -> list[dict]:
     import json
 
-    line = next(ln for ln in stdout.splitlines() if ln.startswith("JSON_REPORT:"))
-    return json.loads(line[len("JSON_REPORT:"):])
+    return [
+        json.loads(ln[len("JSON_ROW:"):])
+        for ln in stdout.splitlines()
+        if ln.startswith("JSON_ROW:")
+    ]
 
 
 @pytest.mark.django_db(transaction=True)

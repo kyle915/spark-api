@@ -299,7 +299,7 @@ class Command(BaseCommand):
             if not rows:
                 w("")
                 w(self.style.SUCCESS("Nothing to import — every row is already in Spark."))
-                w("JSON_REPORT:" + json.dumps(report))
+                _write_json_rows(w, report)
                 return
 
         link_event_ids: dict[int, int] = {}
@@ -379,7 +379,7 @@ class Command(BaseCommand):
                     "--commit (execute=true) to create them."
                 )
             )
-        w("JSON_REPORT:" + json.dumps(report))
+        _write_json_rows(w, report)
 
     def _resolve_timezone(self, forced_code):
         if forced_code:
@@ -560,6 +560,12 @@ def _walkin_events_for_rows(rows: list, tenant_id: int) -> dict[int, int]:
             claimed.add(hit.id)
             out[i] = hit.id
     return out
+
+
+def _write_json_rows(w, report: list[dict]) -> None:
+    # One short line per row: CI log viewers drop a single huge line.
+    for entry in report:
+        w("JSON_ROW:" + json.dumps(entry))
 
 
 def _slugify(name: str) -> str:
