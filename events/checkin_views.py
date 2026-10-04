@@ -481,7 +481,34 @@ def public_checkin_identify(request: HttpRequest, code: str) -> HttpResponse:
         # captured as SamplingStops during the shift.
         from tenants.models import Tenant
 
-        if checkin_web.tenant_location_mode(target) == Tenant.CHECKIN_LOCATION_MARKET:
+        market_mode = (
+            checkin_web.tenant_location_mode(target) == Tenant.CHECKIN_LOCATION_MARKET
+        )
+        if market_mode and not recap_only:
+            # An Event Activation is one venue, not a roaming market: the BA
+            # types or GPS-picks the venue and the event keys on that address.
+            # A "Still need a recap" tap on such a shift sends its venue back
+            # as the market with no program, so a venue the BA already clocked
+            # that day counts too.
+            picked = (data.get("market") or "").strip()
+            known_market = any(
+                m.strip().lower() == picked.lower()
+                for m in checkin_web.tenant_markets(target)
+            )
+            venue = address or ("" if known_market else picked)
+            if venue and (
+                checkin_web.is_event_activation_type(chosen_type)
+                or (
+                    on_date is not None
+                    and checkin_web.existing_shift_event_for(
+                        ambassador=ambassador, tenant=target, on_date=on_date, address=venue
+                    )
+                    is not None
+                )
+            ):
+                address = venue
+                market_mode = False
+        if market_mode:
             market = (data.get("market") or "").strip()
             allowed = checkin_web.tenant_markets(target)
             if not market:
