@@ -54,12 +54,12 @@ from datetime import date, datetime, timedelta
 from django.utils import timezone
 
 from recaps.tenant_overview import (
-    SPARSE_BASE_MIN_RECAPS,
     sales_program_metrics,
     tenant_event_recap_counts,
     tenant_kpi_totals,
     tenant_monthly_trend,
     tenant_trend_program,
+    thin_period,
 )
 
 # Sentiments the frontend knows how to render. Buckets only ever set one of
@@ -193,16 +193,18 @@ def _momentum_bucket(trend: list) -> dict | None:
     latest_eng = latest.engagements
     prior_eng = prior.engagements
 
-    if prior.recaps < SPARSE_BASE_MIN_RECAPS:
-        noun = "recap" if prior.recaps == 1 else "recaps"
+    thin = thin_period((prior_short, prior.recaps), (latest_short, latest.recaps))
+    if thin:
+        label, n = thin
+        noun = "recap" if n == 1 else "recaps"
         return {
             "key": "momentum",
             "title": "Momentum",
             "metric": f"n/a vs {prior_short}",
             "detail": (
                 f"Engagements {latest_eng:,} in {latest.month} vs "
-                f"{prior_eng:,} in {prior.month} — {prior_short} had only "
-                f"{prior.recaps:,} {noun}; % hidden."
+                f"{prior_eng:,} in {prior.month} — {label} had only "
+                f"{n:,} {noun}; % hidden."
             ),
             "sentiment": "neutral",
         }
@@ -326,13 +328,9 @@ def _sales_momentum_bucket(tenant_id: int, today: date | None = None) -> dict | 
         f"{prev_units:,} {prev_label}"
     )
 
-    thin = [
-        (label, m["recaps"])
-        for label, m in ((prev_label, prev), (cur_label, cur))
-        if m["recaps"] < SPARSE_BASE_MIN_RECAPS
-    ]
+    thin = thin_period((prev_label, prev["recaps"]), (cur_label, cur["recaps"]))
     if thin:
-        label, n = thin[0]
+        label, n = thin
         noun = "recap" if n == 1 else "recaps"
         return {
             "key": "momentum",

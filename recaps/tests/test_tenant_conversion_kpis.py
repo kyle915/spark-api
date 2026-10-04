@@ -552,9 +552,9 @@ class TestTenantConversionSampledBase(AmbassadorsGraphQLTestCase):
         assert prev.strftime("%b") in b["metric"]
 
     def test_sales_momentum_compares_same_days(self, monkeypatch):
-        from recaps import tenant_insights
+        from recaps import tenant_insights, tenant_overview
 
-        monkeypatch.setattr(tenant_insights, "SPARSE_BASE_MIN_RECAPS", 1)
+        monkeypatch.setattr(tenant_overview, "SPARSE_BASE_MIN_RECAPS", 1)
         today = self.today.replace(day=2)
         prev_first = (today.replace(day=1) - timedelta(days=1)).replace(day=1)
         for when, sampled, packs in (
@@ -575,6 +575,61 @@ class TestTenantConversionSampledBase(AmbassadorsGraphQLTestCase):
         assert "10 units sold" in b["detail"]
         assert "vs 8 " in b["detail"]
         assert "conversion 20.0% vs 20.0% (+0.0 pts)" in b["detail"]
+
+    def test_conversion_kpis_sparse_note_names_thin_window(self, monkeypatch):
+        from recaps import tenant_overview
+
+        self._custom_recap(
+            request_type=self.retail_type,
+            fields=[
+                ("Total number of consumers sampled", "40"),
+                ("How many packs did consumers purchase?", "10"),
+            ],
+        )
+        data = tenant_conversion_kpis(self.tenant.id, start=self.start, end=self.end)
+        assert (data["recaps"], data["previous_recaps"]) == (1, 0)
+        assert data["sparse_note"] == (
+            f"{data['previous_label']} had only 0 recaps — % changes hidden."
+        )
+
+        prev_day = self.start - timedelta(days=1)
+        self._custom_recap(
+            request_type=self.retail_type,
+            when=timezone.make_aware(
+                datetime(prev_day.year, prev_day.month, prev_day.day, 12, 0)
+            ),
+            fields=[
+                ("Total number of consumers sampled", "50"),
+                ("How many packs did consumers purchase?", "5"),
+            ],
+        )
+        monkeypatch.setattr(tenant_overview, "SPARSE_BASE_MIN_RECAPS", 1)
+        data = tenant_conversion_kpis(self.tenant.id, start=self.start, end=self.end)
+        assert (data["recaps"], data["previous_recaps"]) == (1, 1)
+        assert data["sparse_note"] is None
+
+    def test_conversion_kpis_graphql_exposes_sparse_fields(self):
+        from recaps.report_types import _build_conversion_kpis
+
+        k = _build_conversion_kpis(self.tenant.id, self.start, self.end)
+        assert (k.recaps, k.previous_recaps) == (0, 0)
+        assert k.sparse_note is not None and "had only 0 recaps" in k.sparse_note
+
+
+def test_sparse_base_note_checks_either_side(monkeypatch):
+    from recaps import tenant_overview
+
+    monkeypatch.setattr(tenant_overview, "SPARSE_BASE_MIN_RECAPS", 10)
+    assert tenant_overview.sparse_base_note(("Aug", 40), ("Sep", 30)) is None
+    assert (
+        tenant_overview.sparse_base_note(("Aug", 40), ("Sep", 3))
+        == "Sep had only 3 recaps — % changes hidden."
+    )
+    assert (
+        tenant_overview.sparse_base_note(("Aug", 1), ("Sep", 3))
+        == "Aug had only 1 recap — % changes hidden."
+    )
+    assert tenant_overview.thin_period(("Aug", 10), ("Sep", 9)) == ("Sep", 9)
 
 
 def test_sold_units_count_each_can_and_pack_as_one_unit():
