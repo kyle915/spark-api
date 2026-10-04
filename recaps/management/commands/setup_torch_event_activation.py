@@ -263,11 +263,27 @@ class Command(BaseCommand):
         "sampling-only recap template (dry-run by default; --apply to write)."
     )
 
+    # Per-brand config; another brand's Event Activation subclasses this.
+    tenant_slug = TENANT_SLUG
+    tenant_form_slug = TENANT_FORM_SLUG
+    checkin_code = CHECKIN_CODE
+    template_name = TEMPLATE_NAME
+    brand_name = "Torch"
+    activation_buckets = ACTIVATION_BUCKETS
+    sample_qty_layout = SAMPLE_QTY_LAYOUT
+    section_order = SECTION_ORDER
+
+    def build_spec(self, product_opts: list[str]) -> list[tuple[str, list[Field]]]:
+        return build_spec(product_opts)
+
     def add_arguments(self, parser):
         parser.add_argument(
             "--tenant",
-            default=TENANT_SLUG,
-            help="exact Tenant.slug, else exact request_url_name (default torch-thc).",
+            default=self.tenant_slug,
+            help=(
+                "exact Tenant.slug, else exact request_url_name "
+                f"(default {self.tenant_slug})."
+            ),
         )
         parser.add_argument("--apply", action="store_true")
 
@@ -276,7 +292,7 @@ class Command(BaseCommand):
     def _resolve_tenant(self, needle: str):
         from tenants.models import Tenant
 
-        needle = (needle or TENANT_SLUG).strip()
+        needle = (needle or self.tenant_slug).strip()
         for lookup in ("slug__iexact", "request_url_name__iexact"):
             matches = list(Tenant.objects.filter(**{lookup: needle}).order_by("id"))
             if len(matches) == 1:
@@ -284,8 +300,8 @@ class Command(BaseCommand):
             if len(matches) > 1:
                 ids = ", ".join(str(t.id) for t in matches)
                 raise CommandError(f"{len(matches)} tenants match {needle!r} ({ids}).")
-        if needle == TENANT_SLUG:
-            return self._resolve_tenant(TENANT_FORM_SLUG)
+        if needle == self.tenant_slug and self.tenant_form_slug:
+            return self._resolve_tenant(self.tenant_form_slug)
         raise CommandError(f"tenant-not-found: {needle}")
 
     def _resolve_creator(self):
@@ -326,7 +342,7 @@ class Command(BaseCommand):
             by_norm.setdefault(_norm(cat.name), cat)
 
         self.stdout.write("\nPhoto categories (Event Activation):")
-        for spec in ACTIVATION_BUCKETS:
+        for spec in self.activation_buckets:
             name = spec["name"]
             match = by_norm.get(_norm(name))
             if match is not None:
@@ -354,7 +370,7 @@ class Command(BaseCommand):
                 merged[pin.name] = list(current)
 
         entries = []
-        for spec in ACTIVATION_BUCKETS:
+        for spec in self.activation_buckets:
             entry = {"name": spec["name"]}
             if spec.get("min"):
                 entry["min"] = spec["min"]
@@ -401,7 +417,7 @@ class Command(BaseCommand):
 
         opts = products_sampled_options_for_tenant(tenant)
         self.stdout.write(
-            f"\nProducts   : {len(opts)} SKUs from the Torch Product catalog"
+            f"\nProducts   : {len(opts)} SKUs from the {self.brand_name} Product catalog"
             if opts
             else "\nProducts   : catalog empty — Products Sampled refreshes at render"
         )
@@ -433,7 +449,7 @@ class Command(BaseCommand):
         """
         from recaps.models import CustomField, RecapSection
 
-        order = SECTION_ORDER.get(name, 99)
+        order = self.section_order.get(name, 99)
         if template is not None:
             sec_id = (
                 CustomField.objects.filter(
@@ -488,15 +504,15 @@ class Command(BaseCommand):
     def _seed_template(self, tenant, event_type, creator, apply: bool) -> None:
         from recaps.models import CustomField, CustomFieldValue, CustomRecapTemplate
 
-        spec = build_spec(self._product_options(tenant))
+        spec = self.build_spec(self._product_options(tenant))
         template = CustomRecapTemplate.objects.filter(
-            tenant_id=tenant.id, name=TEMPLATE_NAME
+            tenant_id=tenant.id, name=self.template_name
         ).first()
         if event_type is not None:
             # The walk-up serves the lowest-id template on this event type.
             rivals = CustomRecapTemplate.objects.filter(
                 tenant_id=tenant.id, event_type=event_type
-            ).exclude(name=TEMPLATE_NAME)
+            ).exclude(name=self.template_name)
             if template is not None:
                 rivals = rivals.filter(id__lt=template.id)
             rivals = list(rivals.order_by("id"))
@@ -515,20 +531,20 @@ class Command(BaseCommand):
         if template is None and apply:
             template = CustomRecapTemplate.objects.create(
                 tenant_id=tenant.id,
-                name=TEMPLATE_NAME,
+                name=self.template_name,
                 event_type=event_type,
                 product_samples=True,
                 sales_performance=False,
-                layout=dict(SAMPLE_QTY_LAYOUT),
+                layout=dict(self.sample_qty_layout),
                 created_by=creator,
             )
-            self.stdout.write(f"\nTemplate   : + {TEMPLATE_NAME!r} [{template.id}]")
+            self.stdout.write(f"\nTemplate   : + {self.template_name!r} [{template.id}]")
         elif template is not None:
-            self.stdout.write(f"\nTemplate   : {TEMPLATE_NAME!r} [{template.id}] (exists)")
+            self.stdout.write(f"\nTemplate   : {self.template_name!r} [{template.id}] (exists)")
             layout = template.layout if isinstance(template.layout, dict) else {}
-            if any(layout.get(k) != v for k, v in SAMPLE_QTY_LAYOUT.items()):
+            if any(layout.get(k) != v for k, v in self.sample_qty_layout.items()):
                 verb = "set" if apply else "would set"
-                self.stdout.write(f"  layout   : {verb} {SAMPLE_QTY_LAYOUT}")
+                self.stdout.write(f"  layout   : {verb} {self.sample_qty_layout}")
             if apply:
                 changed = []
                 if template.event_type_id != event_type.id:
@@ -541,20 +557,20 @@ class Command(BaseCommand):
                     template.sales_performance = False
                     changed.append("sales_performance")
                 layout = dict(template.layout) if isinstance(template.layout, dict) else {}
-                if any(layout.get(k) != v for k, v in SAMPLE_QTY_LAYOUT.items()):
-                    template.layout = {**layout, **SAMPLE_QTY_LAYOUT}
+                if any(layout.get(k) != v for k, v in self.sample_qty_layout.items()):
+                    template.layout = {**layout, **self.sample_qty_layout}
                     changed.append("layout")
                 if changed:
                     template.save(update_fields=[*changed, "updated_at"])
         else:
-            self.stdout.write(f"\nTemplate   : would create {TEMPLATE_NAME!r}")
+            self.stdout.write(f"\nTemplate   : would create {self.template_name!r}")
 
         ft_cache: dict = {}
         keep: set[str] = set()
         stats = {"created": 0, "updated": 0}
         for section_name, fields in spec:
             section = self._template_section(tenant, template, section_name, creator, apply)
-            self.stdout.write(f"\n  [{SECTION_ORDER[section_name]}] {section_name}")
+            self.stdout.write(f"\n  [{self.section_order[section_name]}] {section_name}")
             for idx, (name, kind, required, options, placeholder) in enumerate(fields):
                 keep.add(name)
                 req = "REQUIRED" if required else "optional"
@@ -617,6 +633,9 @@ class Command(BaseCommand):
 
     # ── entry ─────────────────────────────────────────────────────────────
 
+    def _report_current(self, tenant) -> None:
+        """Brand-specific pre-write inventory (none for Torch)."""
+
     def handle(self, *args, **opts):
         from django.conf import settings
 
@@ -636,12 +655,13 @@ class Command(BaseCommand):
             if code
             else "Walk-up    : (no checkin_code — set one up before BAs can use this)"
         )
-        if code and code != CHECKIN_CODE:
+        if code and code != self.checkin_code:
             self.stdout.write(
-                self.style.WARNING(f"  ! expected {CHECKIN_CODE!r} — leaving {code!r} alone")
+                self.style.WARNING(f"  ! expected {self.checkin_code!r} — leaving {code!r} alone")
             )
         self.stdout.write(f"Mode       : {'APPLY (writing)' if apply else 'DRY-RUN (no writes)'}")
         self.stdout.write("=" * 68)
+        self._report_current(tenant)
 
         if apply:
             with transaction.atomic():
@@ -653,7 +673,7 @@ class Command(BaseCommand):
             self.stdout.write(
                 self.style.SUCCESS(
                     f"\nAPPLIED — {base}/checkin/{code} offers {EVENT_LABEL} "
-                    f"with {TEMPLATE_NAME!r}."
+                    f"with {self.template_name!r}."
                 )
             )
         else:
