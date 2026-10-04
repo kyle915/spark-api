@@ -10,6 +10,7 @@ from events import models as event_models
 from recaps import models as recap_models
 from recaps.tenant_overview import (
     conversion_window_totals,
+    sales_program_metrics,
     tenant_conversion_kpis,
     tenant_monthly_trend,
 )
@@ -410,6 +411,170 @@ class TestTenantConversionSampledBase(AmbassadorsGraphQLTestCase):
             ("unitsSold", "Units sold"),
         ]
         assert "People engaged" in kpis.trend_note
+
+    def _seed_sales_program(self, when=None):
+        self._custom_recap(
+            request_type=self.retail_type,
+            when=when,
+            fields=[
+                ("Total number of consumers sampled", "40"),
+                ("How many single cans did consumers purchase?", "6"),
+                ("How many packs did consumers purchase?", "2"),
+                ("First Time consumers?", "10"),
+                ("How many consumers that were engaged with knew about Torch THC product/brand?", "5"),
+                ("How many consumers would be willing to purchase the product after tasing it?", "20"),
+                ("How many consumers would NOT be willing to purchase the product after tasing it?", "9"),
+            ],
+        )
+        self._custom_recap(
+            request_type=self.retail_type,
+            when=when,
+            fields=[
+                ("Total number of consumers sampled", "0"),
+                ("How many packs did consumers purchase?", "3"),
+                ("Dry demo? (no product tasted)", "Yes"),
+                ("People engaged", "25"),
+                ("First Time consumers?", "4"),
+            ],
+        )
+        self._custom_recap(
+            request_type=self.event_type,
+            when=when,
+            fields=[
+                ("Total number of consumers sampled", "500"),
+                ("How many packs did consumers purchase?", "90"),
+                ("First Time consumers?", "300"),
+            ],
+        )
+        self._custom_recap(
+            request_type=self.retail_type,
+            when=when,
+            fields=[("How many single cans did consumers purchase?", "1")],
+        )
+
+    def _make_sales_tenant(self):
+        from tenants.models import Tenant
+
+        Tenant.objects.filter(id=self.tenant.id).update(
+            insights_trend_series=Tenant.TREND_SERIES_SALES
+        )
+
+    def test_sales_program_metrics_match_conversion_set(self):
+        self._seed_sales_program()
+        m = sales_program_metrics(self.tenant.id, self.start, self.end)
+        conv = tenant_conversion_kpis(self.tenant.id, start=self.start, end=self.end)
+        assert (m["consumers_sampled"], m["units_sold"]) == (65, 11)
+        assert (conv["engagements"], conv["sold"]) == (65, 11)
+        assert (m["cans_sold"], m["packs_sold"]) == (6, 5)
+        assert (m["recaps"], m["demos"], m["dry_demos"]) == (2, 2, 1)
+        assert m["dry_people_engaged"] == 25
+        assert m["conversion_pct"] == 16.9
+        assert m["first_time_consumers"] == 14
+        assert m["brand_aware_consumers"] == 5
+        assert m["willing_to_purchase"] == 20
+
+    def test_sales_tenant_insight_cards_drop_engagements(self):
+        from recaps.tenant_insights import build_insight_buckets_scoped
+
+        self._seed_sales_program()
+        self._make_sales_tenant()
+        items, label = build_insight_buckets_scoped(
+            self.tenant.id, self.start, self.end
+        )
+        by = {b["key"]: b for b in items}
+        assert by["reach"]["metric"] == "65"
+        assert "across 2 demos" in by["reach"]["detail"]
+        assert "1 dry demo counted by People engaged (25)" in by["reach"]["detail"]
+        assert by["sales"]["title"] == "Units sold"
+        assert by["sales"]["metric"] == "11"
+        assert "6 single cans · 5 packs" in by["sales"]["detail"]
+        assert "16.9% conversion" in by["sales"]["detail"]
+        assert by["new_audience"]["metric"] == "14"
+        blob = " ".join(f"{b['title']} {b['metric']} {b['detail']}" for b in items)
+        assert "engagement" not in blob.lower()
+        assert label == f"{self.start} → {self.end}"
+
+    def test_activity_tenant_insight_cards_unscoped(self):
+        from recaps.tenant_insights import build_insight_buckets_scoped
+
+        self._seed_sales_program()
+        items, label = build_insight_buckets_scoped(
+            self.tenant.id, self.start, self.end
+        )
+        assert label is None
+        assert next(b for b in items if b["key"] == "sales")["title"] == "Sales"
+
+    def test_program_kpis_and_comparison_use_sales_metrics(self):
+        from recaps.report_types import _build_tenant_kpis
+        from recaps.tenant_overview import tenant_kpi_comparison
+
+        self._make_sales_tenant()
+        last_month_end = self.today.replace(day=1) - timedelta(days=1)
+        self._seed_sales_program(
+            when=timezone.make_aware(
+                datetime(last_month_end.year, last_month_end.month, 10, 12, 0)
+            )
+        )
+        kpis = _build_tenant_kpis(self.tenant.id)
+        assert kpis.program is not None
+        assert (kpis.program.consumers_sampled, kpis.program.units_sold) == (65, 11)
+
+        data = tenant_kpi_comparison(self.tenant.id, "month")
+        assert data["current"]["program"]["consumers_sampled"] == 65
+        assert data["previous"]["program"]["recaps"] == 0
+        assert data["sparse_note"] == f"{data['previous_label']} had only 0 recaps — % changes hidden."
+
+    def test_activity_comparison_has_no_program(self):
+        from recaps.tenant_overview import tenant_kpi_comparison
+
+        data = tenant_kpi_comparison(self.tenant.id, "month")
+        assert "program" not in data["current"]
+        assert data["sparse_note"] is not None
+
+    def test_sales_momentum_hides_pct_on_thin_base(self):
+        from recaps.tenant_insights import _sales_momentum_bucket
+
+        today = self.today.replace(day=2)
+        self._custom_recap(
+            request_type=self.retail_type,
+            when=timezone.make_aware(datetime(today.year, today.month, 1, 12, 0)),
+            fields=[
+                ("Total number of consumers sampled", "40"),
+                ("How many packs did consumers purchase?", "10"),
+            ],
+        )
+        b = _sales_momentum_bucket(self.tenant.id, today=today)
+        prev = today.replace(day=1) - timedelta(days=1)
+        assert b["metric"].startswith("n/a vs ")
+        assert "month to date" in b["detail"]
+        assert "% hidden" in b["detail"]
+        assert "engagement" not in b["detail"].lower()
+        assert prev.strftime("%b") in b["metric"]
+
+    def test_sales_momentum_compares_same_days(self, monkeypatch):
+        from recaps import tenant_insights
+
+        monkeypatch.setattr(tenant_insights, "SPARSE_BASE_MIN_RECAPS", 1)
+        today = self.today.replace(day=2)
+        prev_first = (today.replace(day=1) - timedelta(days=1)).replace(day=1)
+        for when, sampled, packs in (
+            (datetime(today.year, today.month, 1, 12, 0), "50", "10"),
+            (datetime(prev_first.year, prev_first.month, 1, 12, 0), "40", "8"),
+            (datetime(prev_first.year, prev_first.month, 20, 12, 0), "900", "300"),
+        ):
+            self._custom_recap(
+                request_type=self.retail_type,
+                when=timezone.make_aware(when),
+                fields=[
+                    ("Total number of consumers sampled", sampled),
+                    ("How many packs did consumers purchase?", packs),
+                ],
+            )
+        b = tenant_insights._sales_momentum_bucket(self.tenant.id, today=today)
+        assert b["metric"].startswith("▲ 25% vs ")
+        assert "10 units sold" in b["detail"]
+        assert "vs 8 " in b["detail"]
+        assert "conversion 20.0% vs 20.0% (+0.0 pts)" in b["detail"]
 
 
 def test_sold_units_count_each_can_and_pack_as_one_unit():
