@@ -49,14 +49,17 @@ buckets live and the cron command calls the entry points directly.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime, timedelta
 
 from django.utils import timezone
 
 from recaps.tenant_overview import (
+    SPARSE_BASE_MIN_RECAPS,
+    sales_program_metrics,
     tenant_event_recap_counts,
     tenant_kpi_totals,
     tenant_monthly_trend,
+    tenant_trend_program,
 )
 
 # Sentiments the frontend knows how to render. Buckets only ever set one of
@@ -190,6 +193,20 @@ def _momentum_bucket(trend: list) -> dict | None:
     latest_eng = latest.engagements
     prior_eng = prior.engagements
 
+    if prior.recaps < SPARSE_BASE_MIN_RECAPS:
+        noun = "recap" if prior.recaps == 1 else "recaps"
+        return {
+            "key": "momentum",
+            "title": "Momentum",
+            "metric": f"n/a vs {prior_short}",
+            "detail": (
+                f"Engagements {latest_eng:,} in {latest.month} vs "
+                f"{prior_eng:,} in {prior.month} — {prior_short} had only "
+                f"{prior.recaps:,} {noun}; % hidden."
+            ),
+            "sentiment": "neutral",
+        }
+
     # Percent move on engagements, latest active month vs prior active month.
     # When the prior active month had zero engagements we can't express a
     # percent, so fall back to a flat "▬ vs <prior>" marker rather than a
@@ -276,6 +293,194 @@ def _momentum_bucket(trend: list) -> dict | None:
     }
 
 
+def _day_span(start: date, end: date) -> str:
+    """``"Oct 1–3"`` for a same-month inclusive span."""
+    mon = _MONTH_ABBR[start.month]
+    if start == end:
+        return f"{mon} {start.day}"
+    return f"{mon} {start.day}–{end.day}"
+
+
+def _sales_momentum_bucket(tenant_id: int, today: date | None = None) -> dict | None:
+    """Units sold month-to-date vs the same days of the prior month.
+
+    Like-for-like on purpose: comparing a 3-day-old month with a whole prior
+    month is what printed "▼ 74% vs Sep" on Oct 3. Either span under
+    :data:`SPARSE_BASE_MIN_RECAPS` recaps hides the % and says why.
+    """
+    today = today or timezone.localdate()
+    cur_start = today.replace(day=1)
+    prev_month_end = cur_start - timedelta(days=1)
+    prev_start = prev_month_end.replace(day=1)
+    prev_end = min(prev_start + timedelta(days=today.day - 1), prev_month_end)
+    cur = sales_program_metrics(tenant_id, cur_start, today)
+    prev = sales_program_metrics(tenant_id, prev_start, prev_end)
+    if cur["recaps"] == 0 and prev["recaps"] == 0:
+        return None
+
+    cur_label = _day_span(cur_start, today)
+    prev_label = _day_span(prev_start, prev_end)
+    cur_units, prev_units = cur["units_sold"], prev["units_sold"]
+    lead = (
+        f"{cur_units:,} units sold {cur_label} (month to date) vs "
+        f"{prev_units:,} {prev_label}"
+    )
+
+    thin = [
+        (label, m["recaps"])
+        for label, m in ((prev_label, prev), (cur_label, cur))
+        if m["recaps"] < SPARSE_BASE_MIN_RECAPS
+    ]
+    if thin:
+        label, n = thin[0]
+        noun = "recap" if n == 1 else "recaps"
+        return {
+            "key": "momentum",
+            "title": "Momentum",
+            "metric": f"n/a vs {prev_label}",
+            "detail": f"{lead} — {label} had only {n:,} {noun}; % hidden.",
+            "sentiment": "neutral",
+        }
+
+    conv = ""
+    if cur["conversion_pct"] is not None and prev["conversion_pct"] is not None:
+        pts = round(cur["conversion_pct"] - prev["conversion_pct"], 1)
+        conv = (
+            f" · conversion {cur['conversion_pct']}% vs "
+            f"{prev['conversion_pct']}% ({pts:+.1f} pts)"
+        )
+
+    if prev_units == 0:
+        return {
+            "key": "momentum",
+            "title": "Momentum",
+            "metric": f"▬ vs {prev_label}",
+            "detail": f"{lead}{conv}.",
+            "sentiment": "neutral",
+        }
+
+    pct = round((cur_units - prev_units) / prev_units * 100)
+    arrow = "▲" if pct > 0 else ("▼" if pct < 0 else "▬")
+    if pct > 0:
+        sentiment = "positive"
+    elif pct <= _MOMENTUM_ATTENTION_PCT:
+        sentiment = "attention"
+    else:
+        sentiment = "neutral"
+    if abs(pct) > _ABSURD_PCT_THRESHOLD:
+        return {
+            "key": "momentum",
+            "title": "Momentum",
+            "metric": f"{arrow} >{_ABSURD_PCT_THRESHOLD}% vs {prev_label}",
+            "detail": (
+                f"{lead}{conv}. Large change — may reflect new collection, "
+                f"not organic growth."
+            ),
+            "sentiment": sentiment,
+        }
+    return {
+        "key": "momentum",
+        "title": "Momentum",
+        "metric": f"{arrow} {abs(pct)}% vs {prev_label}",
+        "detail": f"{lead}{conv}.",
+        "sentiment": sentiment,
+    }
+
+
+def _sales_buckets(
+    tenant_id: int, start: date | None, end: date | None
+) -> list[dict]:
+    """Cards for ``sales`` trend-series tenants (Torch).
+
+    Everything but Momentum comes from
+    :func:`recaps.tenant_overview.sales_program_metrics` for the window, so
+    the cards match Conversion, Program KPIs and the Monthly trend. No
+    engagements: Torch tracks consumers sampled and units sold.
+    """
+    m = sales_program_metrics(tenant_id, start, end)
+    momentum = _sales_momentum_bucket(tenant_id)
+    if m["recaps"] == 0 and momentum is None:
+        return []
+
+    sampled = m["consumers_sampled"]
+    demos = m["demos"]
+    reach_detail = (
+        f"{sampled:,} consumers sampled across {demos:,} "
+        f"demo{'' if demos == 1 else 's'}"
+    )
+    if m["dry_demos"]:
+        reach_detail += (
+            f" · includes {m['dry_demos']:,} dry demo"
+            f"{'' if m['dry_demos'] == 1 else 's'} counted by People engaged "
+            f"({m['dry_people_engaged']:,})"
+        )
+    reach_detail += "."
+
+    units = m["units_sold"]
+    sales_detail = (
+        f"{units:,} units sold ({m['cans_sold']:,} single cans · "
+        f"{m['packs_sold']:,} packs"
+    )
+    other = units - m["cans_sold"] - m["packs_sold"]
+    if other > 0:
+        sales_detail += f" · {other:,} other"
+    sales_detail += ")"
+    if m["conversion_pct"] is not None:
+        sales_detail += f" · {m['conversion_pct']}% conversion"
+    sales_detail += "."
+
+    buckets = [
+        {
+            "key": "reach",
+            "title": "Consumers sampled",
+            "metric": f"{sampled:,}",
+            "detail": reach_detail,
+            "sentiment": "positive" if sampled > 0 else "neutral",
+        },
+        {
+            "key": "sales",
+            "title": "Units sold",
+            "metric": f"{units:,}",
+            "detail": sales_detail,
+            "sentiment": "positive" if units > 0 else "neutral",
+        },
+        {
+            "key": "new_audience",
+            "title": "New audience",
+            "metric": f"{m['first_time_consumers']:,}",
+            "detail": (
+                f"{m['first_time_consumers']:,} first-time consumers · "
+                f"{m['brand_aware_consumers']:,} brand-aware · "
+                f"{m['willing_to_purchase']:,} willing to purchase."
+            ),
+            "sentiment": "positive" if m["first_time_consumers"] > 0 else "neutral",
+        },
+    ]
+    if momentum is not None:
+        buckets.append(momentum)
+    return buckets
+
+
+def build_insight_buckets_scoped(
+    tenant_id: int, start: date | None = None, end: date | None = None
+) -> tuple[list[dict], str | None]:
+    """Buckets plus a scope label for the panel header.
+
+    ``sales`` tenants are scoped to the inclusive ``start``..``end`` page
+    range (``None`` = all time); other tenants keep whole-program buckets
+    and no label.
+    """
+    from tenants.models import Tenant
+
+    if tenant_trend_program(tenant_id) != Tenant.TREND_SERIES_SALES:
+        return build_insight_buckets(tenant_id), None
+    if start is None and end is None:
+        label = "All time"
+    else:
+        label = f"{start or 'start'} → {end or 'today'}"
+    return _sales_buckets(tenant_id, start, end), label
+
+
 def build_insight_buckets(tenant_id: int) -> list[dict]:
     """Deterministic proactive-insight buckets for one tenant (or ``[]``).
 
@@ -295,6 +500,11 @@ def build_insight_buckets(tenant_id: int) -> list[dict]:
     Synchronous Django ORM; callers wrap it as needed. Numbers are only ever
     read from the aggregates — never fabricated.
     """
+    from tenants.models import Tenant
+
+    if tenant_trend_program(tenant_id) == Tenant.TREND_SERIES_SALES:
+        return _sales_buckets(tenant_id, None, None)
+
     event_count, recap_count = tenant_event_recap_counts(tenant_id)
     k = tenant_kpi_totals(tenant_id)
     trend = tenant_monthly_trend(tenant_id)

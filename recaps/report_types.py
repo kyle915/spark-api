@@ -32,7 +32,7 @@ from recaps import report_service
 from recaps.recap_quality import recap_quality_flags
 from recaps.report_tokens import make_report_token
 from recaps.tenant_ba_leaderboard import tenant_ba_leaderboard
-from recaps.tenant_insights import build_insight_buckets
+from recaps.tenant_insights import build_insight_buckets_scoped
 from recaps.tenant_sentiment import get_or_refresh_tenant_sentiment
 from recaps.field_sampling_report import (
     build_field_sampling_report,
@@ -51,6 +51,10 @@ from recaps.tenant_overview import (
     tenant_monthly_trend,
     tenant_program_health,
     tenant_sku_pulse,
+    _year_bounds,
+    sales_program_metrics,
+    tenant_trend_program,
+    window_to_inclusive_dates,
 )
 from utils.ai_text import (
     AiUnavailable,
@@ -351,6 +355,37 @@ class TenantAiAnswer:
 
 
 @strawberry.type
+class TenantProgramMetrics:
+    """Retail-sales program metrics on the Conversion tile's recap set.
+
+    Set only for tenants on the ``sales`` trend series (Torch). Every field
+    comes from :func:`recaps.tenant_overview.sales_program_metrics`, so
+    Program KPIs, Insights cards and Period comparison reconcile with
+    Conversion and the Monthly trend for the same dates.
+    """
+
+    recaps: int
+    demos: int
+    consumers_sampled: int
+    units_sold: int
+    cans_sold: int
+    packs_sold: int
+    conversion_pct: float | None
+    dry_demos: int
+    dry_people_engaged: int
+    unpaired_dry_demos: int
+    first_time_consumers: int
+    brand_aware_consumers: int
+    willing_to_purchase: int
+
+
+def _program_metrics_from_dict(data: dict | None) -> TenantProgramMetrics | None:
+    if not data:
+        return None
+    return TenantProgramMetrics(**data)
+
+
+@strawberry.type
 class TenantKpiMonth:
     """One calendar month of a tenant's activity for the dashboard trend.
 
@@ -433,6 +468,7 @@ class TenantKpis:
     monthly_trend: list[TenantKpiMonth]
     trend_series: list[TenantKpiTrendSeries]
     trend_note: str | None
+    program: TenantProgramMetrics | None = None
 
 
 def _zeroed_tenant_kpis() -> TenantKpis:
@@ -815,15 +851,14 @@ def _build_tenant_kpis(tenant_id: int, year: int | None = None) -> TenantKpis:
     from tenants.models import Tenant
 
     totals = tenant_kpi_totals(tenant_id, year)
-    program = (
-        Tenant.objects.filter(id=tenant_id)
-        .values_list("insights_trend_series", flat=True)
-        .first()
-    )
+    program = tenant_trend_program(tenant_id)
+    sales = program == Tenant.TREND_SERIES_SALES
     series, note = _trend_series_for(program)
-    trend = tenant_monthly_trend(
-        tenant_id, year, sales=program == Tenant.TREND_SERIES_SALES
-    )
+    trend = tenant_monthly_trend(tenant_id, year, sales=sales)
+    metrics = None
+    if sales:
+        window = None if year is None else _year_bounds(year)
+        metrics = sales_program_metrics(tenant_id, *window_to_inclusive_dates(window))
     return TenantKpis(
         events=event_count,
         recaps=recap_count,
@@ -849,6 +884,7 @@ def _build_tenant_kpis(tenant_id: int, year: int | None = None) -> TenantKpis:
         ],
         trend_series=list(series),
         trend_note=note,
+        program=_program_metrics_from_dict(metrics),
     )
 
 
@@ -876,6 +912,7 @@ class TenantKpiTotals:
     first_time_consumers: int
     brand_aware_consumers: int
     willing_to_purchase: int
+    program: TenantProgramMetrics | None = None
 
 
 @strawberry.type
@@ -903,6 +940,7 @@ class TenantKpiComparison:
     previous_label: str
     current: TenantKpiTotals
     previous: TenantKpiTotals
+    sparse_note: str | None = None
 
 
 def _kpi_totals_from_dict(data: dict) -> TenantKpiTotals:
@@ -925,6 +963,7 @@ def _kpi_totals_from_dict(data: dict) -> TenantKpiTotals:
         first_time_consumers=int(data.get("first_time_consumers", 0) or 0),
         brand_aware_consumers=int(data.get("brand_aware_consumers", 0) or 0),
         willing_to_purchase=int(data.get("willing_to_purchase", 0) or 0),
+        program=_program_metrics_from_dict(data.get("program")),
     )
 
 
@@ -947,6 +986,7 @@ def _build_tenant_kpi_comparison(
         previous_label=data["previous_label"],
         current=_kpi_totals_from_dict(data["current"]),
         previous=_kpi_totals_from_dict(data["previous"]),
+        sparse_note=data.get("sparse_note"),
     )
 
 
@@ -1313,6 +1353,7 @@ class TenantInsights:
 
     generated_at: str | None
     items: list[TenantInsightItem]
+    scope_label: str | None = None
 
 
 def _empty_tenant_insights() -> TenantInsights:
@@ -1321,7 +1362,7 @@ def _empty_tenant_insights() -> TenantInsights:
 
 
 def _build_tenant_insights_type(
-    items: list[dict], generated_at
+    items: list[dict], generated_at, scope_label: str | None = None
 ) -> TenantInsights:
     """Map the deterministic bucket dicts + timestamp onto the Strawberry type.
 
@@ -1360,6 +1401,7 @@ def _build_tenant_insights_type(
     return TenantInsights(
         generated_at=generated_at.isoformat() if generated_at else None,
         items=out,
+        scope_label=scope_label,
     )
 
 
@@ -2847,8 +2889,14 @@ class CampaignReportQueries:
         self,
         info: strawberry.Info,
         tenant_id: strawberry.ID,
+        start_date: str | None = None,
+        end_date: str | None = None,
     ) -> TenantInsights:
         """Proactive "what's notable" insights for a client's dashboard.
+
+        ``start_date`` / ``end_date`` (inclusive ``YYYY-MM-DD``) scope the cards of tenants
+        on the ``sales`` trend series to the page range; other tenants keep
+        their whole-program buckets.
 
         A FIXED, deterministic set of headline buckets about the tenant's
         whole program (reach, sampling, sales, new audience, momentum),
@@ -2875,6 +2923,14 @@ class CampaignReportQueries:
 
         generated_at = timezone.now()
 
+        def _parse(raw: str | None) -> date | None:
+            try:
+                return date.fromisoformat(raw) if raw else None
+            except ValueError:
+                return None
+
+        start, end = _parse(start_date), _parse(end_date)
+
         def _build():
             # Guard the tenant's existence so an admin passing an unknown id
             # degrades to empty rather than computing buckets over no tenant.
@@ -2882,17 +2938,18 @@ class CampaignReportQueries:
 
             if not Tenant.objects.filter(id=target_tenant_id).exists():
                 return None
-            return build_insight_buckets(target_tenant_id)
+            return build_insight_buckets_scoped(target_tenant_id, start, end)
 
         try:
-            items = await sync_to_async(_build, thread_sensitive=True)()
+            built = await sync_to_async(_build, thread_sensitive=True)()
         except Exception:
             return _empty_tenant_insights()
 
-        if items is None:
+        if built is None:
             return _empty_tenant_insights()
 
-        return _build_tenant_insights_type(items, generated_at)
+        items, scope_label = built
+        return _build_tenant_insights_type(items, generated_at, scope_label)
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def tenant_sentiment(

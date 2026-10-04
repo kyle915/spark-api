@@ -60,6 +60,12 @@ class TestTenantInsightBuckets(AmbassadorsGraphQLTestCase):
     """Deterministic insight buckets + the Momentum empty-month fix."""
 
     @pytest.fixture(autouse=True)
+    def one_recap_months_are_not_sparse(self, monkeypatch):
+        # These fixtures seed one recap per month; the sparse-base gate has
+        # its own tests below.
+        monkeypatch.setattr("recaps.tenant_insights.SPARSE_BASE_MIN_RECAPS", 1)
+
+    @pytest.fixture(autouse=True)
     def setup(self, db):
         from config.schema_client import schema_clients
 
@@ -384,6 +390,15 @@ class TestTenantInsightBuckets(AmbassadorsGraphQLTestCase):
         assert large is not None
         assert large["metric"].startswith("▲ >500% vs ")
 
+    def test_momentum_hides_pct_when_prior_month_has_few_recaps(self, monkeypatch):
+        monkeypatch.setattr("recaps.tenant_insights.SPARSE_BASE_MIN_RECAPS", 10)
+        self._seed_two_active_months_newest_empty()
+        momentum = {b["key"]: b for b in build_insight_buckets(self.tenant.id)}[
+            "momentum"
+        ]
+        assert momentum["metric"] == "n/a vs " + self._short(self.older_month)
+        assert "had only 1 recap; % hidden" in momentum["detail"]
+
     def test_single_active_month_reports_peak_not_delta(self):
         # Exactly one active month -> no comparison; a neutral "Peak" card.
         self._recap_in_month(self.newer_active_month, engagements=77, consumers=88)
@@ -492,6 +507,33 @@ class TestTenantInsightBuckets(AmbassadorsGraphQLTestCase):
             "new_audience",
         ]
         assert all(i["key"] != "sampling" for i in items)
+
+    @pytest.mark.asyncio
+    async def test_graphql_accepts_range_activity_tenant_unscoped(self):
+        from asgiref.sync import sync_to_async
+
+        await sync_to_async(self._seed_two_active_months_newest_empty)()
+        result = await self._execute_query_authenticated(
+            """
+            query Insights($tenantId: ID!, $s: String, $e: String) {
+              tenantInsights(tenantId: $tenantId, startDate: $s, endDate: $e) {
+                scopeLabel
+                items { key title }
+              }
+            }
+            """,
+            {"tenantId": str(self.tenant.id), "s": "2026-09-01", "e": "2026-09-30"},
+            self.spark_admin,
+            self.endpoint_path,
+        )
+        assert result.errors is None, f"errored: {result.errors}"
+        payload = result.data["tenantInsights"]
+        assert payload["scopeLabel"] is None
+        assert [i["key"] for i in payload["items"]][:3] == [
+            "reach",
+            "sales",
+            "new_audience",
+        ]
 
     @pytest.mark.asyncio
     async def test_graphql_empty_tenant_degrades_to_empty_items(self):

@@ -63,6 +63,7 @@ from recaps.types import (
     _is_dry_demo_from_fields,
     _people_engaged_from_fields,
     _samples_given_from_fields,
+    _sold_unit_lines,
     _sold_units_from_fields,
 )
 from tenants.models import Tenant
@@ -421,6 +422,23 @@ _CUSTOM_KPI_NAME_RE = re.compile(
 )
 
 
+def _add_audience_from_pairs(
+    pairs: list[tuple[str | None, str | None]], out: dict[str, int]
+) -> None:
+    """Add one recap's first-time / brand-aware / willing-to-purchase counts."""
+    for name, value in pairs:
+        label = (name or "").lower()
+        val = _leading_int(value)
+        if val is None:
+            continue
+        if "first time" in label:
+            out["first_time_consumers"] += val
+        elif "knew about" in label:
+            out["brand_aware_consumers"] += val
+        elif "willing to purchase" in label and "not" not in label:
+            out["willing_to_purchase"] += val
+
+
 def _custom_kpis_window(tenant_id: int, window: tuple | None) -> dict[str, int]:
     """Sum the custom-template :class:`recaps.models.CustomRecap` KPIs over a window.
 
@@ -504,17 +522,7 @@ def _custom_kpis_window(tenant_id: int, window: tuple | None) -> dict[str, int]:
     sampled_total = 0
     samples_given_total = 0
     for pairs in per_recap.values():
-        for name, value in pairs:
-            label = (name or "").lower()
-            val = _leading_int(value)
-            if val is None:
-                continue
-            if "first time" in label:
-                out["first_time_consumers"] += val
-            elif "knew about" in label:
-                out["brand_aware_consumers"] += val
-            elif "willing to purchase" in label and "not" not in label:
-                out["willing_to_purchase"] += val
+        _add_audience_from_pairs(pairs, out)
 
         consumers_sampled = _consumers_sampled_from_fields(pairs)
         if consumers_sampled is not None:
@@ -891,12 +899,23 @@ def tenant_kpi_comparison(tenant_id: int, period: str = "month") -> dict:
         period = "month"
     builder = _COMPARISON_WINDOW_BUILDERS[period]
     cur_window, cur_label, prev_window, prev_label = builder()
+    current = _period_totals(tenant_id, cur_window)
+    previous = _period_totals(tenant_id, prev_window)
+    if tenant_trend_program(tenant_id) == Tenant.TREND_SERIES_SALES:
+        current["program"] = sales_program_metrics(
+            tenant_id, *window_to_inclusive_dates(cur_window)
+        )
+        previous["program"] = sales_program_metrics(
+            tenant_id, *window_to_inclusive_dates(prev_window)
+        )
+    base_recaps = (previous.get("program") or previous)["recaps"]
     return {
         "period": period,
         "current_label": cur_label,
         "previous_label": prev_label,
-        "current": _period_totals(tenant_id, cur_window),
-        "previous": _period_totals(tenant_id, prev_window),
+        "current": current,
+        "previous": previous,
+        "sparse_note": sparse_base_note(prev_label, int(base_recaps)),
     }
 
 
@@ -2234,6 +2253,117 @@ def custom_conversion_rows(
                 "reason": "" if ok else "no_base",
             }
         )
+    return out
+
+
+# A comparison base period with fewer approved recaps than this is too thin
+# for a % change: every period-% surface (Period comparison, Momentum) hides
+# its % chips and says why, instead of printing ">500%" off two recaps.
+SPARSE_BASE_MIN_RECAPS = 10
+
+
+def sparse_base_note(label: str, recaps: int) -> str | None:
+    """Panel note when ``label``'s period is too thin for % changes, else None."""
+    if recaps >= SPARSE_BASE_MIN_RECAPS:
+        return None
+    noun = "recap" if recaps == 1 else "recaps"
+    return f"{label} had only {recaps:,} {noun} — % changes hidden."
+
+
+def tenant_trend_program(tenant_id: int) -> str:
+    """The tenant's ``insights_trend_series`` ("activity" or "sales")."""
+    return (
+        Tenant.objects.filter(id=tenant_id)
+        .values_list("insights_trend_series", flat=True)
+        .first()
+        or Tenant.TREND_SERIES_ACTIVITY
+    )
+
+
+def window_to_inclusive_dates(window: tuple | None) -> tuple:
+    """Half-open datetime ``(start, end)`` → inclusive ``(date, date)``."""
+    if window is None:
+        return None, None
+    start, end = window
+    return (
+        start.date() if start is not None else None,
+        (end - timedelta(days=1)).date() if end is not None else None,
+    )
+
+
+_CANS_RE = re.compile(r"\bcans?\b", re.IGNORECASE)
+_PACKS_RE = re.compile(r"\bpacks?\b", re.IGNORECASE)
+
+
+def sales_program_metrics(
+    tenant_id: int, w_start: date | None, w_end: date | None
+) -> dict:
+    """THE Torch-style ("sales" trend series) metric set for one window.
+
+    Every number comes from the recaps that land in the Conversion tile's
+    rate (:func:`conversion_window_totals`: approved, non-archived,
+    Retail / On-Premise, 3rd-party excluded, paired per recap; dry demos use
+    People engaged as their base). Program KPIs, the Insights cards and the
+    Period comparison all read this, so they agree with Conversion and the
+    Monthly trend for the same dates.
+    """
+    conv = conversion_window_totals(tenant_id, w_start, w_end, detail=True)
+    counted = [r for r in conv["recaps"] if r["counted"]]
+    custom_ids = [r["id"] for r in counted if r["kind"] == "custom"]
+    legacy_ids = [r["id"] for r in counted if r["kind"] == "legacy"]
+
+    out = {
+        "recaps": len(counted),
+        "demos": 0,
+        "consumers_sampled": int(conv["base"]),
+        "units_sold": int(conv["sold"]),
+        "cans_sold": 0,
+        "packs_sold": 0,
+        "conversion_pct": (
+            round(conv["sold"] / conv["base"] * 100, 1) if conv["base"] else None
+        ),
+        "dry_demos": int(conv["dry_n"]),
+        "dry_people_engaged": int(conv["dry_base"]),
+        "unpaired_dry_demos": len(conv["unpaired"]),
+        "first_time_consumers": 0,
+        "brand_aware_consumers": 0,
+        "willing_to_purchase": 0,
+    }
+
+    event_ids = set(
+        CustomRecap.objects.filter(id__in=custom_ids).values_list("event_id", flat=True)
+    ) | set(Recap.objects.filter(id__in=legacy_ids).values_list("event_id", flat=True))
+    event_ids.discard(None)
+    out["demos"] = len(event_ids)
+
+    per_recap: dict[int, list[tuple[str | None, str | None]]] = {}
+    for recap_id, name, value in (
+        CustomFieldValue.objects.filter(
+            custom_recap_id__in=custom_ids,
+            custom_field__name__iregex=_CUSTOM_KPI_NAME_RE.pattern,
+        )
+        .values_list("custom_recap_id", "custom_field__name", "value")
+        .order_by("custom_recap_id")
+        .iterator()
+    ):
+        per_recap.setdefault(recap_id, []).append((name, value))
+    for pairs in per_recap.values():
+        _add_audience_from_pairs(pairs, out)
+        for name, count in _sold_unit_lines(pairs):
+            if _CANS_RE.search(name):
+                out["cans_sold"] += count
+            elif _PACKS_RE.search(name):
+                out["packs_sold"] += count
+
+    if legacy_ids:
+        legacy_aud = ConsumerEngagements.objects.filter(recap_id__in=legacy_ids).aggregate(
+            ft=Coalesce(Sum("first_time_consumers"), 0),
+            ba=Coalesce(Sum("brand_aware_consumers"), 0),
+            wp=Coalesce(Sum("willing_to_purchase_consumers"), 0),
+        )
+        out["first_time_consumers"] += int(legacy_aud["ft"])
+        out["brand_aware_consumers"] += int(legacy_aud["ba"])
+        out["willing_to_purchase"] += int(legacy_aud["wp"])
     return out
 
 
