@@ -364,6 +364,44 @@ class TenantKpiMonth:
     recaps: int
     engagements: int
     samples: int
+    consumers_sampled: int
+    units_sold: int
+
+
+@strawberry.type
+class TenantKpiTrendSeries:
+    """One bar series on the Monthly trend chart.
+
+    ``key`` names the :class:`TenantKpiMonth` field to plot (camelCase, as
+    the client reads it); ``label`` is the legend / axis text.
+    """
+
+    key: str
+    label: str
+
+
+_TREND_SERIES = {
+    "activity": (
+        [
+            TenantKpiTrendSeries(key="engagements", label="Engagements"),
+            TenantKpiTrendSeries(key="samples", label="Samples"),
+        ],
+        None,
+    ),
+    "sales": (
+        [
+            TenantKpiTrendSeries(key="consumersSampled", label="Consumers sampled"),
+            TenantKpiTrendSeries(key="unitsSold", label="Units sold"),
+        ],
+        "Same basis as Conversion: approved Retail / On-Premise recaps with a "
+        "sampled base. Units sold = single cans + packs (1 each). Dry demos "
+        "(no product tasted) count People engaged as consumers sampled.",
+    ),
+}
+
+
+def _trend_series_for(program: str | None):
+    return _TREND_SERIES.get(program or "activity", _TREND_SERIES["activity"])
 
 
 @strawberry.type
@@ -393,6 +431,8 @@ class TenantKpis:
     brand_aware_consumers: int
     willing_to_purchase: int
     monthly_trend: list[TenantKpiMonth]
+    trend_series: list[TenantKpiTrendSeries]
+    trend_note: str | None
 
 
 def _zeroed_tenant_kpis() -> TenantKpis:
@@ -415,6 +455,8 @@ def _zeroed_tenant_kpis() -> TenantKpis:
         brand_aware_consumers=0,
         willing_to_purchase=0,
         monthly_trend=[],
+        trend_series=list(_TREND_SERIES["activity"][0]),
+        trend_note=None,
     )
 
 
@@ -770,8 +812,18 @@ def _build_tenant_kpis(tenant_id: int, year: int | None = None) -> TenantKpis:
     straight through to the three shared helpers.
     """
     event_count, recap_count = tenant_event_recap_counts(tenant_id, year)
+    from tenants.models import Tenant
+
     totals = tenant_kpi_totals(tenant_id, year)
-    trend = tenant_monthly_trend(tenant_id, year)
+    program = (
+        Tenant.objects.filter(id=tenant_id)
+        .values_list("insights_trend_series", flat=True)
+        .first()
+    )
+    series, note = _trend_series_for(program)
+    trend = tenant_monthly_trend(
+        tenant_id, year, sales=program == Tenant.TREND_SERIES_SALES
+    )
     return TenantKpis(
         events=event_count,
         recaps=recap_count,
@@ -790,9 +842,13 @@ def _build_tenant_kpis(tenant_id: int, year: int | None = None) -> TenantKpis:
                 recaps=m.recaps,
                 engagements=m.engagements,
                 samples=m.samples,
+                consumers_sampled=m.consumers_sampled,
+                units_sold=m.units_sold,
             )
             for m in trend
         ],
+        trend_series=list(series),
+        trend_note=note,
     )
 
 

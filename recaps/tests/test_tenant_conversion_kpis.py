@@ -8,7 +8,11 @@ from django.utils import timezone
 from ambassadors.tests.base import AmbassadorsGraphQLTestCase
 from events import models as event_models
 from recaps import models as recap_models
-from recaps.tenant_overview import tenant_conversion_kpis
+from recaps.tenant_overview import (
+    conversion_window_totals,
+    tenant_conversion_kpis,
+    tenant_monthly_trend,
+)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -74,8 +78,9 @@ class TestTenantConversionSampledBase(AmbassadorsGraphQLTestCase):
         request_type,
         fields: list[tuple[str, str]],
         engagements: int = 0,
+        when=None,
     ):
-        when = timezone.make_aware(
+        when = when or timezone.make_aware(
             datetime(self.today.year, self.today.month, self.today.day, 12, 0)
         )
         req = self.create_request(
@@ -340,6 +345,71 @@ class TestTenantConversionSampledBase(AmbassadorsGraphQLTestCase):
         data = tenant_conversion_kpis(self.tenant.id, start=self.start, end=self.end)
         assert data["sold"] == 0
         assert data["engagements"] == 0
+
+    def test_monthly_trend_sales_series_reconciles_with_conversion(self):
+        this_month = timezone.make_aware(
+            datetime(self.today.year, self.today.month, 1, 12, 0)
+        )
+        last_month = this_month - timedelta(days=10)
+        self._custom_recap(
+            request_type=self.retail_type,
+            when=last_month,
+            fields=[
+                ("Total number of consumers sampled", "40"),
+                ("How many single cans did consumers purchase?", "6"),
+                ("How many packs did consumers purchase?", "2"),
+            ],
+        )
+        self._custom_recap(
+            request_type=self.retail_type,
+            when=this_month,
+            fields=[
+                ("Total number of consumers sampled", "0"),
+                ("How many packs did consumers purchase?", "3"),
+                ("Dry demo? (no product tasted)", "Yes"),
+                ("People engaged", "25"),
+            ],
+        )
+        self._custom_recap(
+            request_type=self.event_type,
+            when=this_month,
+            fields=[
+                ("Total number of consumers sampled", "500"),
+                ("How many packs did consumers purchase?", "90"),
+            ],
+        )
+
+        trend = tenant_monthly_trend(self.tenant.id, sales=True)
+        by_month = {m.month: m for m in trend}
+        last_key = f"{last_month.year:04d}-{last_month.month:02d}"
+        this_key = f"{this_month.year:04d}-{this_month.month:02d}"
+        assert (by_month[last_key].consumers_sampled, by_month[last_key].units_sold) == (40, 8)
+        assert (by_month[this_key].consumers_sampled, by_month[this_key].units_sold) == (25, 3)
+
+        totals = conversion_window_totals(self.tenant.id, None, None)
+        assert sum(m.consumers_sampled for m in trend) == totals["base"] == 65
+        assert sum(m.units_sold for m in trend) == totals["sold"] == 11
+
+        activity = tenant_monthly_trend(self.tenant.id)
+        assert all(m.consumers_sampled == 0 and m.units_sold == 0 for m in activity)
+
+    def test_tenant_kpis_trend_series_follow_tenant_setting(self):
+        from recaps.report_types import _build_tenant_kpis
+        from tenants.models import Tenant
+
+        kpis = _build_tenant_kpis(self.tenant.id)
+        assert [s.key for s in kpis.trend_series] == ["engagements", "samples"]
+        assert kpis.trend_note is None
+
+        Tenant.objects.filter(id=self.tenant.id).update(
+            insights_trend_series=Tenant.TREND_SERIES_SALES
+        )
+        kpis = _build_tenant_kpis(self.tenant.id)
+        assert [(s.key, s.label) for s in kpis.trend_series] == [
+            ("consumersSampled", "Consumers sampled"),
+            ("unitsSold", "Units sold"),
+        ]
+        assert "People engaged" in kpis.trend_note
 
 
 def test_sold_units_count_each_can_and_pack_as_one_unit():

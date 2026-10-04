@@ -155,6 +155,20 @@ class Tenant(Asyncable, models.Model):
     # are stamped CustomRecap.exclude_from_aggregates, so their numbers never
     # roll into Insights, dashboards, list totals, or summary exports.
     checkin_recap_excludes_aggregates = models.BooleanField(default=False)
+    # Bars on the Insights / client "Monthly trend" chart. "activity" =
+    # Engagements + structured Samples; "sales" = Consumers sampled + Units
+    # sold on the Conversion tile's basis (Retail + On-Premise, paired per
+    # recap), for retail programs that track units sold.
+    TREND_SERIES_ACTIVITY = "activity"
+    TREND_SERIES_SALES = "sales"
+    insights_trend_series = models.CharField(
+        max_length=16,
+        default=TREND_SERIES_ACTIVITY,
+        choices=[
+            (TREND_SERIES_ACTIVITY, "Engagements + Samples"),
+            (TREND_SERIES_SALES, "Consumers sampled + Units sold"),
+        ],
+    )
     # Mileage defaults stamped onto events the STANDING CHECK-IN LINK creates.
     #
     # Mileage is a per-gig toggle (Event.track_mileage / mileage_rate), which

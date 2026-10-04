@@ -114,6 +114,8 @@ class TenantKpiMonth:
     recaps: int = 0
     engagements: int = 0
     samples: int = 0
+    consumers_sampled: int = 0
+    units_sold: int = 0
 
 
 def _sum(queryset, field: str) -> int:
@@ -982,7 +984,7 @@ def _trend_window(year: int | None):
 
 
 def tenant_monthly_trend(
-    tenant_id: int, year: int | None = None
+    tenant_id: int, year: int | None = None, *, sales: bool = False
 ) -> list[TenantKpiMonth]:
     """Calendar months of a tenant's activity, oldest → newest, zero-filled.
 
@@ -1016,6 +1018,11 @@ def tenant_monthly_trend(
 
     All five querysets are scoped to ``tenant_id`` and floored to the window
     so the GROUP BY never returns more than the window's months.
+
+    ``sales=True`` (tenants on the ``sales`` trend series) also fills
+    ``consumers_sampled`` / ``units_sold`` from
+    :func:`conversion_window_totals` — the Conversion tile's base and sold,
+    bucketed by event month — so the monthly bars sum to that tile.
     """
     start, end, num_months = _trend_window(year)
 
@@ -1081,6 +1088,13 @@ def tenant_monthly_trend(
         ).items():
             sample_counts[key] = sample_counts.get(key, 0) + val
 
+    conversion_months: dict[str, dict[str, int]] = {}
+    if sales and num_months:
+        w_end = None if end is None else (end - timedelta(days=1)).date()
+        conversion_months = conversion_window_totals(
+            tenant_id, start.date(), w_end, by_month=True
+        )["months"]
+
     # Zero-fill every month in the window, oldest -> newest, so the series
     # is contiguous and bounded regardless of which months had activity.
     months: list[TenantKpiMonth] = []
@@ -1093,6 +1107,8 @@ def tenant_monthly_trend(
                 recaps=recap_counts.get(key, 0),
                 engagements=engagement_counts.get(key, 0),
                 samples=sample_counts.get(key, 0),
+                consumers_sampled=conversion_months.get(key, {}).get("base", 0),
+                units_sold=conversion_months.get(key, {}).get("sold", 0),
             )
         )
         month += 1
@@ -1964,6 +1980,7 @@ def conversion_window_totals(
     w_end: date | None,
     *,
     detail: bool = False,
+    by_month: bool = False,
 ) -> dict:
     """Retail + On-Premise CONV totals for one inclusive window.
 
@@ -1972,10 +1989,22 @@ def conversion_window_totals(
     queryset selected (approved, non-archived, in-window, Retail/On-Prem
     by Request type → Event type → template name) with its base, units and
     whether it landed in the rate — so audits reconcile against the exact
-    set Insights counts instead of re-deriving it.
+    set Insights counts instead of re-deriving it. ``by_month=True`` adds
+    ``months``: ``{"YYYY-MM": {"sold", "base"}}`` over the recaps that land
+    in the rate, bucketed by event date, so a monthly series sums to the
+    window's ``sold`` / ``base`` exactly.
     """
     window = _inclusive_dates_to_window(w_start, w_end)
     detail_rows: list[dict] = []
+    months: dict[str, dict[str, int]] = {}
+
+    def _add_month(evtdate, base: int, units: int) -> None:
+        key = _month_key(evtdate)
+        if key is None:
+            return
+        bucket = months.setdefault(key, {"sold": 0, "base": 0})
+        bucket["base"] += base
+        bucket["sold"] += units
 
     # Activation type: the Request's type, else the Event's own type
     # (standing walk-up / agency events have no Request), else the
@@ -1997,7 +2026,8 @@ def conversion_window_totals(
                 "event__request__request_type__name",
                 "event__event_type__name",
                 output_field=TextField(),
-            )
+            ),
+            _evtdate=_event_date_expr("event__"),
         )
         .filter(_retail_onprem_type_q("_conv_type"))
     )
@@ -2006,7 +2036,9 @@ def conversion_window_totals(
     # Sold only counts where that recap has a sampled base, so a recap
     # with nobody sampled can't add purchases with no denominator.
     legacy_rows = list(
-        legacy.values("id", "products_sold", "total_engagements", "_conv_type")
+        legacy.values(
+            "id", "products_sold", "total_engagements", "_conv_type", "_evtdate"
+        )
     )
     sold = 0
     sampled = 0
@@ -2035,6 +2067,7 @@ def conversion_window_totals(
             if base > 0:
                 sampled += base
                 sold += units
+                _add_month(row["_evtdate"], base, units)
             if detail:
                 detail_rows.append(
                     {
@@ -2066,12 +2099,14 @@ def conversion_window_totals(
                 "event__event_type__name",
                 "custom_recap_template__name",
                 output_field=TextField(),
-            )
+            ),
+            _evtdate=_event_date_expr("event__"),
         )
         .filter(_retail_onprem_type_q("_conv_type"))
     )
     custom_meta = {
-        row["id"]: row for row in custom.values("id", "total_engagements", "_conv_type")
+        row["id"]: row
+        for row in custom.values("id", "total_engagements", "_conv_type", "_evtdate")
     }
     custom_ids = list(custom_meta)
     rows_out = custom_conversion_rows(
@@ -2085,6 +2120,7 @@ def conversion_window_totals(
     unpaired: list[int] = []
     for row in rows_out:
         if row["counted"]:
+            _add_month(custom_meta[row["id"]]["_evtdate"], row["base"], row["units"])
             if row["dry"]:
                 dry_base += row["base"]
                 dry_sold += row["units"]
@@ -2109,6 +2145,8 @@ def conversion_window_totals(
     }
     if detail:
         out["recaps"] = detail_rows
+    if by_month:
+        out["months"] = months
     return out
 
 
