@@ -63,7 +63,7 @@ class TestTenantInsightBuckets(AmbassadorsGraphQLTestCase):
     def one_recap_months_are_not_sparse(self, monkeypatch):
         # These fixtures seed one recap per month; the sparse-base gate has
         # its own tests below.
-        monkeypatch.setattr("recaps.tenant_insights.SPARSE_BASE_MIN_RECAPS", 1)
+        monkeypatch.setattr("recaps.tenant_overview.SPARSE_BASE_MIN_RECAPS", 1)
 
     @pytest.fixture(autouse=True)
     def setup(self, db):
@@ -391,7 +391,7 @@ class TestTenantInsightBuckets(AmbassadorsGraphQLTestCase):
         assert large["metric"].startswith("▲ >500% vs ")
 
     def test_momentum_hides_pct_when_prior_month_has_few_recaps(self, monkeypatch):
-        monkeypatch.setattr("recaps.tenant_insights.SPARSE_BASE_MIN_RECAPS", 10)
+        monkeypatch.setattr("recaps.tenant_overview.SPARSE_BASE_MIN_RECAPS", 10)
         self._seed_two_active_months_newest_empty()
         momentum = {b["key"]: b for b in build_insight_buckets(self.tenant.id)}[
             "momentum"

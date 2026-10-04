@@ -674,6 +674,11 @@ class TenantConversionKpis:
     dry_engagements: int = 0
     dry_recaps: int = 0
     unpaired_dry_recaps: int = 0
+    # Recaps behind each window's rate; ``sparse_note`` is set (and the
+    # change chip hidden) when either side is under SPARSE_BASE_MIN_RECAPS.
+    recaps: int = 0
+    previous_recaps: int = 0
+    sparse_note: str | None = None
 
 
 @strawberry.type
@@ -724,6 +729,9 @@ def _build_conversion_kpis(
         dry_engagements=int(data.get("dry_engagements") or 0),
         dry_recaps=int(data.get("dry_recaps") or 0),
         unpaired_dry_recaps=len(data.get("unpaired_dry_recap_ids") or []),
+        recaps=int(data.get("recaps") or 0),
+        previous_recaps=int(data.get("previous_recaps") or 0),
+        sparse_note=data.get("sparse_note"),
     )
 
 

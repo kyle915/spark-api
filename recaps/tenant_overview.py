@@ -908,14 +908,17 @@ def tenant_kpi_comparison(tenant_id: int, period: str = "month") -> dict:
         previous["program"] = sales_program_metrics(
             tenant_id, *window_to_inclusive_dates(prev_window)
         )
-    base_recaps = (previous.get("program") or previous)["recaps"]
+    prev_recaps = (previous.get("program") or previous)["recaps"]
+    cur_recaps = (current.get("program") or current)["recaps"]
     return {
         "period": period,
         "current_label": cur_label,
         "previous_label": prev_label,
         "current": current,
         "previous": previous,
-        "sparse_note": sparse_base_note(prev_label, int(base_recaps)),
+        "sparse_note": sparse_base_note(
+            (prev_label, int(prev_recaps)), (cur_label, int(cur_recaps))
+        ),
     }
 
 
@@ -2061,6 +2064,7 @@ def conversion_window_totals(
     )
     sold = 0
     sampled = 0
+    counted_n = 0
     if legacy_rows:
         legacy_ids = [row["id"] for row in legacy_rows]
         consumers_by_recap = {
@@ -2086,6 +2090,7 @@ def conversion_window_totals(
             if base > 0:
                 sampled += base
                 sold += units
+                counted_n += 1
                 _add_month(row["_evtdate"], base, units)
             if detail:
                 detail_rows.append(
@@ -2139,6 +2144,7 @@ def conversion_window_totals(
     unpaired: list[int] = []
     for row in rows_out:
         if row["counted"]:
+            counted_n += 1
             _add_month(custom_meta[row["id"]]["_evtdate"], row["base"], row["units"])
             if row["dry"]:
                 dry_base += row["base"]
@@ -2157,6 +2163,7 @@ def conversion_window_totals(
     out = {
         "sold": sold + dry_sold,
         "base": sampled + dry_base,
+        "n": counted_n,
         "dry_sold": dry_sold,
         "dry_base": dry_base,
         "dry_n": dry_n,
@@ -2256,16 +2263,27 @@ def custom_conversion_rows(
     return out
 
 
-# A comparison base period with fewer approved recaps than this is too thin
-# for a % change: every period-% surface (Period comparison, Momentum) hides
-# its % chips and says why, instead of printing ">500%" off two recaps.
+# A compared period with fewer approved recaps than this (on either side) is
+# too thin for a change: every period-over-period surface (Period comparison,
+# Conversion tile, Trial quality, Momentum) hides its change chip and says
+# why, instead of printing ">500%" off two recaps.
 SPARSE_BASE_MIN_RECAPS = 10
 
 
-def sparse_base_note(label: str, recaps: int) -> str | None:
-    """Panel note when ``label``'s period is too thin for % changes, else None."""
-    if recaps >= SPARSE_BASE_MIN_RECAPS:
+def thin_period(*periods: tuple[str, int]) -> tuple[str, int] | None:
+    """First ``(label, recaps)`` under :data:`SPARSE_BASE_MIN_RECAPS`, else None."""
+    for label, recaps in periods:
+        if recaps < SPARSE_BASE_MIN_RECAPS:
+            return label, int(recaps)
+    return None
+
+
+def sparse_base_note(*periods: tuple[str, int]) -> str | None:
+    """Panel note naming the thin period when changes must be hidden, else None."""
+    thin = thin_period(*periods)
+    if thin is None:
         return None
+    label, recaps = thin
     noun = "recap" if recaps == 1 else "recaps"
     return f"{label} had only {recaps:,} {noun} — % changes hidden."
 
@@ -2397,6 +2415,9 @@ def tenant_conversion_kpis(
             "previous_sold": 0,
             "previous_engagements": 0,
             "previous_pct": None,
+            "recaps": 0,
+            "previous_recaps": 0,
+            "sparse_note": None,
             "dry_sold": 0,
             "dry_engagements": 0,
             "dry_recaps": 0,
@@ -2423,6 +2444,7 @@ def tenant_conversion_kpis(
             return f"{a.strftime('%b %-d')} – {b.strftime('%b %-d, %Y')}"
         return f"{a.strftime('%b %-d, %Y')} – {b.strftime('%b %-d, %Y')}"
 
+    cur_label, prev_label = _label(start, end), _label(prev_start, prev_end)
     return {
         "sold": int(cur_sold),
         "engagements": int(cur_sampled),
@@ -2430,12 +2452,17 @@ def tenant_conversion_kpis(
         "previous_sold": int(prev_sold),
         "previous_engagements": int(prev_sampled),
         "previous_pct": _conversion_pct(prev_sold, prev_sampled),
+        "recaps": int(cur["n"]),
+        "previous_recaps": int(prev["n"]),
+        "sparse_note": sparse_base_note(
+            (prev_label, int(prev["n"])), (cur_label, int(cur["n"]))
+        ),
         "dry_sold": int(cur["dry_sold"]),
         "dry_engagements": int(cur["dry_base"]),
         "dry_recaps": int(cur["dry_n"]),
         "unpaired_dry_recap_ids": cur["unpaired"],
-        "current_label": _label(start, end),
-        "previous_label": _label(prev_start, prev_end),
+        "current_label": cur_label,
+        "previous_label": prev_label,
         "start_date": start.isoformat(),
         "end_date": end.isoformat(),
     }
