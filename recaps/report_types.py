@@ -376,6 +376,8 @@ class TenantProgramMetrics:
     dry_people_engaged: int
     unpaired_dry_demos: int
     first_time_consumers: int
+    # Consumers sampled on recaps that asked first-time — Trial quality's base.
+    first_time_base: int
     brand_aware_consumers: int
     willing_to_purchase: int
 

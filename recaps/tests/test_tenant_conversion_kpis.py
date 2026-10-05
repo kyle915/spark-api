@@ -420,6 +420,27 @@ class TestTenantConversionSampledBase(AmbassadorsGraphQLTestCase):
         kpis = _build_tenant_kpis(self.tenant.id)
         assert "People engaged" in kpis.trend_note
 
+    def test_first_time_base_skips_recaps_that_never_asked(self):
+        self._make_sales_tenant()
+        self._custom_recap(
+            request_type=self.retail_type,
+            fields=[
+                ("Total number of consumers sampled", "50"),
+                ("First Time consumers?", "40"),
+                ("How many single cans did consumers purchase?", "10"),
+            ],
+        )
+        self._custom_recap(
+            request_type=self.retail_type,
+            fields=[("# of Consumers Sampled", "120"), ("# of Total Cans Sold", "10")],
+        )
+        m = sales_program_metrics(self.tenant.id, self.start, self.end)
+        assert (m["consumers_sampled"], m["first_time_consumers"], m["first_time_base"]) == (
+            170,
+            40,
+            50,
+        )
+
     def test_brew_dr_shape_reconciles_across_panels(self):
         """Brew Dr: singles + packs (1 each), an Aug-switch recap carrying the
         old "# of Total Cans Sold" too, Event Activation and an unapproved
