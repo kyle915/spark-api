@@ -2353,9 +2353,11 @@ def sales_program_metrics(
         "dry_people_engaged": int(conv["dry_base"]),
         "unpaired_dry_demos": len(conv["unpaired"]),
         "first_time_consumers": 0,
+        "first_time_base": 0,
         "brand_aware_consumers": 0,
         "willing_to_purchase": 0,
     }
+    custom_base = {r["id"]: int(r["base"]) for r in counted if r["kind"] == "custom"}
 
     event_ids = set(
         CustomRecap.objects.filter(id__in=custom_ids).values_list("event_id", flat=True)
@@ -2374,8 +2376,15 @@ def sales_program_metrics(
         .iterator()
     ):
         per_recap.setdefault(recap_id, []).append((name, value))
-    for pairs in per_recap.values():
+    for recap_id, pairs in per_recap.items():
         _add_audience_from_pairs(pairs, out)
+        # Trial quality's denominator: only recaps whose template asked
+        # first-time (Brew Dr's Aug v1 template didn't).
+        if any(
+            "first time" in (name or "").lower() and _leading_int(value) is not None
+            for name, value in pairs
+        ):
+            out["first_time_base"] += custom_base.get(recap_id, 0)
         for name, count in _sold_unit_lines(pairs):
             if _CANS_RE.search(name):
                 out["cans_sold"] += count
@@ -2389,6 +2398,9 @@ def sales_program_metrics(
             wp=Coalesce(Sum("willing_to_purchase_consumers"), 0),
         )
         out["first_time_consumers"] += int(legacy_aud["ft"])
+        out["first_time_base"] += sum(
+            int(r["base"]) for r in counted if r["kind"] == "legacy"
+        )
         out["brand_aware_consumers"] += int(legacy_aud["ba"])
         out["willing_to_purchase"] += int(legacy_aud["wp"])
     return out
