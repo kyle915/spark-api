@@ -53,10 +53,23 @@ def _admin_recap_url(recap, *, kind: str) -> str:
     return f"{base}{path}"
 
 
-def apply_signoff(recap, *, status: str, comment: str | None) -> Any:
+NOT_APPROVED_MESSAGE = (
+    "This recap hasn't been approved yet. Client sign-off doesn't approve "
+    "a recap — approve it in Spark first."
+)
+
+
+def apply_signoff(
+    recap, *, status: str, comment: str | None, require_approved: bool = False
+) -> Any:
     status = (status or "").strip()
     if status not in ALLOWED:
         raise ValueError("status must be looks_good or need_more_photos")
+    # Logged-in brand users never see drafts, so an in-app sign-off on one is
+    # an admin in Client view who meant "approve" — recording it would leave
+    # the recap hidden from the client while looking signed off.
+    if require_approved and not getattr(recap, "approved", False):
+        raise ValueError(NOT_APPROVED_MESSAGE)
     recap.client_signoff_status = status
     recap.client_signoff_comment = (comment or "").strip()
     recap.client_signoff_at = dj_tz.now()

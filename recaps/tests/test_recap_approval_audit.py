@@ -145,3 +145,54 @@ class TestRecapApprovalAudit(AmbassadorsGraphQLTestCase):
         assert recap.approved is False
         assert recap.approved_by_id is None
         assert recap.approved_at is None
+
+    @pytest.mark.asyncio
+    async def test_client_signoff_on_draft_custom_recap_is_rejected(self, monkeypatch):
+        monkeypatch.setattr(
+            "recaps.client_signoff.notify_ops_signoff", lambda recap, kind: None
+        )
+        recap = await sync_to_async(self._make_custom_recap)(approved=False)
+        result = await self._execute_mutation_authenticated(
+            CLIENT_SIGNOFF_MUTATION,
+            {"id": str(recap.id), "status": "looks_good"},
+            self.spark_admin,
+            self.endpoint_path,
+        )
+        assert result.errors is None, result.errors
+        payload = result.data["submitRecapClientSignoff"]
+        assert payload["success"] is False
+        assert "hasn't been approved" in payload["message"]
+        refreshed = await sync_to_async(recap_models.CustomRecap.objects.get)(
+            id=recap.id
+        )
+        assert refreshed.approved is False
+        assert refreshed.client_signoff_status == ""
+
+    @pytest.mark.asyncio
+    async def test_client_signoff_on_approved_custom_recap_saves(self, monkeypatch):
+        monkeypatch.setattr(
+            "recaps.client_signoff.notify_ops_signoff", lambda recap, kind: None
+        )
+        recap = await sync_to_async(self._make_custom_recap)(approved=True)
+        result = await self._execute_mutation_authenticated(
+            CLIENT_SIGNOFF_MUTATION,
+            {"id": str(recap.id), "status": "looks_good"},
+            self.spark_admin,
+            self.endpoint_path,
+        )
+        assert result.errors is None, result.errors
+        assert result.data["submitRecapClientSignoff"]["success"] is True
+        refreshed = await sync_to_async(recap_models.CustomRecap.objects.get)(
+            id=recap.id
+        )
+        assert refreshed.client_signoff_status == "looks_good"
+
+
+CLIENT_SIGNOFF_MUTATION = """
+mutation Signoff($id: ID!, $status: String!) {
+  submitRecapClientSignoff(input: { customRecapId: $id, status: $status }) {
+    success
+    message
+  }
+}
+"""
