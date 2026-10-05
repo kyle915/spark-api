@@ -53,6 +53,7 @@ from recaps.tenant_overview import (
     tenant_sku_pulse,
     _year_bounds,
     sales_program_metrics,
+    tenant_tracks_dry_demos,
     tenant_trend_program,
     window_to_inclusive_dates,
 )
@@ -429,10 +430,13 @@ _TREND_SERIES = {
             TenantKpiTrendSeries(key="unitsSold", label="Units sold"),
         ],
         "Same basis as Conversion: approved Retail / On-Premise recaps with a "
-        "sampled base. Units sold = single cans + packs (1 each). Dry demos "
-        "(no product tasted) count People engaged as consumers sampled.",
+        "sampled base. Units sold = single cans + packs (1 each).",
     ),
 }
+
+_SALES_DRY_DEMO_NOTE = (
+    "Dry demos (no product tasted) count People engaged as consumers sampled."
+)
 
 
 def _trend_series_for(program: str | None):
@@ -865,6 +869,8 @@ def _build_tenant_kpis(tenant_id: int, year: int | None = None) -> TenantKpis:
     trend = tenant_monthly_trend(tenant_id, year, sales=sales)
     metrics = None
     if sales:
+        if tenant_tracks_dry_demos(tenant_id):
+            note = f"{note} {_SALES_DRY_DEMO_NOTE}"
         window = None if year is None else _year_bounds(year)
         metrics = sales_program_metrics(tenant_id, *window_to_inclusive_dates(window))
     return TenantKpis(
