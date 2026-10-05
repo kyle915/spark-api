@@ -68,6 +68,11 @@ _SOLD_FALLBACK_RE = re.compile(r"\b(sold|bought|purchase[ds]?)\b", re.IGNORECASE
 # "Total units sold today" so the total is not added on top of the parts.
 _SOLD_SKU_LINE_RE = re.compile(r"units sold\s*:", re.IGNORECASE)
 
+# Same rule for cans/packs: a "# of Total Cans Sold" rollup is not added on
+# top of "single cans" / "packs" lines on the same recap. Brew Dr recaps
+# filed across its Aug 2026 template switch carry both.
+_SOLD_ROLLUP_RE = re.compile(r"\btotal\b", re.IGNORECASE)
+
 # Intent/likelihood phrasing that must NEVER be counted as actual sales even
 # though it contains "purchase" — e.g. "willing to purchase", "would not be
 # willing to purchase", "likely to purchase". The same Stone House Bread
@@ -218,9 +223,13 @@ def _sold_unit_lines(
                 out.append((name, parsed))
         return out
 
+    cans_packs = _match(_SOLD_FIELD_RE)
+    parts = [line for line in cans_packs if not _SOLD_ROLLUP_RE.search(line[0])]
+    if parts:
+        cans_packs = parts
     return (
         _match(_SOLD_SKU_LINE_RE, exclude=_SOLD_EXCLUDE_RE)
-        or _match(_SOLD_FIELD_RE)
+        or cans_packs
         or _match(_SOLD_FALLBACK_RE, exclude=_SOLD_EXCLUDE_RE)
     )
 

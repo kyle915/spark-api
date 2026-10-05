@@ -410,7 +410,74 @@ class TestTenantConversionSampledBase(AmbassadorsGraphQLTestCase):
             ("consumersSampled", "Consumers sampled"),
             ("unitsSold", "Units sold"),
         ]
+        assert "single cans + packs (1 each)" in kpis.trend_note
+        assert "People engaged" not in kpis.trend_note
+
+        self._custom_recap(
+            request_type=self.retail_type,
+            fields=[("Dry demo? (no product tasted)", "No")],
+        )
+        kpis = _build_tenant_kpis(self.tenant.id)
         assert "People engaged" in kpis.trend_note
+
+    def test_brew_dr_shape_reconciles_across_panels(self):
+        """Brew Dr: singles + packs (1 each), an Aug-switch recap carrying the
+        old "# of Total Cans Sold" too, Event Activation and an unapproved
+        recap out of the set — trend, Conversion and program metrics agree."""
+        from recaps.report_types import _build_tenant_kpis
+
+        self._make_sales_tenant()
+        self._custom_recap(
+            request_type=self.retail_type,
+            fields=[
+                ("Total number of consumers sampled", "75"),
+                ("How many single cans did consumers purchase?", "15"),
+                ("How many packs did consumers purchase?", "6"),
+            ],
+        )
+        self._custom_recap(
+            request_type=self.retail_type,
+            fields=[
+                ("# of Consumers Sampled", "19"),
+                ("# of Total Cans Sold", "2"),
+                ("Total number of consumers sampled", "19"),
+                ("How many single cans did consumers purchase?", "2"),
+                ("How many packs did consumers purchase?", "0"),
+            ],
+        )
+        self._custom_recap(
+            request_type=self.retail_type,
+            fields=[
+                ("# of Consumers Sampled", "30"),
+                ("# of Total Cans Sold", "8"),
+            ],
+        )
+        self._custom_recap(
+            request_type=self.event_type,
+            fields=[("How many TOTAL consumers did you sample?", "3600")],
+        )
+        pending = self._custom_recap(
+            request_type=self.retail_type,
+            fields=[
+                ("Total number of consumers sampled", "48"),
+                ("How many single cans did consumers purchase?", "20"),
+            ],
+        )
+        recap_models.CustomRecap.objects.filter(id=pending.id).update(approved=False)
+
+        conv = tenant_conversion_kpis(self.tenant.id, self.start, self.end)
+        assert (conv["sold"], conv["engagements"], conv["recaps"]) == (31, 124, 3)
+        assert conv["pct"] == 25.0
+
+        m = sales_program_metrics(self.tenant.id, self.start, self.end)
+        assert (m["units_sold"], m["consumers_sampled"], m["recaps"]) == (31, 124, 3)
+        assert (m["cans_sold"], m["packs_sold"]) == (25, 6)
+        assert m["conversion_pct"] == 25.0
+
+        kpis = _build_tenant_kpis(self.tenant.id)
+        assert sum(mo.units_sold for mo in kpis.monthly_trend) == 31
+        assert sum(mo.consumers_sampled for mo in kpis.monthly_trend) == 124
+        assert (kpis.program.units_sold, kpis.program.consumers_sampled) == (31, 124)
 
     def _seed_sales_program(self, when=None):
         self._custom_recap(

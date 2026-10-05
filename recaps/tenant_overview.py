@@ -50,6 +50,7 @@ from events.models import Event, Request
 from recaps.models import (
     ConsumerEngagements,
     ConsumerFeedback,
+    CustomField,
     CustomFieldValue,
     CustomRecap,
     CustomRecapProductSample,
@@ -2296,6 +2297,14 @@ def tenant_trend_program(tenant_id: int) -> str:
         .first()
         or Tenant.TREND_SERIES_ACTIVITY
     )
+
+
+def tenant_tracks_dry_demos(tenant_id: int) -> bool:
+    """True when one of the tenant's recap templates asks "Dry demo?"."""
+    return CustomField.objects.filter(
+        custom_recap_template__tenant_id=tenant_id,
+        name__iregex=r"dry\s*demo",
+    ).exists()
 
 
 def window_to_inclusive_dates(window: tuple | None) -> tuple:

@@ -154,6 +154,26 @@ def test_sold_units_empty_iterable_is_none():
     assert _sold_units_from_fields([]) is None
 
 
+def test_sold_units_total_rollup_not_added_on_top_of_singles_and_packs():
+    # Brew Dr #891: the old "# of Total Cans Sold" and the new singles/packs
+    # questions both record the same 2 cans.
+    fields = [
+        ("# of Total Cans Sold", "2"),
+        ("How many single cans did consumers purchase?", "2"),
+        ("How many packs did consumers purchase?", "0"),
+    ]
+    assert _sold_units_from_fields(fields) == 2
+
+
+def test_sold_units_total_rollup_alone_still_counts():
+    assert _sold_units_from_fields([("# of Total Cans Sold", "10")]) == 10
+
+
+def test_sold_units_only_rollups_are_summed():
+    fields = [("Total Cans Sold", "10"), ("Total Packs Sold", "3")]
+    assert _sold_units_from_fields(fields) == 13
+
+
 # ---------------------------------------------------------------------------
 # _consumers_sampled_from_fields — customConsumersSampled
 # ---------------------------------------------------------------------------
