@@ -40,6 +40,35 @@ def test_apply_signoff_rejects_unknown_status():
     assert recap.saved is False
 
 
+def test_in_app_signoff_rejects_unapproved_recap():
+    from recaps.client_signoff import NOT_APPROVED_MESSAGE
+
+    recap = _Recap()
+    recap.approved = False
+    try:
+        apply_signoff(recap, status=LOOKS_GOOD, comment="", require_approved=True)
+        raise AssertionError("expected ValueError")
+    except ValueError as e:
+        assert str(e) == NOT_APPROVED_MESSAGE
+    assert recap.saved is False
+    assert recap.client_signoff_status == ""
+
+
+def test_in_app_signoff_allows_approved_recap():
+    recap = _Recap()
+    recap.approved = True
+    apply_signoff(recap, status=LOOKS_GOOD, comment="", require_approved=True)
+    assert recap.client_signoff_status == LOOKS_GOOD
+    assert recap.saved
+
+
+def test_public_link_signoff_does_not_require_approval():
+    recap = _Recap()
+    recap.approved = False
+    apply_signoff(recap, status=NEED_MORE_PHOTOS, comment="")
+    assert recap.client_signoff_status == NEED_MORE_PHOTOS
+
+
 def test_public_signoff_rejects_bad_token():
     req = RequestFactory().post(
         "/api/public/recap/not-a-token/signoff",

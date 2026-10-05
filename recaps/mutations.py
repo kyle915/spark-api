@@ -4209,7 +4209,10 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
             )
             try:
                 recap = await sync_to_async(apply_signoff)(
-                    recap, status=self.input.status, comment=self.input.comment
+                    recap,
+                    status=self.input.status,
+                    comment=self.input.comment,
+                    require_approved=True,
                 )
             except ValueError as e:
                 raise GraphQLError(str(e))
@@ -4233,7 +4236,10 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
             )
             try:
                 recap = await sync_to_async(apply_signoff)(
-                    recap, status=self.input.status, comment=self.input.comment
+                    recap,
+                    status=self.input.status,
+                    comment=self.input.comment,
+                    require_approved=True,
                 )
             except ValueError as e:
                 raise GraphQLError(str(e))
