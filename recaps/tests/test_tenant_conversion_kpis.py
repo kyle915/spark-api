@@ -1,19 +1,24 @@
 """Torch-style conversion: products purchased ÷ consumers sampled / samples given."""
 
+import importlib
 from datetime import datetime, timedelta
 
 import pytest
+from django.apps import apps as django_apps
 from django.utils import timezone
 
 from ambassadors.tests.base import AmbassadorsGraphQLTestCase
 from events import models as event_models
 from recaps import models as recap_models
+from recaps.report_types import _build_tenant_kpis
+from recaps.tenant_insights import build_insight_buckets_scoped
 from recaps.tenant_overview import (
     conversion_window_totals,
     sales_program_metrics,
     tenant_conversion_kpis,
     tenant_monthly_trend,
 )
+from tenants.models import Tenant
 
 
 @pytest.mark.django_db(transaction=True)
@@ -499,6 +504,75 @@ class TestTenantConversionSampledBase(AmbassadorsGraphQLTestCase):
         assert sum(mo.units_sold for mo in kpis.monthly_trend) == 31
         assert sum(mo.consumers_sampled for mo in kpis.monthly_trend) == 124
         assert (kpis.program.units_sold, kpis.program.consumers_sampled) == (31, 124)
+
+    def test_drekker_shape_reconciles_across_panels(self):
+        """Drekker: singles + packs (1 each), Account Spend and the NOT-willing
+        count never read as sales or intent, no "Dry demo?" field — trend,
+        Conversion, program metrics and Insight cards agree (prod Oct 6:
+        30 ÷ 116 = 25.9%)."""
+        self._make_sales_tenant()
+        for sampled, first, aware, willing, not_willing, cans, packs, spend in (
+            ("26", "25", "1", "17", "9", "0", "2", "70.35"),
+            ("17", "17", "0", "2", "15", "0", "2", "84"),
+            ("29", "23", "5", "15", "5", "5", "9", "70.35"),
+            ("44", "38", "5", "38", "6", "0", "12", "87.48"),
+        ):
+            self._custom_recap(
+                request_type=self.retail_type,
+                fields=[
+                    ("Total number of consumers sampled", sampled),
+                    ("First Time consumers?", first),
+                    ("How many consumers that were engaged with knew about Drekker Brewing product/brand?", aware),
+                    ("How many consumers would be willing to purchase the product after tasing it?", willing),
+                    ("How many consumers would NOT be willing to purchase the product after tasing it?", not_willing),
+                    ("How many single cans did consumers purchase?", cans),
+                    ("How many packs did consumers purchase?", packs),
+                    ("Account Spend Amount", spend),
+                ],
+            )
+
+        conv = tenant_conversion_kpis(self.tenant.id, self.start, self.end)
+        assert (conv["sold"], conv["engagements"], conv["recaps"]) == (30, 116, 4)
+        assert conv["pct"] == 25.9
+
+        m = sales_program_metrics(self.tenant.id, self.start, self.end)
+        assert (m["units_sold"], m["consumers_sampled"], m["recaps"]) == (30, 116, 4)
+        assert (m["cans_sold"], m["packs_sold"]) == (5, 25)
+        assert (m["dry_demos"], m["unpaired_dry_demos"]) == (0, 0)
+        assert (m["first_time_consumers"], m["first_time_base"]) == (103, 116)
+        assert (m["brand_aware_consumers"], m["willing_to_purchase"]) == (11, 72)
+
+        kpis = _build_tenant_kpis(self.tenant.id)
+        assert [s.key for s in kpis.trend_series] == ["consumersSampled", "unitsSold"]
+        assert "People engaged" not in kpis.trend_note
+        assert sum(mo.units_sold for mo in kpis.monthly_trend) == 30
+        assert sum(mo.consumers_sampled for mo in kpis.monthly_trend) == 116
+        assert (kpis.program.units_sold, kpis.program.consumers_sampled) == (30, 116)
+
+        items, _ = build_insight_buckets_scoped(self.tenant.id, self.start, self.end)
+        by = {b["key"]: b for b in items}
+        assert (by["reach"]["metric"], by["sales"]["metric"]) == ("116", "30")
+        assert "5 single cans · 25 packs" in by["sales"]["detail"]
+        assert "25.9% conversion" in by["sales"]["detail"]
+        assert "dry demo" not in by["reach"]["detail"]
+        blob = " ".join(f"{b['title']} {b['metric']} {b['detail']}" for b in items)
+        assert "engagement" not in blob.lower()
+
+    def test_drekker_migration_resolves_exact_slug_then_request_url_name(self):
+        run = importlib.import_module(
+            "tenants.migrations.0049_drekker_insights_sales_series"
+        )._set_series("sales")
+        lookalike = self.create_tenant(name="Drekker Brewing Test")
+        Tenant.objects.filter(id=lookalike.id).update(
+            slug="drekker-brewing-test", request_url_name="drekker-brewing-test"
+        )
+        Tenant.objects.filter(id=self.tenant.id).update(
+            slug="drekker-co", request_url_name="drekker-brewing"
+        )
+        run(django_apps, None)
+        series = dict(Tenant.objects.values_list("id", "insights_trend_series"))
+        assert series[self.tenant.id] == Tenant.TREND_SERIES_SALES
+        assert series[lookalike.id] == Tenant.TREND_SERIES_ACTIVITY
 
     def _seed_sales_program(self, when=None):
         self._custom_recap(
