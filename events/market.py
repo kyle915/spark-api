@@ -17,7 +17,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from events.routing import _US_STATE_NAME_TO_CODE, extract_state_code
+from events.routing import _US_STATE_CODES, _US_STATE_NAME_TO_CODE, extract_state_code
 
 _COUNTRY_SEGMENT_RE = re.compile(
     r"^(?:united states(?: of america)?|u\.?\s*s\.?\s*a?\.?)$", re.IGNORECASE
@@ -35,56 +35,53 @@ class AddressGeo:
 def _tidy_city(raw: str) -> str:
     city = re.sub(r"\s+", " ", raw).strip(" ,.")
     if city.isupper() or city.islower():
-        city = city.title()
+        city = re.sub(r"'S\b", "'s", city.title())
     return city
 
 
-def _is_state_segment(segment: str, code: str) -> bool:
-    tokens = segment.replace(".", " ").split()
-    if not tokens:
-        return False
-    if tokens[0].upper() == code:
-        return True
-    low = re.sub(r"\d", "", segment).strip().lower()
-    return _US_STATE_NAME_TO_CODE.get(low) == code
+_STATE_SEGMENT_RE = re.compile(r"^([A-Za-z]{2})(?:\s+\d{2,5}(?:-\d{4})?)?$")
+
+
+def _segment_state(segment: str) -> str | None:
+    """State code when a comma segment is just a state ("CA", "CA 92108",
+    "Missouri", "New York 10001"), else None."""
+    seg = segment.strip().rstrip(".")
+    m = _STATE_SEGMENT_RE.match(seg)
+    if m:
+        code = m.group(1).upper()
+        return code if code in _US_STATE_CODES else None
+    name = re.sub(r"\s+\d{2,5}(?:-\d{4})?$", "", seg).strip().lower()
+    return _US_STATE_NAME_TO_CODE.get(name)
 
 
 def parse_address_geo(address: str | None) -> AddressGeo:
     """Pull ``(city, state_code, zip)`` out of a US street address.
 
-    Handles "8740 Rio San Diego Dr, San Diego, CA 92108", Google-Places
-    ", USA" suffixes, "EDMOND, OK, 73034" and full state names. City is
-    only returned when it is its own comma segment right before the state
-    (a segment that starts with a street number is never a city).
+    The state is the last comma segment that is only a state ("CA 92108",
+    "Missouri", "New York") — so "4 Pennsylvania Plaza, New York, New York"
+    is NY — falling back to :func:`extract_state_code` for comma-less forms.
+    City is the segment right before the state segment (never one that
+    starts with a street number).
     """
     if not address:
         return AddressGeo(None, None, None)
-    code = extract_state_code(address)
-    if not code:
-        return AddressGeo(None, None, None)
-
     segments = [
         s.strip()
         for s in re.sub(r"[\t ]+", " ", address).split(",")
         if s.strip() and not _COUNTRY_SEGMENT_RE.match(s.strip())
     ]
-    zip_code: str | None = None
-    city: str | None = None
     for idx in range(len(segments) - 1, -1, -1):
-        seg = segments[idx]
-        if not _is_state_segment(seg, code):
+        code = _segment_state(segments[idx])
+        if not code:
             continue
-        tail = " ".join(segments[idx:])
-        zm = _ZIP_RE.search(tail)
-        zip_code = zm.group(1) if zm else None
+        zm = _ZIP_RE.search(" ".join(segments[idx:]))
+        city: str | None = None
         if idx > 0:
             candidate = segments[idx - 1]
-            if candidate and not candidate[0].isdigit() and not _ZIP_RE.search(
-                candidate
-            ):
-                city = _tidy_city(candidate)
-        break
-    return AddressGeo(city or None, code, zip_code)
+            if not candidate[0].isdigit() and not _ZIP_RE.search(candidate):
+                city = _tidy_city(candidate) or None
+        return AddressGeo(city, code, zm.group(1) if zm else None)
+    return AddressGeo(None, extract_state_code(address), None)
 
 
 @dataclass(frozen=True)
@@ -111,7 +108,8 @@ def market_for(obj) -> Market:
     location = getattr(obj, "location", None)
     if geo.state_code:
         city = geo.city
-        if not city and location is not None and _loc_state_code(location) == geo.state_code:
+        same_state = location is not None and _loc_state_code(location) == geo.state_code
+        if same_state and (not city or (location.name or "").lower() == city.lower()):
             city = location.name
         return Market(city, geo.state_code)
     if location is not None:
@@ -228,16 +226,15 @@ def geo_changes(
     obj,
     resolution: GeoResolution | None,
     *,
-    clear_city_mismatch: bool = False,
     lookup: GeoLookup | None = None,
 ) -> dict[str, int | None]:
     """FK changes (``state_id`` / ``location_id``) that would make ``obj``
     agree with its address. Empty when already consistent or underivable.
 
-    A location in another state is always cleared; one in the right state
-    but a different city is relinked when the address city has a Location
-    row, and only cleared with ``clear_city_mismatch``. A location that
-    can't be checked (address has no city) is left alone.
+    A location in another state is cleared; one in the right state but a
+    different city is relinked when the address city has a Location row and
+    otherwise kept (metro / neighborhood picks like "Los Angeles" for North
+    Hollywood are defensible; the market label follows the address anyway).
     """
     if resolution is None:
         return {}
@@ -253,16 +250,8 @@ def geo_changes(
             changes["location_id"] = resolution.location_id
     elif current_loc_id is not None:
         loc = lookup.location(current_loc_id)
-        if loc is not None:
-            loc_state_id, loc_name = loc
-            wrong_state = loc_state_id != resolution.state_id
-            wrong_city = (
-                clear_city_mismatch
-                and bool(resolution.geo.city)
-                and loc_name.strip().lower() != resolution.geo.city.lower()
-            )
-            if wrong_state or wrong_city:
-                changes["location_id"] = None
+        if loc is not None and loc[0] != resolution.state_id:
+            changes["location_id"] = None
     return changes
 
 
