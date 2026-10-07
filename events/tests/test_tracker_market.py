@@ -56,6 +56,11 @@ query Counts($filters: RequestFiltersInput) {
         ("60 Washington square park south", (None, None, None)),
         ("3101 Texas Sage", (None, None, None)),
         ("Ohio state university", (None, None, None)),
+        ("Center Parc Stadium - Atlanta, GA", ("Atlanta", "GA", None)),
+        ("Sloan Park Festival Grounds - Phoenix, AZ 85201", ("Phoenix", "AZ", "85201")),
+        ("Kissimmee Event, West Irlo Bronson Memorial Highway, FL", (None, "FL", None)),
+        ("King Soopers 3600 Mesa Dr Boulder, CO", (None, "CO", None)),
+        ("1 Main St, Miller Place, NY", ("Miller Place", "NY", None)),
         ("4 Pennsylvania Plaza, New York, New York", ("New York", "NY", None)),
         ("1648 NW Chipman Road, LEE'S SUMMIT, MO 64081", ("Lee's Summit", "MO", "64081")),
         ("Tampa / St. Pete, FL", ("Tampa / St. Pete", "FL", None)),
@@ -165,6 +170,27 @@ class TestTrackerMarket(EventsGraphQLTestCase):
         req.refresh_from_db()
         assert req.state_id == self.az.id
         assert req.location_id == self.phoenix.id
+
+    def test_save_finds_catalog_city_at_end_of_street_segment(self):
+        req = self._request(
+            "Tempe no comma", "8544 S EMERALD DR TEMPE AZ 85284", location=self.tucson
+        )
+        req.refresh_from_db()
+        assert (req.state_id, req.location_id) == (self.az.id, self.tempe.id)
+        assert market_for(req).label == "Tempe, AZ"
+
+        venue = self._request(
+            "Venue", "McCormick Place // 2301 S Dr Phoenix, AZ 85004", location=None
+        )
+        venue.refresh_from_db()
+        assert venue.location_id == self.phoenix.id
+        assert market_for(venue).label == "Phoenix, AZ"
+
+    def test_street_name_is_never_the_catalog_city(self):
+        req = self._request("Street", "100 Tempe St, AZ 85281", location=None)
+        req.refresh_from_db()
+        assert (req.state_id, req.location_id) == (self.az.id, None)
+        assert market_for(req).label == "AZ"
 
     def test_unrelated_save_does_not_touch_geo(self):
         req = self._stale(

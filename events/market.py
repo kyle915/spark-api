@@ -15,7 +15,7 @@ with the address on save, and ``market_for`` is the read-side answer.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from events.routing import _US_STATE_CODES, _US_STATE_NAME_TO_CODE
 
@@ -31,11 +31,23 @@ _TRAILING_CODE_RE = re.compile(r"(?:^|[\s.,])([A-Za-z]{2})$")
 _STATE_NAMES_LONGEST_FIRST = sorted(_US_STATE_NAME_TO_CODE, key=len, reverse=True)
 
 
+_VENUE_SEPARATOR_RE = re.compile(r"\s+(?:-|–|—|//|\|)\s+")
+_STREET_SUFFIXES = frozenset(
+    "street st avenue ave road rd highway hwy parkway pkwy boulevard blvd drive dr "
+    "lane ln way trail trl court ct circle cir expressway expy freeway fwy".split()
+)
+_MAX_CITY_WORDS = 4
+
+
 @dataclass(frozen=True)
 class AddressGeo:
     city: str | None
     state_code: str | None
     zip: str | None
+    street_tail: str | None = None
+    """Text right before the state when street and city share it ("4100 Blue
+    Diamond Rd Las Vegas") — :func:`resolve_geo_for_address` matches its last
+    words against the Location catalog."""
 
 
 def _tidy_city(raw: str) -> str:
@@ -43,6 +55,20 @@ def _tidy_city(raw: str) -> str:
     if city.isupper() or city.islower():
         city = re.sub(r"'S\b", "'s", city.title())
     return city
+
+
+def _city_or_tail(text: str) -> tuple[str | None, str | None]:
+    """``(city, street_tail)`` for the text before the state. A venue prefix
+    ("Center Parc Stadium - Atlanta") is dropped; text with digits is a street
+    plus maybe a city (tail); text ending in a street word is no city."""
+    text = _VENUE_SEPARATOR_RE.split(text.strip())[-1].strip(" .,")
+    if not text:
+        return None, None
+    if any(ch.isdigit() for ch in text):
+        return None, text
+    if text.split()[-1].lower().rstrip(".") in _STREET_SUFFIXES:
+        return None, None
+    return _tidy_city(text) or None, None
 
 
 _STATE_SEGMENT_RE = re.compile(r"^([A-Za-z]{2})(?:\s+\d{2,5}(?:-\d{4})?)?$")
@@ -119,22 +145,20 @@ def parse_address_geo(address: str | None) -> AddressGeo:
         if not code:
             continue
         zm = _ZIP_RE.search(" ".join(segments[idx:]))
-        city: str | None = None
-        if idx > 0:
-            candidate = segments[idx - 1]
-            if not candidate[0].isdigit() and not _ZIP_RE.search(candidate):
-                city = _tidy_city(candidate) or None
-        return AddressGeo(city, code, zm.group(1) if zm else None)
+        city, street_tail = _city_or_tail(segments[idx - 1]) if idx > 0 else (None, None)
+        return AddressGeo(city, code, zm.group(1) if zm else None, street_tail)
     if not segments:
         return AddressGeo(None, None, None)
-    tail = _trailing_state(segments[-1])
-    if tail is None:
+    trailing = _trailing_state(segments[-1])
+    if trailing is None:
         return AddressGeo(None, None, None)
-    code, before, zip_code = tail
-    city = None
-    if len(segments) > 1 and before and not any(ch.isdigit() for ch in before):
-        city = _tidy_city(before) or None
-    return AddressGeo(city, code, zip_code)
+    code, before, zip_code = trailing
+    if not before:
+        return AddressGeo(None, code, zip_code)
+    city, street_tail = _city_or_tail(before)
+    if len(segments) == 1 and city:
+        city, street_tail = None, before
+    return AddressGeo(city, code, zip_code, street_tail)
 
 
 @dataclass(frozen=True)
@@ -250,6 +274,20 @@ class PreloadedGeoLookup(GeoLookup):
         return self._by_id.get(location_id)
 
 
+def _catalog_city_from_tail(tail: str, state_id: int, lookup: GeoLookup) -> str | None:
+    """Longest run of trailing words in ``tail`` that is a Location in the
+    state ("2200 E 12 Mile Rd Royal Oak" → "Royal Oak"). Only the end of the
+    text counts, so a street name never becomes the city."""
+    words = tail.replace("’", "'").split()
+    for n in range(min(_MAX_CITY_WORDS, len(words)), 0, -1):
+        candidate = " ".join(words[-n:]).strip(" .,")
+        if not candidate or candidate[0].isdigit():
+            continue
+        if lookup.city_locations(candidate, state_id):
+            return _tidy_city(candidate)
+    return None
+
+
 def resolve_geo_for_address(
     address: str | None, lookup: GeoLookup | None = None
 ) -> GeoResolution | None:
@@ -262,6 +300,10 @@ def resolve_geo_for_address(
     state_id = lookup.state_id(geo.state_code)
     if state_id is None:
         return None
+    if not geo.city and geo.street_tail:
+        city = _catalog_city_from_tail(geo.street_tail, state_id, lookup)
+        if city:
+            geo = replace(geo, city=city, street_tail=None)
     if not geo.city:
         return GeoResolution(state_id, None, geo)
     ids = lookup.city_locations(geo.city, state_id)

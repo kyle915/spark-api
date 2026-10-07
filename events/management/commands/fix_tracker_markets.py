@@ -133,7 +133,7 @@ class Command(BaseCommand):
                     stats[key]["no_city_in_address"] += 1
                     flagged.append(
                         f"  [{tname}] {label} {ident}: address has state "
-                        f"{res.geo.state_code} but no city segment → market shows "
+                        f"{res.geo.state_code} but no city found in it → market shows "
                         f"{after_display!r}; address={obj.address!r}"
                     )
                 if res.location_ambiguous:
