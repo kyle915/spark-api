@@ -6739,6 +6739,22 @@ class AddTorchDryDemoFieldsView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class ResendRecentSendsView(View):
+    """GET/POST `/internal/cron/resend-recent-sends`.
+
+    READ-ONLY: recent Resend emails to one recipient with their last delivery
+    event (delivered / bounced / suppressed ...). Params: recipient (required),
+    pages (100 emails each, default 3).
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return _run_dry_run_command(request, "resend_recent_sends", ("recipient", "pages"))
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self.post(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class TagTorchDryDemosView(View):
     """GET/POST `/internal/cron/tag-torch-dry-demos`.
 
@@ -10392,6 +10408,7 @@ def _registered_views() -> dict[str, Any]:
         "add-torch-competitor-feedback": AddTorchCompetitorFeedbackView,
         "add-torch-dry-demo-fields": AddTorchDryDemoFieldsView,
         "tag-torch-dry-demos": TagTorchDryDemosView,
+        "resend-recent-sends": ResendRecentSendsView,
         "exclude-third-party-from-aggregates": ExcludeThirdPartyFromAggregatesView,
         "reclassify-onpremise-to-retail": ReclassifyOnpremiseToRetailView,
         "setup-torch-event-activation": SetupTorchEventActivationView,
