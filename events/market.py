@@ -25,7 +25,7 @@ _COUNTRY_SEGMENT_RE = re.compile(
 _TRAILING_COUNTRY_RE = re.compile(
     r"[\s,]+(?:united states(?: of america)?|usa|u\.s\.a?\.?)\.?$", re.IGNORECASE
 )
-_ZIP_RE = re.compile(r"\b(\d{5})(?:-\d{4})?\b")
+_ZIP_RE = re.compile(r"(?<!\d)(\d{5})(?:-\d{4})?(?!\d)")
 _TRAILING_ZIP_RE = re.compile(r"[\s,]+(\d{5})(?:-\d{4})?$")
 _TRAILING_CODE_RE = re.compile(r"(?:^|[\s.,])([A-Za-z]{2})$")
 _STATE_NAMES_LONGEST_FIRST = sorted(_US_STATE_NAME_TO_CODE, key=len, reverse=True)
@@ -71,7 +71,9 @@ def _city_or_tail(text: str) -> tuple[str | None, str | None]:
     return _tidy_city(text) or None, None
 
 
-_STATE_SEGMENT_RE = re.compile(r"^([A-Za-z]{2})(?:\s+\d{2,5}(?:-\d{4})?)?$")
+_STATE_SEGMENT_RE = re.compile(
+    r"^([A-Za-z]{2})(?:\s+\d{2,5}(?:-\d{4})?|\d{5}(?:-\d{4})?)?$"
+)
 
 
 def _segment_state(segment: str) -> str | None:

@@ -61,6 +61,8 @@ query Counts($filters: RequestFiltersInput) {
         ("Kissimmee Event, West Irlo Bronson Memorial Highway, FL", (None, "FL", None)),
         ("King Soopers 3600 Mesa Dr Boulder, CO", (None, "CO", None)),
         ("1 Main St, Miller Place, NY", ("Miller Place", "NY", None)),
+        ("3954A PEACHTREE ROAD NE, , BROOKHAVEN, GA30319", ("Brookhaven", "GA", "30319")),
+        ("2955 COBB PKWY NW STE 308, , ATLANTA, GA30339-1234", ("Atlanta", "GA", "30339")),
         ("4 Pennsylvania Plaza, New York, New York", ("New York", "NY", None)),
         ("1648 NW Chipman Road, LEE'S SUMMIT, MO 64081", ("Lee's Summit", "MO", "64081")),
         ("Tampa / St. Pete, FL", ("Tampa / St. Pete", "FL", None)),
