@@ -8,8 +8,10 @@ month never looks like a real zero.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
+from functools import partial
 from zoneinfo import ZoneInfo
 
 import strawberry
@@ -24,11 +26,14 @@ from django.core.exceptions import MultipleObjectsReturned
 from events import models
 from events.activity_log import _safe_log
 from events.demo_cancel import request_display_code
+from events.field_marketing_mail import notify_plan_submitted
 from tenants.models import Tenant, TenantedUser
 from utils.graphql.inputs import SparkGraphQLInput
 from utils.graphql.mixins import SparkGraphQLMixin, resolve_id_to_int
 from utils.graphql.permissions import StrictIsAuthenticated
 from utils.utils import ROLE_ID, build_mutation_response
+
+logger = logging.getLogger(__name__)
 
 TORCH_SLUGS = frozenset({"torch", "torch-thc", "keee-torch-thc"})
 # Staffed plan rows book as Event Activation — not the old catch-all
@@ -737,21 +742,82 @@ def _attach_request_products(request: models.Request, event: models.FieldMarketi
         )
 
 
-def _submit_event(event: models.FieldMarketingEvent, actor) -> models.FieldMarketingEvent:
-    if event.status == models.FieldMarketingEvent.STATUS_SUBMITTED and event.request_id:
-        return event
-    if (
-        event.status == models.FieldMarketingEvent.STATUS_SUBMITTED
-        and not _should_create_request(event)
-    ):
-        return event
+def _date_range_label(event: models.FieldMarketingEvent) -> str:
+    start = event.starts_on
+    days = event.days or 1
+    if days <= 1:
+        return start.strftime("%a, %b %-d, %Y")
+    end = start + timedelta(days=days - 1)
+    return f"{start.strftime('%a, %b %-d')} – {end.strftime('%a, %b %-d, %Y')} ({days} days)"
 
+
+def _summary_rows(event: models.FieldMarketingEvent) -> list[tuple[str, str]]:
+    """Label/value rows the plan-submitted emails show."""
+    market = _markets().get(event.market)
+    tactic = ACTIVITIES.get(event.activity, event.activity)
+    if event.sampling_format:
+        tactic += f" · {SAMPLING_LABELS.get(event.sampling_format, event.sampling_format)}"
+    rows = [
+        ("Tactic", tactic),
+        ("Date", _date_range_label(event)),
+        (
+            "Market",
+            f"{market.label} · {market.manager}" if market else event.market,
+        ),
+    ]
+    if event.address:
+        rows.append(("Location", event.address))
+    if event.sku_names:
+        rows.append(("SKUs", ", ".join(event.sku_names)))
+    if event.support_type:
+        label = SUPPORT_LABELS.get(event.support_type, event.support_type)
+        if event.support_type == models.FieldMarketingEvent.SUPPORT_OTHER and event.support_other:
+            label = f"{label}: {event.support_other}"
+        rows.append(("Sales support", label))
+    if event.needs_field_support:
+        rows.append(("Brand ambassadors", str(event.ambassador_count)))
+        if event.support_times:
+            rows.append(("Times", event.support_times))
+        if event.support_scope:
+            rows.append(("Scope", event.support_scope))
+    if event.planned_full_cans:
+        rows.append(("Planned full cans", f"{event.planned_full_cans:,}"))
+    if event.planned_pour_samples:
+        rows.append(("Planned 4oz pours", f"{event.planned_pour_samples:,}"))
+    if event.planned_emails:
+        rows.append(("Planned consumer emails", f"{event.planned_emails:,}"))
+    if event.notes:
+        rows.append(("Notes", event.notes))
+    return rows
+
+
+def _send_submitted_mail(event_id: int, actor) -> None:
+    try:
+        event = models.FieldMarketingEvent.objects.select_related(
+            "tenant", "request"
+        ).get(id=event_id)
+        code = request_display_code(event.request_id) if event.request_id else None
+        notify_plan_submitted(event, actor, _summary_rows(event), code)
+    except Exception:
+        logger.exception("Plan-submitted mail failed for field marketing event %s", event_id)
+
+
+def _submit_event(event: models.FieldMarketingEvent, actor) -> bool:
+    """Submit the plan. True when this call submitted it or booked its request.
+
+    Submitting an already-submitted plan is a no-op, so double clicks and
+    retries never resend the emails.
+    """
+    already_submitted = event.status == models.FieldMarketingEvent.STATUS_SUBMITTED
     create_request = _should_create_request(event)
+    if already_submitted and (event.request_id or not create_request):
+        return False
+
     if not create_request:
         # Plan-only confirm — seeding / sales support / unstaffed guerilla.
         event.status = models.FieldMarketingEvent.STATUS_SUBMITTED
         event.save(update_fields=["status", "updated_at"])
-        return event
+        return True
 
     address = (event.address or "").strip()
     if not address:
@@ -791,7 +857,12 @@ def _submit_event(event: models.FieldMarketingEvent, actor) -> models.FieldMarke
     event.request = request
     event.status = models.FieldMarketingEvent.STATUS_SUBMITTED
     event.save(update_fields=["request", "status", "updated_at"])
-    return event
+    return True
+
+
+def _submit_and_mail(event: models.FieldMarketingEvent, actor) -> None:
+    if _submit_event(event, actor):
+        transaction.on_commit(partial(_send_submitted_mail, event.id, actor))
 
 
 @transaction.atomic
@@ -805,7 +876,7 @@ def plan_event(*, user, payload: dict, submit: bool, tenant_id=None) -> models.F
         **cleaned,
     )
     if submit:
-        event = _submit_event(event, user)
+        _submit_and_mail(event, user)
     return event
 
 
@@ -817,7 +888,8 @@ def submit_event(*, user, event_id: str, tenant_id=None) -> models.FieldMarketin
     ).first()
     if event is None:
         raise FieldMarketingError("That field marketing event isn't on Torch.")
-    return _submit_event(event, user)
+    _submit_and_mail(event, user)
+    return event
 
 
 @transaction.atomic
@@ -1075,8 +1147,6 @@ class FieldMarketingMutations:
         except FieldMarketingError as exc:
             raise GraphQLError(str(exc)) from exc
         if input.submit and event.request_id:
-            await _notify_ignite(event)
-        if input.submit and event.request_id:
             message = "Booked with Ignite as Event Activation — pending on the tracker."
         elif input.submit:
             message = "Confirmed on the plan (no Ignite request for this tactic)."
@@ -1103,8 +1173,6 @@ class FieldMarketingMutations:
             )
         except FieldMarketingError as exc:
             raise GraphQLError(str(exc)) from exc
-        if event.request_id:
-            await _notify_ignite(event)
         message = (
             "Booked with Ignite as Event Activation — pending on the tracker."
             if event.request_id
@@ -1145,12 +1213,3 @@ class FieldMarketingMutations:
             input_obj=input,
             event=_event_type(event),
         )
-
-
-async def _notify_ignite(event: models.FieldMarketingEvent) -> None:
-    request = await sync_to_async(lambda: event.request)()
-    if request is None:
-        return
-    from events.mutations import _notify_spark_admins_for_client_request
-
-    await _notify_spark_admins_for_client_request(request, None)
