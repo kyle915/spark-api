@@ -1525,3 +1525,38 @@ class TestSendClientWeeklyDigestOnlyEmail:
         )
         assert resp.status_code == 400
         mock_call.assert_not_called()
+
+
+@pytest.mark.django_db
+class TestResendRecentSendsView:
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    def test_lists_only_matching_recipient_across_pages(self):
+        pages = [
+            {
+                "data": [
+                    {"id": "a1", "to": ["Collin@TorchEnterprise.com"], "subject": "Torch THC: week of Sep 28 – Oct 5",
+                     "created_at": "2026-10-07 15:05:00", "last_event": "delivered"},
+                    {"id": "a2", "to": ["john@torchdrinks.com"], "subject": "other", "created_at": "x", "last_event": "sent"},
+                ],
+                "has_more": True,
+            },
+            {"data": [{"id": "a3", "to": ["nobody@x.com"], "subject": "s", "created_at": "y", "last_event": "sent"}],
+             "has_more": False},
+        ]
+        with patch("digest.management.commands.resend_recent_sends.resend.Emails.list", side_effect=pages) as lst:
+            resp = Client().post(
+                "/internal/cron/resend-recent-sends",
+                {"recipient": "collin@torchenterprise.com", "pages": "3"},
+                HTTP_X_CRON_SECRET=VALID_SECRET,
+            )
+        assert resp.status_code == 200
+        log = resp.json()["log"]
+        assert "id=a1" in log and "last_event=delivered" in log
+        assert "a2" not in log and "a3" not in log
+        assert "Scanned 3 recent emails; 1 to collin@torchenterprise.com." in log
+        assert lst.call_args_list[1][0][0]["after"] == "a2"
+
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    def test_requires_secret(self):
+        resp = Client().post("/internal/cron/resend-recent-sends", {"recipient": "a@b.com"})
+        assert resp.status_code == 401
