@@ -1702,6 +1702,9 @@ class SendClientWeeklyDigestView(View):
         but send NO email.
       - tenant: int — restrict to a single tenant id (does NOT bypass opt-in).
       - force: "1" / "true" / "yes" — send even if the week is quiet.
+      - only_email: catch-up resend to ONE address already on the tenant's
+        digest list. Requires tenant. Dry-run unless dry_run=false is passed.
+      - as_of: ISO datetime the digest window ends at (match a past Monday).
     """
 
     def post(self, request: HttpRequest) -> HttpResponse:
@@ -1713,7 +1716,9 @@ class SendClientWeeklyDigestView(View):
             raw = (request.GET.get(name) or request.POST.get(name) or "").lower()
             return raw in ("1", "true", "yes", "on") if raw else default
 
-        dry_run = _bool("dry_run", default=False)
+        only_email = (request.GET.get("only_email") or request.POST.get("only_email") or "").strip()
+        as_of = (request.GET.get("as_of") or request.POST.get("as_of") or "").strip()
+        dry_run = _bool("dry_run", default=bool(only_email))
         force = _bool("force", default=False)
 
         tenant = request.GET.get("tenant") or request.POST.get("tenant")
@@ -1733,6 +1738,15 @@ class SendClientWeeklyDigestView(View):
             cmd_args.append("--force")
         if tenant:
             cmd_args.extend(["--tenant", str(tenant)])
+        if only_email:
+            if not tenant:
+                return JsonResponse(
+                    {"ok": False, "error": "only_email requires tenant"},
+                    status=400,
+                )
+            cmd_args.extend(["--only-email", only_email])
+        if as_of:
+            cmd_args.extend(["--as-of", as_of])
 
         out = io.StringIO()
         try:
@@ -1755,6 +1769,8 @@ class SendClientWeeklyDigestView(View):
                 "dry_run": dry_run,
                 "force": force,
                 "tenant": tenant,
+                "only_email": only_email or None,
+                "as_of": as_of or None,
                 "log": out.getvalue(),
             }
         )

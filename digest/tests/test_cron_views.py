@@ -1482,3 +1482,46 @@ class TestTorchDryDemoCronViews:
         resp = self.client.post("/internal/cron/tag-torch-dry-demos", HTTP_X_CRON_SECRET=VALID_SECRET)
         assert resp.status_code == 400
         assert resp.json()["error"] == "bad-request"
+
+
+CLIENT_WEEKLY_DIGEST_URL = "/internal/cron/send-client-weekly-digest"
+
+
+@pytest.mark.django_db
+class TestSendClientWeeklyDigestOnlyEmail:
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    @patch("digest.cron_views.call_command")
+    def test_only_email_defaults_to_dry_run(self, mock_call):
+        resp = Client().post(
+            f"{CLIENT_WEEKLY_DIGEST_URL}?tenant=17",
+            {"only_email": "collin@torchenterprise.com", "as_of": "2026-10-05T14:42:28Z"},
+            HTTP_X_CRON_SECRET=VALID_SECRET,
+        )
+        assert resp.status_code == 200
+        assert resp.json()["dry_run"] is True
+        args = mock_call.call_args[0]
+        assert "--dry-run" in args
+        assert args[args.index("--only-email") + 1] == "collin@torchenterprise.com"
+        assert args[args.index("--as-of") + 1] == "2026-10-05T14:42:28Z"
+
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    @patch("digest.cron_views.call_command")
+    def test_only_email_explicit_send(self, mock_call):
+        resp = Client().post(
+            f"{CLIENT_WEEKLY_DIGEST_URL}?tenant=17&dry_run=false",
+            {"only_email": "collin@torchenterprise.com"},
+            HTTP_X_CRON_SECRET=VALID_SECRET,
+        )
+        assert resp.json()["dry_run"] is False
+        assert "--dry-run" not in mock_call.call_args[0]
+
+    @override_settings(INTERNAL_CRON_SECRET=VALID_SECRET)
+    @patch("digest.cron_views.call_command")
+    def test_only_email_requires_tenant(self, mock_call):
+        resp = Client().post(
+            CLIENT_WEEKLY_DIGEST_URL,
+            {"only_email": "collin@torchenterprise.com"},
+            HTTP_X_CRON_SECRET=VALID_SECRET,
+        )
+        assert resp.status_code == 400
+        mock_call.assert_not_called()

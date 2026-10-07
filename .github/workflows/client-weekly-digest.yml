@@ -40,13 +40,21 @@ on:
           - "false"
           - "true"
       dry_run:
-        description: "Build + log recipients, but send no email"
+        description: "Build + log recipients, but send no email (manual runs default to dry run)"
         required: false
-        default: "false"
+        default: "true"
         type: choice
         options:
           - "false"
           - "true"
+      only_email:
+        description: "Catch-up resend to ONE address already on the tenant's digest list (requires tenant)"
+        required: false
+        default: ""
+      as_of:
+        description: "ISO datetime the digest window ends at, e.g. a past Monday's run time (optional)"
+        required: false
+        default: ""
 
 jobs:
   fire-client-weekly-digest:
@@ -59,6 +67,8 @@ jobs:
           TENANT: ${{ github.event.inputs.tenant || '' }}
           FORCE: ${{ github.event.inputs.force || 'false' }}
           DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+          ONLY_EMAIL: ${{ github.event.inputs.only_email || '' }}
+          AS_OF: ${{ github.event.inputs.as_of || '' }}
         run: |
           set -euo pipefail
           if [ -z "$CRON_SECRET" ]; then
@@ -79,6 +89,8 @@ jobs:
 
           STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
             -X POST "$CRON_URL?$QS" \
+            --data-urlencode "only_email=$ONLY_EMAIL" \
+            --data-urlencode "as_of=$AS_OF" \
             -H "X-Cron-Secret: $CRON_SECRET")
           echo "HTTP $STATUS"
           cat /tmp/cron-response.json
