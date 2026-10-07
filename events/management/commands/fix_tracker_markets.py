@@ -92,6 +92,7 @@ class Command(BaseCommand):
         stats: dict[str, Counter] = defaultdict(Counter)
         flagged: list[str] = []
         changes_log: list[str] = []
+        display_only: list[str] = []
 
         def scan(model, label: str):
             qs = model.objects.select_related(
@@ -123,7 +124,10 @@ class Command(BaseCommand):
                 after_state = changes.get("state_id", obj.state_id)
                 after_loc = changes.get("location_id", obj.location_id)
                 after_display = market_for(obj).label
-                if (before_display or "").lower() != (after_display or "").lower():
+                display_fixed = (before_display or "").lower() != (
+                    after_display or ""
+                ).lower()
+                if display_fixed:
                     stats[key]["display_market_fixed"] += 1
                 if res.geo.city is None:
                     stats[key]["no_city_in_address"] += 1
@@ -153,6 +157,11 @@ class Command(BaseCommand):
                         f"{after_display!r}; address={obj.address!r}"
                     )
                 if not changes:
+                    if display_fixed:
+                        display_only.append(
+                            f"  [{tname}] {label} {ident} {obj.address!r}: tracker "
+                            f"market {before_display or '∅'} → {after_display or '∅'}"
+                        )
                     continue
                 stats[key]["fk_updated"] += 1
                 if "state_id" in changes:
@@ -177,6 +186,13 @@ class Command(BaseCommand):
         w("")
         w(f"CHANGES ({len(changes_log)}){'' if apply else ' — dry run, nothing written'}:")
         for line in changes_log:
+            w(line)
+        w("")
+        w(
+            f"DISPLAY-ONLY FIXES ({len(display_only)}; stored FKs already match "
+            "the address — fixed by reading the address, nothing to write):"
+        )
+        for line in display_only:
             w(line)
         w("")
         w(f"FLAGGED FOR REVIEW ({len(flagged)}; first {MAX_LISTED} shown):")

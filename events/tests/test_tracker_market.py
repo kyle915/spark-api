@@ -265,6 +265,7 @@ class TestTrackerMarket(EventsGraphQLTestCase):
         assert "kept location 'Phoenix'" in log
         assert "kept location 'Tucson'" in log
         assert "address has no US state" in log
+        assert "DISPLAY-ONLY FIXES" in log
         wrong_state.refresh_from_db()
         assert wrong_state.state_id == self.az.id
 
