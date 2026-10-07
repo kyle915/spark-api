@@ -13,11 +13,12 @@ Move to a per-tenant `RmmTerritory` table when there's a second client
 that needs different rules.
 """
 from __future__ import annotations
-import re
 import logging
 from asgiref.sync import sync_to_async
 from django.db.models import Q
 from django.utils import timezone
+
+from events.market import parse_address_geo
 
 logger = logging.getLogger(__name__)
 
@@ -101,81 +102,19 @@ def suppress_cc(emails: list[str]) -> list[str]:
 # types in the public form URL: /spark-form/ighn-liquid-death.
 ROUTED_TENANT_SLUGS = {"ighn-liquid-death"}
 
-# Full US state (+ DC) names → 2-letter code. Lets the parser resolve forms
-# the bare 2-letter regex misses, e.g. "…Columbia, Missouri" or "…Cabot,
-# Arkansas, United States".
-_US_STATE_NAME_TO_CODE: dict[str, str] = {
-    "alabama": "AL", "alaska": "AK", "arizona": "AZ", "arkansas": "AR",
-    "california": "CA", "colorado": "CO", "connecticut": "CT", "delaware": "DE",
-    "district of columbia": "DC", "florida": "FL", "georgia": "GA",
-    "hawaii": "HI", "idaho": "ID", "illinois": "IL", "indiana": "IN",
-    "iowa": "IA", "kansas": "KS", "kentucky": "KY", "louisiana": "LA",
-    "maine": "ME", "maryland": "MD", "massachusetts": "MA", "michigan": "MI",
-    "minnesota": "MN", "mississippi": "MS", "missouri": "MO", "montana": "MT",
-    "nebraska": "NE", "nevada": "NV", "new hampshire": "NH", "new jersey": "NJ",
-    "new mexico": "NM", "new york": "NY", "north carolina": "NC",
-    "north dakota": "ND", "ohio": "OH", "oklahoma": "OK", "oregon": "OR",
-    "pennsylvania": "PA", "rhode island": "RI", "south carolina": "SC",
-    "south dakota": "SD", "tennessee": "TN", "texas": "TX", "utah": "UT",
-    "vermont": "VT", "virginia": "VA", "washington": "WA",
-    "west virginia": "WV", "wisconsin": "WI", "wyoming": "WY",
-}
-_US_STATE_CODES: set[str] = set(_US_STATE_NAME_TO_CODE.values())
-# Longest names first so "west virginia" wins over "virginia", etc.
-_US_STATE_NAMES_BY_LEN = sorted(_US_STATE_NAME_TO_CODE, key=len, reverse=True)
-
-# Trailing country suffix to strip before looking for the state.
-_COUNTRY_SUFFIX_RE = re.compile(
-    r"[\s,]*(?:united states of america|united states|u\.?\s*s\.?\s*a\.?|"
-    r"u\.?\s*s\.?)\s*$",
-    re.IGNORECASE,
-)
-# A 2-letter code at the END (optionally before a zip) — the most authoritative
-# signal. Case-insensitive; validated against the real US-state set below.
-# The trailing number is 2-5 digits (not just 5): spreadsheet/CSV imports
-# routinely strip the leading zero off New-England ZIPs ("WOLFEBORO NH 3894"
-# is 03894) or carry a short store number after the state ("Chula Vista CA
-# 3516"). Matching only \d{5} missed the state on every one of those, so the
-# row landed stateless and dropped off the RMM's sheet.
-_END_CODE_RE = re.compile(r"\b([A-Za-z]{2})\b[,\s]*(?:\d{2,5}(?:-\d{4})?)?\s*$")
-
-
 def extract_state_code(address: str | None) -> str | None:
-    """Pull the 2-letter US state code out of an address string.
+    """2-letter US state code for an address, or None.
 
-    Robust to the messy real-world forms we actually receive:
-      * Google-Places ("1885 Halite Dr, Sparks, NV 89436, USA")
-      * manual comma form ("EDMOND, OK, 73034")
-      * lowercase codes ("11650 s 73rd st papillion, ne 68046")
-      * full state names ("405 East Nifong Blvd, Columbia, Missouri")
-      * a "United States" country suffix
-      * tab / irregular whitespace ("OREGON CITY\\tOR\\t97045")
+    Same parser as the Master Tracker market (``events.market``): only a
+    state at the end of the address counts — the last comma segment that is
+    just a state ("Columbia, Missouri", "EDMOND, OK, 73034", "BROOKHAVEN,
+    GA30319") or a code / name at the very end ("Tempe AZ 85282", "WOLFEBORO
+    NH 3894"). A street name never reads as a state ("13657 Washington St",
+    "Peachtree Rd NE").
 
-    Resolution order (most authoritative first):
-      1. a trailing 2-letter code (optionally before a zip), validated
-         against the real US-state set — beats a state-named city like
-         "Indiana, PA";
-      2. a full state name anywhere in the string (longest match wins).
-
-    Returns None for international addresses or genuine misses — callers
-    treat None as "route manually" (see `_state_code_from_request`).
+    None means "route manually" (see `_state_code_from_request`).
     """
-    if not address:
-        return None
-    # Normalise: collapse tabs/spaces, then drop the trailing country.
-    norm = re.sub(r"[\t ]+", " ", address.strip())
-    norm = _COUNTRY_SUFFIX_RE.sub("", norm).strip()
-
-    m = _END_CODE_RE.search(norm)
-    if m and m.group(1).upper() in _US_STATE_CODES:
-        return m.group(1).upper()
-
-    low = norm.lower()
-    for name in _US_STATE_NAMES_BY_LEN:
-        if re.search(r"\b" + re.escape(name) + r"\b", low):
-            return _US_STATE_NAME_TO_CODE[name]
-
-    return None
+    return parse_address_geo(address).state_code
 
 
 def _state_code_from_request(request) -> str | None:

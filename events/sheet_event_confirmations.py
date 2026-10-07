@@ -23,8 +23,9 @@ from zoneinfo import ZoneInfo
 from django.utils import timezone as dj_tz
 
 from events.event_confirmations import is_liquid_death_tenant
-from events.routing import _US_STATE_NAME_TO_CODE, extract_state_code
+from events.routing import extract_state_code
 from events.torch_portal import is_torch_tenant
+from events.us_states import US_STATE_NAME_TO_CODE
 from utils.geocoding import photon_geocode_feature
 from utils.torch_public_form_sheet import (
     TORCH_PUBLIC_FORM_SHEET_ID,
@@ -273,7 +274,7 @@ def _state_code_from_hint(state_hint: str | None, address: str | None) -> str | 
         upper = hint.upper()
         if len(upper) == 2 and iana_for_us_state(upper):
             return upper
-        mapped = _US_STATE_NAME_TO_CODE.get(hint.lower())
+        mapped = US_STATE_NAME_TO_CODE.get(hint.lower())
         if mapped:
             return mapped
     return extract_state_code(address)

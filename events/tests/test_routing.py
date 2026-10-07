@@ -59,6 +59,15 @@ from events.routing import (
         ("122 122-128 CAMBRIDGE ST BOSTON MA 2114", "MA"),  # 02114 stripped
         ("85 S MAIN ST MANCHESTER NH 3102", "NH"),
         ("1360 Eastlake Pkwy Chula Vista CA 3516", "CA"),  # store no. after code
+        # State glued to its zip (sheet imports).
+        ("3954A PEACHTREE ROAD NE, , BROOKHAVEN, GA30319", "GA"),
+        ("2955 COBB PKWY NW STE 308, ATLANTA, GA30339-1234", "GA"),
+        ("3954A Peachtree Rd NE Brookhaven GA30319", "GA"),
+        # A street name before the real state never wins.
+        ("13657 Washington St, Columbus, OH 43215", "OH"),
+        ("100 Georgia Ave, Silver Spring, MD 20910", "MD"),
+        ("3954A Peachtree Rd NE, Atlanta, GA 30319", "GA"),
+        ("4 Pennsylvania Plaza, New York, New York", "NY"),
     ],
 )
 def test_extract_state_code_ok(address, expected):
@@ -81,6 +90,15 @@ def test_extract_state_code_ok(address, expected):
         "2150 West ISB, Daytona",
         "1717 South US 17",
         "Madison Square Garden",
+        # Street names / directions are not states.
+        "13657 Washington St",
+        "13657 Washington Street",
+        "3954A Peachtree Rd NE",
+        "3954A Peachtree Rd NE 242",
+        "100 Georgia Ave",
+        "3101 Texas Sage",
+        "Ohio state university",
+        "Kroger - Indiana Ave",
     ],
 )
 def test_extract_state_code_returns_none(address):
@@ -150,6 +168,23 @@ def test_departed_rmm_states_go_to_the_remaining_three():
     for state in ("CA", "FL", "WI"):
         assert territory_emails_for_state("ighn-liquid-death", state) == remaining
     assert territory_emails_for_state("ighn-liquid-death", "DE") == ["pat@liquiddeath.com"]
+
+
+def test_street_named_after_a_state_does_not_pick_the_territory():
+    # Old parser: "Washington St" → WA (pat@), "Peachtree Rd NE" → NE.
+    req = _public_request("Event Activation", "13657 Washington St, Edmond, OK 73034")
+    assert public_form_rmm_emails("ighn-liquid-death", req) == ["ross@liquiddeath.com"]
+
+    req = _public_request("Event Activation", "13657 Washington St")
+    assert public_form_rmm_emails("ighn-liquid-death", req) == []
+
+    req = _public_request("Event Activation", "13657 Washington St")
+    req.state = SimpleNamespace(code="tx")
+    assert public_form_rmm_emails("ighn-liquid-death", req) == ["ross@liquiddeath.com"]
+
+    req = _public_request("Event Activation", "3954A Peachtree Rd NE")
+    req.location = SimpleNamespace(state=SimpleNamespace(code="NY"))
+    assert public_form_rmm_emails("ighn-liquid-death", req) == ["l.giaccio@liquiddeath.com"]
 
 
 def test_public_ld_other_types_keep_territory_routing():
