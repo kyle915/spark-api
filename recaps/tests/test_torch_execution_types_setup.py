@@ -16,6 +16,7 @@ from django.utils import timezone
 
 from ambassadors import checkin_web
 from ambassadors.tests.base import AmbassadorsGraphQLTestCase
+from events.checkin_views import _stamp_recap_only
 from recaps.management.commands.setup_torch_event_activation import (
     EMAIL_FIELDS,
     EMAIL_SECTION,
@@ -28,6 +29,7 @@ from recaps.management.commands.setup_torch_event_activation import (
 )
 from recaps.management.commands.setup_torch_execution_types import (
     DROP_OFF_LOCATIONS_FIELD,
+    EMAIL_TEMPLATES,
     GUERILLA_LABEL,
     GUERILLA_TEMPLATE,
     PICKER_TITLE,
@@ -114,8 +116,31 @@ class TestSpec:
             DROP_OFF_LOCATIONS_FIELD,
             "Account feedback",
             "Total mileage",
+            *(f[0] for f in EMAIL_FIELDS),
         ]
+        assert not any(f[2] for f in dict(SEEDING_SPEC)[EMAIL_SECTION])
         assert checkin_web.is_product_seeding_event_type(type("ET", (), {"name": SEEDING_LABEL}))
+
+    def test_email_section_on_exactly_four_templates(self):
+        assert set(EMAIL_TEMPLATES) == {
+            EVENT_TEMPLATE,
+            GUERILLA_TEMPLATE,
+            SEEDING_TEMPLATE,
+            "Torch THC-Retail Sampling",
+        }
+
+    def test_recap_only_strips_email_section(self):
+        template = {
+            "id": "1",
+            "sections": [
+                {"name": "Consumer Engagement", "fields": []},
+                {"name": EMAIL_SECTION, "fields": [{"name": "Email addresses collected"}]},
+            ],
+        }
+        stripped = checkin_web.strip_recap_only_sections(template)
+        assert [s["name"] for s in stripped["sections"]] == ["Consumer Engagement"]
+        assert len(template["sections"]) == 2
+        assert checkin_web.strip_recap_only_sections(None) is None
 
 
 @pytest.mark.django_db(transaction=True)
@@ -268,7 +293,76 @@ class TestSetupCommand(AmbassadorsGraphQLTestCase):
         )
         assert snapshot == again
         assert CustomRecapTemplate.objects.filter(tenant=self.tenant).count() == 4
-        assert RecapSection.objects.filter(tenant=self.tenant, name=EMAIL_SECTION).count() == 3
+        assert RecapSection.objects.filter(tenant=self.tenant, name=EMAIL_SECTION).count() == 4
+
+    def _email_names(self, template) -> list[str]:
+        return list(
+            CustomField.objects.filter(
+                custom_recap_template=template, recap_section__name=EMAIL_SECTION
+            )
+            .order_by("order")
+            .values_list("name", flat=True)
+        )
+
+    def test_email_section_only_on_the_four_templates(self):
+        legacy = CustomRecapTemplate.objects.create(
+            tenant=self.tenant,
+            name="Torch THC-On Premise",
+            event_type=self.create_event_type("On Premise", self.tenant),
+            created_by=self.sys,
+        )
+        legacy_section = RecapSection.objects.create(
+            name=EMAIL_SECTION, tenant=self.tenant, created_by=self.sys
+        )
+        unanswered, answered = (
+            CustomField.objects.create(
+                name=name,
+                custom_recap_template=legacy,
+                custom_field_type=self.number,
+                recap_section=legacy_section,
+                created_by=self.sys,
+            )
+            for name in ("Email addresses collected", "Email collection notes")
+        )
+        recap = CustomRecap.objects.create(
+            name="Old",
+            event=self.create_event(name="Old", tenant=self.tenant, event_type=legacy.event_type),
+            tenant=self.tenant,
+            custom_recap_template=legacy,
+            created_by=self.sys,
+        )
+        CustomFieldValue.objects.create(
+            custom_recap=recap, custom_field=answered, value="kept", created_by=self.sys
+        )
+
+        dry = self._run()
+        assert f"would prune 'Email addresses collected' [{unanswered.id}]" in dry
+        assert CustomField.objects.filter(id=unanswered.id).exists()
+
+        log = self._run("--apply")
+        want = [f[0] for f in EMAIL_FIELDS]
+        for name in (EVENT_TEMPLATE, GUERILLA_TEMPLATE, SEEDING_TEMPLATE):
+            assert self._email_names(self._tpl(name)) == want, name
+        assert self._email_names(self.retail_tpl) == want
+        assert not CustomField.objects.filter(id=unanswered.id).exists()
+        assert CustomField.objects.filter(id=answered.id).exists()
+        assert CustomFieldValue.objects.filter(custom_recap=recap).get().value == "kept"
+        assert "1 submitted answer(s)" in log
+
+    def test_agency_payload_hides_email_section(self):
+        self._run("--apply")
+        store = self.create_event(name="Store", tenant=self.tenant, event_type=self.retail)
+        main = checkin_web.build_public_context(store)
+        assert EMAIL_SECTION in [s["name"] for s in main["template"]["sections"]]
+
+        agency = _stamp_recap_only(checkin_web.build_public_context(store), "TH-AGENCY", self.tenant)
+        names = [s["name"] for s in agency["template"]["sections"]]
+        assert EMAIL_SECTION not in names
+        assert "Consumer Engagement" in names
+        main_again = _stamp_recap_only(
+            checkin_web.build_public_context(store), "TH-2HRV3D", self.tenant
+        )
+        assert EMAIL_SECTION in [s["name"] for s in main_again["template"]["sections"]]
 
     def test_missing_retail_template_blocks(self):
         self.retail_tpl.name = "Something else"

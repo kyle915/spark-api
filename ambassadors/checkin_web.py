@@ -178,6 +178,25 @@ def _event_products(event):
     return out
 
 
+# Sections a 3rd-party recap-only link (Torch TH-AGENCY) never shows: the
+# agency's sign-ups aren't first-party data, and its recaps stay out of totals.
+RECAP_ONLY_HIDDEN_SECTIONS = frozenset({"Email Data Collection"})
+
+
+def strip_recap_only_sections(template: dict | None) -> dict | None:
+    """``template`` (a :func:`serialize_template` payload) minus the sections
+    a recap-only link hides. Returns a new dict; the input is left alone."""
+    if not isinstance(template, dict):
+        return template
+    sections = template.get("sections") or []
+    return {
+        **template,
+        "sections": [
+            s for s in sections if (s.get("name") or "") not in RECAP_ONLY_HIDDEN_SECTIONS
+        ],
+    }
+
+
 def serialize_template(event) -> dict | None:
     """Shape the event's custom recap template for the public page: sections in
     order, each with its fields (type / options / required) in order. Field ids

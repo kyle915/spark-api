@@ -185,6 +185,8 @@ def _stamp_recap_only(payload: dict, code: str, tenant) -> dict:
         resources = checkin_web.build_checkin_resources(tenant, recap_only=True)
         payload["resources"] = resources
         payload["trainingUrl"] = checkin_web._training_url_from_resources(resources)
+        if "template" in payload:
+            payload["template"] = checkin_web.strip_recap_only_sections(payload["template"])
     return payload
 
 

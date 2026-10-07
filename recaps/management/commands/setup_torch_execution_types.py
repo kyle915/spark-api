@@ -20,12 +20,16 @@ which remains Retail Sampling only.
   repeater (place / GPS or typed address, per-location SKU + cases) and
   Total mileage; the walk-up skips "Where are you working".
 * Retail, Event and Guerilla ask "Sample format" (Full can / 4oz pour,
-  multi-select, required) and carry an optional Email Data Collection
-  section (Email addresses collected / Collection method / notes). Retail
-  adds "No samples (dry demo)" so a dry demo can still answer honestly.
+  multi-select, required). Retail adds "No samples (dry demo)" so a dry demo
+  can still answer honestly.
+* The optional Email Data Collection section (Email addresses collected /
+  Collection method / notes) sits on exactly these four templates. Any other
+  Torch template carrying it is listed and its unanswered email fields are
+  pruned; answered ones are kept and flagged (submitted data is never touched).
 
-The agency twin ``TH-AGENCY`` keeps no picker (Retail Sampling only); it
-shares the Retail Sampling template, so it gets the same two additions.
+The agency twin ``TH-AGENCY`` keeps no picker (Retail Sampling only). It
+shares the Retail Sampling template, so it gets Sample format; the recap-only
+payload drops Email Data Collection (``checkin_web.RECAP_ONLY_HIDDEN_SECTIONS``).
 Recaps still land ``approved=False`` (Needs review).
 
 Idempotent. DRY-RUN by default; ``--apply`` writes. Run on prod via
@@ -54,6 +58,7 @@ from recaps.management.commands.setup_torch_event_activation import (
     SERVED_FIELD,
     SERVED_OPTS,
     SPEC_FIELDS,
+    TEMPLATE_NAME as EVENT_TEMPLATE,
     TRAFFIC_OPTS,
     Field,
 )
@@ -170,8 +175,17 @@ SEEDING_SPEC: list[tuple[str, list[Field]]] = [
         "Mileage",
         [("Total mileage", "number", True, [], "Total miles driven for today's drop-offs")],
     ),
+    (EMAIL_SECTION, list(EMAIL_FIELDS)),
 ]
-SEEDING_SECTION_ORDER = {"Drop-off Details": 0, "Mileage": 1}
+SEEDING_SECTION_ORDER = {"Drop-off Details": 0, "Mileage": 1, EMAIL_SECTION: 2}
+
+EMAIL_TEMPLATES = (
+    EVENT_TEMPLATE,
+    GUERILLA_TEMPLATE,
+    SEEDING_TEMPLATE,
+    RETAIL_TEMPLATE,
+)
+EMAIL_FIELD_NAMES = frozenset(f[0] for f in EMAIL_FIELDS)
 SEEDING_BUCKETS: list[dict] = [
     {
         "name": "Drop-off Placement",
@@ -362,6 +376,44 @@ class Command(EventActivationCommand):
         for idx, spec in enumerate(EMAIL_FIELDS):
             self._upsert_field(tpl, email_section, spec, idx, creator, apply, cache)
 
+    # ── Email Data Collection: exactly the four execution-type templates ──
+
+    def _audit_email_section(self, tenant, apply: bool) -> None:
+        from recaps.models import CustomField, CustomFieldValue, CustomRecapTemplate
+
+        self.stdout.write(f"\n{EMAIL_SECTION} by template:")
+        for tpl in CustomRecapTemplate.objects.filter(tenant_id=tenant.id).order_by("id"):
+            email_fields = [
+                f
+                for f in CustomField.objects.filter(custom_recap_template=tpl).select_related(
+                    "recap_section"
+                )
+                if f.name in EMAIL_FIELD_NAMES
+                or getattr(f.recap_section, "name", None) == EMAIL_SECTION
+            ]
+            if tpl.name in EMAIL_TEMPLATES:
+                state = "has it" if email_fields else "missing"
+                self.stdout.write(f"  [{tpl.id}] {tpl.name!r}: keep ({state})")
+                continue
+            if not email_fields:
+                self.stdout.write(f"  [{tpl.id}] {tpl.name!r}: none")
+                continue
+            self.stdout.write(f"  [{tpl.id}] {tpl.name!r}: remove")
+            for field in email_fields:
+                answers = CustomFieldValue.objects.filter(custom_field=field).count()
+                if answers:
+                    self.stdout.write(
+                        self.style.WARNING(
+                            f"    ! keep {field.name!r} [{field.id}] — {answers} submitted answer(s)"
+                        )
+                    )
+                    continue
+                self.stdout.write(
+                    f"    - {'pruned' if apply else 'would prune'} {field.name!r} [{field.id}]"
+                )
+                if apply:
+                    field.delete()
+
     # ── entry ─────────────────────────────────────────────────────────────
 
     def _subcommand(self, cls):
@@ -378,6 +430,7 @@ class Command(EventActivationCommand):
             self._subcommand(cls).run_steps(tenant, creator, apply)
         self.stdout.write("\n" + "-" * 68)
         self._augment_retail(tenant, creator, apply)
+        self._audit_email_section(tenant, apply)
         self._set_picker(tenant, apply)
 
     def handle(self, *args, **opts):

@@ -298,9 +298,17 @@ def _format_field_value(value):
     return value
 
 
+def _is_blank_answer(value) -> bool:
+    text = str(value if value is not None else "").strip()
+    return text in ("", "[]", "null")
+
+
 def _custom_field_sections(recap) -> dict[str, list[tuple[str, str]]]:
+    """Answered custom fields by section; a section with no answers is absent."""
     sections: dict[str, list[tuple[str, str]]] = {}
     for custom_field_value in _related_items(recap, "custom_field_value"):
+        if _is_blank_answer(custom_field_value.value):
+            continue
         custom_field = getattr(custom_field_value, "custom_field", None)
         recap_section = getattr(custom_field, "recap_section", None)
         section_name = getattr(recap_section, "name", None) or "Custom Fields"

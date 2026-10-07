@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from recaps.pdf import (
     SPARK_MARK_URL,
+    _custom_field_sections,
     _display_answer,
     _display_field_label,
     _display_product_name,
@@ -83,6 +84,29 @@ class RelatedList:
 
     def all(self):
         return self._values
+
+
+def test_custom_field_sections_skip_unanswered_fields():
+    email = SimpleNamespace(name="Email Data Collection")
+    engagement = SimpleNamespace(name="Consumer Engagement")
+
+    def value(name, section, raw):
+        return SimpleNamespace(
+            value=raw, custom_field=SimpleNamespace(name=name, recap_section=section)
+        )
+
+    recap = SimpleNamespace(
+        custom_field_value=RelatedList(
+            [
+                value("People engaged", engagement, "40"),
+                value("Email addresses collected", email, ""),
+                value("Collection method", email, "[]"),
+                value("Email collection notes", email, "  "),
+            ]
+        )
+    )
+
+    assert _custom_field_sections(recap) == {"Consumer Engagement": [("People engaged", "40")]}
 
 
 def test_build_recap_pdf_html_limits_fields_for_total_wireless():
