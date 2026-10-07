@@ -420,12 +420,14 @@ async def _resolve_event_location(
     try:
         request: models.Request = await sync_to_async(
             models.Request.objects.select_related(
-                "retailer__location", "distributor__location"
+                "location", "retailer__location", "distributor__location"
             ).get
         )(id=event.request_id)
     except models.Request.DoesNotExist:
         return None
 
+    if request.location_id:
+        return request.location
     if request.retailer and request.retailer.location_id:
         return request.retailer.location
     if request.distributor and request.distributor.location_id:
@@ -2915,9 +2917,12 @@ async def _resolve_request_location(
 ) -> models.Location | None:
     def _get_location() -> models.Location | None:
         req = models.Request.objects.select_related(
+            "location",
             "retailer__location",
             "distributor__location",
         ).get(id=request.id)
+        if req.location_id:
+            return req.location
         if req.retailer and req.retailer.location_id:
             return req.retailer.location
         if req.distributor and req.distributor.location_id:

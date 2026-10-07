@@ -288,9 +288,8 @@ def compute_tracker_status_counts(
     raw_codes = (
         source.annotate(
             market_code=Coalesce(
-                "retailer__location__state__code",
-                "location__state__code",
                 "state__code",
+                "location__state__code",
             )
         )
         .exclude(market_code__isnull=True)

@@ -1290,7 +1290,7 @@ class RequestQueriesService(BaseEventQueriesService):
         "billing_entity__state",
         "distributor__location__state",
         "retailer__location__state",
-        "location",
+        "location__state",
         "state",
         "rmm_asigned",
         "created_by",
@@ -1462,12 +1462,20 @@ def _apply_request_list_filters(
 
         code = (filters.state_code or "").strip().upper()
         if code:
+            # The request's own state FK (kept in line with its address on
+            # save) wins; the shared banner retailer's location never counts.
+            no_state = _Q(state__isnull=True)
             queryset = queryset.filter(
                 _Q(state__code__iexact=code)
-                | _Q(location__state__code__iexact=code)
-                | _Q(retailer__location__state__code__iexact=code)
-                | _Q(address__icontains=f", {code}")
-                | _Q(address__icontains=f" {code} ")
+                | (no_state & _Q(location__state__code__iexact=code))
+                | (
+                    no_state
+                    & _Q(location__isnull=True)
+                    & (
+                        _Q(address__icontains=f", {code}")
+                        | _Q(address__icontains=f" {code} ")
+                    )
+                )
             )
 
     if filters.client_id:

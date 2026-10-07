@@ -13,6 +13,7 @@ from tenants.types import SparkUserType, TenantType
 from utils.gcs import extract_blob_name_from_url, public_url
 
 from . import models
+from .market import market_for
 
 if TYPE_CHECKING:
     from recaps.types import CustomRecapTemplate
@@ -434,6 +435,16 @@ class Request(Node):
     retailer: Retailer | None = None
     location: Location | None = None
     state: State | None = None
+
+    @strawberry.field
+    async def market(self) -> str | None:
+        """"City, ST" from this request's own address (then its location /
+        state). Never the shared banner retailer's location."""
+        return (await sync_to_async(market_for)(self)).label
+
+    @strawberry.field
+    async def market_state_code(self) -> str | None:
+        return (await sync_to_async(market_for)(self)).state_code
 
     @strawberry.field
     async def activation_plan(self) -> Annotated[

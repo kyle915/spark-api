@@ -9532,6 +9532,51 @@ class FixNeutonicGeoView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class FixTrackerMarketsView(View):
+    """POST `/internal/cron/fix-tracker-markets` — re-derive request/event
+    state + city Location from the address (`fix_tracker_markets`).
+
+    Params: tenant (slug or request_url_name; blank = all tenants), apply
+    (write; default dry-run). Writes via queryset update — no emails, no
+    sheet mirror. Secret-gated; idempotent.
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _get(n: str) -> str:
+            return (request.GET.get(n) or request.POST.get(n) or "").strip()
+
+        apply = _get("apply").lower() in ("1", "true", "yes", "on")
+        cmd_args: list[str] = ["--apply"] if apply else []
+        if _get("tenant"):
+            cmd_args += ["--tenant", _get("tenant")]
+        out = io.StringIO()
+        try:
+            call_command("fix_tracker_markets", *cmd_args, stdout=out)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("fix_tracker_markets cron failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "log": out.getvalue(),
+                },
+                status=500,
+            )
+        return JsonResponse({"ok": True, "apply": apply, "log": out.getvalue()})
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        return JsonResponse({"ok": True, "endpoint": "fix-tracker-markets"})
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class SetRecapChoiceOptionsView(View):
     """POST `/internal/cron/set-recap-choice-options` — set a custom-recap
     choice field's allowed options (the builder only sets them at create time).
@@ -10202,6 +10247,7 @@ def _registered_views() -> dict[str, Any]:
         ),
         "repair-event-dates": RepairEventDatesView,
         "fix-neutonic-geo": FixNeutonicGeoView,
+        "fix-tracker-markets": FixTrackerMarketsView,
         "set-recap-choice-options": SetRecapChoiceOptionsView,
         "send-update-check-push": SendUpdateCheckPushView,
         "backfill-event-coordinates": BackfillEventCoordinatesView,
