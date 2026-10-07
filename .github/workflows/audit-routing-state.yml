@@ -1,0 +1,49 @@
+name: Audit routing state
+
+# Manual, read-only: old vs new address→state parse for recent Torch
+# approved-recap mail and Liquid Death RMM territory routing. Writes and
+# sends nothing. See events/management/commands/audit_routing_state.py.
+
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "Look-back window in days"
+        required: false
+        default: "60"
+      limit:
+        description: "Examples listed per section"
+        required: false
+        default: "25"
+
+jobs:
+  audit-routing-state:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire audit-routing-state cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/audit-routing-state
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          DAYS: ${{ github.event.inputs.days || '60' }}
+          LIMIT: ${{ github.event.inputs.limit || '25' }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            --max-time 900 \
+            -X POST "$CRON_URL" \
+            --data-urlencode "days=$DAYS" \
+            --data-urlencode "limit=$LIMIT" \
+            -H "X-Cron-Secret: $CRON_SECRET")
+
+          echo "HTTP $STATUS"
+          python3 -c 'import json; d=json.load(open("/tmp/cron-response.json")); print(d.get("log") or d)'
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS — see body above."
+            exit 1
+          fi
