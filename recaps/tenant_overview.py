@@ -38,6 +38,7 @@ single entry point :func:`build_tenant_overview` in ``sync_to_async``.
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, fields as dataclass_fields
 from datetime import date, timedelta
@@ -2404,6 +2405,67 @@ def sales_program_metrics(
         out["brand_aware_consumers"] += int(legacy_aud["ba"])
         out["willing_to_purchase"] += int(legacy_aud["wp"])
     return out
+
+
+EMAILS_COLLECTED_FIELD = "Email addresses collected"
+EMAIL_METHOD_FIELD = "Collection method"
+
+
+def _choice_values(raw: str | None) -> list[str]:
+    """A multi-select answer (JSON list, else comma text) as clean strings."""
+    text = (raw or "").strip()
+    if not text:
+        return []
+    try:
+        parsed = json.loads(text)
+    except ValueError:
+        parsed = text.split(",")
+    if not isinstance(parsed, list):
+        parsed = [parsed]
+    return [str(v).strip() for v in parsed if str(v).strip()]
+
+
+def emails_collected_metrics(
+    tenant_id: int, w_start: date | None, w_end: date | None
+) -> dict:
+    """Email sign-ups BAs recorded, across every program, for one window.
+
+    Approved, non-archived, 3rd-party excluded (via
+    :func:`_filter_event_window`). Only recaps that answered "Email addresses
+    collected" count — a blank is not a zero — and the total is its own
+    figure, never folded into consumers sampled or reach.
+    """
+    window = _inclusive_dates_to_window(w_start, w_end)
+    rows = _approved_only(
+        _filter_event_window(
+            CustomFieldValue.objects.filter(
+                custom_recap__tenant_id=tenant_id,
+                custom_recap__archived_at__isnull=True,
+                custom_field__name__iexact=EMAILS_COLLECTED_FIELD,
+            ),
+            "custom_recap__event__",
+            window,
+        ),
+        "custom_recap__",
+    ).values_list("custom_recap_id", "value")
+    per_recap: dict[int, int] = {}
+    for recap_id, value in rows:
+        count = _leading_int(value)
+        if count is not None:
+            per_recap[recap_id] = max(0, count)
+    methods: dict[str, int] = {}
+    if per_recap:
+        for value in CustomFieldValue.objects.filter(
+            custom_recap_id__in=list(per_recap),
+            custom_field__name__iexact=EMAIL_METHOD_FIELD,
+        ).values_list("value", flat=True):
+            for method in _choice_values(value):
+                methods[method] = methods.get(method, 0) + 1
+    return {
+        "emails": sum(per_recap.values()),
+        "recaps": len(per_recap),
+        "methods": sorted(methods.items(), key=lambda kv: (-kv[1], kv[0])),
+    }
 
 
 def tenant_conversion_kpis(

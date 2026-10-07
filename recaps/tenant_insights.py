@@ -54,6 +54,7 @@ from datetime import date, datetime, timedelta
 from django.utils import timezone
 
 from recaps.tenant_overview import (
+    emails_collected_metrics,
     sales_program_metrics,
     tenant_event_recap_counts,
     tenant_kpi_totals,
@@ -397,7 +398,8 @@ def _sales_buckets(
     """
     m = sales_program_metrics(tenant_id, start, end)
     momentum = _sales_momentum_bucket(tenant_id)
-    if m["recaps"] == 0 and momentum is None:
+    emails = _emails_bucket(tenant_id, start, end)
+    if m["recaps"] == 0 and momentum is None and emails is None:
         return []
 
     sampled = m["consumers_sampled"]
@@ -454,9 +456,37 @@ def _sales_buckets(
             "sentiment": "positive" if m["first_time_consumers"] > 0 else "neutral",
         },
     ]
+    if emails is not None:
+        buckets.append(emails)
     if momentum is not None:
         buckets.append(momentum)
     return buckets
+
+
+def _emails_bucket(tenant_id: int, start: date | None, end: date | None) -> dict | None:
+    """"Emails collected" — only when at least one recap in the window answered.
+
+    Every program counts (sign-ups aren't a conversion metric), and the
+    figure is never merged into consumers sampled.
+    """
+    e = emails_collected_metrics(tenant_id, start, end)
+    if e["recaps"] == 0:
+        return None
+    n = e["recaps"]
+    detail = (
+        f"{e['emails']:,} email addresses collected on {n:,} "
+        f"recap{'' if n == 1 else 's'} that recorded it"
+    )
+    if e["methods"]:
+        detail += " (method: " + " · ".join(f"{m} on {c:,}" for m, c in e["methods"]) + ")"
+    detail += ". Not counted in consumers sampled."
+    return {
+        "key": "emails",
+        "title": "Emails collected",
+        "metric": f"{e['emails']:,}",
+        "detail": detail,
+        "sentiment": "positive" if e["emails"] > 0 else "neutral",
+    }
 
 
 def build_insight_buckets_scoped(

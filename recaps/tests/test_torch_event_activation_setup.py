@@ -65,6 +65,7 @@ class TestSpec:
         assert [s for s, _ in SPEC] == [
             "Event Details",
             "Consumer Engagement",
+            "Email Data Collection",
             "Feedback & Account Notes",
             "Products Sampled",
         ]

@@ -265,6 +265,17 @@ class Tenant(Asyncable, models.Model):
         blank=True,
         related_name="checkin_selectable_for_tenants",
     )
+    # BA-facing copy + order for the program picker above, keyed by the real
+    # event type name (which still drives templates, photo buckets and
+    # Insights buckets, so it is never renamed for display):
+    #
+    #   {"title": "What's your execution type?",
+    #    "options": [{"eventType": "Event Activation", "label": "Event",
+    #                 "description": "Festivals, concerts ..."}, ...]}
+    #
+    # Listed programs render first, in this order; unlisted offered programs
+    # follow in id order under their own names. NULL = names in id order.
+    checkin_program_picker = models.JSONField(null=True, blank=True)
     # Optional BA-facing reference link surfaced on the check-in page (the
     # brand's /training/<code> hub). Shown before identify and again once
     # clocked in, because "what do I do again?" is a mid-shift question.
