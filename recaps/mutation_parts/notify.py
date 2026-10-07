@@ -9,8 +9,11 @@ from django.utils import timezone
 
 from events.torch_portal import is_torch_tenant
 from events.torch_retail_routing import (
+    EXECUTION_RETAIL,
     TORCH_RETAIL_IGNITE_OPS,
     state_code_from_event,
+    torch_field_marketing_recap_emails,
+    torch_recap_execution_type,
     torch_retail_recap_emails,
 )
 from recaps import models
@@ -255,9 +258,11 @@ def _collect_recap_approved_recipients(
     """Recipient set for approve-notify. Returns (recipients, reply_to).
 
     Torch retail uses the by-state sales list (John / Doug / Liberty always,
-    plus market reps). Ryan is weekly-only and never lands here. Portal
-    (request-linked) Torch keeps the requestor + Ignite ops and adds the
-    same by-state Torch list. Other brands keep RMM + client-role +
+    plus market reps); Ryan is weekly-only there. Portal (request-linked)
+    Torch retail keeps the requestor + Ignite ops and adds the same by-state
+    Torch list. Torch Event / Guerilla / Seeding go only to the field
+    marketing list (plus Ignite ops when portal) — no state reps, no
+    requestor. Other brands keep RMM + client-role +
     Tenant.recap_recipient_emails + requestor.
     """
     tenant = None
@@ -267,9 +272,11 @@ def _collect_recap_approved_recipients(
         tenant = None
 
     if is_torch_tenant(tenant):
-        event = recap.event
-        state = state_code_from_event(event)
-        torch_emails = torch_retail_recap_emails(state)
+        retail = torch_recap_execution_type(recap) == EXECUTION_RETAIL
+        if retail:
+            torch_emails = torch_retail_recap_emails(state_code_from_event(recap.event))
+        else:
+            torch_emails = torch_field_marketing_recap_emails()
         recipients: list[tuple[str, str]] = []
         seen: set[str] = set()
 
@@ -285,11 +292,11 @@ def _collect_recap_approved_recipients(
         for email in torch_emails:
             _push(email)
         if is_torch_portal_recap(recap):
-            for email, first in _collect_requestor_recipients(recap):
-                _push(email, first)
+            if retail:
+                for email, first in _collect_requestor_recipients(recap):
+                    _push(email, first)
             for email in TORCH_RETAIL_IGNITE_OPS:
                 _push(email)
-            return recipients, "events@igniteproductions.co"
         return recipients, "events@igniteproductions.co"
 
     event = recap.event

@@ -33,11 +33,19 @@ from events.routing import (
 )
 from events.torch_portal import is_torch_tenant
 from events.torch_retail_routing import (
+    EXECUTION_RETAIL,
+    TORCH_RETAIL_IGNITE_OPS,
     state_code_from_event,
+    torch_field_marketing_recap_emails,
+    torch_recap_execution_type,
     torch_retail_recap_emails,
 )
 from events.us_states import US_STATE_CODES, US_STATE_NAME_TO_CODE
 from recaps.models import CustomRecap, Recap
+from recaps.mutation_parts.notify import (
+    _collect_requestor_recipients,
+    is_torch_portal_recap,
+)
 from tenants.models import Tenant
 
 _LEGACY_NAMES = sorted(US_STATE_NAME_TO_CODE, key=len, reverse=True)
@@ -109,6 +117,7 @@ class Command(BaseCommand):
         w(f"audit_routing_state days={opts['days']} torch={torch_ids} ld={ld_ids}")
 
         self._torch(torch_ids, since, limit)
+        self._torch_non_retail(torch_ids, since)
         self._ld_requests(ld_ids, since, limit)
         self._ld_recaps(ld_ids, since, limit)
 
@@ -138,6 +147,8 @@ class Command(BaseCommand):
         state_diff = []
         rcpt_diff = []
         for recap in recaps:
+            if torch_recap_execution_type(recap) != EXECUTION_RETAIL:
+                continue
             old = _legacy_event_state(recap.event)
             new = state_code_from_event(recap.event)
             if old == new:
@@ -158,6 +169,54 @@ class Command(BaseCommand):
                 f"sent={'yes' if recap.client_notified_at else 'no'} "
                 f"wrongly_sent_to={extra} missed={missed}"
             )
+
+    def _torch_non_retail(self, tenant_ids, since):
+        """Every Event / Guerilla / Seeding recap filed in the window, with the
+        state-routed list it went to before vs the field marketing list now."""
+        w = self.stdout.write
+        rows = []
+        for model in (Recap, CustomRecap):
+            qs = (
+                model.objects.filter(event__tenant_id__in=tenant_ids, created_at__gte=since)
+                .select_related(
+                    "event",
+                    "event__state",
+                    "event__event_type",
+                    "event__request",
+                    "event__request__request_type",
+                    "event__request__created_by",
+                )
+                .order_by("id")
+            )
+            if model is CustomRecap:
+                qs = qs.select_related(
+                    "custom_recap_template", "custom_recap_template__event_type"
+                )
+            rows.extend(r for r in qs if torch_recap_execution_type(r) != EXECUTION_RETAIL)
+        sent = [r for r in rows if r.client_notified_at]
+        w(
+            f"\nTORCH non-retail recaps filed: {len(rows)} "
+            f"(approved={sum(1 for r in rows if r.approved)} mail_sent={len(sent)})"
+        )
+        new_to = sorted(torch_field_marketing_recap_emails())
+        w(f"  now routed to: {new_to}")
+        for recap in rows:
+            portal = is_torch_portal_recap(recap)
+            old_to = list(torch_retail_recap_emails(state_code_from_event(recap.event)))
+            if portal:
+                old_to += [e for e, _ in _collect_requestor_recipients(recap)]
+                old_to += list(TORCH_RETAIL_IGNITE_OPS)
+            event_day = recap.event.date.date() if recap.event.date else None
+            notified = recap.client_notified_at
+            w(
+                f"   - {type(recap).__name__}#{recap.id} "
+                f"type={torch_recap_execution_type(recap)} {recap.event.name!r} "
+                f"event_day={event_day} filed={recap.created_at:%Y-%m-%d} "
+                f"approved={'yes' if recap.approved else 'no'} "
+                f"archived={'yes' if recap.archived_at else 'no'} "
+                f"mail_sent={f'{notified:%Y-%m-%d %H:%M}' if notified else 'no'}"
+            )
+            w(f"       old_to={sorted(set(e.lower() for e in old_to))} portal={portal}")
 
     def _ld_requests(self, tenant_ids, since, limit):
         w = self.stdout.write

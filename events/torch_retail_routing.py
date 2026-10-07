@@ -1,12 +1,15 @@
-"""Torch retail recap recipients by state.
+"""Torch recap recipients.
 
 Retail-approved recaps go to the sales org keyed by the store's state.
-Ryan Heuser and Collin Kerrigan (CEO) are weekly-rollup only — never on a
-per-recap blast. The Monday weekly digest goes to the full list, including
-the weekly-only people.
+Ryan Heuser and Collin Kerrigan (CEO) are off every per-retail-recap blast.
+Event, Guerilla and Seeding recaps go only to the field marketing list
+(Ryan + the four market managers), never the state reps. The Monday weekly
+digest goes to the full retail list, including the weekly-only people.
 """
 
 from __future__ import annotations
+
+import re
 
 from events.routing import _state_code_from_request, extract_state_code
 
@@ -53,6 +56,28 @@ TORCH_WEEKLY_ONLY: tuple[tuple[str, str], ...] = (
     ("Collin Kerrigan", "collin@torchenterprise.com"),
 )
 
+# Every Event / Guerilla / Seeding recap — instead of the state reps.
+TORCH_FIELD_MARKETING_RECAP: tuple[tuple[str, str], ...] = (
+    ("Ryan Heuser", "ryanheuser@torchdrinks.com"),
+    ("Alec Aparicio", "alec@torchdrinks.com"),
+    ("Brittany Senglin", "brittany@torchdrinks.com"),
+    ("Victoria Quintana", "victoria@torchdrinks.com"),
+    ("Octavius Jefferson", "octavius@torchdrinks.com"),
+)
+
+EXECUTION_RETAIL = "retail"
+EXECUTION_EVENT = "event"
+EXECUTION_GUERILLA = "guerilla"
+EXECUTION_SEEDING = "seeding"
+
+# First match wins, so "Guerilla Activation" is guerilla, not event.
+_EXECUTION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    (EXECUTION_SEEDING, re.compile(r"product\s*seeding|\bseeding\b", re.I)),
+    (EXECUTION_GUERILLA, re.compile(r"guerr?ill?a", re.I)),
+    (EXECUTION_RETAIL, re.compile(r"retail|on[-\s]?prem", re.I)),
+    (EXECUTION_EVENT, re.compile(r"event|activation|festival|pop[-\s]?up", re.I)),
+)
+
 # Ignite ops still CC'd on portal (request-linked) Torch recap mail.
 TORCH_RETAIL_IGNITE_OPS: tuple[str, ...] = (
     "events@igniteproductions.co",
@@ -82,6 +107,50 @@ def torch_retail_recap_emails(state_code: str | None) -> list[str]:
     if code in TORCH_RETAIL_BY_STATE:
         emails.extend(email for _name, email in TORCH_RETAIL_BY_STATE[code])
     return _dedupe_emails(emails)
+
+
+def torch_field_marketing_recap_emails() -> list[str]:
+    """Per-recap recipients for Event / Guerilla / Seeding. No state reps."""
+    return _dedupe_emails([email for _name, email in TORCH_FIELD_MARKETING_RECAP])
+
+
+def _execution_type_for_name(name: str | None) -> str | None:
+    text = name or ""
+    for kind, pattern in _EXECUTION_PATTERNS:
+        if pattern.search(text):
+            return kind
+    return None
+
+
+def _related_name(obj, *path: str) -> str | None:
+    try:
+        for attr in path:
+            obj = getattr(obj, attr, None)
+            if obj is None:
+                return None
+    except Exception:
+        return None
+    return obj if isinstance(obj, str) else None
+
+
+def torch_recap_execution_type(recap) -> str:
+    """Event / Guerilla / Seeding / Retail for a Recap or CustomRecap.
+
+    The template the BA filed on wins, then the event's program, then the
+    linked request's type. Anything unrecognised stays retail.
+    """
+    candidates = (
+        ("custom_recap_template", "name"),
+        ("custom_recap_template", "event_type", "name"),
+        ("event", "event_type", "name"),
+        ("event", "custom_recap_template", "name"),
+        ("event", "request", "request_type", "name"),
+    )
+    for path in candidates:
+        kind = _execution_type_for_name(_related_name(recap, *path))
+        if kind is not None:
+            return kind
+    return EXECUTION_RETAIL
 
 
 def torch_weekly_digest_emails() -> list[str]:
