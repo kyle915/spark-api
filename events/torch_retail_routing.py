@@ -1,8 +1,9 @@
 """Torch retail recap recipients by state.
 
 Retail-approved recaps go to the sales org keyed by the store's state.
-Ryan Heuser is weekly-rollup only — never on a per-recap blast.
-The Monday weekly digest goes to the full list, including Ryan.
+Ryan Heuser and Collin Kerrigan (CEO) are weekly-rollup only — never on a
+per-recap blast. The Monday weekly digest goes to the full list, including
+the weekly-only people.
 """
 
 from __future__ import annotations
@@ -49,6 +50,7 @@ TORCH_RETAIL_BY_STATE: dict[str, tuple[tuple[str, str], ...]] = {
 # Weekly rollup only — never per-recap.
 TORCH_WEEKLY_ONLY: tuple[tuple[str, str], ...] = (
     ("Ryan Heuser", "ryanheuser@torchdrinks.com"),
+    ("Collin Kerrigan", "collin@torchenterprise.com"),
 )
 
 # Ignite ops still CC'd on portal (request-linked) Torch recap mail.

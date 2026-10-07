@@ -304,5 +304,14 @@ class TestTorchRetailStateRouting(EventsGraphQLTestCase):
         assert len(captured) == 1
         recipients = {e.lower() for e in captured[0]["recipients"]}
         assert "ryanheuser@torchdrinks.com" in recipients
+        assert "collin@torchenterprise.com" in recipients
         assert "john@torchdrinks.com" in recipients
         assert "james@torchdrinks.com" in recipients
+
+    def test_collin_weekly_only_never_per_recap(self):
+        assert "collin@torchenterprise.com" in torch_weekly_digest_emails()
+        for state in (None, "FL", "OH", "TX", "GA"):
+            assert "collin@torchenterprise.com" not in torch_retail_recap_emails(state)
+        recap = self._recap(address="1 Easton Way, Columbus, OH 43219")
+        emails = {e.lower() for e, _ in _collect_recap_approved_recipients(recap)[0]}
+        assert "collin@torchenterprise.com" not in emails
