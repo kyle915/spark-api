@@ -7,7 +7,7 @@ The Monday weekly digest goes to the full list, including Ryan.
 
 from __future__ import annotations
 
-from events.routing import extract_state_code
+from events.routing import _state_code_from_request, extract_state_code
 
 # Always on every retail recap (and on the weekly rollup).
 TORCH_RETAIL_ALL_STATES: tuple[tuple[str, str], ...] = (
@@ -105,8 +105,6 @@ def state_code_from_event(event) -> str | None:
     except Exception:
         pass
     try:
-        from events.routing import _state_code_from_request
-
         req = getattr(event, "request", None)
         if req is not None:
             return _state_code_from_request(req)

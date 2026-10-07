@@ -17,7 +17,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, replace
 
-from events.routing import _US_STATE_CODES, _US_STATE_NAME_TO_CODE
+from events.us_states import US_STATE_CODES, US_STATE_NAME_TO_CODE
 
 _COUNTRY_SEGMENT_RE = re.compile(
     r"^(?:united states(?: of america)?|u\.?\s*s\.?\s*a?\.?)$", re.IGNORECASE
@@ -26,9 +26,11 @@ _TRAILING_COUNTRY_RE = re.compile(
     r"[\s,]+(?:united states(?: of america)?|usa|u\.s\.a?\.?)\.?$", re.IGNORECASE
 )
 _ZIP_RE = re.compile(r"(?<!\d)(\d{5})(?:-\d{4})?(?!\d)")
-_TRAILING_ZIP_RE = re.compile(r"[\s,]+(\d{5})(?:-\d{4})?$")
+_TRAILING_ZIP_RE = re.compile(r"[\s,]+(\d{5})(?:-\d{4})?(?:\s+\d{1,5})?$")
+_GLUED_TRAILING_ZIP_RE = re.compile(r"(?<![A-Za-z])([A-Za-z]{2})(\d{5}(?:-\d{4})?)$")
 _TRAILING_CODE_RE = re.compile(r"(?:^|[\s.,])([A-Za-z]{2})$")
-_STATE_NAMES_LONGEST_FIRST = sorted(_US_STATE_NAME_TO_CODE, key=len, reverse=True)
+_TRAILING_CODE_SHORT_NUMBER_RE = re.compile(r"(?:^|[\s.,])([A-Za-z]{2})[\s,]+\d{2,4}$")
+_STATE_NAMES_LONGEST_FIRST = sorted(US_STATE_NAME_TO_CODE, key=len, reverse=True)
 
 
 _VENUE_SEPARATOR_RE = re.compile(r"\s+(?:-|–|—|//|\|)\s+")
@@ -83,9 +85,9 @@ def _segment_state(segment: str) -> str | None:
     m = _STATE_SEGMENT_RE.match(seg)
     if m:
         code = m.group(1).upper()
-        return code if code in _US_STATE_CODES else None
+        return code if code in US_STATE_CODES else None
     name = re.sub(r"\s+\d{2,5}(?:-\d{4})?$", "", seg).strip().lower()
-    return _US_STATE_NAME_TO_CODE.get(name)
+    return US_STATE_NAME_TO_CODE.get(name)
 
 
 def _trailing_state(text: str) -> tuple[str, str, str | None] | None:
@@ -97,13 +99,27 @@ def _trailing_state(text: str) -> tuple[str, str, str | None] | None:
     ("13657 Washington Street", "3101 Texas Sage"). A title-case code is a
     word, not a state ("... Portland Or"), and "NE" needs a zip after it
     because "Peachtree Rd NE" is a street direction, not Nebraska.
+
+    Sheet imports also carry a store number after the zip ("OR 97045 242"),
+    a zip glued to the code ("Atlanta GA30319"), or a New-England zip with
+    its leading zero stripped ("WOLFEBORO NH 3894") — a short number only
+    counts right after a 2-letter code, never after a state name.
     """
     t = _TRAILING_COUNTRY_RE.sub("", text.strip()).strip(" .,")
+    t = _GLUED_TRAILING_ZIP_RE.sub(r"\1 \2", t)
     zip_code: str | None = None
     zm = _TRAILING_ZIP_RE.search(t)
     if zm:
         zip_code = zm.group(1)
         t = t[: zm.start()].strip(" .,")
+    else:
+        sm = _TRAILING_CODE_SHORT_NUMBER_RE.search(t)
+        if sm:
+            raw = sm.group(1)
+            code = raw.upper()
+            if code in US_STATE_CODES and code != "NE" and (raw.isupper() or raw.islower()):
+                return code, t[: sm.start(1)].strip(" .,"), None
+            return None
     low = t.lower()
     for name in _STATE_NAMES_LONGEST_FIRST:
         if low.endswith(name) and (len(low) == len(name) or low[-len(name) - 1] in " .,"):
@@ -111,13 +127,13 @@ def _trailing_state(text: str) -> tuple[str, str, str | None] | None:
             last_word = before.split()[-1] if before.split() else ""
             if last_word.isdigit():
                 return None
-            return _US_STATE_NAME_TO_CODE[name], before, zip_code
+            return US_STATE_NAME_TO_CODE[name], before, zip_code
     m = _TRAILING_CODE_RE.search(t)
     if not m:
         return None
     raw = m.group(1)
     code = raw.upper()
-    if code not in _US_STATE_CODES or not (raw.isupper() or raw.islower()):
+    if code not in US_STATE_CODES or not (raw.isupper() or raw.islower()):
         return None
     if code == "NE" and zip_code is None:
         return None

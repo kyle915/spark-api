@@ -9577,6 +9577,46 @@ class FixTrackerMarketsView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class AuditRoutingStateView(View):
+    """POST `/internal/cron/audit-routing-state` — read-only old vs new
+    routed state for recent Torch / LD routings (`audit_routing_state`).
+
+    Params: days (default 60), limit (examples per section). Writes and
+    sends nothing. Secret-gated.
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _get(n: str) -> str:
+            return (request.GET.get(n) or request.POST.get(n) or "").strip()
+
+        cmd_args: list[str] = []
+        if _get("days").isdigit():
+            cmd_args += ["--days", _get("days")]
+        if _get("limit").isdigit():
+            cmd_args += ["--limit", _get("limit")]
+        out = io.StringIO()
+        try:
+            call_command("audit_routing_state", *cmd_args, stdout=out)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("audit_routing_state cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc), "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse({"ok": True, "log": out.getvalue()})
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        return JsonResponse({"ok": True, "endpoint": "audit-routing-state"})
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class SetRecapChoiceOptionsView(View):
     """POST `/internal/cron/set-recap-choice-options` — set a custom-recap
     choice field's allowed options (the builder only sets them at create time).
@@ -10248,6 +10288,7 @@ def _registered_views() -> dict[str, Any]:
         "repair-event-dates": RepairEventDatesView,
         "fix-neutonic-geo": FixNeutonicGeoView,
         "fix-tracker-markets": FixTrackerMarketsView,
+        "audit-routing-state": AuditRoutingStateView,
         "set-recap-choice-options": SetRecapChoiceOptionsView,
         "send-update-check-push": SendUpdateCheckPushView,
         "backfill-event-coordinates": BackfillEventCoordinatesView,

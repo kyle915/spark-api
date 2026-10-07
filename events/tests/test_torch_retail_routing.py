@@ -111,6 +111,32 @@ class TestTorchRetailStateRouting(EventsGraphQLTestCase):
                 "jason@torchdrinks.com",
             }
 
+    def test_street_named_after_a_state_routes_by_the_real_state(self):
+        always = {
+            "john@torchdrinks.com",
+            "doug@torchdrinks.com",
+            "liberty@torchdrinks.com",
+        }
+        # Old parser read "Georgia Ave" as GA (Cesar) on an Ohio store.
+        recap = self._recap(address="100 Georgia Ave, Columbus, OH 43215", name="OH Georgia Ave")
+        emails = {e.lower() for e, _ in _collect_recap_approved_recipients(recap)[0]}
+        assert emails == always | {"jason@torchdrinks.com"}
+
+        # No state in the address: the event's stored state wins, not the street.
+        ohio = em.State.objects.create(name="Ohio", code="OH", created_by=self.system_user)
+        recap = self._recap(address="13657 Texas Ave", name="OH Texas Ave")
+        recap.event.state = ohio
+        recap.event.save(update_fields=["state"])
+        emails = {e.lower() for e, _ in _collect_recap_approved_recipients(recap)[0]}
+        assert emails == always | {"jason@torchdrinks.com"}
+
+        # "Peachtree Rd NE" is a street direction; the glued zip carries GA.
+        recap = self._recap(
+            address="3954A PEACHTREE ROAD NE, , BROOKHAVEN, GA30319", name="GA Peachtree"
+        )
+        emails = {e.lower() for e, _ in _collect_recap_approved_recipients(recap)[0]}
+        assert emails == always | {"cesar@torchdrinks.com"}
+
     def test_non_ohio_excludes_jason(self):
         recap = self._recap(address="100 Ocean Dr, Miami Beach, FL 33139")
         emails = {e.lower() for e, _ in _collect_recap_approved_recipients(recap)[0]}
