@@ -1,0 +1,25 @@
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%"
+       style="border:1px solid #eeeae0;border-radius:12px;border-collapse:separate;border-spacing:0;overflow:hidden;">
+  <tr>
+    <td style="padding:10px 14px;border-bottom:1px solid #eeeae0;font-size:12px;font-weight:700;color:#3b4034;width:150px;vertical-align:top;">Plan</td>
+    <td style="padding:10px 14px;border-bottom:1px solid #eeeae0;font-size:13px;color:#0a0d09;font-weight:700;">{{ c.plan_name }}</td>
+  </tr>
+  {% for label, value in c.rows %}
+  <tr>
+    <td style="padding:10px 14px;border-bottom:1px solid #eeeae0;font-size:12px;font-weight:700;color:#3b4034;width:150px;vertical-align:top;">{{ label }}</td>
+    <td style="padding:10px 14px;border-bottom:1px solid #eeeae0;font-size:13px;color:#0a0d09;white-space:pre-line;">{{ value }}</td>
+  </tr>
+  {% endfor %}
+  {% if c.request_code %}
+  <tr>
+    <td style="padding:10px 14px;border-bottom:1px solid #eeeae0;font-size:12px;font-weight:700;color:#3b4034;vertical-align:top;">Ignite request</td>
+    <td style="padding:10px 14px;border-bottom:1px solid #eeeae0;font-size:12px;color:#0a0d09;font-family:'Courier New',Courier,monospace;letter-spacing:0.1em;">{{ c.request_code }} · Event Activation</td>
+  </tr>
+  {% endif %}
+  <tr>
+    <td style="padding:10px 14px;font-size:12px;font-weight:700;color:#3b4034;vertical-align:top;">Submitted by</td>
+    <td style="padding:10px 14px;font-size:13px;color:#0a0d09;">
+      {{ c.submitter_name }}{% if c.submitter_email and c.submitter_email != c.submitter_name %}<br/><a href="mailto:{{ c.submitter_email }}" style="color:#3b4034;text-decoration:underline;">{{ c.submitter_email }}</a>{% endif %}
+    </td>
+  </tr>
+</table>
