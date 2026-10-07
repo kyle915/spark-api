@@ -12,6 +12,7 @@ from .managers import (
     EventManager,
 )
 from utils.models import WithDefaultAttribute, Asyncable
+from .market import AddressGeoSyncMixin
 
 
 class TimeZone(models.Model):
@@ -432,7 +433,7 @@ class ActivationPlan(models.Model):
         return f"ActivationPlan {self.name!r} @ tenant {self.tenant_id}"
 
 
-class Request(models.Model):
+class Request(AddressGeoSyncMixin, models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
     name = models.CharField(max_length=255)
@@ -799,7 +800,7 @@ class EventType(WithDefaultAttribute, models.Model):
     objects = EventTypeManager()
 
 
-class Event(models.Model):
+class Event(AddressGeoSyncMixin, models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
     name = models.CharField(max_length=255)

@@ -61,7 +61,7 @@ class TestRequestRmmRouting(EventsGraphQLTestCase):
 
     # ── factory ────────────────────────────────────────────────────────
     def _make_request(self, *, tenant=None, address="1355 S Park St, Carrollton, GA 30117", **kwargs):
-        return event_models.Request.objects.create(
+        req = event_models.Request.objects.create(
             name="Kroger Pharmacy",
             address=address,
             request_type=self.request_type,
@@ -69,6 +69,11 @@ class TestRequestRmmRouting(EventsGraphQLTestCase):
             created_by=self.system_user,
             **kwargs,
         )
+        # Legacy row: saved before Request.save derived state from the address.
+        legacy = {k: kwargs.get(k) for k in ("state", "location")}
+        event_models.Request.objects.filter(pk=req.pk).update(**legacy)
+        req.refresh_from_db()
+        return req
 
     # ── compute_request_routing (read-only) ─────────────────────────────
     def test_compute_assigns_territory_owner_and_state(self):

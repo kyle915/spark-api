@@ -1,0 +1,56 @@
+name: Fix tracker markets
+
+# Manual: re-derive each request/event's market (state + city Location) from
+# its own address. The Master Tracker used to show the shared banner
+# retailer's city (every Total Wine row = "Tucson, AZ"). Writes via queryset
+# update — no emails, no sheet mirror, no time/BA/status changes.
+# Dry-run unless apply=true. See
+# events/management/commands/fix_tracker_markets.py.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tenant:
+        description: "Tenant slug or request_url_name (blank = all tenants)"
+        required: false
+        default: ""
+      apply:
+        description: "Actually write (true) or dry-run (false)"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+jobs:
+  fix-tracker-markets:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire fix-tracker-markets cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/fix-tracker-markets
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          APPLY: ${{ github.event.inputs.apply || 'false' }}
+          TENANT: ${{ github.event.inputs.tenant || '' }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            --max-time 900 \
+            -X POST "$CRON_URL" \
+            --data-urlencode "apply=$APPLY" \
+            --data-urlencode "tenant=$TENANT" \
+            -H "X-Cron-Secret: $CRON_SECRET")
+
+          echo "HTTP $STATUS"
+          python3 -c 'import json; d=json.load(open("/tmp/cron-response.json")); print(d.get("log") or d)'
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS — see body above."
+            exit 1
+          fi
