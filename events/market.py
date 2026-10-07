@@ -17,12 +17,18 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from events.routing import _US_STATE_CODES, _US_STATE_NAME_TO_CODE, extract_state_code
+from events.routing import _US_STATE_CODES, _US_STATE_NAME_TO_CODE
 
 _COUNTRY_SEGMENT_RE = re.compile(
     r"^(?:united states(?: of america)?|u\.?\s*s\.?\s*a?\.?)$", re.IGNORECASE
 )
+_TRAILING_COUNTRY_RE = re.compile(
+    r"[\s,]+(?:united states(?: of america)?|usa|u\.s\.a?\.?)\.?$", re.IGNORECASE
+)
 _ZIP_RE = re.compile(r"\b(\d{5})(?:-\d{4})?\b")
+_TRAILING_ZIP_RE = re.compile(r"[\s,]+(\d{5})(?:-\d{4})?$")
+_TRAILING_CODE_RE = re.compile(r"(?:^|[\s.,])([A-Za-z]{2})$")
+_STATE_NAMES_LONGEST_FIRST = sorted(_US_STATE_NAME_TO_CODE, key=len, reverse=True)
 
 
 @dataclass(frozen=True)
@@ -54,14 +60,52 @@ def _segment_state(segment: str) -> str | None:
     return _US_STATE_NAME_TO_CODE.get(name)
 
 
+def _trailing_state(text: str) -> tuple[str, str, str | None] | None:
+    """``(state_code, text_before_state, zip)`` when ``text`` *ends* with a
+    state ("Chicago IL", "Orlando Florida 32803", "Sandy, UT 84070 United
+    States"), else None.
+
+    Only the end of the string counts, so street names never read as states
+    ("13657 Washington Street", "3101 Texas Sage"). A title-case code is a
+    word, not a state ("... Portland Or"), and "NE" needs a zip after it
+    because "Peachtree Rd NE" is a street direction, not Nebraska.
+    """
+    t = _TRAILING_COUNTRY_RE.sub("", text.strip()).strip(" .,")
+    zip_code: str | None = None
+    zm = _TRAILING_ZIP_RE.search(t)
+    if zm:
+        zip_code = zm.group(1)
+        t = t[: zm.start()].strip(" .,")
+    low = t.lower()
+    for name in _STATE_NAMES_LONGEST_FIRST:
+        if low.endswith(name) and (len(low) == len(name) or low[-len(name) - 1] in " .,"):
+            before = t[: len(t) - len(name)].strip(" .,")
+            last_word = before.split()[-1] if before.split() else ""
+            if last_word.isdigit():
+                return None
+            return _US_STATE_NAME_TO_CODE[name], before, zip_code
+    m = _TRAILING_CODE_RE.search(t)
+    if not m:
+        return None
+    raw = m.group(1)
+    code = raw.upper()
+    if code not in _US_STATE_CODES or not (raw.isupper() or raw.islower()):
+        return None
+    if code == "NE" and zip_code is None:
+        return None
+    return code, t[: m.start(1)].strip(" .,"), zip_code
+
+
 def parse_address_geo(address: str | None) -> AddressGeo:
     """Pull ``(city, state_code, zip)`` out of a US street address.
 
     The state is the last comma segment that is only a state ("CA 92108",
     "Missouri", "New York") — so "4 Pennsylvania Plaza, New York, New York"
-    is NY — falling back to :func:`extract_state_code` for comma-less forms.
-    City is the segment right before the state segment (never one that
-    starts with a street number).
+    is NY. City is the segment right before it (never one that starts with
+    a street number). Comma-less tails ("1357 N Elston Ave, Chicago IL",
+    "2714 W Southern Ave Tempe AZ 85282") fall back to a state at the very
+    end of the address; the city is taken only when it sits alone after the
+    last comma. A state named only mid-address is not a state.
     """
     if not address:
         return AddressGeo(None, None, None)
@@ -81,7 +125,16 @@ def parse_address_geo(address: str | None) -> AddressGeo:
             if not candidate[0].isdigit() and not _ZIP_RE.search(candidate):
                 city = _tidy_city(candidate) or None
         return AddressGeo(city, code, zm.group(1) if zm else None)
-    return AddressGeo(None, extract_state_code(address), None)
+    if not segments:
+        return AddressGeo(None, None, None)
+    tail = _trailing_state(segments[-1])
+    if tail is None:
+        return AddressGeo(None, None, None)
+    code, before, zip_code = tail
+    city = None
+    if len(segments) > 1 and before and not any(ch.isdigit() for ch in before):
+        city = _tidy_city(before) or None
+    return AddressGeo(city, code, zip_code)
 
 
 @dataclass(frozen=True)
