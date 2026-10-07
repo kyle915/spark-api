@@ -308,6 +308,60 @@ class TestTorchRetailStateRouting(EventsGraphQLTestCase):
         assert "john@torchdrinks.com" in recipients
         assert "james@torchdrinks.com" in recipients
 
+    def _run_digest(self, *args):
+        from django.core.management import call_command
+        from unittest import mock
+        from tenants.management.commands import send_client_weekly_digest as cmd_mod
+
+        type(self.torch).objects.filter(id=self.torch.id).update(
+            client_weekly_digest_enabled=True
+        )
+        captured = []
+
+        class _FakeMailer:
+            def __init__(self, **kwargs):
+                captured.append(kwargs)
+
+            def send(self):
+                return None
+
+        with (
+            mock.patch.object(cmd_mod, "ClientWeeklyDigestMailer", _FakeMailer),
+            mock.patch.object(cmd_mod, "build_weekly_digest") as build,
+        ):
+            build.return_value = mock.Mock(
+                has_content=True, completed_activations=1, upcoming_total=0
+            )
+            call_command("send_client_weekly_digest", f"--tenant={self.torch.id}", "--force", *args)
+        return captured, build
+
+    def test_only_email_sends_to_that_one_recipient_as_of(self):
+        import datetime
+
+        captured, build = self._run_digest(
+            "--only-email=Collin@TorchEnterprise.com", "--as-of=2026-10-05T14:42:28Z"
+        )
+        assert len(captured) == 1
+        assert captured[0]["recipients"] == ["collin@torchenterprise.com"]
+        assert build.call_args[0][1] == datetime.datetime(
+            2026, 10, 5, 14, 42, 28, tzinfo=datetime.timezone.utc
+        )
+
+    def test_only_email_not_on_list_sends_nothing(self):
+        captured, _ = self._run_digest("--only-email=stray@torchdrinks.com")
+        assert captured == []
+
+    def test_only_email_dry_run_sends_nothing(self):
+        captured, _ = self._run_digest("--only-email=collin@torchenterprise.com", "--dry-run")
+        assert captured == []
+
+    def test_only_email_requires_tenant(self):
+        from django.core.management import call_command
+        from django.core.management.base import CommandError
+
+        with pytest.raises(CommandError):
+            call_command("send_client_weekly_digest", "--only-email=collin@torchenterprise.com")
+
     def test_collin_weekly_only_never_per_recap(self):
         assert "collin@torchenterprise.com" in torch_weekly_digest_emails()
         for state in (None, "FL", "OH", "TX", "GA"):

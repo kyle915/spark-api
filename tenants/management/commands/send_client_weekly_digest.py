@@ -28,6 +28,10 @@ Flags:
     --dry-run        Build the digest + log recipients, but send NOTHING.
     --tenant <id>    Only this tenant (for testing a single brand).
     --force          Send even if the week is quiet (skips the has_content gate).
+    --only-email <e> Catch-up resend to ONE address. Requires --tenant, and the
+                     address must already be on that tenant's digest list.
+    --as-of <iso>    Build the digest as of this datetime (reproduce a past
+                     Monday's window for a catch-up resend).
 
 Usage:
     python manage.py send_client_weekly_digest
@@ -46,10 +50,12 @@ from the default branch (``main``), but the endpoint deploys from ``develop``.
 
 from __future__ import annotations
 
+import datetime
 import logging
 
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 
 from recaps.envelopes import ClientWeeklyDigestMailer
 from recaps.weekly_digest import build_weekly_digest
@@ -84,12 +90,32 @@ class Command(BaseCommand):
             action="store_true",
             help="Send even if the week is quiet (skip the has_content gate).",
         )
+        parser.add_argument(
+            "--only-email",
+            default="",
+            help="Send to this one address only. Requires --tenant; must be on the tenant's digest list.",
+        )
+        parser.add_argument(
+            "--as-of",
+            default="",
+            help="ISO datetime to build the digest as of (default: now).",
+        )
 
     def handle(self, *args, **opts):
         dry_run = bool(opts["dry_run"])
         force = bool(opts["force"])
         only_tenant = opts.get("tenant")
+        only_email = (opts.get("only_email") or "").strip()
+        if only_email and only_tenant is None:
+            raise CommandError("--only-email requires --tenant")
         now = timezone.now()
+        if opts.get("as_of"):
+            as_of = parse_datetime(opts["as_of"].strip())
+            if as_of is None:
+                raise CommandError(f"--as-of is not an ISO datetime: {opts['as_of']}")
+            if timezone.is_naive(as_of):
+                as_of = timezone.make_aware(as_of, datetime.timezone.utc)
+            now = as_of
 
         # Candidate tenants: opted-in + active only. --tenant narrows to one id
         # WITHOUT bypassing the opt-in gate, so testing still can't email a
@@ -103,7 +129,9 @@ class Command(BaseCommand):
         mode = "DRY-RUN (no email will be sent)" if dry_run else "live"
         self.stdout.write(
             f"Client weekly digest — as of {now:%Y-%m-%d}, mode {mode}"
-            f"{' (forced)' if force else ''}."
+            f"{' (forced)' if force else ''}"
+            f"{f' (window ends {now.isoformat()})' if opts.get('as_of') else ''}"
+            f"{f' (only {only_email})' if only_email else ''}."
         )
 
         enabled = 0
@@ -120,6 +148,16 @@ class Command(BaseCommand):
                     # Torch weekly rollup goes to the full sales org + Ryan.
                     # Per-recap mail uses the by-state list without Ryan.
                     recipients = torch_weekly_digest_emails()
+                if only_email:
+                    matched = [r for r in recipients if r.strip().lower() == only_email.lower()]
+                    if not matched:
+                        skipped_no_recipients += 1
+                        self.stdout.write(
+                            f"  - {tenant.name} (id={tenant.id}): SKIP — {only_email} "
+                            f"is not on this tenant's digest list."
+                        )
+                        continue
+                    recipients = matched[:1]
                 if not recipients:
                     skipped_no_recipients += 1
                     self.stdout.write(
