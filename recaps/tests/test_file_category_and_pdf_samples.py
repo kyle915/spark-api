@@ -19,6 +19,8 @@ B6 — per-SKU product samples (and sales performance) were missing from the
     custom recaps.
 """
 
+import json
+
 import pytest
 
 from asgiref.sync import sync_to_async
@@ -659,8 +661,11 @@ class TestCustomRecapPdfSamplesB6(_Base):
 
     @pytest.mark.asyncio
     async def test_custom_recap_pdf_samples_section_present_when_empty(self):
-        # Even with no samples, the section header should render (with N/A) so
-        # the custom layout matches the legacy layout's structure.
+        # A template that asks for samples + sales keeps both cards (N/A)
+        # even when the BA logged none.
+        self.template.product_samples = True
+        self.template.sales_performance = True
+        await sync_to_async(self.template.save)()
         custom_recap = await sync_to_async(self._build_custom_recap)(
             with_sample=False, with_sale=False
         )
@@ -669,3 +674,135 @@ class TestCustomRecapPdfSamplesB6(_Base):
 
         assert "Product Samples" in html
         assert "Sales Performance" in html
+
+    @pytest.mark.asyncio
+    async def test_custom_recap_pdf_skips_cards_template_never_asks_for(self):
+        custom_recap = await sync_to_async(self._build_custom_recap)(
+            with_sample=False, with_sale=False
+        )
+
+        html = await sync_to_async(build_recap_pdf_html)(custom_recap, [])
+
+        assert "Product Samples" not in html
+        assert "Sales Performance" not in html
+        assert "<li>N/A</li>" not in html
+
+    def _field(self, section, name, kind="longtext", order=0):
+        field_type, _ = recap_models.CustomRecapFieldType.objects.get_or_create(
+            name=kind, defaults={"created_by": self.system_user}
+        )
+        return recap_models.CustomField.objects.create(
+            custom_recap_template=self.template,
+            recap_section=section,
+            name=name,
+            custom_field_type=field_type,
+            order=order,
+            created_by=self.system_user,
+        )
+
+    def _section(self, name, order):
+        return recap_models.RecapSection.objects.create(
+            tenant=self.tenant, name=name, order=order, created_by=self.system_user
+        )
+
+    def _answer(self, recap, field, value):
+        recap_models.CustomFieldValue.objects.create(
+            custom_recap=recap, custom_field=field, value=value, created_by=self.system_user
+        )
+
+    def _build_seeding_recap(self):
+        self.template.name = "Torch THC · Product Seeding Recap"
+        self.template.product_samples = True
+        self.template.save()
+        details = self._section("Drop-off Details", 0)
+        mileage = self._section("Mileage", 1)
+        drop_offs = self._field(details, "Drop-off Locations")
+        feedback = self._field(details, "Account feedback", order=1)
+        miles = self._field(mileage, "Total mileage", kind="number")
+        recap = self._build_custom_recap(with_sample=True, with_sale=False)
+        stops = [
+            {
+                "placeName": "Gateway Wine & Spirits",
+                "address": "3120 S Grand Blvd, St. Louis, MO 63118",
+                "lat": 38.60412,
+                "lng": -90.24321,
+                "source": "places",
+                "skus": [
+                    {"productId": str(self.product.id), "productName": "Mountain Water 16oz", "cases": 2},
+                    {"productId": "999", "productName": "Black Cherry 10mg 4-Pack", "cases": 1},
+                ],
+            },
+            {
+                "placeName": "The Corner Tap",
+                "address": "",
+                "lat": 38.62679,
+                "lng": -90.25863,
+                "source": "gps",
+                "skus": [{"productId": "998", "productName": "Variety Pack", "cases": 1}],
+            },
+        ]
+        self._answer(recap, drop_offs, json.dumps(stops))
+        self._answer(recap, feedback, "Buyer wants shelf talkers")
+        self._answer(recap, miles, "38")
+        return recap
+
+    @pytest.mark.asyncio
+    async def test_seeding_recap_pdf_prints_drop_offs_as_rows(self):
+        recap = await sync_to_async(self._build_seeding_recap)()
+
+        html = await sync_to_async(build_recap_pdf_html)(recap, [])
+
+        assert "<strong>Gateway Wine &amp; Spirits · 3 cases</strong>" in html
+        assert "<em>3120 S Grand Blvd, St. Louis, MO 63118</em>" in html
+        assert "<li>Mountain Water 16oz: 2</li>" in html
+        assert "<li>Black Cherry 10mg 4-Pack: 1</li>" in html
+        assert "<strong>The Corner Tap · 1 case</strong>" in html
+        assert "<em>38.62679, -90.25863</em>" in html
+        assert "2 locations · 4 cases total" in html
+        assert "38" in html.split("Total mileage", 1)[1]
+        body = html.split("<body>", 1)[1]
+        for raw in ("placeName", "productId", "{'", '{"', "[{", "skus"):
+            assert raw not in body
+        assert "Sales Performance" not in html
+        assert "Cases Dropped by SKU" in html
+        assert "Mountain Water 16oz · Cases: 42" in html
+        assert "Product Samples" not in html
+
+    @pytest.mark.asyncio
+    async def test_retail_recap_with_sales_fields_keeps_sales_card(self):
+        def build():
+            self.template.name = "Torch THC-Retail Sampling"
+            self.template.product_samples = True
+            self.template.save()
+            engagement = self._section("Consumer Engagement", 0)
+            singles = self._field(engagement, "How many single cans did consumers purchase?", "FormInputInteger")
+            packs = self._field(engagement, "How many packs did consumers purchase?", "FormInputInteger", 1)
+            products = self._field(engagement, "Products Sampled", "multiselect", 2)
+            recap = self._build_custom_recap(with_sample=True, with_sale=False)
+            self._answer(recap, singles, "9")
+            self._answer(recap, packs, "14")
+            self._answer(recap, products, json.dumps(["Beverage — Mountain Water 16oz"]))
+            return recap
+
+        recap = await sync_to_async(build)()
+        html = await sync_to_async(build_recap_pdf_html)(recap, [])
+
+        assert "Sales Performance" in html
+        assert "Total units sold: 23" in html
+        assert "Product Samples" in html
+        assert "Mountain Water 16oz - Qty: 42" in html
+        assert "Beverage — Mountain Water 16oz" in html
+        assert '["' not in html.split("<body>", 1)[1]
+
+    @pytest.mark.asyncio
+    async def test_retail_recap_with_unanswered_sales_fields_keeps_na_card(self):
+        def build():
+            engagement = self._section("Consumer Engagement", 0)
+            self._field(engagement, "How many packs did consumers purchase?", "FormInputInteger")
+            return self._build_custom_recap(with_sample=False, with_sale=False)
+
+        recap = await sync_to_async(build)()
+        html = await sync_to_async(build_recap_pdf_html)(recap, [])
+
+        assert "Sales Performance" in html.split("<h2>Images</h2>", 1)[0]
+        assert "How many packs" not in html

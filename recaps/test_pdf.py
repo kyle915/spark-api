@@ -224,7 +224,13 @@ def test_event_activation_custom_recap_skips_empty_sales_card():
             name="Fest",
             approved=True,
             ambassador=None,
-            custom_recap_template=SimpleNamespace(name=template_name, event_type=None),
+            custom_recap_template=SimpleNamespace(
+                name=template_name,
+                event_type=None,
+                custom_field=RelatedList(
+                    [SimpleNamespace(name="How many packs did consumers purchase?")]
+                ),
+            ),
             total_engagements=312,
             event=SimpleNamespace(
                 name="Fest",
@@ -390,13 +396,11 @@ def test_build_recap_pdf_html_groups_custom_fields_by_recap_section():
     assert "Custom Recap Template" not in html
     assert "Created At" not in html
     assert "Updated At" not in html
-    # #706 deliberately gave custom recaps their own per-SKU cards, and
-    # renders them even with no rows (an "N/A" placeholder) so the custom
-    # layout keeps the same structure as the legacy one. Asserted from the
-    # other side in recaps/tests/test_file_category_and_pdf_samples.py
-    # (test_custom_recap_pdf_samples_section_present_when_empty).
-    assert "Product Samples" in html
-    assert "Sales Performance" in html
+    # No sample/sales toggles or fields on this template, so no N/A cards.
+    # The template-asks-for-it side lives in
+    # recaps/tests/test_file_category_and_pdf_samples.py.
+    assert "Product Samples" not in html
+    assert "Sales Performance" not in html
     assert 'class="spark-mark"' in html
     assert 'alt="Spark by Ignite"' in html
     assert "data:image/png;base64," in html or SPARK_MARK_URL in html
