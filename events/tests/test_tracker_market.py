@@ -44,6 +44,10 @@ query Counts($filters: RequestFiltersInput) {
         ("EDMOND, OK, 73034", ("Edmond", "OK", "73034")),
         ("405 East Nifong Blvd, Columbia, Missouri", ("Columbia", "MO", None)),
         ("OREGON CITY\tOR\t97045", (None, "OR", None)),
+        ("4 Pennsylvania Plaza, New York, New York", ("New York", "NY", None)),
+        ("1648 NW Chipman Road, LEE'S SUMMIT, MO 64081", ("Lee's Summit", "MO", "64081")),
+        ("Tampa / St. Pete, FL", ("Tampa / St. Pete", "FL", None)),
+        ("123 Main St, Indiana, PA 15701", ("Indiana", "PA", "15701")),
         ("Total Wine", (None, None, None)),
         ("", (None, None, None)),
     ],
@@ -259,6 +263,7 @@ class TestTrackerMarket(EventsGraphQLTestCase):
         assert "apply=False" in log
         assert "tracker market: Tucson, AZ → San Diego, CA" in log
         assert "kept location 'Phoenix'" in log
+        assert "kept location 'Tucson'" in log
         assert "address has no US state" in log
         wrong_state.refresh_from_db()
         assert wrong_state.state_id == self.az.id
@@ -268,7 +273,7 @@ class TestTrackerMarket(EventsGraphQLTestCase):
         )
         for r in (inherited, relink, wrong_state, hand_set, no_addr):
             r.refresh_from_db()
-        assert (inherited.state_id, inherited.location_id) == (self.az.id, None)
+        assert (inherited.state_id, inherited.location_id) == (self.az.id, self.tucson.id)
         assert (relink.state_id, relink.location_id) == (self.az.id, self.tempe.id)
         assert (wrong_state.state_id, wrong_state.location_id) == (self.ca.id, None)
         assert hand_set.location_id == self.phoenix.id

@@ -11,8 +11,7 @@ Per live Request and Event with a parseable US address:
   * ``state`` is set to the address state;
   * ``location`` is relinked to the address city's Location when the catalog
     has one; a location in another state is cleared; a same-state location for
-    a different city is cleared only when it was inherited from the shared
-    retailer account (the bug's signature) — otherwise it is kept and listed.
+    a different city with no catalog row is kept and listed for review.
 
 Writes use queryset ``.update()`` — no post_save signals, no emails, no sheet
 mirror, no change to times / BAs / status / RMM. Dry-run unless ``--apply``.
@@ -119,14 +118,7 @@ class Command(BaseCommand):
                             f"address={obj.address!r}"
                         )
                     continue
-                inherited = bool(
-                    obj.location_id
-                    and obj.retailer_id
-                    and obj.retailer.location_id == obj.location_id
-                )
-                changes = geo_changes(
-                    obj, res, clear_city_mismatch=inherited, lookup=lookup
-                )
+                changes = geo_changes(obj, res, lookup=lookup)
                 before_display = _legacy_market(obj)
                 after_state = changes.get("state_id", obj.state_id)
                 after_loc = changes.get("location_id", obj.location_id)
@@ -156,8 +148,8 @@ class Command(BaseCommand):
                     stats[key]["kept_location_city_differs"] += 1
                     flagged.append(
                         f"  [{tname}] {label} {ident}: kept location "
-                        f"{loc_names.get(after_loc)!r} (set by hand, no "
-                        f"'{res.geo.city}' Location) — market shows "
+                        f"{loc_names.get(after_loc)!r} (no '{res.geo.city}' "
+                        f"Location in the catalog) — market shows "
                         f"{after_display!r}; address={obj.address!r}"
                     )
                 if not changes:
@@ -172,7 +164,6 @@ class Command(BaseCommand):
                     f"      tracker market: {before_display or '∅'} → {after_display or '∅'}\n"
                     f"      FKs: {fk_label(obj.state_id, obj.location_id)} → "
                     f"{fk_label(after_state, after_loc)}"
-                    + ("  (location inherited from retailer)" if inherited else "")
                 )
                 pending.append((obj.id, changes))
             if apply and pending:
