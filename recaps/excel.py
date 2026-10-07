@@ -5,6 +5,11 @@ from io import BytesIO
 from typing import Iterable
 from openpyxl import Workbook
 
+from recaps.drop_off_locations import (
+    drop_off_summary_lines,
+    looks_like_drop_off_locations,
+    parse_drop_off_locations,
+)
 from utils.gcs import extract_blob_name_from_url
 
 INVALID_SHEET_CHARS = set(r'[]:*?/\\')
@@ -38,7 +43,8 @@ def _format_field_value(value) -> str:
 
     Multiselect answers are stored as a JSON array of option strings
     (e.g. '["Detroit", "Lansing"]'); render them as a readable comma list
-    instead of raw JSON. Single-select / text / number pass through _safe.
+    instead of raw JSON. Drop-off Locations become one line per stop.
+    Single-select / text / number pass through _safe.
     """
     if isinstance(value, str):
         stripped = value.strip()
@@ -47,6 +53,8 @@ def _format_field_value(value) -> str:
                 parsed = json.loads(stripped)
             except (ValueError, TypeError):
                 return _safe(value)
+            if looks_like_drop_off_locations(parsed):
+                return "\n".join(drop_off_summary_lines(parse_drop_off_locations(parsed)))
             if isinstance(parsed, list):
                 return ", ".join(str(v) for v in parsed)
     return _safe(value)

@@ -4,12 +4,26 @@ import base64
 import json
 import re
 from functools import lru_cache
+from html import escape
 from io import BytesIO
 from pathlib import Path
 from typing import Iterable
 
 from PIL import Image, ImageOps
 from pillow_heif import register_heif_opener
+
+from recaps.drop_off_locations import (
+    DropOffLocation,
+    drop_off_summary_lines,
+    is_drop_off_locations_field,
+    location_title,
+    looks_like_drop_off_locations,
+    parse_drop_off_locations,
+    sku_label,
+)
+from recaps.sample_qty import sample_qty_labels
+from recaps.template_fallback import is_activation_template
+from recaps.types import _sold_unit_lines
 
 # We import WeasyPrint lazily inside build_recap_pdf to avoid startup crashes
 # when the native dependencies are missing.
@@ -278,13 +292,27 @@ def _event_retailer(recap):
     return name or None
 
 
+def _readable_json(parsed) -> str:
+    """Plain text for a JSON answer that isn't a known shape — never a repr."""
+    if isinstance(parsed, dict):
+        return ", ".join(
+            f"{key}: {_readable_json(val)}"
+            for key, val in parsed.items()
+            if val not in (None, "", [], {})
+        )
+    if isinstance(parsed, list):
+        return "; ".join(_readable_json(item) for item in parsed)
+    return str(parsed)
+
+
 def _format_field_value(value):
     """Render a stored custom-field value for display.
 
     A multiselect answer is persisted as a JSON array of the chosen option
     strings (e.g. '["Detroit", "Lansing"]'); show it as a readable comma
-    list rather than raw JSON. Everything else (text / number / single
-    select) is already display-ready and passes through untouched.
+    list rather than raw JSON. Drop-off Locations become one line per stop.
+    Everything else (text / number / single select) is already
+    display-ready and passes through untouched.
     """
     if isinstance(value, str):
         stripped = value.strip()
@@ -293,8 +321,12 @@ def _format_field_value(value):
                 parsed = json.loads(stripped)
             except (ValueError, TypeError):
                 return value
+            if looks_like_drop_off_locations(parsed):
+                return "; ".join(drop_off_summary_lines(parse_drop_off_locations(parsed)))
             if isinstance(parsed, list):
-                return ", ".join(str(v) for v in parsed)
+                return ", ".join(
+                    v if isinstance(v, str) else _readable_json(v) for v in parsed
+                )
     return value
 
 
@@ -303,9 +335,28 @@ def _is_blank_answer(value) -> bool:
     return text in ("", "[]", "null")
 
 
-def _custom_field_sections(recap) -> dict[str, list[tuple[str, str]]]:
-    """Answered custom fields by section; a section with no answers is absent."""
-    sections: dict[str, list[tuple[str, str]]] = {}
+def _drop_off_value(field_name: str | None, raw) -> list[DropOffLocation] | None:
+    """Parsed stops for a Drop-off Locations answer; None for other fields."""
+    if not is_drop_off_locations_field(field_name):
+        try:
+            parsed = json.loads(str(raw).strip())
+        except (TypeError, ValueError):
+            return None
+        if not looks_like_drop_off_locations(parsed):
+            return None
+    return [
+        loc
+        for loc in parse_drop_off_locations(raw)
+        if loc.place_name or loc.pin or loc.skus
+    ]
+
+
+def _custom_field_sections(recap) -> dict[str, list[tuple[str, object]]]:
+    """Answered custom fields by section; a section with no answers is absent.
+
+    Drop-off Locations answers stay structured (a list of stops) so the
+    renderer can print one row per stop."""
+    sections: dict[str, list[tuple[str, object]]] = {}
     for custom_field_value in _related_items(recap, "custom_field_value"):
         if _is_blank_answer(custom_field_value.value):
             continue
@@ -313,10 +364,67 @@ def _custom_field_sections(recap) -> dict[str, list[tuple[str, str]]]:
         recap_section = getattr(custom_field, "recap_section", None)
         section_name = getattr(recap_section, "name", None) or "Custom Fields"
         field_name = getattr(custom_field, "name", None) or "Custom field"
+        stops = _drop_off_value(field_name, custom_field_value.value)
+        if stops is not None:
+            if stops:
+                sections.setdefault(section_name, []).append((field_name, stops))
+            continue
         sections.setdefault(section_name, []).append(
             (field_name, _format_field_value(custom_field_value.value))
         )
     return sections
+
+
+def _drop_off_locations_html(label: str, stops: list[DropOffLocation]) -> str:
+    """One row per stop: place · cases, address/pin, then SKU × cases."""
+    items = []
+    for i, loc in enumerate(stops):
+        title = location_title(loc, i)
+        head = escape(title)
+        if loc.cases:
+            head += f" · {loc.cases:,} case{'' if loc.cases == 1 else 's'}"
+        pin = loc.pin if loc.pin and loc.pin != title else ""
+        skus = "".join(
+            f"<li>{escape(_display_product_name(sku_label(s)))}: {s.cases:,}</li>"
+            for s in loc.skus
+            if s.cases > 0
+        )
+        items.append(
+            f"<li><strong>{head}</strong>"
+            + (f"<em>{escape(pin)}</em>" if pin else "")
+            + (f"<ul>{skus}</ul>" if skus else "")
+            + "</li>"
+        )
+    total_cases = sum(loc.cases for loc in stops)
+    totals = f"{len(stops)} location{'' if len(stops) == 1 else 's'}"
+    if total_cases:
+        totals += f" · {total_cases:,} case{'' if total_cases == 1 else 's'} total"
+    return (
+        f'<div class="drop-offs"><span>{escape(_display_field_label(label))}</span>'
+        f'<ol>{"".join(items)}</ol>'
+        f'<p class="drop-offs-total">{totals}</p></div>'
+    )
+
+
+def _template_field_names(recap, template) -> list[str]:
+    names = [
+        getattr(f, "name", None) for f in _related_items(template, "custom_field")
+    ]
+    names += [
+        getattr(getattr(cfv, "custom_field", None), "name", None)
+        for cfv in _related_items(recap, "custom_field_value")
+    ]
+    return [n for n in names if n]
+
+
+def _template_collects_sales(recap, template) -> bool:
+    """A template asks for sales via the Sales Performance toggle or a
+    cans / packs / units-sold field (the same matcher the KPIs use)."""
+    if template is None or getattr(template, "sales_performance", False):
+        return True
+    return bool(
+        _sold_unit_lines((name, "1") for name in _template_field_names(recap, template))
+    )
 
 
 def detect_image_type(data: bytes) -> str | None:
@@ -570,6 +678,8 @@ def build_recap_pdf_html(
     custom_field_sections = _custom_field_sections(recap)
 
     def _render_custom_field(field_name: str, value) -> str:
+        if isinstance(value, list):
+            return _drop_off_locations_html(field_name, value)
         # Image-type field: value is a blob path we pre-fetched bytes for.
         # Embed the image (reusing the gallery figure/img styling) rather
         # than printing the raw blob path. bytes_to_data_uri handles the
@@ -818,13 +928,8 @@ def build_recap_pdf_html(
     # branches keep their inline copies, so their output is unchanged.
     samples_sales_html = ""
     if is_custom_recap:
-        # Event Activations never sell, so they skip the always-empty card.
-        from recaps.template_fallback import is_activation_template
-
         template = getattr(recap, "custom_recap_template", None)
         if not sales:
-            from recaps.types import _sold_unit_lines
-
             unit_lines = _sold_unit_lines(
                 (
                     getattr(getattr(cfv, "custom_field", None), "name", None),
@@ -836,7 +941,13 @@ def build_recap_pdf_html(
                 sales = [f"{_display_field_label(name)}: {n:,}" for name, n in unit_lines]
                 total = sum(n for _, n in unit_lines)
                 sales.append(f"Total units sold: {total:,}")
-        show_sales = bool(sales) or template is None or not is_activation_template(template)
+        # An empty card only prints (as N/A) when the template asks for that
+        # data; Event Activations never sell, and seeding / sampling-only
+        # templates have no sales fields.
+        show_sales = bool(sales) or (
+            (template is None or not is_activation_template(template))
+            and _template_collects_sales(recap, template)
+        )
         sales_card = (
             f"""
     <section class="card">
@@ -849,9 +960,16 @@ def build_recap_pdf_html(
             if show_sales
             else ""
         )
-        from recaps.sample_qty import sample_qty_labels
-
         qty_label, qty_total_label = sample_qty_labels(template)
+        samples_heading = "Product Samples"
+        # Product Seeding stores drop-off cases as the per-SKU rows.
+        if any(
+            isinstance(value, list)
+            for fields in custom_field_sections.values()
+            for _, value in fields
+        ):
+            samples_heading = "Cases Dropped by SKU"
+            qty_label, qty_total_label = "Cases", "Total cases dropped"
         sample_items = [f"<li>{safe(item)}</li>" for item in samples]
         if qty_label and product_samples:
             sample_items = [
@@ -866,14 +984,22 @@ def build_recap_pdf_html(
             sample_items.append(
                 f"<li><strong>{safe(qty_total_label)}: {total:,}</strong></li>"
             )
-        samples_sales_html = f"""
+        show_samples = bool(sample_items) or (
+            template is None or bool(getattr(template, "product_samples", False)) or bool(qty_label)
+        )
+        samples_card = (
+            f"""
     <section class="card">
-      <h2>Product Samples</h2>
+      <h2>{samples_heading}</h2>
       <ul class="list">
         {"".join(sample_items) or "<li>N/A</li>"}
       </ul>
     </section>
-{sales_card}"""
+"""
+            if show_samples
+            else ""
+        )
+        samples_sales_html = f"{samples_card}{sales_card}"
 
     if public_share:
         eyebrow_html = (
@@ -950,6 +1076,31 @@ _PDF_BASE_CSS = """
             width: auto;
             display: block;
             margin: 0 0 8px 0;
+        }"""
+
+_DROP_OFF_CSS = """
+        .stack .drop-offs ol {
+            flex-basis: 100%;
+            margin: 0;
+            padding-left: 18px;
+            color: #14160f;
+        }
+        .stack .drop-offs ol > li { margin-bottom: 8px; font-size: 11px; }
+        .stack .drop-offs em {
+            display: block;
+            font-style: normal;
+            font-size: 10px;
+            color: #5c6154;
+            margin-top: 2px;
+        }
+        .stack .drop-offs ul { margin: 3px 0 0 0; padding-left: 14px; font-size: 10px; }
+        .stack .drop-offs .drop-offs-total {
+            flex-basis: 100%;
+            max-width: none;
+            text-align: left;
+            font-size: 10px;
+            font-weight: 600;
+            color: #5c6154;
         }"""
 
 
@@ -1150,7 +1301,7 @@ def build_recap_pdf(
         """
     if accent != _DEFAULT_PDF_ACCENT:
         theme_css = theme_css.replace(_DEFAULT_PDF_ACCENT, accent)
-    css = CSS(string=_PDF_BASE_CSS + theme_css)
+    css = CSS(string=_PDF_BASE_CSS + theme_css + _DROP_OFF_CSS)
 
     return HTML(string=html).write_pdf(stylesheets=[css])
 
@@ -1553,5 +1704,5 @@ def build_campaign_report_pdf(
         .empty { margin: 0; color: #9ca3af; font-style: italic; }
     """
 
-    css = CSS(string=_PDF_BASE_CSS + single_pdf_css + cover_css)
+    css = CSS(string=_PDF_BASE_CSS + single_pdf_css + cover_css + _DROP_OFF_CSS)
     return HTML(string=html_doc).write_pdf(stylesheets=[css])
