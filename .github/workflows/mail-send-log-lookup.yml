@@ -1,0 +1,57 @@
+name: Mail send log lookup (read-only)
+
+# Confirms whether Resend accepted mail to one address: greps spark-api-new
+# Cloud Run logs for the ResendMailDriver lines ("Resend send to=... id=..." on
+# success, "Resend send FAILED" / "Inline mail send failed" otherwise).
+# Read-only — never sends or changes anything.
+
+on:
+  workflow_dispatch:
+    inputs:
+      recipient:
+        description: "Email address to look up"
+        required: true
+        type: string
+      freshness:
+        description: "How far back to search (gcloud --freshness, e.g. 2h, 1d)"
+        required: false
+        default: "1d"
+        type: string
+
+env:
+  GCP_PROJECT_ID: spark-479222
+  CLOUD_RUN_SERVICE: spark-api-new
+
+jobs:
+  lookup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_DEPLOY_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Read mail send log lines
+        env:
+          RECIPIENT: ${{ github.event.inputs.recipient }}
+          FRESHNESS: ${{ github.event.inputs.freshness || '1d' }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$RECIPIENT" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+$ ]]; then
+            echo "::error::recipient must be a plain email address"
+            exit 1
+          fi
+          if ! [[ "$FRESHNESS" =~ ^[0-9]+[smhd]$ ]]; then
+            echo "::error::freshness must look like 2h or 1d"
+            exit 1
+          fi
+          FILTER="resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"$CLOUD_RUN_SERVICE\" AND (\"Resend send\" OR \"mail send failed\") AND \"$RECIPIENT\""
+          gcloud logging read "$FILTER" \
+            --project="$GCP_PROJECT_ID" \
+            --freshness="$FRESHNESS" \
+            --order=asc \
+            --limit=50 \
+            --format='value(timestamp,severity,textPayload,jsonPayload.message)'
