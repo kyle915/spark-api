@@ -2466,6 +2466,47 @@ def selectable_event_types(tenant) -> list:
         return []
 
 
+def _program_key(name: str | None) -> str:
+    return re.sub(r"[^a-z0-9]+", "", (name or "").lower())
+
+
+def checkin_program_picker(tenant) -> tuple[list[dict], str]:
+    """``(options, title)`` for the walk-up program picker.
+
+    Each option keeps the real event type ``name`` (the page keys location
+    and venue copy off it) plus the BA-facing ``label`` / ``description``
+    from ``Tenant.checkin_program_picker``. Configured programs come first in
+    config order; the rest follow in id order. A malformed config falls back
+    to plain names so the link never closes over copy.
+    """
+    offered = selectable_event_types(tenant)
+    cfg = getattr(tenant, "checkin_program_picker", None)
+    cfg = cfg if isinstance(cfg, dict) else {}
+    rows = cfg.get("options") if isinstance(cfg.get("options"), list) else []
+    by_key: dict[str, tuple[int, dict]] = {}
+    for idx, row in enumerate(rows):
+        if isinstance(row, dict) and row.get("eventType"):
+            by_key.setdefault(_program_key(str(row["eventType"])), (idx, row))
+
+    ranked = []
+    for pos, et in enumerate(offered):
+        idx, row = by_key.get(_program_key(et.name), (len(rows) + pos, {}))
+        ranked.append(
+            (
+                idx,
+                {
+                    "id": str(et.id),
+                    "name": et.name or "",
+                    "label": str(row.get("label") or "").strip(),
+                    "description": str(row.get("description") or "").strip(),
+                },
+            )
+        )
+    ranked.sort(key=lambda pair: pair[0])
+    title = str(cfg.get("title") or "").strip()
+    return [opt for _, opt in ranked], title
+
+
 def resolve_checkin_event_type(tenant, raw_id):
     """The EventType a BA picked, or ``None``.
 
@@ -2675,6 +2716,7 @@ def build_tenant_context(tenant, *, recap_only: bool = False) -> dict:
     """
     stores = [] if recap_only else recent_checkin_locations(tenant)
     resources = build_checkin_resources(tenant, recap_only=recap_only)
+    programs, program_title = ([], "") if recap_only else checkin_program_picker(tenant)
     return {
         "mode": "tenant",
         "needsEventDetails": True,
@@ -2689,12 +2731,8 @@ def build_tenant_context(tenant, *, recap_only: bool = False) -> dict:
         # with a single program (Total Wireless, Feel Free) have to look exactly
         # as they do today. The 3rd-party agency twin stays on the tenant
         # default program (Torch TH-AGENCY = store demos only).
-        "eventTypes": []
-        if recap_only
-        else [
-            {"id": str(t.id), "name": t.name or ""}
-            for t in selectable_event_types(tenant)
-        ],
+        "eventTypes": programs,
+        "programPickerTitle": program_title,
         # BA-facing resources (training deck, photo-release QR, the brand's
         # /training/<code> hub) as ordered buttons. See build_checkin_resources.
         # Agency twin drops hideOnRecapOnly rows (Torch Sampling Guide).

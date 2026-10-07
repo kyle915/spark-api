@@ -7,6 +7,8 @@ Mark Anthony Brands Event Activation recaps, trimmed to sampling only: Torch
 does not sell at events, so there are no purchase, units-sold, spend, or
 can-purchase fields. Products Sampled resolves from the live Torch Product
 catalog (per-SKU sample counts on the walk-up), never a hardcoded SKU list.
+Every Torch sampling form also asks "Sample format" (Full can / 4oz pour)
+and carries an optional Email Data Collection section.
 
 Photo dropzones are the LD/MAB activation buckets (Activation Set Up,
 Consumer Sampling Pictures, Expense Receipts (Parking)), keyed to the Event
@@ -85,6 +87,40 @@ PRODUCTS_SAMPLED = "Products Sampled"
 # (name, kind, required, options, placeholder)
 Field = tuple[str, str, bool, list[str], str]
 
+# Multi-select: one demo can hand out full cans and pour 4oz samples.
+SAMPLE_FORMAT_FIELD = "Sample format"
+SAMPLE_FORMAT_OPTS = ["Full can", "4oz pour"]
+SAMPLE_FORMAT: Field = (
+    SAMPLE_FORMAT_FIELD,
+    "multiselect",
+    True,
+    list(SAMPLE_FORMAT_OPTS),
+    "Pick both if you poured samples and handed out full cans",
+)
+
+# Email sign-ups are their own count — never consumers sampled or reach.
+EMAIL_SECTION = "Email Data Collection"
+EMAILS_COLLECTED_FIELD = "Email addresses collected"
+EMAIL_METHOD_FIELD = "Collection method"
+EMAIL_METHOD_OPTS = ["QR code", "Tablet / sign-up form", "Paper sheet", "Other"]
+EMAIL_FIELDS: list[Field] = [
+    (
+        EMAILS_COLLECTED_FIELD,
+        "number",
+        False,
+        [],
+        "e.g. 110 — enter 0 if none were collected",
+    ),
+    (EMAIL_METHOD_FIELD, "multiselect", False, list(EMAIL_METHOD_OPTS), ""),
+    (
+        "Email collection notes",
+        "longtext",
+        False,
+        [],
+        "e.g. QR code on the table tent drove most sign-ups",
+    ),
+]
+
 SPEC_FIELDS: list[tuple[str, list[Field]]] = [
     (
         "Event Details",
@@ -111,6 +147,7 @@ SPEC_FIELDS: list[tuple[str, list[Field]]] = [
                 list(SERVED_OPTS),
                 "",
             ),
+            SAMPLE_FORMAT,
         ],
     ),
     (
@@ -155,6 +192,7 @@ SPEC_FIELDS: list[tuple[str, list[Field]]] = [
             ),
         ],
     ),
+    (EMAIL_SECTION, list(EMAIL_FIELDS)),
     (
         "Feedback & Account Notes",
         [
@@ -204,8 +242,9 @@ SPEC_FIELDS: list[tuple[str, list[Field]]] = [
 SECTION_ORDER = {
     "Event Details": 0,
     "Consumer Engagement": 1,
-    "Feedback & Account Notes": 2,
-    PRODUCTS_SAMPLED: 3,
+    EMAIL_SECTION: 2,
+    "Feedback & Account Notes": 3,
+    PRODUCTS_SAMPLED: 4,
 }
 
 # Purchase / sales vocabulary that must never appear on a sampling-only form.
@@ -264,6 +303,7 @@ class Command(BaseCommand):
     )
 
     # Per-brand config; another brand's Event Activation subclasses this.
+    event_label = EVENT_LABEL
     tenant_slug = TENANT_SLUG
     tenant_form_slug = TENANT_FORM_SLUG
     checkin_code = CHECKIN_CODE
@@ -321,17 +361,16 @@ class Command(BaseCommand):
     def _ensure_event_type(self, tenant, creator, apply: bool):
         from events.models import EventType
 
-        existing = EventType.objects.filter(
-            tenant_id=tenant.id, name__iexact=EVENT_LABEL
-        ).first()
+        label = self.event_label
+        existing = EventType.objects.filter(tenant_id=tenant.id, name__iexact=label).first()
         if existing:
             self.stdout.write(f"Event type : [{existing.id}] {existing.name!r} (exists)")
             return existing
         if not apply:
-            self.stdout.write(f"Event type : would create {EVENT_LABEL!r}")
+            self.stdout.write(f"Event type : would create {label!r}")
             return None
-        et = EventType.objects.create(name=EVENT_LABEL, tenant=tenant, created_by=creator)
-        self.stdout.write(f"Event type : + {EVENT_LABEL!r} [{et.id}]")
+        et = EventType.objects.create(name=label, tenant=tenant, created_by=creator)
+        self.stdout.write(f"Event type : + {label!r} [{et.id}]")
         return et
 
     def _ensure_categories(self, tenant, creator, apply: bool) -> None:
@@ -341,7 +380,7 @@ class Command(BaseCommand):
         for cat in FileRecapCategory.objects.filter(tenant_id=tenant.id).order_by("id"):
             by_norm.setdefault(_norm(cat.name), cat)
 
-        self.stdout.write("\nPhoto categories (Event Activation):")
+        self.stdout.write(f"\nPhoto categories ({self.event_label}):")
         for spec in self.activation_buckets:
             name = spec["name"]
             match = by_norm.get(_norm(name))
@@ -377,7 +416,7 @@ class Command(BaseCommand):
             if spec.get("helper"):
                 entry["helper"] = spec["helper"]
             entries.append(entry)
-        merged[EVENT_LABEL] = entries
+        merged[self.event_label] = entries
 
         self.stdout.write("\nPhoto bucket keys after merge:")
         for key, buckets in merged.items():
@@ -403,7 +442,7 @@ class Command(BaseCommand):
         for et in wanted:
             self.stdout.write(f"  [{et.id}] {et.name!r}")
         if activation is None:
-            self.stdout.write(f"  [new] {EVENT_LABEL!r}")
+            self.stdout.write(f"  [new] {self.event_label!r}")
         self.stdout.write(
             f"Pinned default : {pin.name!r} (unchanged)" if pin else "Pinned default : (none)"
         )
@@ -519,13 +558,13 @@ class Command(BaseCommand):
             for rival in rivals:
                 self.stdout.write(
                     self.style.WARNING(
-                        f"  ! [{rival.id}] {rival.name!r} already sits on {EVENT_LABEL!r} "
+                        f"  ! [{rival.id}] {rival.name!r} already sits on {self.event_label!r} "
                         "and would win the walk-up"
                     )
                 )
             if rivals and apply:
                 raise CommandError(
-                    f"{len(rivals)} other template(s) on {EVENT_LABEL!r} — "
+                    f"{len(rivals)} other template(s) on {self.event_label!r} — "
                     "move them to another event type first."
                 )
         if template is None and apply:
@@ -636,6 +675,15 @@ class Command(BaseCommand):
     def _report_current(self, tenant) -> None:
         """Brand-specific pre-write inventory (none for Torch)."""
 
+    def run_steps(self, tenant, creator, apply: bool):
+        """Program, photo buckets, picker entry and template; returns the program."""
+        activation = self._ensure_event_type(tenant, creator, apply)
+        self._ensure_categories(tenant, creator, apply)
+        self._merge_photo_buckets(tenant, apply)
+        self._add_to_picker(tenant, activation, apply)
+        self._seed_template(tenant, activation, creator, apply)
+        return activation
+
     def handle(self, *args, **opts):
         from django.conf import settings
 
@@ -665,23 +713,15 @@ class Command(BaseCommand):
 
         if apply:
             with transaction.atomic():
-                activation = self._ensure_event_type(tenant, creator, True)
-                self._ensure_categories(tenant, creator, True)
-                self._merge_photo_buckets(tenant, True)
-                self._add_to_picker(tenant, activation, True)
-                self._seed_template(tenant, activation, creator, True)
+                self.run_steps(tenant, creator, True)
             self.stdout.write(
                 self.style.SUCCESS(
-                    f"\nAPPLIED — {base}/checkin/{code} offers {EVENT_LABEL} "
+                    f"\nAPPLIED — {base}/checkin/{code} offers {self.event_label} "
                     f"with {self.template_name!r}."
                 )
             )
         else:
-            activation = self._ensure_event_type(tenant, creator, False)
-            self._ensure_categories(tenant, creator, False)
-            self._merge_photo_buckets(tenant, False)
-            self._add_to_picker(tenant, activation, False)
-            self._seed_template(tenant, activation, creator, False)
+            self.run_steps(tenant, creator, False)
             self.stdout.write(
                 self.style.WARNING("\nDRY-RUN — nothing written. Re-run with --apply.")
             )
