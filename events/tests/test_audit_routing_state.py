@@ -85,3 +85,37 @@ class TestAuditRoutingState(EventsGraphQLTestCase):
         assert "old=WA new=None" in log and "pat@liquiddeath.com" in log
         assert em.Request.objects.filter(pk=req.pk).values().get() == before
         assert mail.outbox == []
+
+    def test_lists_torch_non_retail_recaps_with_old_recipients(self):
+        event = self.create_event(
+            name="Miami Guerilla", tenant=self.torch, address="100 Ocean Dr, Miami Beach, FL 33139"
+        )
+        template = recap_models.CustomRecapTemplate.objects.create(
+            name="Torch THC · Guerilla Recap",
+            event_type=self.create_event_type(name="Guerilla Activation", tenant=self.torch),
+            tenant=self.torch,
+            created_by=self.sys,
+        )
+        recap_models.CustomRecap.objects.create(
+            name="Miami Guerilla",
+            event=event,
+            tenant=self.torch,
+            custom_recap_template=template,
+            approved=True,
+            approved_at=timezone.now(),
+            client_notified_at=timezone.now(),
+            created_by=self.spark,
+            updated_by=self.spark,
+        )
+        self._approved_recap(self.torch, "1 Easton Way, Columbus, OH 43219", "Kroger Easton")
+
+        out = StringIO()
+        call_command("audit_routing_state", stdout=out)
+        log = out.getvalue()
+
+        assert "TORCH non-retail recaps filed: 1 (approved=1 mail_sent=1)" in log
+        assert "type=guerilla 'Miami Guerilla'" in log
+        assert "james@torchdrinks.com" in log
+        assert "octavius@torchdrinks.com" in log
+        assert "Kroger Easton" not in log
+        assert mail.outbox == []

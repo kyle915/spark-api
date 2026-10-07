@@ -8,6 +8,8 @@ from asgiref.sync import async_to_sync
 from events import models as em
 from events.tests.base import EventsGraphQLTestCase
 from events.torch_retail_routing import (
+    torch_field_marketing_recap_emails,
+    torch_recap_execution_type,
     torch_retail_recap_emails,
     torch_weekly_digest_emails,
 )
@@ -17,6 +19,14 @@ from recaps.mutation_parts.notify import (
     _kick_torch_portal_recap_submit_notify,
     is_torch_portal_recap,
 )
+
+FIELD_MARKETING = {
+    "ryanheuser@torchdrinks.com",
+    "alec@torchdrinks.com",
+    "brittany@torchdrinks.com",
+    "victoria@torchdrinks.com",
+    "octavius@torchdrinks.com",
+}
 
 
 @pytest.mark.django_db(transaction=True)
@@ -145,31 +155,126 @@ class TestTorchRetailStateRouting(EventsGraphQLTestCase):
         assert "jason@torchdrinks.com" in torch_retail_recap_emails("oh")
         assert "jason@torchdrinks.com" in torch_weekly_digest_emails()
 
-    def test_ohio_event_activation_custom_recap_includes_jason(self):
+    def _custom_recap(
+        self, *, template_name: str, event_type_name: str, address: str, request=None
+    ):
         event = self.create_event(
-            name="OH activation",
+            name=template_name,
             tenant=self.torch,
-            address="500 Vine St, Cincinnati, OH 45202",
+            address=address,
+            request=request,
         )
         template = recap_models.CustomRecapTemplate.objects.create(
-            name="Torch THC-Event Activation",
-            event_type=self.create_event_type(
-                name="Event Activation", tenant=self.torch
-            ),
+            name=template_name,
+            event_type=self.create_event_type(name=event_type_name, tenant=self.torch),
             tenant=self.torch,
             created_by=self.system_user,
         )
-        recap = recap_models.CustomRecap.objects.create(
-            name="OH activation",
+        return recap_models.CustomRecap.objects.create(
+            name=template_name,
             event=event,
             tenant=self.torch,
             custom_recap_template=template,
             created_by=self.spark_user,
             updated_by=self.spark_user,
         )
+
+    NON_RETAIL = (
+        ("Torch THC-Event Activation", "Event Activation", "event"),
+        ("Torch THC · Guerilla Recap", "Guerilla Activation", "guerilla"),
+        ("Torch THC · Product Seeding Recap", "Product Seeding", "seeding"),
+    )
+
+    def test_event_guerilla_seeding_go_only_to_field_marketing_list(self):
+        for template_name, type_name, kind in self.NON_RETAIL:
+            for address in (
+                "500 Vine St, Cincinnati, OH 45202",
+                "100 Ocean Dr, Miami Beach, FL 33139",
+                "Warehouse bay 3",
+            ):
+                recap = self._custom_recap(
+                    template_name=template_name,
+                    event_type_name=type_name,
+                    address=address,
+                )
+                assert torch_recap_execution_type(recap) == kind
+                recipients, reply_to = _collect_recap_approved_recipients(recap)
+                assert {e.lower() for e, _ in recipients} == FIELD_MARKETING, (
+                    template_name,
+                    address,
+                )
+                assert reply_to == "events@igniteproductions.co"
+
+    def test_non_retail_portal_adds_ignite_ops_not_requestor(self):
+        event_activation = self.create_request_type(
+            name="Event Activation", tenant=self.torch
+        )
+        req = em.Request.objects.create(
+            name="Torch plan activation",
+            address="500 Congress Ave, Austin, TX 78701",
+            tenant=self.torch,
+            status=self.req_approved,
+            request_type=event_activation,
+            requestor_email="planner@torchdrinks.com",
+            created_by=None,
+        )
+        recap = self._custom_recap(
+            template_name="Torch THC-Event Activation",
+            event_type_name="Event Activation",
+            address="500 Congress Ave, Austin, TX 78701",
+            request=req,
+        )
+        assert is_torch_portal_recap(recap) is True
         emails = {e.lower() for e, _ in _collect_recap_approved_recipients(recap)[0]}
-        assert "jason@torchdrinks.com" in emails
-        assert "john@torchdrinks.com" in emails
+        assert emails == FIELD_MARKETING | {
+            "events@igniteproductions.co",
+            "nevena@igniteproductions.co",
+        }
+
+    def test_legacy_recap_on_event_activation_request_is_non_retail(self):
+        event_activation = self.create_request_type(
+            name="Event Activation", tenant=self.torch
+        )
+        req = em.Request.objects.create(
+            name="Torch activation",
+            address="1 Easton Way, Columbus, OH 43219",
+            tenant=self.torch,
+            status=self.req_approved,
+            request_type=event_activation,
+            created_by=None,
+        )
+        recap = self._recap(address="1 Easton Way, Columbus, OH 43219", request=req)
+        assert torch_recap_execution_type(recap) == "event"
+        emails = {e.lower() for e, _ in _collect_recap_approved_recipients(recap)[0]}
+        assert emails == FIELD_MARKETING | {
+            "events@igniteproductions.co",
+            "nevena@igniteproductions.co",
+        }
+
+    def test_retail_sampling_custom_recap_keeps_state_list(self):
+        recap = self._custom_recap(
+            template_name="Torch THC-Retail Sampling",
+            event_type_name="Retail Sampling",
+            address="500 Vine St, Cincinnati, OH 45202",
+        )
+        assert torch_recap_execution_type(recap) == "retail"
+        emails = {e.lower() for e, _ in _collect_recap_approved_recipients(recap)[0]}
+        assert emails == {
+            "john@torchdrinks.com",
+            "doug@torchdrinks.com",
+            "liberty@torchdrinks.com",
+            "jason@torchdrinks.com",
+        }
+
+    def test_field_marketing_list_is_exactly_the_five(self):
+        assert set(torch_field_marketing_recap_emails()) == FIELD_MARKETING
+        weekly = set(torch_weekly_digest_emails())
+        for email in ("alec@torchdrinks.com", "brittany@torchdrinks.com"):
+            assert email not in weekly
+        for state in (None, "FL", "OH", "TX", "GA"):
+            retail = set(torch_retail_recap_emails(state))
+            assert "ryanheuser@torchdrinks.com" not in retail
+            assert not retail & (FIELD_MARKETING - {"ryanheuser@torchdrinks.com"})
 
     def test_portal_ohio_includes_jason_and_requestor(self):
         req = em.Request.objects.create(
