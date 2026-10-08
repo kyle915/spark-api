@@ -156,6 +156,8 @@ class CreateRecapInput(SparkGraphQLInput):
 @strawberry.input
 class UpdateRecapInput(CreateRecapInput):
     id: strawberry.ID
+    # Optional note stored on the staff edit-history rows for this save.
+    edit_reason: str | None = None
 
 
 @strawberry.input
@@ -535,6 +537,8 @@ class CreateCustomRecapMobileInput(SparkGraphQLInput):
 @strawberry.input
 class UpdateCustomRecapInput(CreateCustomRecapInput):
     id: strawberry.ID
+    # Optional note stored on the staff edit-history rows for this save.
+    edit_reason: str | None = None
 
 
 @strawberry.input

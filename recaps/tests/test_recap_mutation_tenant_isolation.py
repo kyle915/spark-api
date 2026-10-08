@@ -536,7 +536,9 @@ class TestRecapMutationTenantIsolation(AmbassadorsGraphQLTestCase):
         assert refreshed.name == "Custom recap"  # untouched
 
     @pytest.mark.asyncio
-    async def test_same_tenant_client_can_update_custom_recap(self):
+    async def test_same_tenant_client_cannot_update_custom_recap(self):
+        # Recap value edits are Ignite-staff corrections; brand users only
+        # sign off. The tenant gate passes, the staff gate refuses.
         recap = await sync_to_async(self._make_custom_recap)(
             self.event, self.tenant, self.template
         )
@@ -554,6 +556,7 @@ class TestRecapMutationTenantIsolation(AmbassadorsGraphQLTestCase):
         )
         assert result.errors is None, f"errored: {result.errors}"
         payload = result.data["updateCustomRecap"]
-        assert payload["success"] is True, payload
+        assert payload["success"] is False, payload
+        assert "Ignite staff" in payload["message"]
         refreshed = await self._refresh_custom(recap)
-        assert refreshed.name == "Renamed by owner"
+        assert refreshed.name == "Custom recap"
