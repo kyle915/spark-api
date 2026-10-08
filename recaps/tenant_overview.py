@@ -43,7 +43,7 @@ import re
 from dataclasses import dataclass, fields as dataclass_fields
 from datetime import date, timedelta
 
-from django.db.models import Count, Exists, Max, Min, OuterRef, Q, Sum, TextField
+from django.db.models import Count, Exists, F, Max, Min, OuterRef, Q, Sum, TextField
 from django.db.models.functions import Coalesce, TruncMonth
 from django.utils import timezone
 
@@ -1808,6 +1808,60 @@ def _activation_bucket_for_type_name(name: str | None) -> tuple[str, str]:
     return "other", "Other"
 
 
+def _walkup_activation_counts(
+    tenant_id: int, start: date | None, end: date | None
+) -> dict[str, int]:
+    """Request-less events with an approved, non-archived recap, per bucket.
+
+    Same event-date window, 3rd-party exclusion and type order (Event type →
+    template name) as :func:`conversion_window_totals`, so a walk-up demo is
+    counted once in the bucket its recap converts in.
+    """
+    window = _inclusive_dates_to_window(start, end)
+    event_types: dict[int, str | None] = {}
+    sources = (
+        (
+            CustomRecap.objects.filter(tenant_id=tenant_id),
+            Coalesce(
+                "event__event_type__name",
+                "custom_recap_template__name",
+                output_field=TextField(),
+            ),
+        ),
+        (
+            Recap.objects.filter(event__tenant_id=tenant_id),
+            F("event__event_type__name"),
+        ),
+    )
+    for queryset, type_expr in sources:
+        rows = (
+            _approved_only(
+                _filter_event_window(
+                    queryset.filter(
+                        archived_at__isnull=True, event__request__isnull=True
+                    ),
+                    "event__",
+                    window,
+                ),
+                "",
+            )
+            .annotate(_walkup_type=type_expr)
+            .values_list("event_id", "_walkup_type")
+            .order_by("event_id", "id")
+        )
+        for event_id, type_name in rows:
+            if event_id is not None and event_types.get(event_id) is None:
+                event_types[event_id] = type_name
+
+    counts: dict[str, int] = {}
+    for type_name in event_types.values():
+        key, _ = _activation_bucket_for_type_name(type_name)
+        if key == "seeding":
+            key = "other"
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
 def tenant_activation_breakdown(
     tenant_id: int,
     start: date | None = None,
@@ -1870,6 +1924,12 @@ def tenant_activation_breakdown(
         if key == "seeding":
             key = "other"
         bucket_counts[key] = bucket_counts.get(key, 0) + count
+
+    if Tenant.objects.filter(
+        id=tenant_id, activation_mix_includes_walkups=True
+    ).exists():
+        for key, count in _walkup_activation_counts(tenant_id, start, end).items():
+            bucket_counts[key] = bucket_counts.get(key, 0) + count
 
     buckets = [
         {"key": key, "label": label, "count": bucket_counts[key]}

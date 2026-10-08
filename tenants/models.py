@@ -169,6 +169,9 @@ class Tenant(Asyncable, models.Model):
             (TREND_SERIES_SALES, "Consumers sampled + Units sold"),
         ],
     )
+    # Walk-up-only programs (no scheduled Requests) count their approved
+    # request-less events in the activation mix; otherwise it reads 0.
+    activation_mix_includes_walkups = models.BooleanField(default=False)
     # Mileage defaults stamped onto events the STANDING CHECK-IN LINK creates.
     #
     # Mileage is a per-gig toggle (Event.track_mileage / mileage_rate), which
