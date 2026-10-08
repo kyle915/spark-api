@@ -43,6 +43,10 @@ class RecapFiltersInput(SparkGraphQLInput):
     # Null / other = no filter.
     # Classification mirrors ``_activation_bucket_for_type_name``.
     activation_bucket: str | None = None
+    # Recaps list type chip: retail / onprem / event / guerilla / seeding
+    # (``recaps.recap_types``). Unlike ``activation_bucket``, Retail does
+    # not fold in On-Premise and Guerilla is its own type.
+    recap_type: str | None = None
 
 
 @strawberry.input

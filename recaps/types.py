@@ -16,6 +16,7 @@ from . import models
 from asgiref.sync import sync_to_async
 from utils.gcs import public_url, extract_blob_name_from_url
 from .heic_conversion import display_blob_name, is_heic_blob
+from .recap_types import recap_type_key
 
 
 # ---------------------------------------------------------------------------
@@ -479,6 +480,27 @@ def _prefetched(instance, attr_name: str):
     if cache and attr_name in cache:
         return list(cache[attr_name])
     return None
+
+
+async def _resolve_recap_type(instance) -> str:
+    """List rows carry the SQL ``_recap_type`` annotation; else classify."""
+    annotated = getattr(instance, "_recap_type", None)
+    if annotated:
+        return str(annotated)
+    return await sync_to_async(recap_type_key, thread_sensitive=True)(instance)
+
+
+@strawberry.type
+class RecapTypeCount:
+    key: str
+    label: str
+    count: int
+
+
+@strawberry.type
+class RecapTypeCounts:
+    total: int
+    types: List[RecapTypeCount]
 
 
 @strawberry_django.type(models.RecapFile)
@@ -1053,6 +1075,11 @@ class Recap(Node):
         return await _get()
 
     @strawberry.field
+    async def recap_type(self) -> str:
+        """retail / onprem / event / guerilla / seeding (``recaps.recap_types``)."""
+        return await _resolve_recap_type(self)
+
+    @strawberry.field
     async def request_type_name(self) -> str | None:
         if not getattr(self, "event_id", None):
             return None
@@ -1397,6 +1424,11 @@ class CustomRecap(Node):
             lambda: _compute(self.custom_recap_files.all()),
             thread_sensitive=True,
         )()
+
+    @strawberry.field
+    async def recap_type(self) -> str:
+        """retail / onprem / event / guerilla / seeding (``recaps.recap_types``)."""
+        return await _resolve_recap_type(self)
 
     @strawberry.field
     async def custom_recap_files_count(self) -> int:

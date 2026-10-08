@@ -9,9 +9,15 @@ digest goes to the full retail list, including the weekly-only people.
 
 from __future__ import annotations
 
-import re
-
 from events.routing import _state_code_from_request, extract_state_code
+from recaps.recap_types import (
+    RECAP_TYPE_EVENT,
+    RECAP_TYPE_GUERILLA,
+    RECAP_TYPE_ONPREM,
+    RECAP_TYPE_RETAIL,
+    RECAP_TYPE_SEEDING,
+    recap_type_key,
+)
 
 # Always on every retail recap (and on the weekly rollup).
 TORCH_RETAIL_ALL_STATES: tuple[tuple[str, str], ...] = (
@@ -65,18 +71,10 @@ TORCH_FIELD_MARKETING_RECAP: tuple[tuple[str, str], ...] = (
     ("Octavius Jefferson", "octavius@torchdrinks.com"),
 )
 
-EXECUTION_RETAIL = "retail"
-EXECUTION_EVENT = "event"
-EXECUTION_GUERILLA = "guerilla"
-EXECUTION_SEEDING = "seeding"
-
-# First match wins, so "Guerilla Activation" is guerilla, not event.
-_EXECUTION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    (EXECUTION_SEEDING, re.compile(r"product\s*seeding|\bseeding\b", re.I)),
-    (EXECUTION_GUERILLA, re.compile(r"guerr?ill?a", re.I)),
-    (EXECUTION_RETAIL, re.compile(r"retail|on[-\s]?prem", re.I)),
-    (EXECUTION_EVENT, re.compile(r"event|activation|festival|pop[-\s]?up", re.I)),
-)
+EXECUTION_RETAIL = RECAP_TYPE_RETAIL
+EXECUTION_EVENT = RECAP_TYPE_EVENT
+EXECUTION_GUERILLA = RECAP_TYPE_GUERILLA
+EXECUTION_SEEDING = RECAP_TYPE_SEEDING
 
 # Ignite ops still CC'd on portal (request-linked) Torch recap mail.
 TORCH_RETAIL_IGNITE_OPS: tuple[str, ...] = (
@@ -114,43 +112,14 @@ def torch_field_marketing_recap_emails() -> list[str]:
     return _dedupe_emails([email for _name, email in TORCH_FIELD_MARKETING_RECAP])
 
 
-def _execution_type_for_name(name: str | None) -> str | None:
-    text = name or ""
-    for kind, pattern in _EXECUTION_PATTERNS:
-        if pattern.search(text):
-            return kind
-    return None
-
-
-def _related_name(obj, *path: str) -> str | None:
-    try:
-        for attr in path:
-            obj = getattr(obj, attr, None)
-            if obj is None:
-                return None
-    except Exception:
-        return None
-    return obj if isinstance(obj, str) else None
-
-
 def torch_recap_execution_type(recap) -> str:
     """Event / Guerilla / Seeding / Retail for a Recap or CustomRecap.
 
-    The template the BA filed on wins, then the event's program, then the
-    linked request's type. Anything unrecognised stays retail.
+    Same classification as the Recaps list type filter; On-Premise routes as
+    retail.
     """
-    candidates = (
-        ("custom_recap_template", "name"),
-        ("custom_recap_template", "event_type", "name"),
-        ("event", "event_type", "name"),
-        ("event", "custom_recap_template", "name"),
-        ("event", "request", "request_type", "name"),
-    )
-    for path in candidates:
-        kind = _execution_type_for_name(_related_name(recap, *path))
-        if kind is not None:
-            return kind
-    return EXECUTION_RETAIL
+    kind = recap_type_key(recap)
+    return EXECUTION_RETAIL if kind == RECAP_TYPE_ONPREM else kind
 
 
 def torch_weekly_digest_emails() -> list[str]:
