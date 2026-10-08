@@ -51,6 +51,8 @@ from recaps.tenant_overview import (
     tenant_monthly_trend,
     tenant_program_health,
     tenant_sku_pulse,
+    _inclusive_dates_to_window,
+    _tenant_kpi_totals_window,
     _year_bounds,
     sales_program_metrics,
     tenant_tracks_dry_demos,
@@ -1257,7 +1259,8 @@ class TenantGoalItem:
     :func:`recaps.tenant_overview.tenant_kpi_totals`). ``pace_pct`` is
     ``current / target * 100`` rounded to one decimal, or ``0.0`` when no
     target is set (target ``<= 0``) — it is NOT capped at 100, so a beaten
-    goal reads above 100%.
+    goal reads above 100%. ``last_7`` is the same actual over the last 7
+    calendar days (today included).
     """
 
     metric: str
@@ -1265,6 +1268,7 @@ class TenantGoalItem:
     target: int
     current: int
     pace_pct: float
+    last_7: int = 0
 
 
 @strawberry.type
@@ -1307,6 +1311,10 @@ def _build_tenant_goals(tenant_id: int, year: int) -> TenantGoals:
 
     goal = TenantGoal.objects.filter(tenant_id=tenant_id, year=year).first()
     totals = tenant_kpi_totals(tenant_id, year=year)
+    today = timezone.localdate()
+    recent = _tenant_kpi_totals_window(
+        tenant_id, _inclusive_dates_to_window(today - timedelta(days=6), today)
+    )
 
     items: list[TenantGoalItem] = []
     for metric, label, target_field, current_field in _TENANT_GOAL_METRICS:
@@ -1319,6 +1327,7 @@ def _build_tenant_goals(tenant_id: int, year: int) -> TenantGoals:
                 target=target,
                 current=current,
                 pace_pct=_pace_pct(current, target),
+                last_7=int(getattr(recent, current_field, 0) or 0),
             )
         )
     return TenantGoals(year=year, items=items)

@@ -10,11 +10,12 @@ from django.utils import timezone
 from ambassadors.tests.base import AmbassadorsGraphQLTestCase
 from events import models as event_models
 from recaps import models as recap_models
-from recaps.report_types import _build_tenant_kpis
+from recaps.report_types import _build_tenant_goals, _build_tenant_kpis
 from recaps.tenant_insights import build_insight_buckets_scoped
 from recaps.tenant_overview import (
     conversion_window_totals,
     sales_program_metrics,
+    tenant_activation_breakdown,
     tenant_conversion_kpis,
     tenant_monthly_trend,
 )
@@ -573,6 +574,52 @@ class TestTenantConversionSampledBase(AmbassadorsGraphQLTestCase):
         series = dict(Tenant.objects.values_list("id", "insights_trend_series"))
         assert series[self.tenant.id] == Tenant.TREND_SERIES_SALES
         assert series[lookalike.id] == Tenant.TREND_SERIES_ACTIVITY
+
+    def test_activation_mix_counts_walkups_only_when_flagged(self):
+        sampled = [("Total number of consumers sampled", "40")]
+        self._custom_recap(request_type=self.retail_type, fields=sampled)
+        self._walkup_recap(fields=sampled)
+        self._walkup_recap(fields=sampled, approved=False)
+        self._walkup_recap(event_type_name="Event Activation", fields=sampled)
+
+        def mix():
+            data = tenant_activation_breakdown(
+                self.tenant.id, start=self.start, end=self.end
+            )
+            return {b["key"]: b["count"] for b in data["buckets"]}
+
+        assert mix() == {"retail": 1, "onprem": 0, "event": 0, "other": 0}
+        Tenant.objects.filter(id=self.tenant.id).update(
+            activation_mix_includes_walkups=True
+        )
+        assert mix() == {"retail": 2, "onprem": 0, "event": 1, "other": 0}
+
+    def test_goal_last_7_reads_the_same_totals_as_current(self):
+        self._walkup_recap(fields=[("Total number of consumers sampled", "40")])
+        goals = _build_tenant_goals(self.tenant.id, self.today.year)
+        by = {i.metric: i for i in goals.items}
+        assert by["consumers_reached"].current > 0
+        assert by["consumers_reached"].last_7 == by["consumers_reached"].current
+
+    def test_brew_dr_walkup_mix_migration_resolves_exact_slug_then_request_url_name(
+        self,
+    ):
+        run = importlib.import_module(
+            "tenants.migrations.0050_tenant_activation_mix_includes_walkups"
+        )._set_flag(True)
+        lookalike = self.create_tenant(name="Brew Dr Kombucha Test")
+        Tenant.objects.filter(id=lookalike.id).update(
+            slug="brew-dr-kombucha-test", request_url_name="brew-dr-kombucha-test"
+        )
+        Tenant.objects.filter(id=self.tenant.id).update(
+            slug="brew-dr", request_url_name="brew-dr-kombucha"
+        )
+        run(django_apps, None)
+        flags = dict(
+            Tenant.objects.values_list("id", "activation_mix_includes_walkups")
+        )
+        assert flags[self.tenant.id] is True
+        assert flags[lookalike.id] is False
 
     def _seed_sales_program(self, when=None):
         self._custom_recap(
