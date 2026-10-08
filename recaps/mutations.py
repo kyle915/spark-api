@@ -28,6 +28,7 @@ from recaps.envelopes import (
 from recaps.queries import RecapQueriesService, CustomRecapQueriesService
 from ambassadors.models import FileType, Ambassador, Attendance
 from events.models import Event, Retailer, Location, State, TimeZone, EventType
+from events.plan_results import auto_attach_quietly
 from jobs.models import Job, AmbassadorJob
 from tenants.models import Role, TenantedUser, Tenant
 from utils.graphql.inputs import SparkGraphQLInput
@@ -3511,6 +3512,9 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
                 logger.info(
                     "recap approval logged hours: recap=%s %s", recap.id, changed
                 )
+            await sync_to_async(auto_attach_quietly)(
+                kind="legacy", recap_id=recap.id, actor=self.user
+            )
 
         if self.input.approved:
             recap = await sync_to_async(
@@ -3588,6 +3592,9 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
                     custom_recap.id,
                     changed,
                 )
+            await sync_to_async(auto_attach_quietly)(
+                kind="custom", recap_id=custom_recap.id, actor=self.user
+            )
 
         if self.input.approved:
             custom_recap = await sync_to_async(

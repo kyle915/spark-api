@@ -29,6 +29,8 @@ from events.activity_log import _safe_log
 from events.demo_cancel import request_display_code
 from events.field_marketing_mail import notify_plan_deleted, notify_plan_submitted
 from events.request_soft_delete import soft_delete_request
+from events.plan_actuals import plan_actuals, result_counts
+from recaps import plan_metrics as pm
 from recaps.models import CustomRecap, Recap
 from tenants.models import Tenant, TenantedUser
 from utils.graphql.inputs import SparkGraphQLInput
@@ -425,6 +427,7 @@ def _serialize(
     event: models.FieldMarketingEvent,
     locked: set[int] | None = None,
     now: datetime | None = None,
+    results: tuple[int, int] = (0, 0),
 ):
     market = _markets().get(event.market)
     now = now or timezone.now()
@@ -475,6 +478,8 @@ def _serialize(
         "deleted_at": event.deleted_at.isoformat() if event.deleted_at else None,
         "deleted_by_name": _person_name(event.deleted_by) if event.deleted_at else "",
         "delete_cancelled_request": bool(event.delete_cancelled_request),
+        "results_counted": results[0],
+        "results_pending": results[1],
     }
 
 
@@ -482,11 +487,46 @@ def _sum_planned(events, field: str) -> int:
     return sum(getattr(event, field) or 0 for event in events)
 
 
-def _sum_logged(events, field: str) -> int | None:
-    vals = [getattr(event, field) for event in events if getattr(event, field) is not None]
+def _sum_logged(events, field: str, actuals: dict | None = None) -> int | None:
+    """Manual log wins per plan; otherwise the attached recaps' actual."""
+    vals = []
+    for event in events:
+        value = getattr(event, field)
+        if value is None and actuals:
+            value = actuals.get(event.id, {}).get(field)
+        if value is not None:
+            vals.append(value)
     if not vals:
         return None
     return sum(vals)
+
+
+def _recap_logged(event: models.FieldMarketingEvent, totals: dict) -> dict[str, int]:
+    """Attached-recap actuals in the scorecard's logged fields.
+
+    Cans count only on full-can-only plans: on a pour plan, cans sampled
+    are cans opened for pours, not full cans handed out.
+    """
+    out: dict[str, int] = {}
+    emails = totals.get(pm.EMAILS_COLLECTED)
+    if emails and emails.value is not None:
+        out["logged_emails"] = int(emails.value)
+    samples = totals.get(pm.SAMPLES_BY_SKU)
+    if (
+        samples
+        and samples.value is not None
+        and _accepts_cans(event)
+        and not _accepts_pours(event)
+    ):
+        out["logged_full_cans"] = int(samples.value)
+    cases = totals.get(pm.CASES_DROPPED)
+    if (
+        cases
+        and cases.value is not None
+        and event.activity == models.FieldMarketingEvent.ACTIVITY_PRODUCT_SEEDING
+    ):
+        out["logged_cases"] = int(cases.value)
+    return out
 
 
 MONTHLY_TARGETS = {
@@ -505,12 +545,14 @@ def build_board(
     quarter: str | None = None,
     activity: str | None = None,
     include_deleted: bool = False,
+    include_pending: bool = False,
 ):
     """Projected KPIs sum planned FieldMarketingEvent fields for the filter.
 
     Not retail recaps. Omit month (or pass blank/"all") for every plan row.
     Monthly targets only apply when a single month is selected. Deleted plans
-    never count; ``include_deleted`` lists them separately for restore.
+    never count; ``include_deleted`` lists them separately for restore. Logged uses
+    the manual log, else the recaps ops pushed to the plan.
     """
     month_raw = (month or "").strip()
     quarter_raw = (quarter or "").strip()
@@ -555,6 +597,15 @@ def build_board(
     )
     now = timezone.now()
     locked = _locked_request_ids([event.request_id for event in events], now)
+    event_ids = [event.id for event in events]
+    counts = result_counts(event_ids)
+    by_id = {event.id: event for event in events}
+    actuals = {
+        plan_id: _recap_logged(by_id[plan_id], totals)
+        for plan_id, totals in plan_actuals(
+            [plan_id for plan_id, (counted, _) in counts.items() if counted]
+        ).items()
+    }
     # Cans and pours ignore product seeding. Planned sums stay on the columns
     # that were actually saved — seeding never writes those columns.
     can_events = [event for event in events if _accepts_cans(event)]
@@ -578,7 +629,7 @@ def build_board(
             "detail": "Product drops, donations, guerilla events. Drives trial and awareness.",
             "target": _target("full_cans"),
             "planned": _sum_planned(can_events, "planned_full_cans"),
-            "logged": _sum_logged(can_events, "logged_full_cans"),
+            "logged": _sum_logged(can_events, "logged_full_cans", actuals),
             "unit": "cans",
         },
         {
@@ -614,7 +665,7 @@ def build_board(
             "detail": "Email addresses. Builds an addressable audience.",
             "target": _target("emails"),
             "planned": _sum_planned(events, "planned_emails"),
-            "logged": _sum_logged(events, "logged_emails"),
+            "logged": _sum_logged(events, "logged_emails", actuals),
             "unit": "emails",
         },
     ]
@@ -635,7 +686,18 @@ def build_board(
             for key_, label, manager, email, phone in MARKETS
         ],
         "kpis": kpis,
-        "events": [_serialize(event, locked, now) for event in events],
+        "events": [
+            _serialize(
+                event,
+                locked,
+                now,
+                (
+                    counts.get(event.id, (0, 0))[0],
+                    counts.get(event.id, (0, 0))[1] if include_pending else 0,
+                ),
+            )
+            for event in events
+        ],
         "deleted_events": [_serialize(event, set(), now) for event in deleted],
         "skus": sku_catalog(tenant),
     }
@@ -1300,6 +1362,8 @@ class FieldMarketingEventType:
     deleted_at: str | None
     deleted_by_name: str
     delete_cancelled_request: bool
+    results_counted: int = 0
+    results_pending: int = 0
 
 
 @strawberry.type(name="FieldMarketingBoard")
@@ -1461,6 +1525,7 @@ class FieldMarketingQueries:
                 quarter=quarter,
                 activity=activity,
                 include_deleted=include_deleted and admin,
+                include_pending=admin,
             )
         except FieldMarketingError as exc:
             raise GraphQLError(str(exc)) from exc

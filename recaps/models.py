@@ -2,7 +2,16 @@ from uuid6 import uuid7
 from django.db import models
 from django.conf import settings
 from ambassadors.models import FileType, Ambassador
-from events.models import Event, TimeZone, Retailer, Product, Location, State, EventType
+from events.models import (
+    Event,
+    EventType,
+    FieldMarketingEvent,
+    Location,
+    Product,
+    Retailer,
+    State,
+    TimeZone,
+)
 from tenants.models import Tenant
 from jobs.models import Job
 
@@ -924,3 +933,54 @@ class RecapQualitySnapshot(models.Model):
             f"Quality snapshot ({shape}) for recap {self.recap_id} "
             f"@ {self.generated_at}"
         )
+
+
+class PlanRecapLink(models.Model):
+    """A filed recap counted toward one field-marketing plan.
+
+    Stores which of the recap's metrics count (``metric_keys``), never the
+    numbers: plan results re-read the recap, so they always match it. A
+    recap sits on at most one plan; a plan can hold many recaps (one per BA).
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    plan = models.ForeignKey(
+        FieldMarketingEvent, on_delete=models.CASCADE, related_name="recap_links"
+    )
+    recap = models.OneToOneField(
+        Recap,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="plan_link",
+    )
+    custom_recap = models.OneToOneField(
+        CustomRecap,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="plan_link",
+    )
+    metric_keys = models.JSONField(default=list, blank=True)
+    # True when approval attached it from the plan's booked request.
+    auto = models.BooleanField(default=False)
+    attached_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="plan_recap_links",
+    )
+    attached_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(recap__isnull=False, custom_recap__isnull=True)
+                    | models.Q(recap__isnull=True, custom_recap__isnull=False)
+                ),
+                name="rc_plan_link_one_recap",
+            ),
+        ]
