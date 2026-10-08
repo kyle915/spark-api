@@ -43,6 +43,7 @@ from .routing import (
     suppress_cc,
 )
 from .demo_cancel import DemoCancelError, request_demo_cancellation
+from .request_soft_delete import soft_delete_request
 from .torch_portal import (
     should_auto_approve_public_request,
     torch_request_approved_lists,
@@ -4471,42 +4472,7 @@ class RequestMutations:
                     deleted_request_uuid=str(request.uuid),
                 )
 
-            from django.utils import timezone as _tz
-            request.deleted_at = _tz.now()
-            request.updated_by = user
-            await sync_to_async(request.save)(
-                update_fields=["deleted_at", "updated_by", "updated_at"]
-            )
-
-            # Close any jobs hanging off this request's events so the deleted
-            # gig also drops off the BA job board (which filters
-            # ongoing=True/closed=False) — the jobs queryset already hides
-            # deleted-request jobs from the admin list, but closing them keeps
-            # the board + job state honest. Best-effort; never fail the delete.
-            try:
-                from jobs.models import Job
-
-                await sync_to_async(
-                    Job.objects.filter(event__request_id=request.id, closed=False)
-                    .update
-                )(closed=True, ongoing=False)
-            except Exception:
-                pass
-
-            # Audit log entry — keeps the timeline honest even though the
-            # request itself is no longer visible. Uses KIND_UPDATED with a
-            # "deleted" metadata flag since there's no dedicated KIND yet.
-            try:
-                await sync_to_async(models.RequestActivityLog.objects.create)(
-                    tenant=request.tenant,
-                    request=request,
-                    kind=models.RequestActivityLog.KIND_UPDATED,
-                    actor_user=user if getattr(user, "id", None) else None,
-                    summary="Request deleted",
-                    metadata={"deleted": True},
-                )
-            except Exception:
-                pass
+            await sync_to_async(soft_delete_request)(request, user)
 
             return build_mutation_response(
                 types.DeleteRequestResponse,
