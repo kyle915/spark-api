@@ -29,6 +29,7 @@ from events.payroll import PayrollQueries, PayrollMutations
 from events.campaign_pnl import CampaignPnlQueries
 from events.activation_plans import ActivationPlanQueries, ActivationPlanMutations
 from events.field_marketing import FieldMarketingMutations, FieldMarketingQueries
+from events.plan_results import PlanResultsMutations, PlanResultsQueries
 
 
 @strawberry.type
@@ -58,6 +59,7 @@ class EventQueryClient(
     CampaignPnlQueries,
     ActivationPlanQueries,
     FieldMarketingQueries,
+    PlanResultsQueries,
     queries.EventTypeQueries,
     queries.EventStatusQueries,
     queries.ClientQueries,
@@ -150,6 +152,7 @@ class EventMutationsClient(
     TimeZoneMutations,
     ActivationPlanMutations,
     FieldMarketingMutations,
+    PlanResultsMutations,
 ):
     pass
 

@@ -27,10 +27,16 @@ from events import models
 from events.activity_log import _safe_log
 from events.demo_cancel import request_display_code
 from events.field_marketing_mail import notify_plan_submitted
+from events.plan_actuals import plan_actuals, result_counts
+from recaps import plan_metrics as pm
 from tenants.models import Tenant, TenantedUser
 from utils.graphql.inputs import SparkGraphQLInput
 from utils.graphql.mixins import SparkGraphQLMixin, resolve_id_to_int
-from utils.graphql.permissions import StrictIsAuthenticated
+from utils.graphql.permissions import (
+    StrictIsAuthenticated,
+    _is_admin_access,
+    resolve_request_user_access,
+)
 from utils.utils import ROLE_ID, build_mutation_response
 
 logger = logging.getLogger(__name__)
@@ -316,7 +322,9 @@ def _require_torch_user(user, tenant_id=None):
     return tenant
 
 
-def _serialize(event: models.FieldMarketingEvent):
+def _serialize(
+    event: models.FieldMarketingEvent, results: tuple[int, int] = (0, 0)
+):
     market = _markets().get(event.market)
     code = None
     if event.request_id:
@@ -353,6 +361,8 @@ def _serialize(event: models.FieldMarketingEvent):
         "logged_cases": event.logged_cases,
         "status": event.status,
         "request_code": code,
+        "results_counted": results[0],
+        "results_pending": results[1],
     }
 
 
@@ -360,11 +370,46 @@ def _sum_planned(events, field: str) -> int:
     return sum(getattr(event, field) or 0 for event in events)
 
 
-def _sum_logged(events, field: str) -> int | None:
-    vals = [getattr(event, field) for event in events if getattr(event, field) is not None]
+def _sum_logged(events, field: str, actuals: dict | None = None) -> int | None:
+    """Manual log wins per plan; otherwise the attached recaps' actual."""
+    vals = []
+    for event in events:
+        value = getattr(event, field)
+        if value is None and actuals:
+            value = actuals.get(event.id, {}).get(field)
+        if value is not None:
+            vals.append(value)
     if not vals:
         return None
     return sum(vals)
+
+
+def _recap_logged(event: models.FieldMarketingEvent, totals: dict) -> dict[str, int]:
+    """Attached-recap actuals in the scorecard's logged fields.
+
+    Cans count only on full-can-only plans: on a pour plan, cans sampled
+    are cans opened for pours, not full cans handed out.
+    """
+    out: dict[str, int] = {}
+    emails = totals.get(pm.EMAILS_COLLECTED)
+    if emails and emails.value is not None:
+        out["logged_emails"] = int(emails.value)
+    samples = totals.get(pm.SAMPLES_BY_SKU)
+    if (
+        samples
+        and samples.value is not None
+        and _accepts_cans(event)
+        and not _accepts_pours(event)
+    ):
+        out["logged_full_cans"] = int(samples.value)
+    cases = totals.get(pm.CASES_DROPPED)
+    if (
+        cases
+        and cases.value is not None
+        and event.activity == models.FieldMarketingEvent.ACTIVITY_PRODUCT_SEEDING
+    ):
+        out["logged_cases"] = int(cases.value)
+    return out
 
 
 MONTHLY_TARGETS = {
@@ -382,11 +427,13 @@ def build_board(
     market: str | None = None,
     quarter: str | None = None,
     activity: str | None = None,
+    include_pending: bool = False,
 ):
     """Projected KPIs sum planned FieldMarketingEvent fields for the filter.
 
     Not retail recaps. Omit month (or pass blank/"all") for every plan row.
-    Monthly targets only apply when a single month is selected.
+    Monthly targets only apply when a single month is selected. Logged uses
+    the manual log, else the recaps ops pushed to the plan.
     """
     month_raw = (month or "").strip()
     quarter_raw = (quarter or "").strip()
@@ -422,6 +469,15 @@ def build_board(
             raise FieldMarketingError("Pick a tactic.")
         qs = qs.filter(activity__in=allowed)
     events = list(qs.order_by(*order))
+    event_ids = [event.id for event in events]
+    counts = result_counts(event_ids)
+    by_id = {event.id: event for event in events}
+    actuals = {
+        plan_id: _recap_logged(by_id[plan_id], totals)
+        for plan_id, totals in plan_actuals(
+            [plan_id for plan_id, (counted, _) in counts.items() if counted]
+        ).items()
+    }
     # Cans and pours ignore product seeding. Planned sums stay on the columns
     # that were actually saved — seeding never writes those columns.
     can_events = [event for event in events if _accepts_cans(event)]
@@ -445,7 +501,7 @@ def build_board(
             "detail": "Product drops, donations, guerilla events. Drives trial and awareness.",
             "target": _target("full_cans"),
             "planned": _sum_planned(can_events, "planned_full_cans"),
-            "logged": _sum_logged(can_events, "logged_full_cans"),
+            "logged": _sum_logged(can_events, "logged_full_cans", actuals),
             "unit": "cans",
         },
         {
@@ -481,7 +537,7 @@ def build_board(
             "detail": "Email addresses. Builds an addressable audience.",
             "target": _target("emails"),
             "planned": _sum_planned(events, "planned_emails"),
-            "logged": _sum_logged(events, "logged_emails"),
+            "logged": _sum_logged(events, "logged_emails", actuals),
             "unit": "emails",
         },
     ]
@@ -502,7 +558,16 @@ def build_board(
             for key_, label, manager, email, phone in MARKETS
         ],
         "kpis": kpis,
-        "events": [_serialize(event) for event in events],
+        "events": [
+            _serialize(
+                event,
+                (
+                    counts.get(event.id, (0, 0))[0],
+                    counts.get(event.id, (0, 0))[1] if include_pending else 0,
+                ),
+            )
+            for event in events
+        ],
         "skus": sku_catalog(tenant),
     }
 
@@ -1000,6 +1065,8 @@ class FieldMarketingEventType:
     logged_cases: int | None
     status: str
     request_code: str | None
+    results_counted: int = 0
+    results_pending: int = 0
 
 
 @strawberry.type(name="FieldMarketingBoard")
@@ -1094,6 +1161,7 @@ class FieldMarketingQueries:
         tenant = await sync_to_async(_active_tenant_for_user)(user, tenant_id)
         if tenant is None or not is_torch_tenant(tenant):
             return _board_type(empty_board(month=month))
+        is_admin = _is_admin_access(*await resolve_request_user_access(user))
         try:
             payload = await sync_to_async(build_board)(
                 tenant,
@@ -1101,6 +1169,7 @@ class FieldMarketingQueries:
                 market=market,
                 quarter=quarter,
                 activity=activity,
+                include_pending=is_admin,
             )
         except FieldMarketingError as exc:
             raise GraphQLError(str(exc)) from exc
