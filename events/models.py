@@ -1664,6 +1664,9 @@ class FieldMarketingEvent(models.Model):
     needs_field_support = models.BooleanField(default=False)
     ambassador_count = models.PositiveIntegerField(default=0)
     support_times = models.CharField(max_length=255, blank=True, default="")
+    # Wall-clock times in the market's own timezone; end before start = overnight.
+    start_time = models.TimeField(null=True, blank=True)
+    end_time = models.TimeField(null=True, blank=True)
     support_scope = models.TextField(blank=True, default="")
     planned_full_cans = models.PositiveIntegerField(default=0)
     planned_pour_samples = models.PositiveIntegerField(default=0)
@@ -1684,6 +1687,17 @@ class FieldMarketingEvent(models.Model):
         blank=True,
         related_name="field_marketing_events_created",
     )
+    # Soft delete: hidden from the board, KPIs, and exports; an admin can restore.
+    deleted_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    deleted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="field_marketing_events_deleted",
+    )
+    # The delete also soft-deleted the linked request. Restore leaves it deleted.
+    delete_cancelled_request = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

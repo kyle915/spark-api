@@ -202,7 +202,7 @@ def suggest_plans(recap, kind: str, query: str | None = None) -> list[Suggestion
     market_key, state = _recap_market(recap)
     markets = _markets()
 
-    qs = _FM.objects.filter(tenant_id=tenant_id)
+    qs = _FM.objects.filter(tenant_id=tenant_id, deleted_at__isnull=True)
     text = (query or "").strip()
     if text:
         qs = qs.filter(
@@ -259,7 +259,9 @@ def push_recap(
     *, kind: str, recap_id, plan_id: str, metric_keys: list[str], actor, confirm_move: bool
 ) -> PlanRecapLink:
     recap = _load_recap(kind, recap_id)
-    plan = _FM.objects.filter(uuid=plan_id).first() if plan_id else None
+    plan = (
+        _FM.objects.filter(uuid=plan_id, deleted_at__isnull=True).first() if plan_id else None
+    )
     if plan is None:
         raise PlanResultsError("Pick a plan.")
     _check_tenant(plan, recap)
@@ -313,7 +315,9 @@ def auto_attach_on_approval(*, kind: str, recap_id: int, actor) -> PlanRecapLink
     if not request_id:
         return None
     plans = list(
-        _FM.objects.filter(tenant_id=_recap_tenant_id(recap), request_id=request_id)
+        _FM.objects.filter(
+            tenant_id=_recap_tenant_id(recap), request_id=request_id, deleted_at__isnull=True
+        )
     )
     if not plans:
         return None

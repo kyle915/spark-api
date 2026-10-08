@@ -1,4 +1,4 @@
-"""Emails fired when a field marketing plan is submitted.
+"""Emails fired when a field marketing plan is submitted or deleted.
 
 Opt-in per brand: a brand only gets these emails when it has an entry in
 ``PLAN_SUBMIT_MAIL_BY_SLUG``. Torch is the only brand today.
@@ -6,6 +6,8 @@ Opt-in per brand: a brand only gets these emails when it has an entry in
 Two emails per submitted plan:
   * a confirmation to the logged-in submitter (brand colors, client host link)
   * a notification to the brand's internal Ignite list (Spark lime, admin link)
+
+Deleting a submitted plan sends one notice to the internal list. Drafts are silent.
 
 Staffed plans also create an Event Activation request, which already alerts
 the whole Ignite team. That alert skips the internal list, because those
@@ -204,6 +206,75 @@ class PlanSubmittedInternalMailer(Mailer):
                 "plan_url": admin_plan_url(),
             },
         )
+
+
+class PlanDeletedInternalMailer(Mailer):
+    """Tells the brand's internal Ignite list a submitted plan was deleted."""
+
+    def _build_logo_attachment(self):
+        return None
+
+    def __init__(self, content: PlanMailContent, to_emails: list[str], request_cancelled: bool):
+        self.content = content
+        self.to_emails = to_emails
+        self.request_cancelled = request_cancelled
+
+    def envelope(self) -> Envelope:
+        c = self.content
+        if c.request_code:
+            outcome = "cancelled" if self.request_cancelled else "kept"
+            tail = f"; linked {c.request_code} {outcome}"
+        else:
+            tail = ""
+        headers = {}
+        if c.submitter_email:
+            headers["Reply-To"] = c.submitter_email
+        return Envelope(
+            subject=(
+                f"{c.brand_label} field marketing plan deleted: {c.plan_name} "
+                f"by {c.submitter_name}{tail}"
+            ),
+            template="events.templates.emails.field_marketing_plan_deleted_internal",
+            from_email=FROM_EMAIL,
+            to_emails=self.to_emails,
+            headers=headers,
+            context={
+                "c": c,
+                "request_cancelled": self.request_cancelled,
+                "plan_url": admin_plan_url(),
+            },
+        )
+
+
+def notify_plan_deleted(
+    event: models.FieldMarketingEvent,
+    actor,
+    rows: list[tuple[str, str]],
+    request_code: str | None,
+    request_cancelled: bool,
+) -> None:
+    """Internal notice for a deleted submitted plan. Never raises."""
+    config = plan_submit_mail_for(event.tenant)
+    if not config:
+        return
+    internal = _normalize(config.internal_emails)
+    if not internal:
+        return
+    request = event.request
+    content = PlanMailContent(
+        brand_label=config.brand_label,
+        plan_name=event.name,
+        rows=rows,
+        request_code=request_code,
+        request_url=_admin_request_url(request) if request else "",
+        submitter_name=submitter_name(actor),
+        submitter_email=(getattr(actor, "email", None) or "").strip(),
+        greeting_name="",
+    )
+    try:
+        PlanDeletedInternalMailer(content, internal, request_cancelled).send()
+    except Exception:
+        logger.exception("Plan deleted email failed for plan %s", event.uuid)
 
 
 def _alert_ignite_team(request: models.Request, exclude: set[str]) -> None:

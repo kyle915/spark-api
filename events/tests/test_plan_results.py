@@ -297,6 +297,17 @@ class TestPlanResults(EventsGraphQLTestCase):
         assert remove_recap(kind="custom", recap_id=recap.id) is True
         assert rm.PlanRecapLink.objects.count() == 0
 
+    def test_deleted_plans_are_not_suggested_or_pushable(self):
+        plan = self._plan()
+        plan.deleted_at = timezone.now()
+        plan.save(update_fields=["deleted_at"])
+        recap = self._event_recap(self._event(request=plan.request))
+        assert plan.name not in [s.plan.name for s in suggest_plans(recap, pm.KIND_CUSTOM)]
+        with pytest.raises(PlanResultsError, match="Pick a plan"):
+            push_recap(kind="custom", recap_id=recap.id, plan_id=str(plan.uuid),
+                       metric_keys=[pm.EMAILS_COLLECTED], actor=self.admin, confirm_move=False)
+        assert auto_attach_on_approval(kind="custom", recap_id=recap.id, actor=self.admin) is None
+
     def test_push_rejects_another_brands_plan(self):
         plan = self._plan()
         other_event = em.Event.objects.create(

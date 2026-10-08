@@ -21,22 +21,22 @@ from django.utils import timezone
 from graphql import GraphQLError
 from strawberry import relay
 
-from django.core.exceptions import MultipleObjectsReturned
+from django.core.exceptions import MultipleObjectsReturned, ValidationError
 
+from ambassadors.models import Attendance
 from events import models
 from events.activity_log import _safe_log
 from events.demo_cancel import request_display_code
-from events.field_marketing_mail import notify_plan_submitted
+from events.field_marketing_mail import notify_plan_deleted, notify_plan_submitted
+from events.request_soft_delete import soft_delete_request
 from events.plan_actuals import plan_actuals, result_counts
 from recaps import plan_metrics as pm
+from recaps.models import CustomRecap, Recap
 from tenants.models import Tenant, TenantedUser
 from utils.graphql.inputs import SparkGraphQLInput
 from utils.graphql.mixins import SparkGraphQLMixin, resolve_id_to_int
-from utils.graphql.permissions import (
-    StrictIsAuthenticated,
-    _is_admin_access,
-    resolve_request_user_access,
-)
+from utils.graphql.permissions import StrictIsAuthenticated
+from utils.tz import resolve_zoneinfo
 from utils.utils import ROLE_ID, build_mutation_response
 
 logger = logging.getLogger(__name__)
@@ -59,6 +59,20 @@ MARKETS: tuple[tuple[str, str, str, str, str], ...] = (
         "972-978-7253",
     ),
 )
+
+MARKET_TIMEZONES: dict[str, str] = {
+    "miami": "America/New_York",
+    "orlando": "America/New_York",
+    "houston": "America/Chicago",
+    "austin-dallas": "America/Chicago",
+}
+
+# The restore an Undo toast fires. Older deletes need an Ignite admin.
+UNDO_WINDOW = timedelta(minutes=15)
+
+DELETE_REMOVE = "remove"
+DELETE_CANCEL_REQUEST = "cancel_request"
+DELETE_KEEP_REQUEST = "keep_request"
 
 ACTIVITIES: dict[str, str] = {
     models.FieldMarketingEvent.ACTIVITY_FULL_CAN: "Full can samples",
@@ -168,6 +182,38 @@ def is_torch_tenant(tenant) -> bool:
     slug = (getattr(tenant, "slug", None) or "").strip().lower()
     url = (getattr(tenant, "request_url_name", None) or "").strip().lower()
     return slug in TORCH_SLUGS or url in TORCH_SLUGS
+
+
+def _market_zone(market: str) -> ZoneInfo:
+    return ZoneInfo(MARKET_TIMEZONES.get(market, "America/New_York"))
+
+
+def _market_today(market: str, now: datetime | None = None) -> date:
+    return (now or timezone.now()).astimezone(_market_zone(market)).date()
+
+
+def _parse_clock(raw, label: str) -> time | None:
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    try:
+        hour_s, minute_s = text.split(":", 1)
+        return time(int(hour_s), int(minute_s[:2]))
+    except (TypeError, ValueError):
+        raise FieldMarketingError(f"Pick a {label} time.") from None
+
+
+def _clock_label(value: time) -> str:
+    hour = value.hour % 12 or 12
+    return f"{hour}:{value.minute:02d} {'AM' if value.hour < 12 else 'PM'}"
+
+
+def _times_label(start: time | None, end: time | None) -> str:
+    if start and end:
+        return f"{_clock_label(start)} – {_clock_label(end)}"
+    if start:
+        return f"Starts {_clock_label(start)}"
+    return ""
 
 
 def _month_window(month: str | None) -> tuple[date, date, str]:
@@ -322,13 +368,75 @@ def _require_torch_user(user, tenant_id=None):
     return tenant
 
 
+def _live_request(event: models.FieldMarketingEvent) -> models.Request | None:
+    request = event.request if event.request_id else None
+    if request is None or request.deleted_at is not None:
+        return None
+    return request
+
+
+def _can_book(event: models.FieldMarketingEvent) -> bool:
+    """Book (or confirm) is still open: never booked, or the booking was cancelled."""
+    if not _should_create_request(event):
+        return event.status != models.FieldMarketingEvent.STATUS_SUBMITTED
+    return _live_request(event) is None
+
+
+def _locked_request_ids(request_ids, now: datetime) -> set[int]:
+    """Requests with a recap, a clock-in, or an event that already started."""
+    ids = [rid for rid in set(request_ids) if rid]
+    if not ids:
+        return set()
+    locked: set[int] = set()
+    for qs in (
+        Recap.objects.filter(event__request_id__in=ids),
+        CustomRecap.objects.filter(event__request_id__in=ids),
+        Attendance.objects.filter(event__request_id__in=ids),
+        models.Event.objects.filter(request_id__in=ids, start_time__lte=now),
+    ):
+        field = "request_id" if qs.model is models.Event else "event__request_id"
+        locked.update(qs.values_list(field, flat=True))
+    return locked
+
+
+def _request_started(request: models.Request, event: models.FieldMarketingEvent, now: datetime) -> bool:
+    if request.start_time:
+        return request.start_time <= now
+    today = _market_today(event.market, now)
+    if request.date:
+        return request.date.astimezone(_market_zone(event.market)).date() < today
+    return event.starts_on < today
+
+
+def _delete_effect(event: models.FieldMarketingEvent, locked: set[int], now: datetime) -> str:
+    request = _live_request(event)
+    if request is None:
+        return DELETE_REMOVE
+    if request.id in locked or _request_started(request, event, now):
+        return DELETE_KEEP_REQUEST
+    return DELETE_CANCEL_REQUEST
+
+
+def _person_name(user) -> str:
+    if user is None:
+        return ""
+    return (user.get_full_name() or "").strip() or (user.email or "").strip()
+
+
 def _serialize(
-    event: models.FieldMarketingEvent, results: tuple[int, int] = (0, 0)
+    event: models.FieldMarketingEvent,
+    locked: set[int] | None = None,
+    now: datetime | None = None,
+    results: tuple[int, int] = (0, 0),
 ):
     market = _markets().get(event.market)
+    now = now or timezone.now()
+    if locked is None:
+        locked = _locked_request_ids([event.request_id], now)
     code = None
     if event.request_id:
         code = request_display_code(event.request_id)
+    live_request = _live_request(event)
     return {
         "id": str(event.uuid),
         "market": event.market,
@@ -350,6 +458,8 @@ def _serialize(
         "needs_field_support": bool(event.needs_field_support),
         "ambassador_count": event.ambassador_count or 0,
         "support_times": event.support_times or "",
+        "start_time": event.start_time.strftime("%H:%M") if event.start_time else "",
+        "end_time": event.end_time.strftime("%H:%M") if event.end_time else "",
         "support_scope": event.support_scope or "",
         "planned_full_cans": event.planned_full_cans,
         "planned_pour_samples": event.planned_pour_samples,
@@ -361,6 +471,13 @@ def _serialize(
         "logged_cases": event.logged_cases,
         "status": event.status,
         "request_code": code,
+        "request_uuid": str(live_request.uuid) if live_request else None,
+        "request_cancelled": bool(event.request_id and live_request is None),
+        "can_book": _can_book(event),
+        "delete_effect": _delete_effect(event, locked, now),
+        "deleted_at": event.deleted_at.isoformat() if event.deleted_at else None,
+        "deleted_by_name": _person_name(event.deleted_by) if event.deleted_at else "",
+        "delete_cancelled_request": bool(event.delete_cancelled_request),
         "results_counted": results[0],
         "results_pending": results[1],
     }
@@ -427,18 +544,22 @@ def build_board(
     market: str | None = None,
     quarter: str | None = None,
     activity: str | None = None,
+    include_deleted: bool = False,
     include_pending: bool = False,
 ):
     """Projected KPIs sum planned FieldMarketingEvent fields for the filter.
 
     Not retail recaps. Omit month (or pass blank/"all") for every plan row.
-    Monthly targets only apply when a single month is selected. Logged uses
+    Monthly targets only apply when a single month is selected. Deleted plans
+    never count; ``include_deleted`` lists them separately for restore. Logged uses
     the manual log, else the recaps ops pushed to the plan.
     """
     month_raw = (month or "").strip()
     quarter_raw = (quarter or "").strip()
     all_dates = not quarter_raw and (not month_raw or month_raw.lower() == "all")
-    qs = models.FieldMarketingEvent.objects.filter(tenant=tenant)
+    qs = models.FieldMarketingEvent.objects.filter(tenant=tenant).select_related(
+        "request", "deleted_by"
+    )
     if quarter_raw:
         start, end, key = _quarter_window(quarter_raw)
         label = f"Q{key[-1]} {start.year}"
@@ -468,7 +589,14 @@ def build_board(
         if allowed is None:
             raise FieldMarketingError("Pick a tactic.")
         qs = qs.filter(activity__in=allowed)
-    events = list(qs.order_by(*order))
+    events = list(qs.filter(deleted_at__isnull=True).order_by(*order))
+    deleted = (
+        list(qs.filter(deleted_at__isnull=False).order_by("-deleted_at", "-id"))
+        if include_deleted
+        else []
+    )
+    now = timezone.now()
+    locked = _locked_request_ids([event.request_id for event in events], now)
     event_ids = [event.id for event in events]
     counts = result_counts(event_ids)
     by_id = {event.id: event for event in events}
@@ -561,6 +689,8 @@ def build_board(
         "events": [
             _serialize(
                 event,
+                locked,
+                now,
                 (
                     counts.get(event.id, (0, 0))[0],
                     counts.get(event.id, (0, 0))[1] if include_pending else 0,
@@ -568,6 +698,7 @@ def build_board(
             )
             for event in events
         ],
+        "deleted_events": [_serialize(event, set(), now) for event in deleted],
         "skus": sku_catalog(tenant),
     }
 
@@ -655,6 +786,15 @@ def _clean_plan(data: dict, tenant) -> dict:
         support_scope = ""
     elif needs_support and ambassador_count < 1:
         raise FieldMarketingError("Say how many brand ambassadors you need.")
+    start_time = _parse_clock(data.get("start_time"), "start")
+    end_time = _parse_clock(data.get("end_time"), "end")
+    if activity not in _STAFFED_ACTIVITIES:
+        start_time = None
+        end_time = None
+    if end_time and not start_time:
+        raise FieldMarketingError("Pick a start time too.")
+    if start_time:
+        support_times = _times_label(start_time, end_time)
     emails = _nonneg(data.get("planned_emails") or 0, "Emails")
     # New activities do not take a forecast of cans or pours. Legacy rows still do.
     legacy = activity in (
@@ -691,6 +831,8 @@ def _clean_plan(data: dict, tenant) -> dict:
         "needs_field_support": needs_support,
         "ambassador_count": ambassador_count,
         "support_times": support_times[:255],
+        "start_time": start_time,
+        "end_time": end_time,
         "support_scope": support_scope,
         "planned_full_cans": full_cans,
         "planned_pour_samples": pours,
@@ -721,10 +863,12 @@ def _request_notes(event: models.FieldMarketingEvent) -> str:
         lines.append(f"Sales support: {label}")
     if event.needs_field_support:
         lines.append(f"Field support: {event.ambassador_count} brand ambassadors")
-        if event.support_times:
-            lines.append(f"Times: {event.support_times}")
-        if event.support_scope:
-            lines.append(f"Scope: {event.support_scope}")
+        # Same "BA count: N" line the request forms write; the approve page reads it.
+        lines.append(f"BA count: {event.ambassador_count}")
+    if event.support_times:
+        lines.append(f"Times: {event.support_times}")
+    if event.needs_field_support and event.support_scope:
+        lines.append(f"Scope: {event.support_scope}")
     if event.planned_full_cans:
         lines.append(f"Planned full cans: {event.planned_full_cans}")
     if event.planned_pour_samples:
@@ -839,10 +983,10 @@ def _summary_rows(event: models.FieldMarketingEvent) -> list[tuple[str, str]]:
         if event.support_type == models.FieldMarketingEvent.SUPPORT_OTHER and event.support_other:
             label = f"{label}: {event.support_other}"
         rows.append(("Sales support", label))
+    if event.support_times:
+        rows.append(("Times", event.support_times))
     if event.needs_field_support:
         rows.append(("Brand ambassadors", str(event.ambassador_count)))
-        if event.support_times:
-            rows.append(("Times", event.support_times))
         if event.support_scope:
             rows.append(("Scope", event.support_scope))
     if event.planned_full_cans:
@@ -867,6 +1011,37 @@ def _send_submitted_mail(event_id: int, actor) -> None:
         logger.exception("Plan-submitted mail failed for field marketing event %s", event_id)
 
 
+def _request_times(
+    event: models.FieldMarketingEvent,
+) -> tuple[datetime, datetime | None, datetime | None]:
+    """Request date / start / end in the market's own timezone."""
+    zone = _market_zone(event.market)
+    when = datetime.combine(event.starts_on, event.start_time or time(12, 0), tzinfo=zone)
+    if not event.start_time:
+        return when, None, None
+    if not event.end_time:
+        return when, when, None
+    ends = datetime.combine(event.starts_on, event.end_time, tzinfo=zone)
+    if ends <= when:
+        ends += timedelta(days=1)
+    return when, when, ends
+
+
+def _timezone_row(when: datetime) -> models.TimeZone | None:
+    """The TimeZone row for this instant: exact DST code first, then any row in that zone."""
+    zone_key = getattr(when.tzinfo, "key", None)
+    rows = list(models.TimeZone.objects.order_by("id"))
+    abbreviation = (when.tzname() or "").upper()
+    for row in rows:
+        if (row.code or "").strip().upper() == abbreviation:
+            return row
+    for row in rows:
+        resolved = resolve_zoneinfo(row)
+        if resolved is not None and resolved.key == zone_key:
+            return row
+    return None
+
+
 def _submit_event(event: models.FieldMarketingEvent, actor) -> bool:
     """Submit the plan. True when this call submitted it or booked its request.
 
@@ -875,7 +1050,7 @@ def _submit_event(event: models.FieldMarketingEvent, actor) -> bool:
     """
     already_submitted = event.status == models.FieldMarketingEvent.STATUS_SUBMITTED
     create_request = _should_create_request(event)
-    if already_submitted and (event.request_id or not create_request):
+    if already_submitted and (_live_request(event) is not None or not create_request):
         return False
 
     if not create_request:
@@ -888,13 +1063,13 @@ def _submit_event(event: models.FieldMarketingEvent, actor) -> bool:
     if not address:
         raise FieldMarketingError("Add an address before submitting this to Ignite.")
     request_type = _resolve_event_activation_type(event.tenant)
-    when = timezone.make_aware(
-        datetime.combine(event.starts_on, time(12, 0)),
-        timezone.get_current_timezone(),
-    )
+    when, starts_at, ends_at = _request_times(event)
     request = models.Request.objects.create(
         name=(event.name or "Event activation")[:255],
         date=when,
+        start_time=starts_at,
+        end_time=ends_at,
+        timezone=_timezone_row(when),
         address=address,
         notes=_request_notes(event),
         requestor_email=(getattr(actor, "email", None) or "")[:254] or None,
@@ -945,26 +1120,138 @@ def plan_event(*, user, payload: dict, submit: bool, tenant_id=None) -> models.F
     return event
 
 
+def _plan_for(tenant, event_id: str, *, deleted: bool = False) -> models.FieldMarketingEvent:
+    qs = models.FieldMarketingEvent.objects.select_for_update().filter(
+        tenant=tenant, deleted_at__isnull=not deleted
+    )
+    try:
+        event = qs.filter(uuid=event_id).first()
+    except (ValueError, ValidationError):
+        event = None
+    if event is None:
+        if deleted:
+            raise FieldMarketingError("That deleted plan isn't on Torch.")
+        raise FieldMarketingError("That field marketing event isn't on Torch.")
+    return event
+
+
 @transaction.atomic
 def submit_event(*, user, event_id: str, tenant_id=None) -> models.FieldMarketingEvent:
     tenant = _require_torch_user(user, tenant_id=tenant_id)
-    event = models.FieldMarketingEvent.objects.filter(
-        tenant=tenant, uuid=event_id
-    ).first()
-    if event is None:
-        raise FieldMarketingError("That field marketing event isn't on Torch.")
+    event = _plan_for(tenant, event_id)
     _submit_and_mail(event, user)
+    return event
+
+
+@transaction.atomic
+def update_event(*, user, event_id: str, payload: dict, tenant_id=None) -> models.FieldMarketingEvent:
+    """Edit a plan that isn't booked. Booked rows change on the request itself."""
+    tenant = _require_torch_user(user, tenant_id=tenant_id)
+    event = _plan_for(tenant, event_id)
+    request = _live_request(event)
+    if request is not None:
+        raise FieldMarketingError(
+            f"This plan is booked as {request_display_code(request.id)}. "
+            "Change it on the request, or delete the plan."
+        )
+    cleaned = _clean_plan(payload, tenant)
+    for field, value in cleaned.items():
+        setattr(event, field, value)
+    event.save()
+    return event
+
+
+@dataclass(frozen=True)
+class DeleteOutcome:
+    event: models.FieldMarketingEvent
+    effect: str
+    request_code: str | None
+
+
+def _send_deleted_mail(event_id: int, actor, request_code: str | None, cancelled: bool) -> None:
+    try:
+        event = models.FieldMarketingEvent.objects.select_related(
+            "tenant", "request"
+        ).get(id=event_id)
+        notify_plan_deleted(event, actor, _summary_rows(event), request_code, cancelled)
+    except Exception:
+        logger.exception("Plan-deleted mail failed for field marketing event %s", event_id)
+
+
+@transaction.atomic
+def delete_event(*, user, event_id: str, tenant_id=None) -> DeleteOutcome:
+    """Soft-delete a plan. A linked request that hasn't happened is cancelled too.
+
+    Started, past, recapped, or clocked-in requests stay untouched; only the
+    plan is hidden. Deleting a submitted plan notifies the brand's internal list.
+    """
+    tenant = _require_torch_user(user, tenant_id=tenant_id)
+    event = _plan_for(tenant, event_id)
+    now = timezone.now()
+    effect = _delete_effect(event, _locked_request_ids([event.request_id], now), now)
+    code = request_display_code(event.request_id) if event.request_id else None
+    request = _live_request(event)
+    if effect == DELETE_CANCEL_REQUEST and request is not None:
+        soft_delete_request(
+            request,
+            user,
+            summary=f"Cancelled with deleted field marketing plan: {event.name}",
+        )
+    elif effect == DELETE_KEEP_REQUEST and request is not None:
+        _safe_log(
+            request=request,
+            kind=models.RequestActivityLog.KIND_UPDATED,
+            actor_user=user,
+            summary=f"Field marketing plan deleted (request kept): {event.name}"[:512],
+            metadata={"field_marketing_event": str(event.uuid), "plan_deleted": True},
+        )
+    event.deleted_at = now
+    event.deleted_by = user if getattr(user, "id", None) else None
+    event.delete_cancelled_request = effect == DELETE_CANCEL_REQUEST
+    event.save(update_fields=["deleted_at", "deleted_by", "delete_cancelled_request", "updated_at"])
+    if event.status == models.FieldMarketingEvent.STATUS_SUBMITTED:
+        transaction.on_commit(
+            partial(
+                _send_deleted_mail,
+                event.id,
+                user,
+                code if request is not None else None,
+                effect == DELETE_CANCEL_REQUEST,
+            )
+        )
+    return DeleteOutcome(event=event, effect=effect, request_code=code if request else None)
+
+
+def can_restore(user, event: models.FieldMarketingEvent | None = None, now: datetime | None = None) -> bool:
+    """Ignite admins restore anything; the person who deleted gets an Undo window."""
+    if _user_can_pick_any_tenant(user):
+        return True
+    if event is None or event.deleted_at is None:
+        return False
+    return (
+        event.deleted_by_id is not None
+        and event.deleted_by_id == getattr(user, "id", None)
+        and (now or timezone.now()) - event.deleted_at <= UNDO_WINDOW
+    )
+
+
+@transaction.atomic
+def restore_event(*, user, event_id: str, tenant_id=None) -> models.FieldMarketingEvent:
+    """Bring a deleted plan back. A request the delete cancelled stays cancelled."""
+    tenant = _require_torch_user(user, tenant_id=tenant_id)
+    event = _plan_for(tenant, event_id, deleted=True)
+    if not can_restore(user, event):
+        raise FieldMarketingError("Only Ignite admins can restore deleted plans.")
+    event.deleted_at = None
+    event.deleted_by = None
+    event.save(update_fields=["deleted_at", "deleted_by", "updated_at"])
     return event
 
 
 @transaction.atomic
 def log_results(*, user, event_id: str, payload: dict, tenant_id=None) -> models.FieldMarketingEvent:
     tenant = _require_torch_user(user, tenant_id=tenant_id)
-    event = models.FieldMarketingEvent.objects.filter(
-        tenant=tenant, uuid=event_id
-    ).first()
-    if event is None:
-        raise FieldMarketingError("That field marketing event isn't on Torch.")
+    event = _plan_for(tenant, event_id)
     touched = False
     checks = (
         ("logged_full_cans", "Full cans", _accepts_cans(event)),
@@ -1008,6 +1295,7 @@ def empty_board(month: str | None = None):
         "managers": [],
         "kpis": [],
         "events": [],
+        "deleted_events": [],
         "skus": [],
     }
 
@@ -1054,6 +1342,8 @@ class FieldMarketingEventType:
     needs_field_support: bool
     ambassador_count: int
     support_times: str
+    start_time: str
+    end_time: str
     support_scope: str
     planned_full_cans: int
     planned_pour_samples: int
@@ -1065,6 +1355,13 @@ class FieldMarketingEventType:
     logged_cases: int | None
     status: str
     request_code: str | None
+    request_uuid: str | None
+    request_cancelled: bool
+    can_book: bool
+    delete_effect: str
+    deleted_at: str | None
+    deleted_by_name: str
+    delete_cancelled_request: bool
     results_counted: int = 0
     results_pending: int = 0
 
@@ -1077,10 +1374,12 @@ class FieldMarketingBoardType:
     managers: list[FieldMarketingManagerType]
     kpis: list[FieldMarketingKpiType]
     events: list[FieldMarketingEventType]
+    deleted_events: list[FieldMarketingEventType]
+    can_restore: bool
     skus: list[str]
 
 
-def _board_type(payload: dict) -> FieldMarketingBoardType:
+def _board_type(payload: dict, can_restore_any: bool = False) -> FieldMarketingBoardType:
     return FieldMarketingBoardType(
         available=payload["available"],
         month=payload["month"],
@@ -1088,6 +1387,10 @@ def _board_type(payload: dict) -> FieldMarketingBoardType:
         managers=[FieldMarketingManagerType(**row) for row in payload["managers"]],
         kpis=[FieldMarketingKpiType(**row) for row in payload["kpis"]],
         events=[FieldMarketingEventType(**row) for row in payload["events"]],
+        deleted_events=[
+            FieldMarketingEventType(**row) for row in payload.get("deleted_events") or []
+        ],
+        can_restore=can_restore_any,
         skus=list(payload.get("skus") or []),
     )
 
@@ -1115,13 +1418,53 @@ class PlanFieldMarketingInput(SparkGraphQLInput):
     needs_field_support: bool = False
     ambassador_count: int = 0
     support_times: str = ""
+    start_time: str = ""
+    end_time: str = ""
     support_scope: str = ""
     submit: bool = False
     tenant_id: strawberry.ID | None = None
 
 
 @strawberry.input
+class UpdateFieldMarketingInput(SparkGraphQLInput):
+    event_id: str
+    market: str
+    activity: str
+    name: str
+    starts_on: str
+    days: int = 1
+    address: str = ""
+    notes: str = ""
+    planned_full_cans: int = 0
+    planned_pour_samples: int = 0
+    planned_emails: int = 0
+    sampling_format: str = ""
+    support_type: str = ""
+    support_other: str = ""
+    sku_names: list[str] | None = None
+    needs_field_support: bool = False
+    ambassador_count: int = 0
+    support_times: str = ""
+    start_time: str = ""
+    end_time: str = ""
+    support_scope: str = ""
+    tenant_id: strawberry.ID | None = None
+
+
+@strawberry.input
 class SubmitFieldMarketingInput(SparkGraphQLInput):
+    event_id: str
+    tenant_id: strawberry.ID | None = None
+
+
+@strawberry.input
+class DeleteFieldMarketingInput(SparkGraphQLInput):
+    event_id: str
+    tenant_id: strawberry.ID | None = None
+
+
+@strawberry.input
+class RestoreFieldMarketingInput(SparkGraphQLInput):
     event_id: str
     tenant_id: strawberry.ID | None = None
 
@@ -1146,6 +1489,17 @@ class FieldMarketingEventResponse:
 
 
 @strawberry.type
+class FieldMarketingDeleteResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    event: FieldMarketingEventType | None = None
+    request_code: str | None = None
+    request_cancelled: bool = False
+    can_undo: bool = False
+
+
+@strawberry.type
 class FieldMarketingQueries:
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def field_marketing(
@@ -1156,12 +1510,13 @@ class FieldMarketingQueries:
         market: str | None = None,
         quarter: str | None = None,
         activity: str | None = None,
+        include_deleted: bool = False,
     ) -> FieldMarketingBoardType:
         user = await SparkGraphQLMixin().get_user(info)
         tenant = await sync_to_async(_active_tenant_for_user)(user, tenant_id)
         if tenant is None or not is_torch_tenant(tenant):
             return _board_type(empty_board(month=month))
-        is_admin = _is_admin_access(*await resolve_request_user_access(user))
+        admin = _user_can_pick_any_tenant(user)
         try:
             payload = await sync_to_async(build_board)(
                 tenant,
@@ -1169,14 +1524,15 @@ class FieldMarketingQueries:
                 market=market,
                 quarter=quarter,
                 activity=activity,
-                include_pending=is_admin,
+                include_deleted=include_deleted and admin,
+                include_pending=admin,
             )
         except FieldMarketingError as exc:
             raise GraphQLError(str(exc)) from exc
-        return _board_type(payload)
+        return _board_type(payload, can_restore_any=admin)
 
 
-def _payload_from_plan(input: PlanFieldMarketingInput) -> dict:
+def _payload_from_plan(input: PlanFieldMarketingInput | UpdateFieldMarketingInput) -> dict:
     return {
         "market": input.market,
         "activity": input.activity,
@@ -1195,6 +1551,8 @@ def _payload_from_plan(input: PlanFieldMarketingInput) -> dict:
         "needs_field_support": input.needs_field_support,
         "ambassador_count": input.ambassador_count,
         "support_times": input.support_times,
+        "start_time": input.start_time,
+        "end_time": input.end_time,
         "support_scope": input.support_scope,
     }
 
@@ -1226,7 +1584,7 @@ class FieldMarketingMutations:
             success=True,
             message=message,
             input_obj=input,
-            event=_event_type(event),
+            event=await sync_to_async(_event_type)(event),
         )
 
     @relay.mutation(permission_classes=[StrictIsAuthenticated])
@@ -1252,7 +1610,7 @@ class FieldMarketingMutations:
             success=True,
             message=message,
             input_obj=input,
-            event=_event_type(event),
+            event=await sync_to_async(_event_type)(event),
         )
 
     @relay.mutation(permission_classes=[StrictIsAuthenticated])
@@ -1280,5 +1638,82 @@ class FieldMarketingMutations:
             success=True,
             message="Logged. The scorecard uses this number.",
             input_obj=input,
-            event=_event_type(event),
+            event=await sync_to_async(_event_type)(event),
+        )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def update_field_marketing(
+        self, info: strawberry.Info, input: UpdateFieldMarketingInput
+    ) -> FieldMarketingEventResponse:
+        user = await SparkGraphQLMixin().get_user(info)
+        try:
+            event = await sync_to_async(update_event)(
+                user=user,
+                event_id=input.event_id,
+                payload=_payload_from_plan(input),
+                tenant_id=input.tenant_id,
+            )
+        except FieldMarketingError as exc:
+            raise GraphQLError(str(exc)) from exc
+        return build_mutation_response(
+            FieldMarketingEventResponse,
+            success=True,
+            message="Plan updated.",
+            input_obj=input,
+            event=await sync_to_async(_event_type)(event),
+        )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def delete_field_marketing(
+        self, info: strawberry.Info, input: DeleteFieldMarketingInput
+    ) -> FieldMarketingDeleteResponse:
+        user = await SparkGraphQLMixin().get_user(info)
+        try:
+            outcome = await sync_to_async(delete_event)(
+                user=user,
+                event_id=input.event_id,
+                tenant_id=input.tenant_id,
+            )
+        except FieldMarketingError as exc:
+            raise GraphQLError(str(exc)) from exc
+        code = outcome.request_code
+        if outcome.effect == DELETE_CANCEL_REQUEST:
+            message = f"Plan deleted. {code} was cancelled."
+        elif outcome.effect == DELETE_KEEP_REQUEST:
+            message = f"Plan deleted. {code} and its recap stay on the tracker."
+        else:
+            message = "Plan deleted."
+        return build_mutation_response(
+            FieldMarketingDeleteResponse,
+            success=True,
+            message=message,
+            input_obj=input,
+            event=await sync_to_async(_event_type)(outcome.event),
+            request_code=code,
+            request_cancelled=outcome.effect == DELETE_CANCEL_REQUEST,
+            can_undo=await sync_to_async(can_restore)(user, outcome.event),
+        )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def restore_field_marketing(
+        self, info: strawberry.Info, input: RestoreFieldMarketingInput
+    ) -> FieldMarketingEventResponse:
+        user = await SparkGraphQLMixin().get_user(info)
+        try:
+            event = await sync_to_async(restore_event)(
+                user=user,
+                event_id=input.event_id,
+                tenant_id=input.tenant_id,
+            )
+        except FieldMarketingError as exc:
+            raise GraphQLError(str(exc)) from exc
+        message = "Plan restored."
+        if event.delete_cancelled_request:
+            message += " Its cancelled request stays cancelled — book it again if it's back on."
+        return build_mutation_response(
+            FieldMarketingEventResponse,
+            success=True,
+            message=message,
+            input_obj=input,
+            event=await sync_to_async(_event_type)(event),
         )

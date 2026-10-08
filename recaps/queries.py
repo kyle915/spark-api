@@ -19,7 +19,15 @@ from django.db.models.functions import Coalesce, Concat
 from recaps import types
 from recaps import models
 from events import types as event_types
+from events.models import EventType
 from ambassadors import models as ambassador_models
+from recaps.recap_types import (
+    RECAP_TYPE_RETAIL,
+    RECAP_TYPES,
+    recap_type_counts,
+    recap_type_for_name,
+    with_recap_type,
+)
 from recaps.inputs import (
     CustomRecapFiltersInput,
     CustomRecapTemplateFiltersInput,
@@ -1341,6 +1349,134 @@ async def _assert_caller_authorized_to_read_recap_tenant(
 WALKIN_WRAP_GRACE_HOURS = 4
 
 
+def _id_or_none(raw) -> int | None:
+    return resolve_id_to_int(raw) if raw not in (None, "") else None
+
+
+async def _legacy_recaps_list_queryset(
+    service: RecapQueriesService,
+    info: strawberry.Info,
+    filters: RecapFiltersInput | None,
+    q: str | None,
+) -> QuerySet | None:
+    """Filtered, ordered legacy rows for the Recaps list (no type filter).
+
+    Shared by ``recaps`` and ``recapTypeCounts`` so chip counts match the
+    list. None means no tenant is in scope: an unrestricted role that sent no
+    tenant gets an EMPTY page, never every tenant's recaps (the Girl Beer
+    leak). Clients are pinned to their own tenant by _enforce_client_tenant.
+    """
+    tenant_id = await _enforce_client_tenant(
+        service, info, _id_or_none(filters.tenant_id) if filters else None
+    )
+    if not tenant_id:
+        return None
+    # Force approved=True for client users — they never see drafts, and
+    # `shared` is an admin publish step, not their visibility gate (Feel
+    # Free: 118 approved, 0 shared). Archived is never client-visible.
+    approved = filters.approved if filters else None
+    client_only = await _is_client_only_user(info)
+    if client_only:
+        approved = True
+    queryset = service.get_ordered_queryset(
+        tenant_id=tenant_id,
+        event_id=_id_or_none(filters.event_id) if filters else None,
+        event_type_id=_id_or_none(filters.event_type) if filters else None,
+        rmm_asigned_id=_id_or_none(filters.rmm_asigned_id) if filters else None,
+        ambassador_id=_id_or_none(filters.ambassador_id) if filters else None,
+        retailer_id=_id_or_none(filters.retailer_id) if filters else None,
+        location_id=_id_or_none(filters.location_id) if filters else None,
+        state_id=_id_or_none(filters.state_id) if filters else None,
+        event_date=filters.event_date if filters else None,
+        start_date=filters.start_date if filters else None,
+        end_date=filters.end_date if filters else None,
+        event_address=filters.event_address if filters else None,
+        approved=approved,
+        q=q,
+    )
+    if filters and filters.edited is not None:
+        queryset = queryset.filter(updated_by__isnull=not filters.edited)
+    if filters and filters.shared is not None and not client_only:
+        queryset = queryset.filter(shared_at__isnull=not filters.shared)
+    if client_only:
+        queryset = queryset.filter(archived_at__isnull=True)
+    elif filters and filters.archived is not None:
+        queryset = queryset.filter(archived_at__isnull=not filters.archived)
+    queryset = _apply_name_code_filters(
+        queryset,
+        retailer_name=filters.retailer_name if filters else None,
+        state_code=filters.state_code if filters else None,
+        ambassador_name=filters.ambassador_name if filters else None,
+    )
+    return _apply_activation_bucket_filter(
+        queryset,
+        activation_bucket=filters.activation_bucket if filters else None,
+        name_field="event__request__request_type__name",
+    )
+
+
+async def _custom_recaps_list_queryset(
+    service: CustomRecapQueriesService,
+    info: strawberry.Info,
+    filters: CustomRecapFiltersInput | None,
+    q: str | None,
+) -> QuerySet | None:
+    """Custom-recap twin of ``_legacy_recaps_list_queryset``."""
+    tenant_id = await _enforce_client_tenant(
+        service, info, _id_or_none(filters.tenant_id) if filters else None
+    )
+    if not tenant_id:
+        return None
+    approved = filters.approved if filters else None
+    client_only = await _is_client_only_user(info)
+    if client_only:
+        approved = True
+    queryset = service.get_ordered_queryset(
+        tenant_id=tenant_id,
+        event_id=_id_or_none(filters.event_id) if filters else None,
+        event_type_id=_id_or_none(filters.event_type) if filters else None,
+        rmm_asigned_id=_id_or_none(filters.rmm_asigned_id) if filters else None,
+        custom_recap_template_id=(
+            _id_or_none(filters.custom_recap_template_id) if filters else None
+        ),
+        ambassador_id=_id_or_none(filters.ambassador_id) if filters else None,
+        retailer_id=_id_or_none(filters.retailer_id) if filters else None,
+        location_id=_id_or_none(filters.location_id) if filters else None,
+        state_id=_id_or_none(filters.state_id) if filters else None,
+        event_date=filters.event_date if filters else None,
+        start_date=filters.start_date if filters else None,
+        end_date=filters.end_date if filters else None,
+        event_address=filters.event_address if filters else None,
+        approved=approved,
+        edited=filters.edited if filters else None,
+        q=q,
+    )
+    queryset = _apply_name_code_filters(
+        queryset,
+        retailer_name=filters.retailer_name if filters else None,
+        state_code=filters.state_code if filters else None,
+        ambassador_name=filters.ambassador_name if filters else None,
+    )
+    # Custom list cards label by template name (same as FE
+    # activationBucketForTypeName on customRecapTemplate.name).
+    queryset = _apply_activation_bucket_filter(
+        queryset,
+        activation_bucket=filters.activation_bucket if filters else None,
+        name_field="custom_recap_template__name",
+    )
+    if filters and filters.shared is not None and not client_only:
+        queryset = queryset.filter(shared_at__isnull=not filters.shared)
+    if client_only:
+        queryset = queryset.filter(archived_at__isnull=True)
+    elif filters and filters.archived is not None:
+        queryset = queryset.filter(archived_at__isnull=not filters.archived)
+    if filters and filters.needs_store_map and not client_only:
+        queryset = queryset.filter(
+            is_third_party=True, store_mapping_status="unmatched"
+        )
+    return queryset
+
+
 @strawberry.type
 class RecapQueries:
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
@@ -1356,142 +1492,21 @@ class RecapQueries:
     ) -> CountableConnection[types.Recap]:
         """Get all recaps using Relay pagination."""
         service = RecapQueriesService()
-        user = await service.get_user(info)
-
-        # Client users see only their own tenant — even if filters.tenant_id
-        # is unset or points elsewhere. Spark admins / ambassadors keep the
-        # filters.tenant_id pass-through behavior.
-        filters_tenant_id_raw: int | None = (
-            resolve_id_to_int(filters.tenant_id)
-            if filters and filters.tenant_id not in (None, "")
-            else None
-        )
-        tenant_id = await _enforce_client_tenant(
-            service, info, filters_tenant_id_raw
-        )
-        # Hard tenant scope for the recaps LIST (clients schema). Every
-        # web consumer of this resolver is a per-tenant surface and always
-        # passes the active tenant; the ONLY way `tenant_id` is None here
-        # is an unrestricted role (staff / superuser / spark-admin) that
-        # sent no tenant — in which case the old resolver returned EVERY
-        # tenant's recaps, leaking cross-tenant rows into the "Your
-        # recaps" list (the live Girl Beer bug: an LD recap and an
-        # inflated count). Mirror `recapEventOptions`: with no tenant in
-        # scope return an EMPTY page rather than all tenants. Clients are
-        # already pinned to their own tenant by _enforce_client_tenant
-        # above, so this only closes the admin-side, no-tenant footgun.
-        if not tenant_id:
-            empty = service.get_model().objects.none()
+        await service.get_user(info)
+        queryset = await _legacy_recaps_list_queryset(service, info, filters, q)
+        if queryset is None:
+            # Match the populated branch's ceiling so the empty page
+            # validates `first` the same way.
             return await service.get_connection(
                 first=first,
                 after=after,
                 last=last,
                 before=before,
-                # Match the populated branch's ceiling so the empty page
-                # validates `first` the same way (no behavior change — the
-                # queryset is empty — but keeps the two paths consistent).
                 max_limit=RECAPS_LIST_MAX_LIMIT,
-                queryset=empty,
+                queryset=service.get_model().objects.none(),
             )
-        event_id: int | None = (
-            resolve_id_to_int(filters.event_id)
-            if filters and filters.event_id
-            else None
-        )
-        event_type_id: int | None = (
-            resolve_id_to_int(filters.event_type)
-            if filters and filters.event_type
-            else None
-        )
-        rmm_asigned_id: int | None = (
-            resolve_id_to_int(filters.rmm_asigned_id)
-            if filters and filters.rmm_asigned_id
-            else None
-        )
-        ambassador_id: int | None = (
-            resolve_id_to_int(filters.ambassador_id)
-            if filters and filters.ambassador_id
-            else None
-        )
-        retailer_id: int | None = (
-            resolve_id_to_int(filters.retailer_id)
-            if filters and filters.retailer_id
-            else None
-        )
-        location_id: int | None = (
-            resolve_id_to_int(filters.location_id)
-            if filters and filters.location_id
-            else None
-        )
-        state_id: int | None = (
-            resolve_id_to_int(filters.state_id)
-            if filters and filters.state_id
-            else None
-        )
-        event_date = filters.event_date if filters else None
-        start_date = filters.start_date if filters else None
-        end_date = filters.end_date if filters else None
-        event_address = filters.event_address if filters else None
-        approved = filters.approved if filters else None
-        retailer_name = filters.retailer_name if filters else None
-        state_code = filters.state_code if filters else None
-        ambassador_name = (
-            getattr(filters, "ambassador_name", None) if filters else None
-        )
-        activation_bucket = (
-            getattr(filters, "activation_bucket", None) if filters else None
-        )
-        # Force approved=True for client users — they never see drafts.
-        # Overrides whatever the client (or a stale frontend filter) sent.
-        # Also ignore `shared`: that flag is an admin publish step, not
-        # the client visibility gate. A stale frontend that defaulted
-        # My Recaps to shared=true hid every approved-but-unshared recap
-        # (Feel Free: 118 approved, 0 shared).
-        # Archived recaps are also never client-visible (same gate as
-        # unapproved) — force archived_at IS NULL for client-only callers.
-        client_only = await _is_client_only_user(info)
-        if client_only:
-            approved = True
-        queryset = service.get_ordered_queryset(
-            tenant_id=tenant_id,
-            event_id=event_id,
-            event_type_id=event_type_id,
-            rmm_asigned_id=rmm_asigned_id,
-            ambassador_id=ambassador_id,
-            retailer_id=retailer_id,
-            location_id=location_id,
-            state_id=state_id,
-            event_date=event_date,
-            start_date=start_date,
-            end_date=end_date,
-            event_address=event_address,
-            approved=approved,
-            q=q,
-        )
-        if filters and filters.edited is not None:
-            queryset = queryset.filter(updated_by__isnull=not filters.edited)
-        if (
-            filters
-            and getattr(filters, "shared", None) is not None
-            and not client_only
-        ):
-            queryset = queryset.filter(shared_at__isnull=not filters.shared)
-        if client_only:
-            queryset = queryset.filter(archived_at__isnull=True)
-        elif filters and getattr(filters, "archived", None) is not None:
-            queryset = queryset.filter(
-                archived_at__isnull=not filters.archived
-            )
-        queryset = _apply_name_code_filters(
-            queryset,
-            retailer_name=retailer_name,
-            state_code=state_code,
-            ambassador_name=ambassador_name,
-        )
-        queryset = _apply_activation_bucket_filter(
-            queryset,
-            activation_bucket=activation_bucket,
-            name_field="event__request__request_type__name",
+        queryset = with_recap_type(
+            queryset, getattr(filters, "recap_type", None) if filters else None
         )
         # List cards only need hero + count + flat event labels.
         # Drop the fat default prefetches (engagements/samples/sales).
@@ -1529,22 +1544,7 @@ class RecapQueries:
                 ),
             )
         )
-
         return await service.get_connection(
-            tenant_id=tenant_id,
-            event_id=event_id,
-            event_type_id=event_type_id,
-            rmm_asigned_id=rmm_asigned_id,
-            ambassador_id=ambassador_id,
-            retailer_id=retailer_id,
-            location_id=location_id,
-            state_id=state_id,
-            event_date=event_date,
-            start_date=start_date,
-            end_date=end_date,
-            event_address=event_address,
-            approved=approved,
-            q=q,
             first=first,
             after=after,
             last=last,
@@ -1552,6 +1552,62 @@ class RecapQueries:
             max_limit=RECAPS_LIST_MAX_LIMIT,
             queryset=queryset,
         )
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def recap_type_counts(
+        self,
+        info: strawberry.Info,
+        q: str | None = None,
+        filters: CustomRecapFiltersInput | None = None,
+    ) -> types.RecapTypeCounts:
+        """Recap types for the Recaps list chips, with counts.
+
+        Same filters as ``recaps`` + ``customRecaps`` (minus the type filter
+        itself), so each chip's count is what the list shows when picked.
+        Types the tenant's standing walk-up offers are listed even at 0.
+        """
+        legacy_service = RecapQueriesService()
+        custom_service = CustomRecapQueriesService()
+        await legacy_service.get_user(info)
+        tenant_id = await _enforce_client_tenant(
+            custom_service, info, _id_or_none(filters.tenant_id) if filters else None
+        )
+        if not tenant_id:
+            return types.RecapTypeCounts(total=0, types=[])
+        custom_qs = await _custom_recaps_list_queryset(
+            custom_service, info, filters, q
+        )
+        # The list hides legacy rows under the "Map store" queue.
+        legacy_qs = (
+            None
+            if filters and filters.needs_store_map
+            else await _legacy_recaps_list_queryset(
+                legacy_service, info, filters, q
+            )
+        )
+
+        def _go() -> types.RecapTypeCounts:
+            counts = recap_type_counts(custom_qs)
+            if legacy_qs is not None:
+                for key, n in recap_type_counts(legacy_qs).items():
+                    counts[key] = counts.get(key, 0) + n
+            offered = {
+                recap_type_for_name(name) or RECAP_TYPE_RETAIL
+                for name in EventType.objects.filter(
+                    tenant_id=tenant_id,
+                    checkin_selectable_for_tenants__id=tenant_id,
+                ).values_list("name", flat=True)
+            }
+            return types.RecapTypeCounts(
+                total=sum(counts.values()),
+                types=[
+                    types.RecapTypeCount(key=key, label=label, count=counts.get(key, 0))
+                    for key, label in RECAP_TYPES
+                    if counts.get(key) or key in offered
+                ],
+            )
+
+        return await sync_to_async(_go)()
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def recap(
@@ -1612,142 +1668,19 @@ class RecapQueries:
         """
         service = CustomRecapQueriesService()
         await service.get_user(info)
-
-        filters_tenant_id_raw = (
-            resolve_id_to_int(filters.tenant_id)
-            if filters and filters.tenant_id not in (None, "")
-            else None
-        )
-        resolved_tenant_id = await _enforce_client_tenant(
-            service, info, filters_tenant_id_raw
-        )
-        # Same hard tenant scope as the legacy `recaps` resolver: custom
-        # recaps share the "Your recaps" list, so an unrestricted role
-        # with no tenant in scope must get an EMPTY page, not every
-        # tenant's custom recaps. Clients are already pinned by
-        # _enforce_client_tenant above.
-        if not resolved_tenant_id:
-            empty = service.get_model().objects.none()
+        queryset = await _custom_recaps_list_queryset(service, info, filters, q)
+        if queryset is None:
             return await service.get_connection(
                 first=first,
                 after=after,
                 last=last,
                 before=before,
-                # Mirror the populated branch's ceiling (no behavior change
-                # on an empty queryset; keeps the two paths consistent).
                 max_limit=RECAPS_LIST_MAX_LIMIT,
-                queryset=empty,
+                queryset=service.get_model().objects.none(),
             )
-        resolved_event_id = (
-            resolve_id_to_int(filters.event_id)
-            if filters and filters.event_id not in (None, "")
-            else None
+        queryset = with_recap_type(
+            queryset, getattr(filters, "recap_type", None) if filters else None
         )
-        resolved_event_type_id = (
-            resolve_id_to_int(filters.event_type)
-            if filters and filters.event_type not in (None, "")
-            else None
-        )
-        resolved_rmm_asigned_id = (
-            resolve_id_to_int(filters.rmm_asigned_id)
-            if filters and filters.rmm_asigned_id not in (None, "")
-            else None
-        )
-        resolved_custom_recap_template_id = (
-            resolve_id_to_int(filters.custom_recap_template_id)
-            if filters and filters.custom_recap_template_id not in (None, "")
-            else None
-        )
-        resolved_ambassador_id = (
-            resolve_id_to_int(filters.ambassador_id)
-            if filters and filters.ambassador_id not in (None, "")
-            else None
-        )
-        resolved_retailer_id = (
-            resolve_id_to_int(filters.retailer_id)
-            if filters and filters.retailer_id not in (None, "")
-            else None
-        )
-        resolved_location_id = (
-            resolve_id_to_int(filters.location_id)
-            if filters and filters.location_id not in (None, "")
-            else None
-        )
-        resolved_state_id = (
-            resolve_id_to_int(filters.state_id)
-            if filters and filters.state_id not in (None, "")
-            else None
-        )
-        event_date = filters.event_date if filters else None
-        start_date = filters.start_date if filters else None
-        end_date = filters.end_date if filters else None
-        event_address = filters.event_address if filters else None
-        approved = filters.approved if filters else None
-        edited = filters.edited if filters else None
-        retailer_name = filters.retailer_name if filters else None
-        state_code = filters.state_code if filters else None
-        ambassador_name = (
-            getattr(filters, "ambassador_name", None) if filters else None
-        )
-        activation_bucket = (
-            getattr(filters, "activation_bucket", None) if filters else None
-        )
-
-        # Force approved=True for client users on custom recaps too.
-        # Ignore `shared` the same way as the legacy recaps list — clients
-        # see every approved recap, not only ones stamped shared_at.
-        # Archived is never client-visible (same gate as unapproved).
-        client_only = await _is_client_only_user(info)
-        if client_only:
-            approved = True
-
-        queryset = service.get_ordered_queryset(
-            tenant_id=resolved_tenant_id,
-            event_id=resolved_event_id,
-            event_type_id=resolved_event_type_id,
-            rmm_asigned_id=resolved_rmm_asigned_id,
-            custom_recap_template_id=resolved_custom_recap_template_id,
-            ambassador_id=resolved_ambassador_id,
-            retailer_id=resolved_retailer_id,
-            location_id=resolved_location_id,
-            state_id=resolved_state_id,
-            event_date=event_date,
-            start_date=start_date,
-            end_date=end_date,
-            event_address=event_address,
-            approved=approved,
-            edited=edited,
-            q=q,
-        )
-        queryset = _apply_name_code_filters(
-            queryset,
-            retailer_name=retailer_name,
-            state_code=state_code,
-            ambassador_name=ambassador_name,
-        )
-        queryset = _apply_activation_bucket_filter(
-            queryset,
-            activation_bucket=activation_bucket,
-            # Custom list cards label by template name (same as FE
-            # activationBucketForTypeName on customRecapTemplate.name).
-            name_field="custom_recap_template__name",
-        )
-        if (
-            filters
-            and getattr(filters, "shared", None) is not None
-            and not client_only
-        ):
-            queryset = queryset.filter(shared_at__isnull=not filters.shared)
-        if client_only:
-            queryset = queryset.filter(archived_at__isnull=True)
-        elif filters and getattr(filters, "archived", None) is not None:
-            queryset = queryset.filter(
-                archived_at__isnull=not filters.archived
-            )
-        if filters and getattr(filters, "needs_store_map", None) and not client_only:
-            queryset = queryset.filter(
-                is_third_party=True, store_mapping_status="unmatched"
-            )
         queryset = (
             queryset.prefetch_related(None)
             .select_related(
@@ -1788,24 +1721,7 @@ class RecapQueries:
                 ),
             )
         )
-
         return await service.get_connection(
-            tenant_id=resolved_tenant_id,
-            event_id=resolved_event_id,
-            event_type_id=resolved_event_type_id,
-            rmm_asigned_id=resolved_rmm_asigned_id,
-            custom_recap_template_id=resolved_custom_recap_template_id,
-            ambassador_id=resolved_ambassador_id,
-            retailer_id=resolved_retailer_id,
-            location_id=resolved_location_id,
-            state_id=resolved_state_id,
-            event_date=event_date,
-            start_date=start_date,
-            end_date=end_date,
-            event_address=event_address,
-            approved=approved,
-            edited=edited,
-            q=q,
             first=first,
             after=after,
             last=last,
