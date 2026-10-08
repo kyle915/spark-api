@@ -984,3 +984,53 @@ class PlanRecapLink(models.Model):
                 name="rc_plan_link_one_recap",
             ),
         ]
+
+
+class RecapMetricEdit(models.Model):
+    """One field-level correction Ignite staff made to a submitted recap.
+
+    Rows are append-only. The earliest row per ``field_key`` holds the BA's
+    original value in ``old_value``; every Save shares one ``batch``.
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    custom_recap = models.ForeignKey(
+        CustomRecap,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="metric_edits",
+    )
+    recap = models.ForeignKey(
+        Recap,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="metric_edits",
+    )
+    batch = models.UUIDField(default=uuid7, db_index=True)
+    field_key = models.CharField(max_length=255)
+    field_label = models.CharField(max_length=255)
+    old_value = models.TextField(null=True, blank=True)
+    new_value = models.TextField(null=True, blank=True)
+    reason = models.TextField(blank=True, default="")
+    edited_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="recap_metric_edits",
+    )
+    edited_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-edited_at", "-id"]
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(recap__isnull=False, custom_recap__isnull=True)
+                    | models.Q(recap__isnull=True, custom_recap__isnull=False)
+                ),
+                name="rc_metric_edit_one_recap",
+            ),
+        ]

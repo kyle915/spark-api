@@ -17,6 +17,7 @@ from asgiref.sync import sync_to_async
 from utils.gcs import public_url, extract_blob_name_from_url
 from .heic_conversion import display_blob_name, is_heic_blob
 from .recap_types import recap_type_key
+from utils.graphql.permissions import _is_admin_access, resolve_request_user_access
 
 
 # ---------------------------------------------------------------------------
@@ -491,6 +492,60 @@ async def _resolve_recap_type(instance) -> str:
 
 
 @strawberry.type
+class RecapMetricEditType:
+    id: strawberry.ID
+    batch: str
+    field_key: str
+    field_label: str
+    old_value: str | None
+    new_value: str | None
+    reason: str
+    edited_by_name: str | None
+    edited_at: str
+
+
+async def _metric_edits_for_admin(
+    info: strawberry.Info, **recap_filter
+) -> List[RecapMetricEditType]:
+    """Staff edit history; empty for clients, BAs and anonymous share views."""
+    user = getattr(getattr(info.context, "request", None), "user", None)
+    if user is None or not getattr(user, "is_authenticated", False):
+        return []
+    role_slug, is_staff, is_super, email = await resolve_request_user_access(user)
+    if not _is_admin_access(role_slug, is_staff, is_super, email):
+        return []
+
+    def _load() -> List[RecapMetricEditType]:
+        out = []
+        for row in models.RecapMetricEdit.objects.filter(**recap_filter).select_related(
+            "edited_by"
+        ):
+            editor = row.edited_by
+            name = None
+            if editor is not None:
+                name = (
+                    f"{editor.first_name or ''} {editor.last_name or ''}".strip()
+                    or editor.email
+                )
+            out.append(
+                RecapMetricEditType(
+                    id=strawberry.ID(str(row.id)),
+                    batch=str(row.batch),
+                    field_key=row.field_key,
+                    field_label=row.field_label,
+                    old_value=row.old_value,
+                    new_value=row.new_value,
+                    reason=row.reason,
+                    edited_by_name=name,
+                    edited_at=row.edited_at.isoformat(),
+                )
+            )
+        return out
+
+    return await sync_to_async(_load, thread_sensitive=True)()
+
+
+@strawberry.type
 class RecapTypeCount:
     key: str
     label: str
@@ -851,6 +906,11 @@ class Recap(Node):
             return value.isoformat()
         except AttributeError:
             return str(value)
+
+    @strawberry.field
+    async def metric_edits(self, info: strawberry.Info) -> List[RecapMetricEditType]:
+        """Staff corrections to this recap, newest first (admins only)."""
+        return await _metric_edits_for_admin(info, recap_id=self.pk)
 
     @strawberry.field
     async def recap_file(self) -> RecapFile | None:
@@ -1230,6 +1290,11 @@ class CustomRecap(Node):
             )
             fields.append(custom_field)
         return fields
+
+    @strawberry.field
+    async def metric_edits(self, info: strawberry.Info) -> List[RecapMetricEditType]:
+        """Staff corrections to this recap, newest first (admins only)."""
+        return await _metric_edits_for_admin(info, custom_recap_id=self.pk)
 
     # ---- Lightweight list-card aggregates -----------------------------
     #

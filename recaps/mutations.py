@@ -19,6 +19,7 @@ from recaps import models
 from recaps import inputs
 from recaps.spend_amount import SpendAmountNeedsCents, guard_spend_amount
 from recaps import heic_conversion
+from recaps import metric_edits
 from recaps.envelopes import (
     RecapApprovedNotificationMailer,
     RecapReadyForReviewAdminMailer,
@@ -925,6 +926,25 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
             recap.event.tenant_id if recap.event_id else None,
             action="update",
         )
+        staff_edit = await self._caller_is_admin()
+        if not staff_edit and await self._caller_editing_ambassador() is None:
+            raise GraphQLError("Only Ignite staff can edit recap values.")
+        if staff_edit:
+            engagements = self.input.consumer_engagements
+            for label, value in (
+                ("Products sold", self.input.products_sold),
+                ("Total cans sold", self.input.total_cans_sold),
+                ("Total packs sold", self.input.total_packs_sold),
+                ("Total earnings", self.input.total_earnings),
+                ("Account spend amount", self.input.account_spend_amount),
+                (
+                    "Total engagements",
+                    engagements.total_consumer if engagements else None,
+                ),
+            ):
+                if value is not None and value < 0:
+                    raise GraphQLError(f"{label} can't be negative.")
+        edit_changes: list = []
 
         # Validate event exists
         event = await sync_to_async(_get_event_by_flexible_id)(self.input.event_id)
@@ -987,6 +1007,7 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
         @sync_to_async
         def update_recap_with_files():
             with transaction.atomic():
+                before = metric_edits.snapshot_recap(recap) if staff_edit else None
                 existing_files = list(
                     models.RecapFile.objects.filter(recap=recap).distinct()
                 )
@@ -1320,6 +1341,20 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
                         id__in=[file.id for file in removed_files]
                     ).delete()
 
+                if staff_edit:
+                    edit_changes.extend(
+                        metric_edits.diff_snapshots(
+                            before, metric_edits.snapshot_recap(recap)
+                        )
+                    )
+                    if edit_changes:
+                        metric_edits.record_edits(
+                            changes=edit_changes,
+                            user=self.user,
+                            reason=self.input.edit_reason,
+                            recap=recap,
+                        )
+
                 return recap, removed_blob_names
 
         recap, removed_blob_names = await update_recap_with_files()
@@ -1327,6 +1362,8 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
         for blob_name in removed_blob_names:
             if blob_name:
                 delete_blob(blob_name)
+        if edit_changes:
+            await sync_to_async(metric_edits.refresh_after_edit)(recap)
 
         if recap.filling_for_ambassador or recap.late or recap.incomplete:
             await self._apply_time_based_recap_payment_rule(
@@ -1765,6 +1802,10 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
                 raise GraphQLError(
                     "This recap has been approved and can no longer be edited."
                 )
+        elif not await self._caller_is_admin():
+            raise GraphQLError("Only Ignite staff can edit recap values.")
+        staff_edit = editing_ambassador is None
+        edit_changes: list = []
 
         job = None
         if is_mobile_input:
@@ -1884,6 +1925,11 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
         @sync_to_async
         def update_custom_recap_transaction():
             with transaction.atomic():
+                before = (
+                    metric_edits.snapshot_custom_recap(custom_recap)
+                    if staff_edit
+                    else None
+                )
                 custom_recap.name = self.input.name
                 custom_recap.event = event
                 custom_recap.custom_recap_template = custom_recap_template
@@ -2044,21 +2090,34 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
                             raise GraphQLError("Duplicate custom field in the input.")
                         seen_custom_field_ids.add(custom_field.id)
 
+                        field_type_name = (
+                            getattr(
+                                getattr(custom_field, "custom_field_type", None),
+                                "name",
+                                "",
+                            )
+                            or ""
+                        )
+                        previous_value = (
+                            custom_field_value.value if custom_field_value else None
+                        )
+                        # Only validate values staff actually changed — legacy
+                        # BA free text in untouched fields must not block a save.
+                        if staff_edit and (custom_field_value_input.value or "").strip() != (
+                            previous_value or ""
+                        ).strip():
+                            metric_edits.validate_number_field(
+                                custom_field.name,
+                                field_type_name,
+                                custom_field_value_input.value,
+                            )
+
                         try:
                             stored_value = guard_spend_amount(
                                 custom_field.name,
-                                getattr(
-                                    getattr(custom_field, "custom_field_type", None),
-                                    "name",
-                                    "",
-                                )
-                                or "",
+                                field_type_name,
                                 custom_field_value_input.value,
-                                previous=(
-                                    custom_field_value.value
-                                    if custom_field_value
-                                    else None
-                                ),
+                                previous=previous_value,
                             )
                         except SpendAmountNeedsCents as exc:
                             raise GraphQLError(str(exc)) from exc
@@ -2368,12 +2427,28 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
                                 id__in=[file.id for file in removed_files]
                             ).delete()
 
+                if staff_edit:
+                    edit_changes.extend(
+                        metric_edits.diff_snapshots(
+                            before, metric_edits.snapshot_custom_recap(custom_recap)
+                        )
+                    )
+                    if edit_changes:
+                        metric_edits.record_edits(
+                            changes=edit_changes,
+                            user=self.user,
+                            reason=getattr(self.input, "edit_reason", None),
+                            custom_recap=custom_recap,
+                        )
+
                 return custom_recap, removed_blob_names
 
         custom_recap, removed_blob_names = await update_custom_recap_transaction()
         for blob_name in removed_blob_names:
             if blob_name:
                 delete_blob(blob_name)
+        if edit_changes:
+            await sync_to_async(metric_edits.refresh_after_edit)(custom_recap)
         return custom_recap
 
     async def create_custom_field(self) -> models.CustomField:
@@ -2946,6 +3021,15 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
             await sync_to_async(user.get_tenant)(tenant_id=tenant_id)
         except Exception:
             raise GraphQLError(f"{record_label} not found.")
+
+    async def _caller_is_admin(self) -> bool:
+        """True for Ignite staff (spark-admin / is_staff / @igniteproductions.co)."""
+        if self.user is None:
+            return False
+        role_slug, is_staff, is_super, email = await resolve_request_user_access(
+            self.user
+        )
+        return _is_admin_access(role_slug, is_staff, is_super, email)
 
     async def _caller_editing_ambassador(self):
         """The caller's Ambassador record IFF they're editing as a BA.
