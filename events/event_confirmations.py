@@ -531,6 +531,7 @@ def send_confirmation_stage(
     stage: str,
     *,
     dry_run: bool = False,
+    mailer_class: type[EventConfirmationMailer] = EventConfirmationMailer,
 ) -> SendResult:
     """Send one stage, exactly once.
 
@@ -570,7 +571,7 @@ def send_confirmation_stage(
     try:
         # send_now, not send(): there is no Redis/RQ on Cloud Run, so the queue
         # path would fall back to inline anyway — this just says so plainly.
-        EventConfirmationMailer(confirmation, stage).send_now()
+        mailer_class(confirmation, stage).send_now()
     except Exception as exc:  # noqa: BLE001 — recorded, retried next sweep
         logger.exception(
             "event confirmation send failed confirmation=%s stage=%s",

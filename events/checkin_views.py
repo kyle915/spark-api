@@ -32,6 +32,7 @@ from django.views.decorators.http import require_http_methods
 
 from ambassadors import checkin_web
 from ambassadors.payable_mileage import NeedsPayableMileage
+from jobboard.checkin import booked_event_for
 from recaps.spend_amount import SpendAmountNeedsCents
 from events.checkin_tokens import (
     BadSignature,
@@ -450,6 +451,17 @@ def public_checkin_identify(request: HttpRequest, code: str) -> HttpResponse:
         except Exception:  # noqa: BLE001
             logger.exception("checkin identify failed code=%s", code)
             return _err("Couldn't start your check-in. Try again.", status=500, code="server")
+
+    if kind == "tenant" and event is None and not recap_only:
+        event = booked_event_for(
+            ambassador=ambassador,
+            tenant=target,
+            on_date=on_date,
+            address=(data.get("address") or data.get("storeAddress") or "").strip(),
+            chosen_type=checkin_web.resolve_checkin_event_type(
+                target, data.get("eventTypeId") or data.get("event_type_id")
+            ),
+        )
 
     if kind == "tenant" and event is None:
         address = (data.get("address") or data.get("storeAddress") or "").strip()

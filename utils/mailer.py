@@ -33,6 +33,8 @@ _PLACEHOLDER_EMAIL_DOMAINS = frozenset({
     "example.com",
     "example.org",
     "example.net",
+    # Synthetic logins for walk-up / job board BAs (ambassadors.checkin_web).
+    "walkup.spark",
 })
 
 
