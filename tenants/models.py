@@ -674,10 +674,22 @@ class User(AbstractUser):
 
         @TODO: Maybe we should check performance of this property.
 
+        Duplicate membership rows for the same tenant count once; only
+        active memberships on two different tenants are ambiguous.
+
         Returns:
             Tenant: The tenant for the user.
         """
-        return TenantedUser.objects.get(user=self, is_active=True).tenant
+        tenant_ids = set(
+            TenantedUser.objects.filter(user=self, is_active=True).values_list(
+                "tenant_id", flat=True
+            )
+        )
+        if not tenant_ids:
+            raise TenantedUser.DoesNotExist
+        if len(tenant_ids) > 1:
+            raise TenantedUser.MultipleObjectsReturned
+        return Tenant.objects.get(id=tenant_ids.pop())
 
     def get_tenant(
         self,
@@ -706,7 +718,12 @@ class User(AbstractUser):
             if tenant_uuid:
                 filters["tenant__uuid"] = tenant_uuid
 
-            return TenantedUser.objects.get(**filters).tenant
+            membership = (
+                TenantedUser.objects.filter(**filters).select_related("tenant").first()
+            )
+            if membership is None:
+                raise TenantedUser.DoesNotExist
+            return membership.tenant
         except (Tenant.DoesNotExist, TenantedUser.DoesNotExist):
             raise Tenant.DoesNotExist
 

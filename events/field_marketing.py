@@ -21,7 +21,7 @@ from django.utils import timezone
 from graphql import GraphQLError
 from strawberry import relay
 
-from django.core.exceptions import MultipleObjectsReturned, ValidationError
+from django.core.exceptions import ValidationError
 
 from ambassadors.models import Attendance
 from events import models
@@ -330,33 +330,27 @@ def _active_tenant_for_user(user, tenant_id=None):
 
     Spark admins have many TenantedUser rows, so ``user.tenant`` raises
     MultipleObjectsReturned. Callers pass the selected dashboard tenant
-    (same pattern as recap / chat / tracker queries).
+    (same pattern as recap / chat / tracker queries). Some (user, tenant)
+    pairs have duplicate membership rows, so never ``.get()`` a membership.
     """
     resolved_id = _parse_tenant_id(tenant_id)
     if resolved_id is not None:
         if _user_can_pick_any_tenant(user):
-            try:
-                return Tenant.objects.get(id=resolved_id)
-            except Tenant.DoesNotExist:
-                return None
-        try:
-            return (
-                TenantedUser.objects.select_related("tenant")
-                .get(user=user, tenant_id=resolved_id, is_active=True)
-                .tenant
-            )
-        except TenantedUser.DoesNotExist:
-            return None
+            return Tenant.objects.filter(id=resolved_id).first()
+        member = TenantedUser.objects.filter(
+            user=user, tenant_id=resolved_id, is_active=True
+        ).exists()
+        return Tenant.objects.filter(id=resolved_id).first() if member else None
 
-    # No explicit id: only safe when the user has exactly one active membership.
-    try:
-        return (
-            TenantedUser.objects.select_related("tenant")
-            .get(user=user, is_active=True)
-            .tenant
+    # No explicit id: only safe when the user is active on exactly one brand.
+    tenant_ids = set(
+        TenantedUser.objects.filter(user=user, is_active=True).values_list(
+            "tenant_id", flat=True
         )
-    except (TenantedUser.DoesNotExist, MultipleObjectsReturned):
+    )
+    if len(tenant_ids) != 1:
         return None
+    return Tenant.objects.filter(id=tenant_ids.pop()).first()
 
 
 def _require_torch_user(user, tenant_id=None):
