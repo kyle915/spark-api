@@ -1,38 +1,29 @@
-name: Purge walk-in event (remove a junk store from the check-in link)
+name: Purge walk-in event (manual)
 
-# Manually fires `/internal/cron/purge-walkin-event` on Cloud Run.
+# Manually fires `/internal/cron/purge-walkin-event` on Cloud Run to run
+# `purge_walkin_event`: deletes ONE junk Event conjured through a standing
+# check-in link (a typo'd address, a test tap, an abandoned check-in) so it
+# never resurfaces as a store suggestion. The command REFUSES any event with a
+# recap, a clock punch, or an approved booking, and `expect_name` must appear
+# in the event's name.
 #
-# The standing check-in link lets any BA create an Event by typing a store
-# address. That's the feature — but typos, test taps and abandoned check-ins
-# all become real Event rows, and those are NOT cosmetic: the check-in page
-# feeds every event's address back to the NEXT BA as a store suggestion. One
-# fat-fingered address becomes a permanent wrong answer in the field team's
-# autocomplete. This is how you take one back.
-#
-# Dispatch-only. SAFE — DRY-RUN IS THE DEFAULT: a plain run reports what it
-# WOULD delete and writes nothing. Set execute=true to actually remove it.
-#
-# The command REFUSES (returns 4xx, no delete) if the event carries any real
-# work — a recap, a clock punch, or an approved booking — or if expect_name
-# doesn't appear in the event's name. That name check is the safety catch:
-# deleting by uuid alone is how the wrong activation disappears.
-#
-# Secret-gated via the X-Cron-Secret HEADER (never in the URL).
+# DRY-RUN unless `execute` is checked. Secret-gated via X-Cron-Secret (shared
+# INTERNAL_CRON_SECRET) — a HEADER, never the URL.
 
 on:
   workflow_dispatch:
     inputs:
       event_uuid:
-        description: "Event uuid to remove."
+        description: "Event UUID to purge."
         required: true
         type: string
       expect_name:
-        description: "Substring that MUST appear in the event's name (safety catch)."
+        description: "Substring that must appear in the event name."
         required: true
         type: string
       execute:
-        description: "Apply the delete. Leave false to preview (no writes)."
-        required: true
+        description: "Delete (unchecked = dry run)."
+        required: false
         default: false
         type: boolean
 
@@ -48,34 +39,21 @@ jobs:
           EXPECT_NAME: ${{ github.event.inputs.expect_name }}
           EXECUTE: ${{ github.event.inputs.execute }}
         run: |
-          set -uo pipefail
-          if [ -z "$CRON_SECRET" ]; then echo "::error::secret missing"; exit 1; fi
-          if [ -z "$EVENT_UUID" ]; then echo "::error::event_uuid required"; exit 1; fi
-          if [ -z "$EXPECT_NAME" ]; then echo "::error::expect_name required"; exit 1; fi
-
-          # jq -sRr @uri url-encodes the name, which will contain spaces.
-          ENC_NAME=$(printf '%s' "$EXPECT_NAME" | jq -sRr @uri)
-          QS="execute=$EXECUTE&event_uuid=$EVENT_UUID&expect_name=$ENC_NAME"
-          echo "query: $QS"
-
-          # Retry transient gateway / cold-start responses. NOT idempotent in
-          # the get-or-create sense, but a delete that already happened simply
-          # returns "No event with uuid ..." (4xx) on the retry rather than
-          # removing anything else.
-          STATUS=000
-          for attempt in 1 2 3; do
-            STATUS=$(curl -sS -o /tmp/resp.json -w '%{http_code}' \
-              -X POST "$CRON_URL?$QS" \
-              -H "X-Cron-Secret: $CRON_SECRET" || echo 000)
-            echo "attempt $attempt -> HTTP $STATUS"
-            case "$STATUS" in
-              502|503|504|000) echo "transient — retrying in $((attempt*10))s"; sleep $((attempt*10));;
-              *) break;;
-            esac
-          done
-          echo "----- response body -----"; cat /tmp/resp.json 2>/dev/null; echo; echo "-------------------------"
-          case "$STATUS" in
-            2*) echo "OK ($STATUS)"; exit 0;;
-            4*) echo "::warning::Endpoint returned $STATUS — this is almost certainly a GUARD REFUSING (real work on the event, or expect_name didn't match). See body above; NOT a run failure."; exit 0;;
-            *) echo "::error::Endpoint returned $STATUS after retries — see body above."; exit 1;;
-          esac
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            --max-time 120 \
+            -X POST "$CRON_URL" \
+            --data-urlencode "event_uuid=$EVENT_UUID" \
+            --data-urlencode "expect_name=$EXPECT_NAME" \
+            --data-urlencode "execute=$EXECUTE" \
+            -H "X-Cron-Secret: $CRON_SECRET")
+          echo "HTTP $STATUS"
+          python3 -c "import json; d=json.load(open('/tmp/cron-response.json')); print(d.get('output') or d)"
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS — see body above."
+            exit 1
+          fi
