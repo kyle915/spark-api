@@ -7718,6 +7718,57 @@ class SetupTeamRecapLinkView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class SetupJobBoardView(View):
+    """GET/POST `/internal/cron/setup-job-board`.
+
+    Mints (once) a brand's public BA job board link and lists the plan gigs
+    it shows. An existing board token is kept, never re-minted.
+
+    Params: tenant (exact slug / request_url_name, default torch-thc),
+    apply (default DRY RUN).
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _str(name: str) -> str:
+            return (request.GET.get(name) or request.POST.get(name) or "").strip()
+
+        kwargs: dict = {}
+        if _str("tenant"):
+            kwargs["tenant"] = _str("tenant")
+        if _str("apply").lower() in ("1", "true", "yes", "on"):
+            kwargs["apply"] = True
+
+        out = io.StringIO()
+        try:
+            call_command("setup_job_board", stdout=out, **kwargs)
+        except CommandError as exc:
+            return JsonResponse(
+                {"ok": False, "error": "bad-input", "detail": str(exc), "log": out.getvalue()},
+                status=400,
+            )
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("setup-job-board cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc),
+                 "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse(
+            {"ok": True, "applied": bool(kwargs.get("apply")), "log": out.getvalue()}
+        )
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class SetCheckinResourcesView(View):
     """GET/POST `/internal/cron/set-checkin-resources`.
 
@@ -10487,6 +10538,7 @@ def _registered_views() -> dict[str, Any]:
         "build-torch-combined-tab": BuildTorchCombinedTabView,
         "set-checkin-resources": SetCheckinResourcesView,
         "setup-team-recap-link": SetupTeamRecapLinkView,
+        "setup-job-board": SetupJobBoardView,
         "set-tenant-mileage-tracking": SetTenantMileageTrackingView,
         "staff-tenant-events": StaffTenantEventsView,
         "weekly-mileage-report": WeeklyMileageReportView,

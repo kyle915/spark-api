@@ -1,5 +1,6 @@
 """Public BA job board: listing, booking, emails, admin controls, check-in."""
 
+import io
 import json
 from datetime import datetime, time, timedelta
 from unittest.mock import patch
@@ -9,6 +10,8 @@ import pytest
 from asgiref.sync import sync_to_async
 from config.schema_client import schema_clients
 from django.core.cache import cache
+from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.test import Client
 from django.utils import timezone
 
@@ -406,6 +409,28 @@ class TestJobBoard(EventsGraphQLTestCase):
         assert em.Event.objects.filter(tenant=self.tenant).count() == 1
         ae = AmbassadorEvent.objects.get(event=gig)
         assert ae.is_approved is True
+
+    # ── setup command ──
+
+    def test_setup_command_mints_once_and_keeps_token(self):
+        JobBoard.objects.filter(tenant=self.tenant).delete()
+        self._gig("Wynwood Art Walk")
+
+        out = io.StringIO()
+        call_command("setup_job_board", stdout=out)
+        assert "DRY-RUN" in out.getvalue() and "Wynwood Art Walk" in out.getvalue()
+        assert not JobBoard.objects.filter(tenant=self.tenant).exists()
+
+        call_command("setup_job_board", "--apply", stdout=io.StringIO())
+        token = JobBoard.objects.get(tenant=self.tenant).token
+
+        out = io.StringIO()
+        call_command("setup_job_board", "--tenant", "keee-torch-thc", "--apply", stdout=out)
+        assert JobBoard.objects.get(tenant=self.tenant).token == token
+        assert f"https://client.igniteproductions.co/jobs/{token}" in out.getvalue()
+
+        with pytest.raises(CommandError):
+            call_command("setup_job_board", "--tenant", "other-brand", stdout=io.StringIO())
 
 
 def test_walkup_stub_emails_are_placeholders():
