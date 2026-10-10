@@ -155,6 +155,18 @@ class Tenant(Asyncable, models.Model):
     # are stamped CustomRecap.exclude_from_aggregates, so their numbers never
     # roll into Insights, dashboards, list totals, or summary exports.
     checkin_recap_excludes_aggregates = models.BooleanField(default=False)
+    # Client-team twin of `checkin_recap_code`: the brand's own staff file
+    # recaps with no clock (name → event type → recap), but unlike the agency
+    # link they keep the program picker, keep Email Data Collection, and COUNT
+    # in totals. Each recap is stamped CustomRecap.source_label with
+    # `checkin_team_label` ("Submitted by Torch team"); `checkin_team_title`
+    # is the admin Walk-ups name. Own column for the same reason as above —
+    # never repoint a code already in circulation. NULL = off.
+    checkin_team_code = models.CharField(
+        max_length=32, null=True, blank=True, unique=True, db_index=True
+    )
+    checkin_team_label = models.CharField(max_length=80, blank=True, default="")
+    checkin_team_title = models.CharField(max_length=120, blank=True, default="")
     # Bars on the Insights / client "Monthly trend" chart. "activity" =
     # Engagements + structured Samples; "sales" = Consumers sampled + Units
     # sold on the Conversion tile's basis (Retail + On-Premise, paired per

@@ -1244,6 +1244,7 @@ class CustomRecap(Node):
     external_ba_name: str | None
     is_third_party: bool
     exclude_from_aggregates: bool
+    source_label: str
     typed_store_name: str
     typed_store_address: str
     store_mapping_status: str

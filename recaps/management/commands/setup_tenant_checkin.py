@@ -225,9 +225,11 @@ class Command(BaseCommand):
         for _ in range(50):
             body = "".join(secrets.choice(ALPHABET) for _ in range(CODE_BODY_LENGTH))
             candidate = f"{prefix}-{body}"
-            taken = Tenant.objects.filter(checkin_code=candidate).exists() or (
-                Tenant.objects.filter(checkin_recap_code=candidate).exists()
-            )
+            taken = Tenant.objects.filter(
+                Q(checkin_code=candidate)
+                | Q(checkin_recap_code=candidate)
+                | Q(checkin_team_code=candidate)
+            ).exists()
             if not taken:
                 return candidate
         raise CommandError("Could not mint an unused check-in code.")

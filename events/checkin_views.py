@@ -178,8 +178,12 @@ def _stamp_recap_only(payload: dict, code: str, tenant) -> dict:
     """Mark a standing-link payload as recap-only and drop clock leftovers."""
     recap_only = checkin_web.is_recap_only_code(code, tenant)
     payload["recapOnly"] = recap_only
+    payload["sourceLabel"] = checkin_web.team_recap_source_label(code, tenant)
     if recap_only:
         payload["unfiledShifts"] = []
+    # The client-team link keeps the BA link's full resources and every recap
+    # section (Email Data Collection included); only the agency link trims.
+    if checkin_web.is_third_party_code(code, tenant):
         # Mid-session payloads come from build_public_context (full BA list).
         # Re-filter so TH-AGENCY never resurfaces hideOnRecapOnly guides.
         resources = checkin_web.build_checkin_resources(tenant, recap_only=True)
@@ -316,7 +320,11 @@ def public_checkin_context(request: HttpRequest, code: str) -> HttpResponse:
             session_error = _session_error_code(err)
         try:
             recap_only = checkin_web.is_recap_only_code(code, target)
-            payload = checkin_web.build_tenant_context(target, recap_only=recap_only)
+            payload = checkin_web.build_tenant_context(
+                target,
+                recap_only=recap_only,
+                team=checkin_web.is_team_recap_code(code, target),
+            )
             if session_error:
                 payload["sessionError"] = session_error
             return JsonResponse(payload)
@@ -388,6 +396,8 @@ def public_checkin_identify(request: HttpRequest, code: str) -> HttpResponse:
         last_name = last_name.strip()
 
     recap_only = kind == "tenant" and checkin_web.is_recap_only_code(code, target)
+    # The client-team link is recap-only too, but still asks which program.
+    agency = recap_only and not checkin_web.is_team_recap_code(code, target)
     # "Continue my shift": find the shift this phone is already clocked in on
     # and hand back its session — never mint a stub or an event. The name is
     # optional here because the stub already carries it.
@@ -461,14 +471,14 @@ def public_checkin_identify(request: HttpRequest, code: str) -> HttpResponse:
         # Unresolvable → unanswered → tenant pinned default (pre-selector behaviour).
         chosen_type = (
             None
-            if recap_only
+            if agency
             else checkin_web.resolve_checkin_event_type(
                 target, data.get("eventTypeId") or data.get("event_type_id")
             )
         )
         if (
             chosen_type is None
-            and not recap_only
+            and not agency
             and len(checkin_web.selectable_event_types(target)) > 1
         ):
             logger.info(
@@ -538,10 +548,15 @@ def public_checkin_identify(request: HttpRequest, code: str) -> HttpResponse:
                 if not store_name:
                     store_name = "Product Seeding"
         elif recap_only:
-            if not store_name:
+            # Client-team Event / Guerilla recaps are at a venue, not a store:
+            # the address is the key and the name is optional.
+            venue = not agency and checkin_web.is_event_activation_type(chosen_type)
+            if not store_name and not venue:
                 return _err("Enter the store name.")
             if not address:
-                return _err("Enter the store address.")
+                return _err(
+                    "Enter the event or venue address." if venue else "Enter the store address."
+                )
         elif not address:
             return _err("Enter the store address so your work is logged to the right place.")
         if on_date is None:
@@ -932,7 +947,10 @@ def public_checkin_recap(request: HttpRequest, code: str) -> HttpResponse:
             total_engagements=total_engagements,
             product_samples=product_samples if isinstance(product_samples, list) else [],
             force_new=force_new,
-            third_party=checkin_web.is_recap_only_code(code, _target),
+            third_party=kind == "tenant" and checkin_web.is_third_party_code(code, _target),
+            source_label=(
+                checkin_web.team_recap_source_label(code, _target) if kind == "tenant" else ""
+            ),
             shift_label=shift_label,
             used_corpo_card=checkin_web.parse_used_corpo_card(
                 data.get("usedCorpoCard", data.get("used_corpo_card"))
