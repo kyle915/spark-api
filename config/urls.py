@@ -88,6 +88,9 @@ urlpatterns = [
     # one campaign and get a link by text — so `/training/<code>` is
     # read-only and needs no login. See `academy/training_views.py`.
     path("api/public/", include("academy.urls")),
+    # Public BA job board: `/jobs/<token>` lists a brand's open plan gigs
+    # and books BAs onto them. See `jobboard/views.py`.
+    path("api/public/", include("jobboard.urls")),
     # On-demand recap photo thumbnails (utils/thumb_views.py).
     path("api/public/img/", include("utils.thumb_urls")),
     # Inline recap video playback. .mov is redirected with Content-Type

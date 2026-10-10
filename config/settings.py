@@ -88,6 +88,7 @@ INSTALLED_APPS = [
     "availability",
     "documents",
     "announcements",
+    "jobboard",
     # Cloud Tasks handler endpoints (no models). Registered so its app label
     # resolves; the routes are mounted under `api/tasks/` in config/urls.py.
     "tasks",

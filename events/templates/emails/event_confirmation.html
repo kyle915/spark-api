@@ -66,6 +66,12 @@ the email body (and into the plain-text alternative, where it's very visible).
               {% if products_label %}
                 <tr><td style="padding: 2px 0;">Product to sample: {{ products_label }}</td></tr>
               {% endif %}
+              {% if sampling_label %}
+                <tr><td style="padding: 2px 0;">Sample format: {{ sampling_label }}</td></tr>
+              {% endif %}
+              {% if brief %}
+                <tr><td style="padding: 2px 0;">Brief: {{ brief|linebreaksbr }}</td></tr>
+              {% endif %}
             </table>
 
             {% if address %}
@@ -82,6 +88,15 @@ the email body (and into the plain-text alternative, where it's very visible).
           </td>
         </tr>
       </table>
+
+      {% if bring_items %}
+        <p style="margin: 0 0 8px 0;"><strong style="color: #202036;">What to bring</strong></p>
+        <ul style="margin: 0 0 24px 0; padding-left: 20px; color: #444444; font-size: 15px;">
+          {% for item in bring_items %}
+            <li style="margin: 0 0 4px 0;">{{ item }}</li>
+          {% endfor %}
+        </ul>
+      {% endif %}
 
       {% if training_resources %}
         {% comment %}
@@ -164,6 +179,13 @@ the email body (and into the plain-text alternative, where it's very visible).
         <p style="margin: 0 0 22px 0; color: #666666; font-size: 15px;">
           Have any questions about your shift or setup? Simply text us at
           <a href="tel:{{ support_phone_href }}" style="color: #666666;">{{ support_phone }}</a>.
+        </p>
+      {% endif %}
+      {% if contact_email %}
+        <p style="margin: 0 0 22px 0; color: #666666; font-size: 15px;">
+          Can't make it anymore? Email
+          <a href="mailto:{{ contact_email }}" style="color: #666666;">{{ contact_email }}</a>
+          as soon as you know so we can fill your spot.
         </p>
       {% endif %}
 
