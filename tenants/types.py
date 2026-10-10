@@ -84,6 +84,11 @@ class TenantType(Node):
     # is already membership-scoped, and the code is meant to be shared
     # with BAs anyway.
     checkin_code: strawberry.auto
+    # Client-team recap link (no clock, counts in totals) + its admin name
+    # for the Walk-ups Standing codes list. Same read-only/minted-by-command
+    # rules as checkin_code.
+    checkin_team_code: strawberry.auto
+    checkin_team_title: strawberry.auto
 
     @strawberry.field(name="checkinPhotoBuckets")
     def checkin_photo_bucket_names(self) -> list[str]:

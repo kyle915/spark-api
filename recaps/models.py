@@ -541,6 +541,10 @@ class CustomRecap(models.Model):
     # approvable, and shareable with its own numbers. Stamped on submit when
     # the tenant's 3rd-party link has checkin_recap_excludes_aggregates.
     exclude_from_aggregates = models.BooleanField(default=False, db_index=True)
+    # Who filed it, when that isn't a Spark BA on the clock: copied from
+    # Tenant.checkin_team_label on submit through checkin_team_code
+    # ("Submitted by Torch team"). Display only — never filters a total.
+    source_label = models.CharField(max_length=80, blank=True, default="")
 
     # Typed store from the 3rd-party agency link (free-text, not a picker).
     # store_mapping_status is "" for normal recaps, "unmatched" until an

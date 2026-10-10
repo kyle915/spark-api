@@ -1,0 +1,68 @@
+name: Setup client-team recap link (manual)
+
+# Manually fires `/internal/cron/setup-team-recap-link` on Cloud Run to run
+# `setup_team_recap_link`: mints (once) the brand's client-team recap link —
+# `/checkin/<code>` with no time clock, the same event-type picker as the BA
+# link, and recaps that COUNT in totals, stamped "Submitted by <brand> team".
+# An existing code is kept (never re-minted); only the label / Walk-ups title
+# refresh. Never touches the BA clock link or the 3rd-party agency link.
+#
+# DRY-RUN unless `apply` is checked. Secret-gated via X-Cron-Secret (shared
+# INTERNAL_CRON_SECRET) — a HEADER, never the URL.
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Write (unchecked = dry run)."
+        required: false
+        default: false
+        type: boolean
+      tenant:
+        description: "Tenant slug (exact), else request_url_name."
+        required: false
+        default: "torch-thc"
+        type: string
+      label:
+        description: "Recap source label (admin + client see it)."
+        required: false
+        default: "Submitted by Torch team"
+        type: string
+      title:
+        description: "Admin Walk-ups name for the link."
+        required: false
+        default: "Torch THC · Client team recaps (no clock)"
+        type: string
+
+jobs:
+  fire-setup-team-recap-link:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire setup-team-recap-link cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/setup-team-recap-link
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          APPLY: ${{ github.event.inputs.apply }}
+          TENANT: ${{ github.event.inputs.tenant || 'torch-thc' }}
+          LABEL: ${{ github.event.inputs.label }}
+          TITLE: ${{ github.event.inputs.title }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            --max-time 120 \
+            -X POST "$CRON_URL" \
+            --data-urlencode "tenant=$TENANT" \
+            --data-urlencode "label=$LABEL" \
+            --data-urlencode "title=$TITLE" \
+            --data-urlencode "apply=$APPLY" \
+            -H "X-Cron-Secret: $CRON_SECRET")
+          echo "HTTP $STATUS"
+          python3 -c "import json; d=json.load(open('/tmp/cron-response.json')); print(d.get('log') or d); print(d.get('detail') or '')"
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS — see body above."
+            exit 1
+          fi

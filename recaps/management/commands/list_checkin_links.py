@@ -74,6 +74,12 @@ class Command(BaseCommand):
                 self.stdout.write(
                     f"  recap-only   : {BASE_URL}/checkin/{recap}  (no time clock)"
                 )
+            team = (getattr(t, "checkin_team_code", None) or "").strip()
+            if team:
+                self.stdout.write(
+                    f"  client team  : {BASE_URL}/checkin/{team}  "
+                    f"(no time clock, counts in totals — {t.checkin_team_label or 'no label'})"
+                )
             self.stdout.write(
                 f"  location mode : {t.checkin_location_mode}"
                 + ("  (BA types a store address)" if t.checkin_location_mode == "address" else "  (BA picks a market)")

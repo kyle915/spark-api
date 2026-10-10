@@ -1304,6 +1304,7 @@ def submit_checkin_recap(
     used_corpo_card: bool | None = None,
     store_name: str = "",
     store_number: str = "",
+    source_label: str = "",
 ):
     """Create a ``CustomRecap`` (+ field values, photos, product samples) for a
     walk-up BA, attributed to their own user. Replicates the write path in
@@ -1453,6 +1454,7 @@ def submit_checkin_recap(
                 created_by=actor,
                 is_third_party=third_party,
                 exclude_from_aggregates=exclude_aggregates,
+                source_label=source_label,
                 typed_store_name=typed_name[:255] if third_party else "",
                 typed_store_address=typed_addr if third_party else "",
                 store_mapping_status="unmatched" if third_party else "",
@@ -1474,6 +1476,8 @@ def submit_checkin_recap(
                 recap.is_third_party = True
             if exclude_aggregates:
                 recap.exclude_from_aggregates = True
+            if source_label:
+                recap.source_label = source_label
             update_fields = [
                 "submitted_at",
                 "total_engagements",
@@ -1482,6 +1486,7 @@ def submit_checkin_recap(
                 "updated_at",
                 *(["is_third_party"] if third_party else []),
                 *(["exclude_from_aggregates"] if exclude_aggregates else []),
+                *(["source_label"] if source_label else []),
             ]
             # force_new reusing an empty stub still needs the second-shift
             # title — otherwise admin sees two rows both named the market.
@@ -2024,18 +2029,46 @@ def resolve_checkin_target(code: str):
     tenant = Tenant.objects.filter(checkin_recap_code__iexact=clean).first()
     if tenant is not None:
         return "tenant", tenant
+    tenant = Tenant.objects.filter(checkin_team_code__iexact=clean).first()
+    if tenant is not None:
+        return "tenant", tenant
     return None, None
 
 
+def _code_matches(code: str, stored) -> bool:
+    stored = (stored or "").strip()
+    return bool(stored) and stored.lower() == (code or "").strip().lower()
+
+
+def is_third_party_code(code: str, tenant) -> bool:
+    """True when ``code`` is this tenant's 3rd-party agency URL (TH-AGENCY):
+    no clock, no program picker, typed store, optionally out of totals."""
+    return _code_matches(code, getattr(tenant, "checkin_recap_code", None))
+
+
+def is_team_recap_code(code: str, tenant) -> bool:
+    """True when ``code`` is this tenant's client-team recap URL: no clock,
+    but the program picker stays and recaps count in totals."""
+    return _code_matches(code, getattr(tenant, "checkin_team_code", None))
+
+
 def is_recap_only_code(code: str, tenant) -> bool:
-    """True when ``code`` is this tenant's 3rd-party recap-only URL.
+    """True when ``code`` files recaps with no time clock — the agency link
+    or the client-team link.
 
     The BA clock link (`checkin_code`) is tried first in resolve, so a
-    mistaken duplicate of the two codes would still clock. This helper is
+    mistaken duplicate of the codes would still clock. This helper is
     the page/API switch for skipping punch.
     """
-    recap = (getattr(tenant, "checkin_recap_code", None) or "").strip()
-    return bool(recap) and recap.lower() == (code or "").strip().lower()
+    return is_third_party_code(code, tenant) or is_team_recap_code(code, tenant)
+
+
+def team_recap_source_label(code: str, tenant) -> str:
+    """The "Submitted by …" stamp for recaps filed through ``code`` ("" when
+    ``code`` isn't the tenant's client-team link)."""
+    if not is_team_recap_code(code, tenant):
+        return ""
+    return (getattr(tenant, "checkin_team_label", "") or "").strip()[:80]
 
 
 def recap_only_identity_phone(
@@ -2725,17 +2758,22 @@ def find_or_create_walkin_event(
     return event, True
 
 
-def build_tenant_context(tenant, *, recap_only: bool = False) -> dict:
+def build_tenant_context(
+    tenant, *, recap_only: bool = False, team: bool = False
+) -> dict:
     """Payload for a standing tenant link before any event exists.
 
     ``needsEventDetails`` tells the page to ask for store + date first; the rest
     of the flow is identical to the per-event link once identify resolves one.
     ``recap_only`` is the 3rd-party twin: no clock, typed store name +
     address (admin maps maybe-matches later), same recap questions.
+    ``team`` (with ``recap_only``) is the client-team link: no clock either,
+    but it keeps the program picker and the BA link's full resource list.
     """
+    agency = recap_only and not team
     stores = [] if recap_only else recent_checkin_locations(tenant)
-    resources = build_checkin_resources(tenant, recap_only=recap_only)
-    programs, program_title = ([], "") if recap_only else checkin_program_picker(tenant)
+    resources = build_checkin_resources(tenant, recap_only=agency)
+    programs, program_title = ([], "") if agency else checkin_program_picker(tenant)
     return {
         "mode": "tenant",
         "needsEventDetails": True,
@@ -2761,9 +2799,12 @@ def build_tenant_context(tenant, *, recap_only: bool = False) -> dict:
         # that falls back to trainingUrl does not resurrect a hidden guide.
         "trainingUrl": (
             _training_url_from_resources(resources)
-            if recap_only
+            if agency
             else _public_training_url(tenant)
         ),
+        "sourceLabel": (getattr(tenant, "checkin_team_label", "") or "").strip()
+        if team
+        else "",
     }
 
 
