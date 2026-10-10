@@ -1,0 +1,59 @@
+name: Purge walk-in event (manual)
+
+# Manually fires `/internal/cron/purge-walkin-event` on Cloud Run to run
+# `purge_walkin_event`: deletes ONE junk Event conjured through a standing
+# check-in link (a typo'd address, a test tap, an abandoned check-in) so it
+# never resurfaces as a store suggestion. The command REFUSES any event with a
+# recap, a clock punch, or an approved booking, and `expect_name` must appear
+# in the event's name.
+#
+# DRY-RUN unless `execute` is checked. Secret-gated via X-Cron-Secret (shared
+# INTERNAL_CRON_SECRET) — a HEADER, never the URL.
+
+on:
+  workflow_dispatch:
+    inputs:
+      event_uuid:
+        description: "Event UUID to purge."
+        required: true
+        type: string
+      expect_name:
+        description: "Substring that must appear in the event name."
+        required: true
+        type: string
+      execute:
+        description: "Delete (unchecked = dry run)."
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  fire-purge-walkin-event:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire purge-walkin-event cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/purge-walkin-event
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          EVENT_UUID: ${{ github.event.inputs.event_uuid }}
+          EXPECT_NAME: ${{ github.event.inputs.expect_name }}
+          EXECUTE: ${{ github.event.inputs.execute }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            --max-time 120 \
+            -X POST "$CRON_URL" \
+            --data-urlencode "event_uuid=$EVENT_UUID" \
+            --data-urlencode "expect_name=$EXPECT_NAME" \
+            --data-urlencode "execute=$EXECUTE" \
+            -H "X-Cron-Secret: $CRON_SECRET")
+          echo "HTTP $STATUS"
+          python3 -c "import json; d=json.load(open('/tmp/cron-response.json')); print(d.get('output') or d)"
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS — see body above."
+            exit 1
+          fi
