@@ -1,4 +1,4 @@
-"""Torch THC execution types: Event / Guerilla / Seeding / Retail on TH-2HRV3D."""
+"""Torch THC execution types: Retail / Event / Guerilla / Seeding on TH-2HRV3D."""
 
 from __future__ import annotations
 
@@ -226,10 +226,10 @@ class TestSetupCommand(AmbassadorsGraphQLTestCase):
         ctx = checkin_web.build_tenant_context(self.tenant)
         assert ctx["programPickerTitle"] == PICKER_TITLE
         assert [(t["label"], t["name"]) for t in ctx["eventTypes"]] == [
+            ("Retail", "Retail Sampling"),
             ("Event", EVENT_LABEL),
             ("Guerilla", GUERILLA_LABEL),
             ("Seeding", SEEDING_LABEL),
-            ("Retail", "Retail Sampling"),
         ]
         assert all(t["description"] for t in ctx["eventTypes"])
         agency = checkin_web.build_tenant_context(self.tenant, recap_only=True)

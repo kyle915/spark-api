@@ -6485,7 +6485,7 @@ class RenameTorchOnshelfBucketView(View):
 class SetupTorchExecutionTypesView(View):
     """GET/POST `/internal/cron/setup-torch-execution-types`.
 
-    Torch THC: Event / Guerilla / Seeding / Retail on the TH-2HRV3D walk-up
+    Torch THC: Retail / Event / Guerilla / Seeding on the TH-2HRV3D walk-up
     (never reminted), the Guerilla + Product Seeding recap templates, and
     Sample format + Email Data Collection on the sampling forms.
 
