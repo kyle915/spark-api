@@ -3,10 +3,10 @@
 ``/checkin/TH-2HRV3D`` (never reminted) opens with "What's your execution
 type?" and four options, in this order:
 
+    Retail    -> Retail Sampling     -> Torch THC-Retail Sampling
     Event     -> Event Activation    -> Torch THC-Event Activation
     Guerilla  -> Guerilla Activation -> Torch THC · Guerilla Recap
     Seeding   -> Product Seeding     -> Torch THC · Product Seeding Recap
-    Retail    -> Retail Sampling     -> Torch THC-Retail Sampling
 
 The labels are display copy (``Tenant.checkin_program_picker``); the event
 type names stay descriptive because they drive the recap template, photo
@@ -77,6 +77,11 @@ PICKER_TITLE = "What's your execution type?"
 # resolved from the pinned program at run time.
 PICKER_OPTIONS: list[tuple[str, str, str]] = [
     (
+        "Retail Sampling",
+        "Retail",
+        "In-store sampling demos at liquor, grocery, and convenience stores.",
+    ),
+    (
         EVENT_LABEL,
         "Event",
         "Festivals, concerts, sporting and community events — one venue.",
@@ -90,11 +95,6 @@ PICKER_OPTIONS: list[tuple[str, str, str]] = [
         SEEDING_LABEL,
         "Seeding",
         "Dropping product off at accounts — not a sampling shift.",
-    ),
-    (
-        "Retail Sampling",
-        "Retail",
-        "In-store sampling demos at liquor, grocery, and convenience stores.",
     ),
 ]
 
@@ -241,7 +241,7 @@ def _norm(name: str | None) -> str:
 
 class Command(EventActivationCommand):
     help = (
-        "Torch THC: Event / Guerilla / Seeding / Retail execution types on the "
+        "Torch THC: Retail / Event / Guerilla / Seeding execution types on the "
         "TH-2HRV3D walk-up, plus Sample format and Email Data Collection "
         "(dry-run by default; --apply to write)."
     )
@@ -461,8 +461,8 @@ class Command(EventActivationCommand):
                 self._run_all(tenant, creator, True)
             self.stdout.write(
                 self.style.SUCCESS(
-                    f"\nAPPLIED — {base}/checkin/{code} offers Event / Guerilla / "
-                    "Seeding / Retail."
+                    f"\nAPPLIED — {base}/checkin/{code} offers Retail / Event / "
+                    "Guerilla / Seeding."
                 )
             )
         else:
