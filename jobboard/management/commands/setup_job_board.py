@@ -16,7 +16,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
 from events.demo_cancel import request_display_code
-from events.models import Event
+from events.models import Event, RequestStatus
 from jobboard.config import job_board_config_for
 from jobboard.gigs import (
     date_label,
@@ -72,6 +72,11 @@ class Command(BaseCommand):
                 f"    [{g.event.id}] {date_label(g)} {time_label(g)} · {g.type_label} · "
                 f"{g.venue!r} · {g.area or '-'} · {g.booked}/{g.open_shifts} booked · {state}"
             )
+        statuses = ", ".join(
+            f"{s.slug}{' (default)' if s.is_default else ''}"
+            for s in RequestStatus.objects.filter(tenant=tenant).order_by("id")
+        )
+        self.stdout.write(f"\n  Request statuses: {statuses or '(none)'}")
         pending = pending_plans(tenant)
         self.stdout.write(f"\n  Plans not on the board yet (request has no event): {len(pending)}")
         for p in pending:

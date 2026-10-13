@@ -428,7 +428,7 @@ class TestJobBoard(EventsGraphQLTestCase):
         )[0]
 
     def _waiting(self, name="RARE Steak Championship", slug="pending", days_out=2, count=3):
-        status = self._request_status(slug)
+        status = self._request_status(slug) if slug else None
         self._request_status("approved")
         day = self.today + timedelta(days=days_out)
         starts = datetime.combine(day, time(17, 0), tzinfo=MIAMI)
@@ -445,6 +445,9 @@ class TestJobBoard(EventsGraphQLTestCase):
             requestor_email="alec@torchdrinks.com",
             created_by=self.brand_user,
         )
+        if status is None:
+            em.Request.objects.filter(id=request.id).update(status=None)
+            request.refresh_from_db()
         return em.FieldMarketingEvent.objects.create(
             tenant=self.tenant,
             request=request,
@@ -554,6 +557,51 @@ class TestJobBoard(EventsGraphQLTestCase):
         out = io.StringIO()
         call_command("setup_job_board", "--post-waiting", "--apply", stdout=out)
         assert "POSTING 0 waiting plan(s)" in out.getvalue()
+
+    def test_plan_request_without_status_can_be_posted(self, sent):
+        plan = self._waiting("Iron City Halloween", slug=None, count=2)
+        [row] = build_admin_board(self.tenant).pending
+        assert row.reason == "no_status"
+        assert row.reason_label == "No status: never reached Approvals"
+        assert row.action_label == "Approve & post"
+
+        out = io.StringIO()
+        call_command("setup_job_board", "--post-waiting", "--apply", stdout=out)
+        assert "status=None" in out.getvalue()
+        assert "Request statuses: approved" in out.getvalue()
+        request = em.Request.objects.select_related("status").get(id=plan.request_id)
+        assert request.status.slug == "approved"
+        assert [(g["venue"], g["openShifts"]) for g in self._board().json()["gigs"]] == [
+            ("Iron City Halloween", 2)
+        ]
+        assert sent == []
+
+    def test_new_request_starts_pending_when_tenant_has_no_flagged_default(self):
+        pending = self._request_status("pending", is_default=False)
+        plan = self._waiting("Fresh plan", slug=None)
+        request = em.Request.objects.create(
+            name="Another",
+            date=timezone.now(),
+            address="1 Main St, Houston, TX 77002",
+            request_type=self.request_type,
+            tenant=self.tenant,
+            created_by=self.sys,
+        )
+        assert request.status_id == pending.id
+        assert plan.request.status_id is None
+
+    def test_default_status_flag_is_per_tenant(self):
+        mine = self._request_status("pending", is_default=True)
+        theirs = em.RequestStatus.objects.create(
+            tenant=self.other, name="Pending", slug="pending", is_default=True, created_by=self.sys
+        )
+        mine.refresh_from_db()
+        assert mine.is_default is True and theirs.is_default is True
+        second = em.RequestStatus.objects.create(
+            tenant=self.tenant, name="Queue", slug="queue", is_default=True, created_by=self.sys
+        )
+        mine.refresh_from_db()
+        assert mine.is_default is False and second.is_default is True
 
     # ── setup command ──
 

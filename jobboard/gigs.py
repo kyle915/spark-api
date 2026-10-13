@@ -212,6 +212,8 @@ def waiting_reason(plan: FieldMarketingEvent) -> WaitingReason:
     status = plan.request.status
     slug = (getattr(status, "slug", None) or "").lower()
     name = getattr(status, "name", None) or slug or "no status"
+    if status is None:
+        return WaitingReason("no_status", "No status: never reached Approvals", "Approve & post")
     if slug in APPROVED_REQUEST_SLUGS:
         return WaitingReason("no_event", "Approved, but its event was never created", "Post to board")
     if slug == "pending":

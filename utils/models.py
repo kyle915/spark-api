@@ -18,10 +18,12 @@ class WithDefaultAttribute:
                     remove the WithDefaultAttribute mixin."""
                 )
 
-            # Set the default status to false if the current status is set to true
+            # One default per tenant: unflag the tenant's other rows, never another tenant's.
             if self.is_default:
                 (
-                    self.__class__.objects.filter(is_default=True)
+                    self.__class__.objects.filter(
+                        is_default=True, tenant_id=getattr(self, "tenant_id", None)
+                    )
                     .exclude(pk=self.pk)
                     .update(is_default=False)
                 )

@@ -356,7 +356,7 @@ def post_waiting_plan(plan: FieldMarketingEvent, actor, *, post_spark_job: bool)
         status = RequestStatus.objects.get_by_slug(slug="approved", tenant=request.tenant_id)
         if status is None:
             raise PostPlanError("This brand has no Approved request status.")
-        previous = request.status.slug
+        previous = getattr(request.status, "slug", None) or "none"
         request.status = status
         request.approved_by = actor
         request.save()

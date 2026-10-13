@@ -614,6 +614,9 @@ class Request(AddressGeoSyncMixin, models.Model):
     def save(self, *args, **kwargs):
         if not self.status:
             self.status = RequestStatus.objects.get_default(self.tenant)
+        if not self.status and self.tenant_id:
+            # A tenant may have no flagged default; new requests start Pending.
+            self.status = RequestStatus.objects.get_by_slug("pending", tenant=self.tenant_id)
         super().save(*args, **kwargs)
 
 
