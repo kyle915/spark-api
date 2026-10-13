@@ -130,6 +130,7 @@ class TestDailyRetailRollup(AmbassadorsGraphQLTestCase):
                 ("Dry demo? (no product tasted)", "Yes"),
                 ("People engaged", "8"),
                 ("How many packs did consumers purchase?", "2"),
+                ("Sample format", '["No samples (dry demo)"]'),
             ),
         )
         # Out of the day / set.
@@ -187,7 +188,11 @@ class TestDailyRetailRollup(AmbassadorsGraphQLTestCase):
         assert "https://client.igniteproductions.co/r/" in html
         assert "admin.igniteproductions.co/recap" not in html
         assert "BA app" not in html
-        assert "people engaged (dry demo)" in html
+        # Dry demos still use People engaged as the base, but the copy doesn't call them out.
+        assert "8 people engaged" in html
+        assert "dry demo" not in html.lower()
+        assert "counted by People engaged" not in html
+        assert "No samples" in html
 
     def test_command_off_by_default_sends_nothing(self):
         self._seed_day()
