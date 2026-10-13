@@ -5,8 +5,10 @@ from typing import Iterable as _Iterable
 from django.conf import settings
 
 from ambassadors.models import Attendance
+from events.event_confirmations import public_page_base
 from jobs.models import AmbassadorJob
 from recaps import models
+from recaps.recap_tokens import make_recap_token
 from utils.mailer import Envelope, Mailer
 
 
@@ -875,6 +877,175 @@ class ClientWeeklyDigestMailer(Mailer):
         return Envelope(
             subject=self._subject_line(),
             template="events.templates.emails.client_weekly_digest",
+            from_email=getattr(
+                settings,
+                "DEFAULT_FROM_EMAIL",
+                "Spark by Ignite <no-reply@igniteproductions.co>",
+            ),
+            to_emails=self.recipients,
+            headers={"Reply-To": self.reply_to_email},
+            context=self._context(),
+        )
+
+
+def _fmt_int(value: int | None) -> str:
+    return "—" if value is None else f"{int(value):,}"
+
+
+def _fmt_pct(value: float | None) -> str:
+    return "—" if value is None else f"{value:.1f}%"
+
+
+def _fmt_day(value: "datetime.date | None") -> str:
+    return value.strftime("%a, %b %-d") if value else "Date not set"
+
+
+def _kpi_block(metrics: dict) -> dict:
+    """Display strings for one sales_program_metrics() result."""
+    dry = int(metrics.get("dry_demos") or 0)
+    dry_note = ""
+    if dry:
+        dry_note = (
+            f"Includes {dry:,} dry demo{'' if dry == 1 else 's'} counted by "
+            f"People engaged ({int(metrics.get('dry_people_engaged') or 0):,})."
+        )
+    return {
+        "demos": _fmt_int(metrics.get("demos")),
+        "recaps": _fmt_int(metrics.get("recaps")),
+        "consumers_sampled": _fmt_int(metrics.get("consumers_sampled")),
+        "units_sold": _fmt_int(metrics.get("units_sold")),
+        "cans_sold": _fmt_int(metrics.get("cans_sold")),
+        "packs_sold": _fmt_int(metrics.get("packs_sold")),
+        "conversion": _fmt_pct(metrics.get("conversion_pct")),
+        "dry_note": dry_note,
+    }
+
+
+class DailyRetailRollupMailer(Mailer):
+    """Executive daily roll-up of yesterday's approved Retail sampling recaps.
+
+    Values arrive pre-computed from :mod:`recaps.daily_retail_rollup` (the
+    canonical conversion set); this class only formats strings for the
+    template and mints the public ``/r/:token`` links on the client host.
+    """
+
+    def __init__(
+        self,
+        *,
+        recipients: "_Iterable[str]",
+        tenant_name: str,
+        rollup: "DailyRetailRollup",
+        brand_color: str | None = None,
+        preview: bool = False,
+        reply_to_email: str | None = None,
+    ) -> None:
+        seen: set[str] = set()
+        clean: list[str] = []
+        for r in recipients:
+            norm = (r or "").strip()
+            if norm and norm.lower() not in seen:
+                seen.add(norm.lower())
+                clean.append(norm)
+        self.recipients = clean
+        self.tenant_name = (tenant_name or "").strip() or "Your brand"
+        self.rollup = rollup
+        self.brand_color = (brand_color or "").strip() or "#c5f546"
+        self.preview = preview
+        self.reply_to_email = (
+            (reply_to_email or "").strip() or "events@igniteproductions.co"
+        )
+
+    def subject_line(self) -> str:
+        subject = (
+            f"{self.tenant_name} · Retail sampling daily · "
+            f"{_fmt_day(self.rollup.report_date)}"
+        )
+        return f"[Preview] {subject}" if self.preview else subject
+
+    def _row(self, row, public_base: str) -> dict:
+        token = make_recap_token(row.kind, int(row.recap_id))
+        if row.dry_demo:
+            base_label = (
+                f"{_fmt_int(row.consumers_sampled)} people engaged (dry demo)"
+                if row.consumers_sampled
+                else "Dry demo · no people engaged count"
+            )
+        else:
+            base_label = (
+                f"{_fmt_int(row.consumers_sampled)} consumers sampled"
+                if row.consumers_sampled
+                else "No consumers-sampled count"
+            )
+        products = row.products[:3]
+        more = len(row.products) - len(products)
+        return {
+            "store": row.store,
+            "event_date": _fmt_day(row.event_date),
+            "market": row.market,
+            "ba": row.ba,
+            "base_label": base_label,
+            "units": f"{row.units_sold:,} unit{'' if row.units_sold == 1 else 's'} sold",
+            "conversion": _fmt_pct(row.conversion_pct),
+            "counted": row.counted,
+            "sample_format": row.sample_format,
+            "products": ", ".join(products) + (f" +{more} more" if more > 0 else ""),
+            "competitor": row.competitor,
+            "link": f"{public_base}/r/{token}",
+        }
+
+    def _context(self) -> dict:
+        r = self.rollup
+        public_base = public_page_base()
+        client_base = _client_base_url()
+        top_store = None
+        if r.top_store is not None:
+            top_store = {
+                "store": r.top_store.store,
+                "units": f"{r.top_store.units_sold:,}",
+                "ba": r.top_store.ba,
+            }
+        top_sku = None
+        if r.top_sku is not None:
+            name, count, basis = r.top_sku
+            top_sku = {
+                "name": name,
+                "detail": (
+                    f"{count:,} sample{'' if count == 1 else 's'} logged"
+                    if basis == "samples"
+                    else f"sampled at {count:,} of {len(r.rows):,} demos"
+                ),
+            }
+        tz_label = "Pacific time" if r.tz_name == "America/Los_Angeles" else r.tz_name
+        return {
+            "tenant_name": self.tenant_name,
+            "brand_color": self.brand_color,
+            "preview": self.preview,
+            "day_label": _fmt_day(r.report_date),
+            "tz_label": tz_label,
+            "month_label": r.report_date.strftime("%B"),
+            "day": _kpi_block(r.day),
+            "mtd": _kpi_block(r.month_to_date),
+            "ptd": _kpi_block(r.program_to_date),
+            "rows": [self._row(row, public_base) for row in r.rows],
+            "recap_count": len(r.rows),
+            "uncounted": r.uncounted,
+            "third_party_rows": [self._row(row, public_base) for row in r.third_party_rows],
+            "top_store": top_store,
+            "top_sku": top_sku,
+            "quotes": [
+                {"text": q.text, "ba": q.ba, "store": q.store} for q in r.quotes
+            ],
+            "links": {
+                "dashboard": f"{client_base}/",
+                "insights": f"{client_base}/insights",
+                "recaps": f"{client_base}/recaps/list?activation=retail",
+            },
+        }
+
+    def envelope(self) -> Envelope:
+        return Envelope(
+            subject=self.subject_line(),
+            template="recaps.templates.emails.daily_retail_rollup",
             from_email=getattr(
                 settings,
                 "DEFAULT_FROM_EMAIL",

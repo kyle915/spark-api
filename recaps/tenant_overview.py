@@ -2065,6 +2065,7 @@ def conversion_window_totals(
     *,
     detail: bool = False,
     by_month: bool = False,
+    approved_between: tuple | None = None,
 ) -> dict:
     """Retail + On-Premise CONV totals for one inclusive window.
 
@@ -2076,9 +2077,16 @@ def conversion_window_totals(
     set Insights counts instead of re-deriving it. ``by_month=True`` adds
     ``months``: ``{"YYYY-MM": {"sold", "base"}}`` over the recaps that land
     in the rate, bucketed by event date, so a monthly series sums to the
-    window's ``sold`` / ``base`` exactly.
+    window's ``sold`` / ``base`` exactly. ``approved_between`` (half-open
+    tz-aware ``(start, end)``) further narrows to recaps approved in that
+    span — the daily roll-up's "approved yesterday" set.
     """
     window = _inclusive_dates_to_window(w_start, w_end)
+    approved_q = Q()
+    if approved_between is not None:
+        approved_q = Q(
+            approved_at__gte=approved_between[0], approved_at__lt=approved_between[1]
+        )
     detail_rows: list[dict] = []
     months: dict[str, dict[str, int]] = {}
 
@@ -2098,7 +2106,7 @@ def conversion_window_totals(
         _approved_only(
             _filter_event_window(
                 Recap.objects.filter(
-                    event__tenant_id=tenant_id, archived_at__isnull=True
+                    approved_q, event__tenant_id=tenant_id, archived_at__isnull=True
                 ),
                 "event__",
                 window,
@@ -2172,7 +2180,7 @@ def conversion_window_totals(
         _approved_only(
             _filter_event_window(
                 CustomRecap.objects.filter(
-                    tenant_id=tenant_id, archived_at__isnull=True
+                    approved_q, tenant_id=tenant_id, archived_at__isnull=True
                 ),
                 "event__",
                 window,
@@ -2384,7 +2392,11 @@ _PACKS_RE = re.compile(r"\bpacks?\b", re.IGNORECASE)
 
 
 def sales_program_metrics(
-    tenant_id: int, w_start: date | None, w_end: date | None
+    tenant_id: int,
+    w_start: date | None,
+    w_end: date | None,
+    *,
+    approved_between: tuple | None = None,
 ) -> dict:
     """THE Torch-style ("sales" trend series) metric set for one window.
 
@@ -2395,7 +2407,9 @@ def sales_program_metrics(
     Period comparison all read this, so they agree with Conversion and the
     Monthly trend for the same dates.
     """
-    conv = conversion_window_totals(tenant_id, w_start, w_end, detail=True)
+    conv = conversion_window_totals(
+        tenant_id, w_start, w_end, detail=True, approved_between=approved_between
+    )
     counted = [r for r in conv["recaps"] if r["counted"]]
     custom_ids = [r["id"] for r in counted if r["kind"] == "custom"]
     legacy_ids = [r["id"] for r in counted if r["kind"] == "legacy"]

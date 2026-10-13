@@ -1,0 +1,76 @@
+name: Set daily retail roll-up
+
+# Fires `/internal/cron/set-daily-retail-rollup`: turns a tenant's executive
+# daily retail roll-up on/off and sets its recipients. DRY RUN unless
+# apply=true (prints before/after). Blank recipients keep the current list
+# (first setup seeds Torch's executive list: ryan@, matt@torchdrinks.com,
+# collin@torchenterprise.com). See
+# digest/management/commands/set_daily_retail_rollup.py.
+#
+# Turn Torch on:  tenant=keee-torch-thc, enabled=true, apply=true.
+# Turn Torch off: tenant=keee-torch-thc, enabled=false, apply=true.
+#
+# Must live on main too — GitHub only lists dispatchable workflows from the
+# default branch.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tenant:
+        description: "Tenant id / slug / request_url_name"
+        required: true
+        default: "keee-torch-thc"
+      enabled:
+        description: "Roll-up on or off (blank = unchanged)"
+        required: false
+        default: ""
+        type: choice
+        options: ["", "true", "false"]
+      recipients:
+        description: "Comma-separated emails to REPLACE the list (blank = keep)"
+        required: false
+        default: ""
+      timezone:
+        description: "IANA timezone for the report day (blank = keep; default America/Los_Angeles)"
+        required: false
+        default: ""
+      apply:
+        description: "Write the change (false = dry run)"
+        required: true
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+jobs:
+  set-daily-retail-rollup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire set-daily-retail-rollup cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/set-daily-retail-rollup
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          TENANT: ${{ github.event.inputs.tenant }}
+          ENABLED: ${{ github.event.inputs.enabled }}
+          RECIPIENTS: ${{ github.event.inputs.recipients }}
+          TZ_NAME: ${{ github.event.inputs.timezone }}
+          APPLY: ${{ github.event.inputs.apply }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL" \
+            --data-urlencode "tenant=$TENANT" \
+            --data-urlencode "enabled=$ENABLED" \
+            --data-urlencode "recipients=$RECIPIENTS" \
+            --data-urlencode "timezone=$TZ_NAME" \
+            --data-urlencode "apply=$APPLY" \
+            -H "X-Cron-Secret: $CRON_SECRET")
+          echo "HTTP $STATUS"
+          python3 -c "import json;b=json.load(open('/tmp/cron-response.json'));print(b.get('log') or '');print({k:v for k,v in b.items() if k!='log'})"
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS — see body above."
+            exit 1
+          fi
