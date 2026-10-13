@@ -383,7 +383,14 @@ def post_waiting_plan(plan: FieldMarketingEvent, actor, *, post_spark_job: bool)
     return PostedPlan(event=event, approved=approved)
 
 
-def set_gig(gig: Gig, *, open_shifts: int | None, listed: bool | None, actor) -> JobBoardGig:
+def set_gig(
+    gig: Gig,
+    *,
+    open_shifts: int | None,
+    listed: bool | None,
+    actor,
+    public_notes: str | None = None,
+) -> JobBoardGig:
     override = gig.override or JobBoardGig(
         tenant_id=gig.event.tenant_id,
         event=gig.event,
@@ -394,6 +401,8 @@ def set_gig(gig: Gig, *, open_shifts: int | None, listed: bool | None, actor) ->
         override.open_shifts = max(0, min(int(open_shifts), 50))
     if listed is not None:
         override.listed = bool(listed)
+    if public_notes is not None:
+        override.public_notes = public_notes.strip()[:2000]
     override.updated_by = actor
     override.save()
     gig.override = override

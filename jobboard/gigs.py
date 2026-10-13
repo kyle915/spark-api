@@ -16,7 +16,7 @@ from django.utils import timezone
 
 from ambassadors.checkin_web import _brand_payload
 from ambassadors.models import AmbassadorEvent
-from events.field_marketing import MARKET_TIMEZONES, SAMPLING_LABELS
+from events.field_marketing import MARKET_TIMEZONES, MARKETS, SAMPLING_LABELS
 from events.managers import EventManager
 from events.market import market_for
 from events.models import Event, FieldMarketingEvent
@@ -39,6 +39,8 @@ GIG_TYPE_LABELS = {
     FieldMarketingEvent.ACTIVITY_RETAIL_SUPPORT: "Retail Support",
     FieldMarketingEvent.ACTIVITY_SALES_SUPPORT: "Sales Support",
 }
+
+MARKET_LABELS = {key: label for key, label, *_ in MARKETS}
 
 _BA_COUNT_RE = re.compile(r"BA count:\s*(\d+)", re.IGNORECASE)
 
@@ -96,12 +98,17 @@ class Gig:
 
     @property
     def area(self) -> str:
-        label = market_for(self.event).label
-        return "" if label == "Unknown" else label
+        """City, ST from the event's address, else the plan's market name."""
+        label = market_for(self.event).label or market_for(self.plan).label
+        return label or MARKET_LABELS.get(self.plan.market, "")
 
     @property
     def skus(self) -> list[str]:
         return [s for s in (self.plan.sku_names or []) if str(s).strip()]
+
+    @property
+    def public_notes(self) -> str:
+        return (self.override.public_notes or "").strip() if self.override is not None else ""
 
 
 def default_open_shifts(plan: FieldMarketingEvent) -> int:
@@ -252,7 +259,8 @@ def time_label(gig: Gig) -> str:
 
 
 def public_gig(gig: Gig) -> dict:
-    """What anyone with the link may see. No address beyond city, no people."""
+    """What anyone with the link may see: city, venue, times, and the admin's
+    public notes. Never the street address or plan/request notes."""
     return {
         "id": str(gig.event.uuid),
         "startsAt": gig.starts_at.isoformat(),
@@ -263,7 +271,7 @@ def public_gig(gig: Gig) -> dict:
         "typeLabel": gig.type_label,
         "sampling": SAMPLING_LABELS.get(gig.plan.sampling_format or "", ""),
         "skus": gig.skus,
-        "brief": (gig.plan.support_scope or "").strip(),
+        "brief": gig.public_notes,
         "openShifts": gig.open_shifts,
         "spotsLeft": gig.spots_left,
         "full": gig.spots_left <= 0,

@@ -71,7 +71,7 @@ class JobBoardBookedMailer(EventConfirmationMailer):
                 ),
                 "bring_items": BRING_ITEMS,
                 "contact_email": STAFFING_EMAIL,
-                "brief": (gig.plan.support_scope or "").strip() if gig else "",
+                "brief": gig.public_notes if gig else "",
                 "sampling_label": (
                     SAMPLING_LABELS.get(gig.plan.sampling_format or "", "") if gig else ""
                 ),

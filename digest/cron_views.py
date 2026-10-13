@@ -9717,6 +9717,45 @@ class FixTrackerMarketsView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class AuditRequestStatusesView(View):
+    """POST `/internal/cron/audit-request-statuses` — requests with no status
+    and tenants with no default status (`audit_request_statuses`).
+
+    Params: tenant (slug or request_url_name; blank = all tenants), apply
+    (restore Pending defaults + move today/future no-status requests to
+    Pending; default dry-run). No emails, nothing approved. Secret-gated.
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _get(n: str) -> str:
+            return (request.GET.get(n) or request.POST.get(n) or "").strip()
+
+        apply = _get("apply").lower() in ("1", "true", "yes", "on")
+        cmd_args: list[str] = ["--apply"] if apply else []
+        if _get("tenant"):
+            cmd_args += ["--tenant", _get("tenant")]
+        out = io.StringIO()
+        try:
+            call_command("audit_request_statuses", *cmd_args, stdout=out)
+        except CommandError as exc:
+            return JsonResponse(
+                {"ok": False, "error": "bad-input", "detail": str(exc), "log": out.getvalue()},
+                status=400,
+            )
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("audit_request_statuses cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc), "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse({"ok": True, "apply": apply, "log": out.getvalue()})
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class AuditRoutingStateView(View):
     """POST `/internal/cron/audit-routing-state` — read-only old vs new
     routed state for recent Torch / LD routings (`audit_routing_state`).
@@ -10428,6 +10467,7 @@ def _registered_views() -> dict[str, Any]:
         "repair-event-dates": RepairEventDatesView,
         "fix-neutonic-geo": FixNeutonicGeoView,
         "fix-tracker-markets": FixTrackerMarketsView,
+        "audit-request-statuses": AuditRequestStatusesView,
         "audit-routing-state": AuditRoutingStateView,
         "set-recap-choice-options": SetRecapChoiceOptionsView,
         "send-update-check-push": SendUpdateCheckPushView,
