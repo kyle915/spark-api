@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from functools import partial
 
+from asgiref.sync import async_to_sync
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
 from django.db import transaction
@@ -21,9 +22,17 @@ from django.utils import timezone
 
 from ambassadors.checkin_web import get_or_create_checkin_ambassador
 from ambassadors.models import AmbassadorEvent, Attendance
-from events.models import Event, EventConfirmation
+from events.models import (
+    Event,
+    EventConfirmation,
+    EventStatus,
+    FieldMarketingEvent,
+    RequestActivityLog,
+    RequestStatus,
+)
+from events.signals import create_pending_jobs_for_request
 from jobboard.config import JobBoardConfig
-from jobboard.gigs import Gig, date_label, list_gigs
+from jobboard.gigs import Gig, date_label, list_gigs, waiting_reason
 from jobboard.mail import send_booking_emails, send_cancellation
 from jobboard.models import JobBoard, JobBoardBooking, JobBoardGig
 from jobs.models import AmbassadorJob, Job, JobTitle, Rate, RateType, Status
@@ -319,6 +328,59 @@ def cancel_booking(booking: JobBoardBooking, actor) -> JobBoardBooking:
         booking.save(update_fields=["cancelled_at", "cancelled_by"])
         transaction.on_commit(partial(send_cancellation, booking.id))
     return booking
+
+
+class PostPlanError(Exception):
+    pass
+
+
+@dataclass(frozen=True)
+class PostedPlan:
+    event: Event
+    approved: bool
+
+
+def post_waiting_plan(plan: FieldMarketingEvent, actor, *, post_spark_job: bool) -> PostedPlan:
+    """Approve a waiting plan's request if needed and create its event.
+
+    This is the step that puts a plan gig on the board. It sends nothing;
+    callers that want the usual approval emails send them after commit.
+    ``post_spark_job`` also posts the BA-app job like ``approveRequest`` does.
+    """
+    reason = waiting_reason(plan)
+    if reason.action is None:
+        raise PostPlanError(f"{plan.name}: {reason.label}. Change it on the request first.")
+    request = plan.request
+    approved = False
+    if reason.code != "no_event":
+        status = RequestStatus.objects.get_by_slug(slug="approved", tenant=request.tenant_id)
+        if status is None:
+            raise PostPlanError("This brand has no Approved request status.")
+        previous = request.status.slug
+        request.status = status
+        request.approved_by = actor
+        request.save()
+        RequestActivityLog.objects.create(
+            tenant_id=request.tenant_id,
+            request=request,
+            kind=RequestActivityLog.KIND_STATUS_CHANGED,
+            actor_user=actor,
+            summary=f"Status: {previous} → approved (job board)",
+            metadata={"from": previous, "to": "approved", "via": "job_board"},
+        )
+        approved = True
+    event = Event.objects.filter(request_id=request.id).order_by("-id").first()
+    if event is None:
+        event = async_to_sync(Event.objects.from_request)(
+            request=request,
+            created_by=actor,
+            status=EventStatus.objects.filter(slug="approved", tenant_id=request.tenant_id)
+            .order_by("id")
+            .first(),
+        )
+    if post_spark_job:
+        create_pending_jobs_for_request(request)
+    return PostedPlan(event=event, approved=approved)
 
 
 def set_gig(gig: Gig, *, open_shifts: int | None, listed: bool | None, actor) -> JobBoardGig:

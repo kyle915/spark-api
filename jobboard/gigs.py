@@ -17,6 +17,7 @@ from django.utils import timezone
 from ambassadors.checkin_web import _brand_payload
 from ambassadors.models import AmbassadorEvent
 from events.field_marketing import MARKET_TIMEZONES, SAMPLING_LABELS
+from events.managers import EventManager
 from events.market import market_for
 from events.models import Event, FieldMarketingEvent
 from jobboard.config import JobBoardConfig, job_board_config_for
@@ -26,6 +27,7 @@ from utils.tz import resolve_zoneinfo
 STAFFING_EMAIL = "staffing@igniteproductions.co"
 
 DEAD_STATUS_SLUGS = {"cancelled", "canceled", "declined", "rejected"}
+APPROVED_REQUEST_SLUGS = EventManager.APPROVED_REQUEST_STATUS_SLUGS
 
 GIG_TYPE_LABELS = {
     FieldMarketingEvent.ACTIVITY_EVENT_ACTIVATION: "Event Activation",
@@ -178,7 +180,11 @@ def list_gigs(tenant, *, now: datetime | None = None, event_ids=None) -> list[Gi
 
 
 def pending_plans(tenant, *, now: datetime | None = None) -> list[FieldMarketingEvent]:
-    """Plans sent to Ignite that have no event yet (waiting on approval)."""
+    """Upcoming plans sent to Ignite whose request has no event yet.
+
+    Approving a request creates its event, so most of these are still
+    pending; ``waiting_reason`` says which step is actually missing.
+    """
     now = now or timezone.now()
     plans = _live_plans(tenant)
     with_events = set(
@@ -192,6 +198,27 @@ def pending_plans(tenant, *, now: datetime | None = None) -> list[FieldMarketing
         for rid, p in plans.items()
         if rid not in with_events and (p.starts_on is None or p.starts_on >= today)
     ]
+
+
+@dataclass(frozen=True)
+class WaitingReason:
+    code: str
+    label: str
+    action: str | None
+
+
+def waiting_reason(plan: FieldMarketingEvent) -> WaitingReason:
+    """Why an upcoming plan's request isn't on the board, and the fix, if any."""
+    status = plan.request.status
+    slug = (getattr(status, "slug", None) or "").lower()
+    name = getattr(status, "name", None) or slug or "no status"
+    if slug in APPROVED_REQUEST_SLUGS:
+        return WaitingReason("no_event", "Approved, but its event was never created", "Post to board")
+    if slug == "pending":
+        return WaitingReason("pending", "Pending: not approved yet", "Approve & post")
+    if slug == "queue":
+        return WaitingReason("queue", "In Queue for Ignite: not approved yet", "Approve & post")
+    return WaitingReason("other", f"Request is {name}", None)
 
 
 # ── Labels ────────────────────────────────────────────────────────────

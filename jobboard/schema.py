@@ -6,15 +6,26 @@ bookings carry BA contact details.
 
 from __future__ import annotations
 
+import logging
+
 import strawberry
 from asgiref.sync import sync_to_async
 from graphql import GraphQLError
 from strawberry import relay
 
+from django.db import transaction
+
 from events.demo_cancel import request_display_code
 from events.envelopes import _admin_request_url
 from events.event_confirmations import public_page_base
 from events.field_marketing import MARKETS, _active_tenant_for_user, _user_can_pick_any_tenant
+from events.models import Request
+from events.mutations import (
+    _notify_notification_group_users_for_request,
+    _notify_requestor_for_request_approved,
+    _push_requestor_for_request_verdict,
+    _resolve_request_location,
+)
 from jobboard.gigs import (
     board_for_tenant,
     date_label,
@@ -22,13 +33,22 @@ from jobboard.gigs import (
     list_gigs,
     pending_plans,
     time_label,
+    waiting_reason,
 )
 from jobboard.models import JobBoardBooking
-from jobboard.services import CancelError, cancel_booking, set_gig
+from jobboard.services import (
+    CancelError,
+    PostPlanError,
+    cancel_booking,
+    post_waiting_plan,
+    set_gig,
+)
 from utils.graphql.inputs import SparkGraphQLInput
 from utils.graphql.mixins import SparkGraphQLMixin
 from utils.graphql.permissions import StrictIsAuthenticated
 from utils.utils import build_mutation_response
+
+logger = logging.getLogger(__name__)
 
 _MARKET_LABELS = {key: label for key, label, *_ in MARKETS}
 
@@ -68,6 +88,11 @@ class JobBoardPendingPlanType:
     starts_on: str | None
     market: str
     request_code: str
+    request_url: str
+    reason: str
+    reason_label: str
+    action_label: str | None
+    open_shifts: int
 
 
 @strawberry.type(name="JobBoard")
@@ -127,16 +152,23 @@ def build_admin_board(tenant) -> JobBoardType:
         token=board.token,
         url=f"{public_page_base()}/jobs/{board.token}",
         gigs=[_gig_type(g, by_event.get(g.event.id, [])) for g in gigs],
-        pending=[
-            JobBoardPendingPlanType(
-                id=strawberry.ID(str(p.uuid)),
-                name=p.name,
-                starts_on=p.starts_on.isoformat() if p.starts_on else None,
-                market=_MARKET_LABELS.get(p.market, p.market or ""),
-                request_code=request_display_code(p.request_id),
-            )
-            for p in pending_plans(tenant)
-        ],
+        pending=[_pending_type(p) for p in pending_plans(tenant)],
+    )
+
+
+def _pending_type(plan) -> JobBoardPendingPlanType:
+    reason = waiting_reason(plan)
+    return JobBoardPendingPlanType(
+        id=strawberry.ID(str(plan.uuid)),
+        name=plan.name,
+        starts_on=plan.starts_on.isoformat() if plan.starts_on else None,
+        market=_MARKET_LABELS.get(plan.market, plan.market or ""),
+        request_code=request_display_code(plan.request_id),
+        request_url=_admin_request_url(plan.request),
+        reason=reason.code,
+        reason_label=reason.label,
+        action_label=reason.action,
+        open_shifts=default_open_shifts(plan),
     )
 
 
@@ -171,6 +203,19 @@ class SetJobBoardGigInput(SparkGraphQLInput):
 class CancelJobBoardBookingInput(SparkGraphQLInput):
     tenant_id: strawberry.ID
     booking_id: strawberry.ID
+
+
+@strawberry.input
+class PostJobBoardPlanInput(SparkGraphQLInput):
+    tenant_id: strawberry.ID
+    plan_id: strawberry.ID
+
+
+@strawberry.type
+class JobBoardPostPlanResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
 
 
 @strawberry.type
@@ -217,8 +262,60 @@ def _cancel(user, input: CancelJobBoardBookingInput) -> None:
         raise GraphQLError(str(exc)) from exc
 
 
+def _post_plan(user, input: PostJobBoardPlanInput) -> tuple[int, bool, str]:
+    """Put a waiting plan on the board. Returns (request id, approved now, message)."""
+    tenant = _admin_tenant(user, input.tenant_id)
+    if tenant is None or board_for_tenant(tenant) is None:
+        raise GraphQLError("Job board isn't available for this brand.")
+    plan = next((p for p in pending_plans(tenant) if str(p.uuid) == str(input.plan_id)), None)
+    if plan is None:
+        raise GraphQLError("That plan isn't waiting anymore. Refresh the page.")
+    try:
+        with transaction.atomic():
+            posted = post_waiting_plan(plan, user, post_spark_job=True)
+    except PostPlanError as exc:
+        raise GraphQLError(str(exc)) from exc
+    shifts = default_open_shifts(plan)
+    message = (
+        f"{plan.name} is on the board with {shifts} open shift{'' if shifts == 1 else 's'}."
+    )
+    return plan.request_id, posted.approved, message
+
+
+async def _send_approval_notices(request_id: int) -> None:
+    """The same emails and push ``approveRequest`` sends."""
+    request = await sync_to_async(
+        Request.objects.select_related(
+            "tenant",
+            "status",
+            "timezone",
+            "retailer__location__state",
+            "distributor__location__state",
+        ).get
+    )(id=request_id)
+    location = await _resolve_request_location(request)
+    await _notify_notification_group_users_for_request(request, location)
+    await _notify_requestor_for_request_approved(request, location)
+    await _push_requestor_for_request_verdict(request, approved=True)
+
+
 @strawberry.type
 class JobBoardMutations:
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def post_job_board_plan(
+        self, info: strawberry.Info, input: PostJobBoardPlanInput
+    ) -> JobBoardPostPlanResponse:
+        user = await SparkGraphQLMixin().get_user(info)
+        request_id, approved, message = await sync_to_async(_post_plan)(user, input)
+        if approved:
+            try:
+                await _send_approval_notices(request_id)
+            except Exception:
+                logger.exception("Job board approval notices failed for request %s", request_id)
+        return build_mutation_response(
+            JobBoardPostPlanResponse, success=True, message=message, input_obj=input
+        )
+
     @relay.mutation(permission_classes=[StrictIsAuthenticated])
     async def set_job_board_gig(
         self, info: strawberry.Info, input: SetJobBoardGigInput
