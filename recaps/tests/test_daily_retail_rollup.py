@@ -15,7 +15,15 @@ from digest.management.commands import send_daily_retail_rollup as send_mod
 from digest.models import TenantDailyRollup, TenantDailyRollupSend
 from events import models as event_models
 from recaps import models as recap_models
-from recaps.daily_retail_rollup import approval_window, build_daily_retail_rollup, previous_day
+from recaps.daily_retail_rollup import (
+    RollupRow,
+    _quote_text,
+    _store_title,
+    _top_sku,
+    approval_window,
+    build_daily_retail_rollup,
+    previous_day,
+)
 from recaps.envelopes import DailyRetailRollupMailer
 
 PT = ZoneInfo("America/Los_Angeles")
@@ -265,3 +273,30 @@ class TestDailyRetailRollup(AmbassadorsGraphQLTestCase):
         call_command("set_daily_retail_rollup", "--tenant", "keee-torch-thc", "--enabled", "true", "--apply")
         row.refresh_from_db()
         assert row.enabled is True and len(row.recipients) == 3
+
+
+def _row(products: list[str]) -> RollupRow:
+    return RollupRow(
+        kind="custom", recap_id=1, store="S", event_date=DAY, market="", ba="",
+        consumers_sampled=10, units_sold=1, dry_demo=False, counted=True,
+        sample_format="", products=products, competitor="",
+    )
+
+
+def test_display_helpers_tidy_titles_quotes_and_top_sku():
+    assert _store_title("Retail Sampling - Total Wine & More (Orlando) #909") == (
+        "Total Wine & More (Orlando) #909"
+    )
+    assert _store_title("Colonial Liquor & Wine · 2026-10-10") == "Colonial Liquor & Wine"
+    assert _store_title("Charboozie Before and After Bar,") == "Charboozie Before and After Bar"
+    assert _store_title("") == "Retail demo"
+    assert _quote_text('"" I can\'t wait to try it. ""') == "I can\'t wait to try it."
+    assert _quote_text("\u201cToo expensive for a single can!\u201d") == "Too expensive for a single can!"
+    rows = [
+        _row(["Seltzer 10mg — Strawberry Lemonade 10mg 4-Pack", "Field marketing — Nonactive"]),
+        _row(["Strawberry Lemonade 10mg 4-Pack"]),
+        _row(["Field marketing — Nonactive"]),
+        _row(["Black Cherry 10mg", "Nonactive"]),
+    ]
+    assert _top_sku(rows) == ("Strawberry Lemonade 10mg 4-Pack", 2)
+    assert _top_sku([_row(["Nonactive"])]) is None

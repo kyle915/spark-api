@@ -1006,14 +1006,10 @@ class DailyRetailRollupMailer(Mailer):
             }
         top_sku = None
         if r.top_sku is not None:
-            name, count, basis = r.top_sku
+            name, count = r.top_sku
             top_sku = {
                 "name": name,
-                "detail": (
-                    f"{count:,} sample{'' if count == 1 else 's'} logged"
-                    if basis == "samples"
-                    else f"sampled at {count:,} of {len(r.rows):,} demos"
-                ),
+                "detail": f"sampled at {count:,} of {len(r.rows):,} demos",
             }
         tz_label = "Pacific time" if r.tz_name == "America/Los_Angeles" else r.tz_name
         return {
