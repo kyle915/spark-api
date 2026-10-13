@@ -20,8 +20,11 @@ Flags:
                          even while the tenant is off. Never stamps the day.
     --html-file <path>   Also write the rendered HTML to this path.
     --not-before <hour>  Skip a tenant while its local time is before this hour.
-                         The schedule fires at 14:05 and 15:05 UTC with 7, so
-                         the send lands at 7:05 AM Pacific in both PDT and PST.
+    --not-after <hour>   Skip a tenant once its local time reaches this hour.
+                         The schedule fires at 19:00, 20:00 and 21:00 UTC with
+                         12 / 14, so the send lands at 12:00 PM Pacific in both
+                         PDT and PST (the extra fire is a backup for a late or
+                         dropped GitHub run; the per-day stamp dedupes).
 """
 
 from __future__ import annotations
@@ -74,9 +77,11 @@ class Command(BaseCommand):
         parser.add_argument("--preview-to", default="")
         parser.add_argument("--html-file", default="")
         parser.add_argument("--not-before", type=int, default=None)
+        parser.add_argument("--not-after", type=int, default=None)
 
     def handle(self, *args, **opts):
         self.not_before = opts.get("not_before")
+        self.not_after = opts.get("not_after")
         dry_run = bool(opts["dry_run"])
         preview_to = (opts.get("preview_to") or "").strip().lower()
         report_date = None
@@ -127,6 +132,12 @@ class Command(BaseCommand):
         if self.not_before is not None and local_hour < self.not_before:
             self.stdout.write(
                 f"  - {label}: SKIP — {local_hour}:00 local is before {self.not_before}:00."
+            )
+            return False
+        if self.not_after is not None and local_hour >= self.not_after:
+            self.stdout.write(
+                f"  - {label}: SKIP — {local_hour}:00 local is past the send window "
+                f"(before {self.not_after}:00)."
             )
             return False
         day = report_date or previous_day(now, tz_name)

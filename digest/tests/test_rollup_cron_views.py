@@ -32,6 +32,16 @@ class TestDailyRetailRollupCron:
 
     @override_settings(INTERNAL_CRON_SECRET=SECRET)
     @patch("digest.rollup_cron_views.call_command")
+    def test_send_passes_local_hour_window(self, mock_call):
+        Client().post(
+            SEND_URL, {"not_before": "12", "not_after": "14"}, HTTP_X_CRON_SECRET=SECRET
+        )
+        args = mock_call.call_args[0]
+        assert args[args.index("--not-before") + 1] == "12"
+        assert args[args.index("--not-after") + 1] == "14"
+
+    @override_settings(INTERNAL_CRON_SECRET=SECRET)
+    @patch("digest.rollup_cron_views.call_command")
     def test_preview_requires_tenant(self, mock_call):
         resp = Client().post(
             SEND_URL, {"preview_to": "kyle@igniteproductions.co"}, HTTP_X_CRON_SECRET=SECRET
