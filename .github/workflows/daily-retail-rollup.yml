@@ -1,0 +1,108 @@
+name: Daily retail roll-up
+
+# Fires `/internal/cron/send-daily-retail-rollup` on Cloud Run: the executive
+# daily email of every Retail Sampling recap approved the previous day
+# (Pacific). See digest/management/commands/send_daily_retail_rollup.py.
+#
+# SAFE — OFF by default. Only tenants with an enabled TenantDailyRollup row
+# (set via the "Set daily retail roll-up" workflow) and recipients get mail.
+# Empty days are skipped; a day is never sent twice (TenantDailyRollupSend).
+#
+# Schedule: 14:05 and 15:05 UTC with not_before=7, so the send lands at
+# 7:05 AM Pacific in both PDT and PST (the earlier fire skips in winter, the
+# later one dedupes in summer).
+#
+# Manual runs default to DRY RUN. preview_to sends ONE copy to an
+# @igniteproductions.co address even while the tenant is off; include_html
+# uploads the rendered email as an artifact.
+#
+# GitHub only fires `schedule:` from the default branch (main); the endpoint
+# deploys from develop. This file must live on BOTH branches.
+
+on:
+  schedule:
+    - cron: "5 14 * * *"
+    - cron: "5 15 * * *"
+  workflow_dispatch:
+    inputs:
+      tenant:
+        description: "Tenant id / slug / request_url_name (blank = all enabled)"
+        required: false
+        default: ""
+      date:
+        description: "Approval day YYYY-MM-DD (blank = yesterday, Pacific)"
+        required: false
+        default: ""
+      dry_run:
+        description: "Build + log only, send nothing"
+        required: false
+        default: "true"
+        type: choice
+        options: ["true", "false"]
+      preview_to:
+        description: "Send one [Preview] copy to this @igniteproductions.co address (requires tenant, dry_run=false)"
+        required: false
+        default: ""
+      include_html:
+        description: "Upload the rendered email HTML as an artifact (requires tenant)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+jobs:
+  fire-daily-retail-rollup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire daily retail roll-up cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/send-daily-retail-rollup
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          SCHEDULED: ${{ github.event_name == 'schedule' }}
+          TENANT: ${{ github.event.inputs.tenant || '' }}
+          REPORT_DATE: ${{ github.event.inputs.date || '' }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+          PREVIEW_TO: ${{ github.event.inputs.preview_to || '' }}
+          INCLUDE_HTML: ${{ github.event.inputs.include_html || 'false' }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          NOT_BEFORE=""
+          if [ "$SCHEDULED" = "true" ]; then
+            NOT_BEFORE="7"
+          fi
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL" \
+            --data-urlencode "dry_run=$DRY_RUN" \
+            --data-urlencode "tenant=$TENANT" \
+            --data-urlencode "date=$REPORT_DATE" \
+            --data-urlencode "preview_to=$PREVIEW_TO" \
+            --data-urlencode "include_html=$INCLUDE_HTML" \
+            --data-urlencode "not_before=$NOT_BEFORE" \
+            -H "X-Cron-Secret: $CRON_SECRET")
+          echo "HTTP $STATUS"
+          mkdir -p /tmp/rollup
+          python3 - <<'PY'
+          import json
+          body = json.load(open("/tmp/cron-response.json"))
+          html = body.pop("html", "")
+          if html:
+              open("/tmp/rollup/daily-retail-rollup.html", "w").write(html)
+          print(body.get("log") or "")
+          print(json.dumps({k: v for k, v in body.items() if k != "log"}))
+          PY
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS — see body above."
+            exit 1
+          fi
+
+      - name: Upload rendered email
+        if: ${{ github.event.inputs.include_html == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-retail-rollup-html
+          path: /tmp/rollup/
+          if-no-files-found: ignore

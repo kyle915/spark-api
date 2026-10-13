@@ -14,6 +14,7 @@ from django.views.decorators.csrf import csrf_exempt
 
 from .cron_views import _registered_views
 from .models import record_cron_run
+from .rollup_cron_views import ROLLUP_VIEWS
 
 
 def _heartbeat(name, view_callable):
@@ -40,5 +41,5 @@ urlpatterns = [
         csrf_exempt(_heartbeat(name, view.as_view())),
         name=f"digest-cron-{name}",
     )
-    for name, view in _registered_views().items()
+    for name, view in {**_registered_views(), **ROLLUP_VIEWS}.items()
 ]

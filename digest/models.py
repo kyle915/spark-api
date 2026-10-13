@@ -63,6 +63,50 @@ class CronRun(models.Model):
         return f"{self.name} @ {self.last_run_at} ok={self.last_ok}"
 
 
+class TenantDailyRollup(models.Model):
+    """Per-tenant switch + recipients for the executive daily retail roll-up.
+
+    OFF until set with ``set_daily_retail_rollup --apply``; the daily cron
+    emails nobody for a tenant without an enabled row and recipients.
+    ``timezone`` defines the calendar day whose approvals are reported.
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    tenant = models.OneToOneField(
+        "tenants.Tenant", on_delete=models.CASCADE, related_name="daily_rollup"
+    )
+    enabled = models.BooleanField(default=False)
+    recipients = models.JSONField(default=list, blank=True)
+    timezone = models.CharField(max_length=64, default="America/Los_Angeles")
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self) -> str:  # pragma: no cover
+        return f"daily rollup tenant={self.tenant_id} enabled={self.enabled}"
+
+
+class TenantDailyRollupSend(models.Model):
+    """One row per (tenant, report day) actually sent — a day never goes twice."""
+
+    id = models.BigAutoField(primary_key=True)
+    tenant = models.ForeignKey(
+        "tenants.Tenant", on_delete=models.CASCADE, related_name="daily_rollup_sends"
+    )
+    report_date = models.DateField()
+    recipients = models.JSONField(default=list, blank=True)
+    recap_count = models.PositiveIntegerField(default=0)
+    sent_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["tenant", "report_date"], name="uniq_daily_rollup_send_day"
+            )
+        ]
+
+    def __str__(self) -> str:  # pragma: no cover
+        return f"daily rollup sent tenant={self.tenant_id} day={self.report_date}"
+
+
 def record_cron_run(name: str, *, status: int, detail: str = "") -> None:
     """Best-effort heartbeat stamp for one cron hit. Never raises."""
     try:

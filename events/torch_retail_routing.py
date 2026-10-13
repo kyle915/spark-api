@@ -62,6 +62,14 @@ TORCH_WEEKLY_ONLY: tuple[tuple[str, str], ...] = (
     ("Collin Kerrigan", "collin@torchenterprise.com"),
 )
 
+# Executive daily retail roll-up (digest.TenantDailyRollup default list).
+# Ryan here is ryan@ — not Ryan Heuser, who stays on the lists above/below.
+TORCH_DAILY_RETAIL_ROLLUP: tuple[tuple[str, str], ...] = (
+    ("Ryan", "ryan@torchdrinks.com"),
+    ("Matt", "matt@torchdrinks.com"),
+    ("Collin Kerrigan", "collin@torchenterprise.com"),
+)
+
 # Every Event / Guerilla / Seeding recap — instead of the state reps.
 TORCH_FIELD_MARKETING_RECAP: tuple[tuple[str, str], ...] = (
     ("Ryan Heuser", "ryanheuser@torchdrinks.com"),
@@ -129,6 +137,11 @@ def torch_weekly_digest_emails() -> list[str]:
         emails.extend(email for _name, email in people)
     emails.extend(email for _name, email in TORCH_WEEKLY_ONLY)
     return _dedupe_emails(emails)
+
+
+def torch_daily_retail_rollup_emails() -> list[str]:
+    """Default recipients of the Torch executive daily retail roll-up."""
+    return _dedupe_emails([email for _name, email in TORCH_DAILY_RETAIL_ROLLUP])
 
 
 def state_code_from_event(event) -> str | None:

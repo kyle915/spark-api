@@ -63,6 +63,7 @@ EXPECTED_MAX_HOURS: dict[str, float] = {
     "send-recap-reminders": 30,
     "export-recaps-to-sheet": 30,
     "export-ld-summary": 30,
+    "send-daily-retail-rollup": 30,
     # weekly (Monday)
     "send-client-weekly-digest": 8 * 24,
     "recap-data-health": 8 * 24,

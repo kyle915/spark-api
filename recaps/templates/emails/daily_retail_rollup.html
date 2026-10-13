@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{{ tenant_name }} · Retail sampling daily · {{ day_label }}</title>
+    <style type="text/css">
+      @media only screen and (max-width: 600px) {
+        .shell { width: 100% !important; }
+        .pad   { padding-left: 18px !important; padding-right: 18px !important; }
+        .hero  { font-size: 26px !important; line-height: 30px !important; }
+        .tile  { padding: 9px 7px !important; }
+        .kpi   { font-size: 19px !important; line-height: 22px !important; }
+        .kpil  { font-size: 8px !important; letter-spacing: 0.06em !important; }
+        .gap   { width: 4px !important; }
+        .ctx td { font-size: 12px !important; padding: 8px 6px !important; }
+      }
+    </style>
+  </head>
+  <body style="margin:0;padding:0;background:#f4f4f0;
+               font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;
+               color:#0a0d09;">
+    <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background:#f4f4f0;">
+      <tr>
+        <td align="center" style="padding:24px 12px;">
+          <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="640" class="shell"
+                 style="width:640px;max-width:640px;background:#ffffff;border-radius:18px;overflow:hidden;
+                        box-shadow:0 1px 2px rgba(10,13,9,0.04);">
+
+            <tr>
+              <td class="pad" style="padding:22px 36px;background:#0a0d09;">
+                <img src="https://admin.igniteproductions.co/legal/spark-logo-full.png" alt="Spark by Ignite"
+                     width="160" height="auto" style="display:block;height:auto;border:0;outline:none;text-decoration:none;" />
+              </td>
+            </tr>
+            <tr><td style="height:5px;line-height:5px;font-size:0;background:{{ brand_color }};">&nbsp;</td></tr>
+
+            {% if preview %}
+            <tr>
+              <td class="pad" style="padding:14px 36px 0 36px;">
+                <p style="margin:0;padding:10px 12px;background:#fff4ec;border:1px solid #f6c3a8;border-radius:10px;
+                          font-size:12px;line-height:18px;color:#7a2f0f;">
+                  Internal preview. This roll-up has not been sent to {{ tenant_name }}.
+                </p>
+              </td>
+            </tr>
+            {% endif %}
+
+            <tr>
+              <td class="pad" style="padding:28px 36px 4px 36px;">
+                <p style="margin:0 0 6px 0;font-family:'Courier New',Courier,monospace;font-size:10px;
+                          letter-spacing:0.2em;color:#5a6354;text-transform:uppercase;">
+                  {{ tenant_name }} · Retail sampling daily · {{ day_label }}
+                </p>
+                <h1 class="hero" style="margin:0;font-family:Georgia,'Times New Roman',serif;font-weight:700;
+                                        font-size:30px;line-height:34px;letter-spacing:-0.02em;color:#0a0d09;">
+                  {{ recap_count }} retail demo recap{{ recap_count|pluralize }} approved {{ day_label }}.
+                </h1>
+                <p style="margin:10px 0 0 0;font-size:14px;line-height:21px;color:#3b4034;">
+                  Every Retail Sampling recap approved on {{ day_label }} ({{ tz_label }}), whatever its event date.
+                  Numbers are exactly as the field team submitted them.
+                </p>
+              </td>
+            </tr>
+
+            <!-- Yesterday KPI strip -->
+            <tr>
+              <td class="pad" style="padding:20px 36px 4px 36px;">
+                <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+                  <tr>
+                    <td class="tile" valign="top" width="25%" style="padding:12px;background:#f9f9f4;border:1px solid #eeeae0;border-radius:12px;">
+                      <p class="kpi" style="margin:0;font-family:Georgia,serif;font-weight:700;font-size:26px;line-height:28px;">{{ day.demos }}</p>
+                      <p class="kpil" style="margin:4px 0 0 0;font-family:'Courier New',monospace;font-size:10px;letter-spacing:0.12em;color:#5a6354;">DEMOS</p>
+                    </td>
+                    <td class="gap" width="8">&nbsp;</td>
+                    <td class="tile" valign="top" width="25%" style="padding:12px;background:#f9f9f4;border:1px solid #eeeae0;border-radius:12px;">
+                      <p class="kpi" style="margin:0;font-family:Georgia,serif;font-weight:700;font-size:26px;line-height:28px;">{{ day.consumers_sampled }}</p>
+                      <p class="kpil" style="margin:4px 0 0 0;font-family:'Courier New',monospace;font-size:10px;letter-spacing:0.12em;color:#5a6354;">CONSUMERS SAMPLED</p>
+                    </td>
+                    <td class="gap" width="8">&nbsp;</td>
+                    <td class="tile" valign="top" width="25%" style="padding:12px;background:#f9f9f4;border:1px solid #eeeae0;border-radius:12px;">
+                      <p class="kpi" style="margin:0;font-family:Georgia,serif;font-weight:700;font-size:26px;line-height:28px;">{{ day.units_sold }}</p>
+                      <p class="kpil" style="margin:4px 0 0 0;font-family:'Courier New',monospace;font-size:10px;letter-spacing:0.12em;color:#5a6354;">UNITS SOLD</p>
+                    </td>
+                    <td class="gap" width="8">&nbsp;</td>
+                    <td class="tile" valign="top" width="25%" style="padding:12px;background:#0a0d09;border:1px solid #0a0d09;border-radius:12px;">
+                      <p class="kpi" style="margin:0;font-family:Georgia,serif;font-weight:700;font-size:26px;line-height:28px;color:#ffffff;">{{ day.conversion }}</p>
+                      <p class="kpil" style="margin:4px 0 0 0;font-family:'Courier New',monospace;font-size:10px;letter-spacing:0.12em;color:#c9cec3;">CONVERSION</p>
+                    </td>
+                  </tr>
+                </table>
+                <p style="margin:10px 0 0 0;font-size:12px;line-height:18px;color:#5a6354;">
+                  Units: {{ day.cans_sold }} single cans · {{ day.packs_sold }} packs (each counts as 1 unit).
+                  {% if day.dry_note %}{{ day.dry_note }}{% endif %}
+                  {% if uncounted %}{{ uncounted }} recap{{ uncounted|pluralize }} had no consumers-sampled count, so {{ uncounted|pluralize:"it is,they are" }} listed below but not in conversion.{% endif %}
+                </p>
+              </td>
+            </tr>
+
+            <!-- Month / program context -->
+            <tr>
+              <td class="pad" style="padding:16px 36px 4px 36px;">
+                <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" class="ctx"
+                       style="border:1px solid #eeeae0;border-radius:12px;border-collapse:separate;border-spacing:0;overflow:hidden;font-size:13px;">
+                  <tr style="background:#f9f9f4;">
+                    <td style="padding:9px 12px;font-family:'Courier New',monospace;font-size:10px;letter-spacing:0.12em;color:#5a6354;">FOR CONTEXT</td>
+                    <td align="right" style="padding:9px 8px;font-family:'Courier New',monospace;font-size:10px;letter-spacing:0.08em;color:#5a6354;">DEMOS</td>
+                    <td align="right" style="padding:9px 8px;font-family:'Courier New',monospace;font-size:10px;letter-spacing:0.08em;color:#5a6354;">SAMPLED</td>
+                    <td align="right" style="padding:9px 8px;font-family:'Courier New',monospace;font-size:10px;letter-spacing:0.08em;color:#5a6354;">UNITS</td>
+                    <td align="right" style="padding:9px 12px;font-family:'Courier New',monospace;font-size:10px;letter-spacing:0.08em;color:#5a6354;">CONV.</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:10px 12px;border-top:1px solid #eeeae0;font-weight:700;">{{ month_label }} to date</td>
+                    <td align="right" style="padding:10px 8px;border-top:1px solid #eeeae0;">{{ mtd.demos }}</td>
+                    <td align="right" style="padding:10px 8px;border-top:1px solid #eeeae0;">{{ mtd.consumers_sampled }}</td>
+                    <td align="right" style="padding:10px 8px;border-top:1px solid #eeeae0;">{{ mtd.units_sold }}</td>
+                    <td align="right" style="padding:10px 12px;border-top:1px solid #eeeae0;font-weight:700;">{{ mtd.conversion }}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:10px 12px;border-top:1px solid #eeeae0;font-weight:700;">Program to date</td>
+                    <td align="right" style="padding:10px 8px;border-top:1px solid #eeeae0;">{{ ptd.demos }}</td>
+                    <td align="right" style="padding:10px 8px;border-top:1px solid #eeeae0;">{{ ptd.consumers_sampled }}</td>
+                    <td align="right" style="padding:10px 8px;border-top:1px solid #eeeae0;">{{ ptd.units_sold }}</td>
+                    <td align="right" style="padding:10px 12px;border-top:1px solid #eeeae0;font-weight:700;">{{ ptd.conversion }}</td>
+                  </tr>
+                </table>
+                <p style="margin:8px 0 0 0;font-size:11px;line-height:16px;color:#7a8074;">
+                  Month and program to date count approved Retail recaps by event date, the same numbers as your Insights page.
+                </p>
+              </td>
+            </tr>
+
+            {% if top_store or top_sku or quotes %}
+            <tr>
+              <td class="pad" style="padding:24px 36px 4px 36px;">
+                <p style="margin:0 0 10px 0;font-family:Georgia,serif;font-weight:700;font-size:18px;letter-spacing:-0.01em;">Highlights</p>
+                <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+                  {% if top_store %}
+                  <tr>
+                    <td style="padding:0 0 8px 0;font-size:14px;line-height:20px;color:#3b4034;">
+                      <strong style="color:#0a0d09;">Top store by units:</strong>
+                      {{ top_store.store }} · {{ top_store.units }} sold{% if top_store.ba %} ({{ top_store.ba }}){% endif %}
+                    </td>
+                  </tr>
+                  {% endif %}
+                  {% if top_sku %}
+                  <tr>
+                    <td style="padding:0 0 8px 0;font-size:14px;line-height:20px;color:#3b4034;">
+                      <strong style="color:#0a0d09;">Most-sampled SKU:</strong> {{ top_sku.name }} · {{ top_sku.detail }}
+                    </td>
+                  </tr>
+                  {% endif %}
+                </table>
+                {% for q in quotes %}
+                <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="margin:8px 0 0 0;">
+                  <tr>
+                    <td style="padding:10px 14px;background:#f9f9f4;border-left:3px solid {{ brand_color }};border-radius:6px;">
+                      <p style="margin:0;font-family:Georgia,serif;font-size:14px;line-height:21px;color:#0a0d09;">“{{ q.text }}”</p>
+                      <p style="margin:4px 0 0 0;font-size:12px;color:#5a6354;">{% if q.ba %}{{ q.ba }} · {% endif %}{{ q.store }}</p>
+                    </td>
+                  </tr>
+                </table>
+                {% endfor %}
+              </td>
+            </tr>
+            {% endif %}
+
+            <!-- Per-recap list -->
+            <tr>
+              <td class="pad" style="padding:26px 36px 4px 36px;">
+                <p style="margin:0 0 10px 0;font-family:Georgia,serif;font-weight:700;font-size:18px;letter-spacing:-0.01em;">
+                  Approved recaps
+                  <span style="font-family:-apple-system,Arial,sans-serif;font-weight:400;font-size:13px;color:#7a8074;">· oldest event first</span>
+                </p>
+                {% for row in rows %}
+                <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%"
+                       style="margin:0 0 10px 0;border:1px solid #eeeae0;border-radius:12px;border-collapse:separate;border-spacing:0;">
+                  <tr>
+                    <td style="padding:12px 14px;">
+                      <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+                        <tr>
+                          <td valign="top">
+                            <a href="{{ row.link }}" style="font-size:15px;font-weight:700;color:#0a0d09;text-decoration:none;">{{ row.store }}</a>
+                            <p style="margin:3px 0 0 0;font-size:12px;line-height:17px;color:#5a6354;">
+                              {{ row.event_date }}{% if row.market %} · {{ row.market }}{% endif %}{% if row.ba %} · {{ row.ba }}{% endif %}
+                            </p>
+                          </td>
+                          <td valign="top" align="right" width="76" style="white-space:nowrap;">
+                            <span style="display:inline-block;padding:4px 9px;border-radius:999px;background:#0a0d09;color:#ffffff;font-size:13px;font-weight:700;">{{ row.conversion }}</span>
+                          </td>
+                        </tr>
+                      </table>
+                      <p style="margin:8px 0 0 0;font-size:13px;line-height:19px;color:#0a0d09;">
+                        {{ row.base_label }} · <strong>{{ row.units }}</strong>{% if row.sample_format %} · {{ row.sample_format }}{% endif %}
+                      </p>
+                      {% if row.products %}
+                      <p style="margin:4px 0 0 0;font-size:12px;line-height:17px;color:#3b4034;"><span style="color:#7a8074;">SKUs:</span> {{ row.products }}</p>
+                      {% endif %}
+                      {% if row.competitor %}
+                      <p style="margin:4px 0 0 0;font-size:12px;line-height:17px;color:#3b4034;"><span style="color:#7a8074;">Competitors mentioned:</span> {{ row.competitor }}</p>
+                      {% endif %}
+                      <p style="margin:8px 0 0 0;"><a href="{{ row.link }}" style="color:#1f6fb2;text-decoration:none;font-size:12px;font-weight:600;">View recap →</a></p>
+                    </td>
+                  </tr>
+                </table>
+                {% endfor %}
+              </td>
+            </tr>
+
+            {% if third_party_rows %}
+            <tr>
+              <td class="pad" style="padding:18px 36px 4px 36px;">
+                <p style="margin:0 0 4px 0;font-family:Georgia,serif;font-weight:700;font-size:16px;">3rd party · not in totals</p>
+                <p style="margin:0 0 10px 0;font-size:12px;line-height:18px;color:#5a6354;">
+                  Approved the same day through the agency link. Shown with their own numbers; none of them are in the figures above.
+                </p>
+                {% for row in third_party_rows %}
+                <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%"
+                       style="margin:0 0 8px 0;border:1px dashed #d9d5c8;border-radius:12px;border-collapse:separate;border-spacing:0;">
+                  <tr>
+                    <td style="padding:10px 14px;">
+                      <a href="{{ row.link }}" style="font-size:14px;font-weight:700;color:#0a0d09;text-decoration:none;">{{ row.store }}</a>
+                      <p style="margin:3px 0 0 0;font-size:12px;line-height:17px;color:#5a6354;">
+                        {{ row.event_date }}{% if row.market %} · {{ row.market }}{% endif %}{% if row.ba %} · {{ row.ba }}{% endif %}
+                      </p>
+                      <p style="margin:6px 0 0 0;font-size:12px;line-height:17px;color:#3b4034;">
+                        {{ row.base_label }} · {{ row.units }} · {{ row.conversion }} conversion
+                      </p>
+                    </td>
+                  </tr>
+                </table>
+                {% endfor %}
+              </td>
+            </tr>
+            {% endif %}
+
+            <tr>
+              <td class="pad" style="padding:18px 36px 4px 36px;">
+                <a href="{{ links.dashboard }}"
+                   style="display:inline-block;background:#c5f546;color:#0a0d09;padding:10px 18px;border-radius:999px;
+                          font-family:Georgia,serif;font-weight:700;font-size:13px;text-decoration:none;box-shadow:0 0 0 1px #b2dd41 inset;">
+                  Open the {{ tenant_name }} dashboard →
+                </a>
+                <p style="margin:12px 0 0 0;font-size:13px;">
+                  <a href="{{ links.insights }}" style="color:#1f6fb2;text-decoration:none;font-weight:600;">Insights</a>
+                  &nbsp;·&nbsp;
+                  <a href="{{ links.recaps }}" style="color:#1f6fb2;text-decoration:none;font-weight:600;">All retail recaps</a>
+                </p>
+              </td>
+            </tr>
+
+            <tr>
+              <td class="pad" style="padding:20px 36px 4px 36px;">
+                <hr style="border:0;border-top:1px solid #ef5a2a;margin:0;" />
+                <p style="margin:14px 0 0 0;font-size:11px;line-height:17px;color:#7a8074;">
+                  How these numbers work: Retail Sampling recaps only; 3rd-party and archived recaps are excluded.
+                  Conversion is units sold (a single can or a pack each count as 1 unit) divided by consumers sampled;
+                  for dry demos (no product tasted) the base is People engaged. Quotes are verbatim excerpts from recap notes.
+                </p>
+                <p style="margin:10px 0 0 0;font-size:12px;line-height:18px;color:#7a8074;font-style:italic;">
+                  Automated daily roll-up from Spark, Ignite's field marketing platform. Questions or a different cadence? Just reply.
+                </p>
+              </td>
+            </tr>
+
+            <tr>
+              <td class="pad" style="padding:18px 36px 24px 36px;background:#f9f9f4;border-top:1px solid #eeeae0;">
+                <p style="margin:0;font-family:'Courier New',monospace;font-size:10px;letter-spacing:0.16em;color:#7a8074;line-height:16px;">
+                  © {% now "Y" %} IGNITE PRODUCTIONS LLC<br/>
+                  <a href="https://admin.igniteproductions.co/legal/terms-of-service.pdf" style="color:#7a8074;">TERMS</a>
+                  &nbsp;·&nbsp;
+                  <a href="https://admin.igniteproductions.co/legal/privacy-policy.pdf" style="color:#7a8074;">PRIVACY</a>
+                </p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>
