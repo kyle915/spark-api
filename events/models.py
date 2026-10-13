@@ -696,6 +696,34 @@ class RequestProduct(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
 
+class RequestCoBrand(models.Model):
+    """A sibling brand sampled alongside the request's own brand.
+
+    Multi-brand activation: the request lives on the host tenant; each row
+    names one other tenant from the host's brand group plus the SKUs (that
+    tenant's own Product catalog) to sample there.
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    request = models.ForeignKey(
+        Request, on_delete=models.CASCADE, related_name="co_brands"
+    )
+    tenant = models.ForeignKey(
+        Tenant, on_delete=models.RESTRICT, related_name="co_brand_requests"
+    )
+    products = models.ManyToManyField(
+        Product, blank=True, related_name="co_brand_requests"
+    )
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["request", "tenant"], name="uniq_request_co_brand"
+            )
+        ]
+
+
 class RequestStoreManager(models.Model):
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
@@ -932,6 +960,16 @@ class Event(AddressGeoSyncMixin, models.Model):
         on_delete=models.RESTRICT,
         null=True,
         related_name="events",
+    )
+    # Multi-brand activation: this event is a co-brand's copy of the host
+    # brand's event, holding only that brand's recap slice. No staffing,
+    # bookings or walk-up code ever hang off it.
+    co_activation_host = models.ForeignKey(
+        "self",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="co_activation_events",
     )
 
     created_by = models.ForeignKey(

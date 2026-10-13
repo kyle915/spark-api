@@ -5823,6 +5823,59 @@ class SetupPivotEnergyCheckinView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class SetupBrandGroupView(View):
+    """GET/POST `/internal/cron/setup-brand-group`.
+
+    FAMUS Energy, Alcohol Armor and Wook Water: tenants (exact slug, then
+    exact request_url_name; created when missing), Retail Sampling + Event
+    Activation programs, catalogs + SKU images, co-activation recap
+    templates, photo buckets, theme/logo, the "sales" trend series, one
+    standing check-in code each (minted once, never rotated) and the shared
+    BrandGroup. Recaps stay admin-approved.
+
+    Params: tenant (one brand slug; default all), skip_images, apply
+    (default DRY RUN).
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _flag(key: str) -> bool:
+            raw = (request.GET.get(key) or request.POST.get(key) or "").lower()
+            return raw in ("1", "true", "yes", "on")
+
+        kwargs: dict = {}
+        tenant = request.GET.get("tenant") or request.POST.get("tenant")
+        if tenant:
+            kwargs["tenant"] = str(tenant)
+        if _flag("skip_images"):
+            kwargs["skip_images"] = True
+        apply_it = _flag("apply")
+        if apply_it:
+            kwargs["apply"] = True
+
+        out = io.StringIO()
+        try:
+            call_command("setup_brand_group", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("setup-brand-group cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc),
+                 "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse({"ok": True, "apply": apply_it, "log": out.getvalue()})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class SetupDudeWipesCheckinView(View):
     """GET/POST `/internal/cron/setup-dude-wipes-checkin`.
 
@@ -10545,6 +10598,7 @@ def _registered_views() -> dict[str, Any]:
         "setup-kalshi-checkin": SetupKalshiCheckinView,
         "setup-pivot-energy-checkin": SetupPivotEnergyCheckinView,
         "setup-dude-wipes-checkin": SetupDudeWipesCheckinView,
+        "setup-brand-group": SetupBrandGroupView,
         "setup-fresh-vintage-checkin": SetupFreshVintageCheckinView,
         "backfill-torch-public-form-sheet": BackfillTorchPublicFormSheetView,
         "inspect-tenants": InspectTenantsView,

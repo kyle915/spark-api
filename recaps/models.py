@@ -593,6 +593,20 @@ class CustomRecap(models.Model):
         related_name="custom_recap",
     )
 
+    # Multi-brand activation. Every recap of one co-activation (the host
+    # brand's recap and one slice per co-brand, each on its own tenant and
+    # event) shares ``co_activation_key``; slices point at the host recap.
+    # Slices are reviewed through the host recap — approving it approves
+    # every slice — so they never show in Needs review on their own.
+    co_activation_key = models.UUIDField(null=True, blank=True, db_index=True)
+    co_activation_parent = models.ForeignKey(
+        "self",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="co_activation_slices",
+    )
+
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,

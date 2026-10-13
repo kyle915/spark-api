@@ -41,6 +41,7 @@ from django.utils.dateparse import parse_datetime
 
 from events.torch_portal import is_torch_tenant
 from tenants.models import normalize_checkin_resources
+from recaps import co_activation
 from recaps.fresh_vintage import inject_roadshow_calcs
 
 logger = logging.getLogger(__name__)
@@ -206,6 +207,29 @@ def serialize_template(event) -> dict | None:
     if tpl is None:
         return None
 
+    sections, include_products = _template_sections(tpl)
+    from recaps.sample_qty import sample_qty_labels
+
+    qty_label, qty_total_label = sample_qty_labels(tpl)
+    return {
+        "id": str(tpl.id),
+        "name": tpl.name,
+        "productSamples": bool(tpl.product_samples),
+        "sampleQtyLabel": qty_label,
+        "sampleQtyTotalLabel": qty_total_label,
+        "sections": sections,
+        "products": _event_products(event) if include_products else [],
+        # Section names asked once PER BRAND on a multi-brand activation.
+        "coBrandSections": [
+            s["name"]
+            for s in sections
+            if s["name"].strip().lower() in co_activation.co_brand_section_names(tpl)
+        ],
+    }
+
+
+def _template_sections(tpl) -> tuple[list[dict], bool]:
+    """``(sections, wants_product_counts)`` for one template, in form order."""
     from recaps.models import CustomField
 
     fields = list(
@@ -243,18 +267,68 @@ def serialize_template(event) -> dict | None:
         and "multi" in (getattr(f.custom_field_type, "name", "") or "").lower()
         for f in fields
     )
-    include_products = bool(tpl.product_samples) or has_products_sampled_pills
-    from recaps.sample_qty import sample_qty_labels
+    return sections, bool(tpl.product_samples) or has_products_sampled_pills
 
-    qty_label, qty_total_label = sample_qty_labels(tpl)
+
+def serialize_co_brand_options(event) -> dict | None:
+    """Sibling brands a BA can add to this activation's recap, or None.
+
+    Each brand carries ONLY its per-brand sections (its own field ids) and
+    its own Product catalog; shared sections are answered once on the host
+    form. ``requestedTenantIds`` pre-selects co-brands named on the request.
+    """
+    tenant = getattr(event, "tenant", None)
+    template = resolve_template_for_event(event)
+    if tenant is None or not co_activation.offers_co_brands(event, template):
+        return None
+    from events.models import Product
+
+    program = co_activation.program_name_for(event, template)
+    brands = []
+    for sibling in co_activation.group_siblings(tenant):
+        tpl = co_activation.sibling_template(sibling, program)
+        if tpl is None:
+            continue
+        per_brand = co_activation.co_brand_section_names(tpl)
+        sections, _ = _template_sections(tpl)
+        products = [
+            row
+            for row in (
+                _product_payload(p)
+                for p in Product.objects.select_related("product_type")
+                .filter(tenant_id=sibling.id)
+                .order_by("product_type__name", "name", "id")
+            )
+            if row is not None
+        ]
+        brands.append(
+            {
+                "tenantId": str(sibling.id),
+                **_brand_payload(sibling),
+                "templateId": str(tpl.id),
+                "sections": [
+                    s for s in sections if s["name"].strip().lower() in per_brand
+                ],
+                "products": products,
+                "requestedProductIds": [
+                    str(pid)
+                    for pid in co_activation.request_co_brand_product_ids(
+                        event, sibling.id
+                    )
+                ],
+            }
+        )
+    if not brands:
+        return None
+    offered = {b["tenantId"] for b in brands}
     return {
-        "id": str(tpl.id),
-        "name": tpl.name,
-        "productSamples": bool(tpl.product_samples),
-        "sampleQtyLabel": qty_label,
-        "sampleQtyTotalLabel": qty_total_label,
-        "sections": sections,
-        "products": _event_products(event) if include_products else [],
+        "groupName": getattr(tenant.brand_group, "name", "") or "",
+        "brands": brands,
+        "requestedTenantIds": [
+            str(tid)
+            for tid in co_activation.requested_co_brand_ids(event)
+            if str(tid) in offered
+        ],
     }
 
 
@@ -1305,6 +1379,7 @@ def submit_checkin_recap(
     store_name: str = "",
     store_number: str = "",
     source_label: str = "",
+    co_brands: list[dict] | None = None,
 ):
     """Create a ``CustomRecap`` (+ field values, photos, product samples) for a
     walk-up BA, attributed to their own user. Replicates the write path in
@@ -1685,6 +1760,17 @@ def submit_checkin_recap(
                 f"recap for event {event.uuid} would have no photo; refusing"
             )
 
+        # None = a page that predates multi-brand recaps: leave any slices.
+        if co_brands is not None:
+            co_activation.write_co_brand_slices(
+                host_recap=recap,
+                host_event=event,
+                ambassador=ambassador,
+                actor=actor,
+                co_brands=co_brands,
+                allowed_blob_prefix=expected_blob_prefix,
+            )
+
     if recap.approved:
         from ambassadors.walkup import approve_booking_for_recap
 
@@ -1949,6 +2035,8 @@ def build_public_context(event, ambassador=None) -> dict:
         # Empty for every brand that hasn't opted in, which is the page's signal
         # to keep its single generic "Photos" grid.
         "photoBuckets": serialize_photo_buckets(event),
+        # Multi-brand activation options (null for standalone brands).
+        "coBrands": serialize_co_brand_options(event),
         # Same key the standing-link landing payload sends. Without it the
         # clocked-in page cannot tell market (Feel Free) from store (Torch)
         # and hides Log this stop.
@@ -2696,7 +2784,12 @@ def find_or_create_walkin_event(
         # its "DUE" clears rather than the walk-in landing on a sibling event.
         exact: list = []
         fuzzy: list = []
-        for ev in Event.objects.filter(tenant=tenant, date__gte=lo, date__lte=hi):
+        for ev in Event.objects.filter(
+            tenant=tenant,
+            date__gte=lo,
+            date__lte=hi,
+            co_activation_host__isnull=True,
+        ):
             # An untyped check-in (brand has no event types at all) keeps the
             # old address+date behaviour and joins whatever is there.
             if type_id is not None and getattr(ev, "event_type_id", None) != type_id:

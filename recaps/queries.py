@@ -1028,6 +1028,9 @@ class CustomRecapQueriesService(SparkGraphQLMixin):
             queryset = queryset.filter(event__address__icontains=event_address)
         if approved is not None:
             queryset = queryset.filter(approved=approved)
+        if approved is False:
+            # Brand slices are reviewed through their host recap.
+            queryset = queryset.filter(co_activation_parent__isnull=True)
         if edited is not None:
             queryset = queryset.filter(updated_by__isnull=not edited)
         if q:

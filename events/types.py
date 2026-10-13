@@ -13,6 +13,7 @@ from tenants.types import SparkUserType, TenantType
 from utils.gcs import extract_blob_name_from_url, public_url
 
 from . import models
+from .co_brands import co_brand_lines, co_brand_rows
 from .market import market_for
 
 if TYPE_CHECKING:
@@ -290,6 +291,13 @@ class Product(Node):
 
 
 @strawberry.type
+class RequestCoBrandType:
+    tenant_pk: int
+    tenant_name: str
+    products: List[Product]
+
+
+@strawberry.type
 class ProductDetailResponse:
     success: bool
     message: str
@@ -524,7 +532,25 @@ class Request(Node):
                 if name and name not in seen:
                     seen.add(name)
                     names.append(name)
+            for line in co_brand_lines(self):
+                if line not in seen:
+                    seen.add(line)
+                    names.append(line)
             return names
+
+        return await sync_to_async(_go)()
+
+    @strawberry.field(description="Other brands sampled on a multi-brand activation.")
+    async def co_brands(self) -> List["RequestCoBrandType"]:
+        def _go() -> list[RequestCoBrandType]:
+            return [
+                RequestCoBrandType(
+                    tenant_pk=row.tenant_id,
+                    tenant_name=row.tenant.name,
+                    products=sorted(row.products.all(), key=lambda p: p.name or ""),
+                )
+                for row in co_brand_rows(self)
+            ]
 
         return await sync_to_async(_go)()
 

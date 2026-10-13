@@ -16,6 +16,7 @@ from receipts.schema import ReceiptQueryClient, ReceiptMutationsClient
 from billing.schema import BillingQueryClient, BillingMutationsClient
 from ambassadors.schema import AmbassadorQueryClient, AmbassadorMutationsClient
 from tenants.schema import QueryClients, MutationClients
+from tenants.brand_groups import BrandGroupMutations, BrandGroupQueries
 from tenants.dashboard.schema import DashboardQueries
 from tenants.dashboard.mutations import DashboardMutations
 from jobs.schema import ClientJobMutations, ClientJobQueries
@@ -38,6 +39,7 @@ QueryClients = merge_types(
         QueryClients,
         ClientJobQueries,
         DashboardQueries,
+        BrandGroupQueries,
         GCSQuery,
         AcademyQueryClient,
         WingspanQueryClient,
@@ -60,6 +62,7 @@ MutationClients = merge_types(
         ClientJobMutations,
         AmbassadorMutationsClient,
         DashboardMutations,
+        BrandGroupMutations,
         AcademyMutationsClient,
         ChatMutationsClient,
         AnnouncementMutationsClient,
