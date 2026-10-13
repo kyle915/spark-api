@@ -60,6 +60,10 @@ _COMPETITOR_MAX_CHARS = 90
 # "No", "N/A", "none" — a blank answer, not a quote worth surfacing.
 _MIN_QUOTE_CHARS = 12
 _EMPTY_ANSWERS = frozenset({"", "none", "n/a", "na", "no", "-", "—", "nothing"})
+_QUOTE_MARKS = "\"'“”‘’ "
+_NON_ACTIVE_RE = re.compile(r"\bnon-?\s?active\b", re.IGNORECASE)
+_TITLE_PREFIX_RE = re.compile(r"^(?:retail\s+sampling|retail\s+demo)\s*[-–—:]\s*", re.IGNORECASE)
+_TITLE_DATE_SUFFIX_RE = re.compile(r"\s*[·|-]\s*\d{4}-\d{2}-\d{2}$")
 
 
 @dataclass(frozen=True)
@@ -104,7 +108,7 @@ class DailyRetailRollup:
     rows: list[RollupRow] = field(default_factory=list)
     third_party_rows: list[RollupRow] = field(default_factory=list)
     top_store: RollupRow | None = None
-    top_sku: tuple[str, int, str] | None = None
+    top_sku: tuple[str, int] | None = None
     quotes: list[RollupQuote] = field(default_factory=list)
 
     @property
@@ -188,7 +192,7 @@ def _structured_samples(custom_ids: list[int]) -> dict[int, list[tuple[str, int]
 
 def _custom_rows(
     conv_rows: list[dict], *, third_party: bool = False
-) -> tuple[list[RollupRow], dict[int, list[tuple[str, str]]], dict[int, list[tuple[str, int]]]]:
+) -> tuple[list[RollupRow], dict[int, list[tuple[str, str]]]]:
     ids = [int(r["id"]) for r in conv_rows]
     recaps = {
         r.id: r
@@ -218,7 +222,7 @@ def _custom_rows(
             RollupRow(
                 kind="custom",
                 recap_id=recap.id,
-                store=_clean(recap.name) or "Retail demo",
+                store=_store_title(recap.name),
                 event_date=event_date.date() if hasattr(event_date, "date") else event_date,
                 market=market_for(recap.event).label or "",
                 ba=_ba_name(recap) or _clean(recap.source_label),
@@ -234,7 +238,7 @@ def _custom_rows(
                 third_party=third_party,
             )
         )
-    return rows, fields_by_recap, structured
+    return rows, fields_by_recap
 
 
 def _legacy_rows(conv_rows: list[dict]) -> list[RollupRow]:
@@ -256,7 +260,7 @@ def _legacy_rows(conv_rows: list[dict]) -> list[RollupRow]:
             RollupRow(
                 kind="legacy",
                 recap_id=recap.id,
-                store=_clean(recap.name) or "Retail demo",
+                store=_store_title(recap.name),
                 event_date=event_date.date() if hasattr(event_date, "date") else event_date,
                 market=market_for(recap.event).label or "",
                 ba=_ba_name(recap),
@@ -302,25 +306,37 @@ def _sort_key(row: RollupRow) -> tuple:
     return (row.event_date or datetime.date.min, row.store.lower())
 
 
-def _top_sku(
-    rows: list[RollupRow], structured: dict[int, list[tuple[str, int]]]
-) -> tuple[str, int, str] | None:
-    """Most-sampled SKU: by structured sample qty when logged, else by demos."""
-    qty: Counter[str] = Counter()
-    for items in structured.values():
-        for name, n in items:
-            qty[name] += n
-    if qty:
-        name, n = qty.most_common(1)[0]
-        return name, n, "samples"
+def _store_title(name: str | None) -> str:
+    """Recap title without workflow prefixes / shift-date suffixes."""
+    text = _clean(name)
+    text = _TITLE_PREFIX_RE.sub("", text)
+    text = _TITLE_DATE_SUFFIX_RE.sub("", text)
+    return text.strip(" ,;-–—") or "Retail demo"
+
+
+def _sku_name(value: str) -> str:
+    """``"Seltzer 10mg — Strawberry Lemonade 10mg 4-Pack"`` → the SKU after the category."""
+    return _clean(value.rsplit(" — ", 1)[-1])
+
+
+def _top_sku(rows: list[RollupRow]) -> tuple[str, int] | None:
+    """Active SKU listed on the most of the day's demos (non-active samples skipped).
+
+    Counted per demo rather than by logged sample quantity: only some recaps
+    log per-SKU quantities, so summing them would rank on partial data.
+    """
     demos: Counter[str] = Counter()
     for row in rows:
-        for name in dict.fromkeys(row.products):
-            demos[name] += 1
+        for name in dict.fromkeys(_sku_name(p) for p in row.products):
+            if name and not _NON_ACTIVE_RE.search(name):
+                demos[name] += 1
     if not demos:
         return None
-    name, n = sorted(demos.items(), key=lambda kv: (-kv[1], kv[0]))[0]
-    return name, n, "demos"
+    return sorted(demos.items(), key=lambda kv: (-kv[1], kv[0].lower()))[0]
+
+
+def _quote_text(value: str) -> str:
+    return _excerpt(value, _QUOTE_MAX_CHARS).strip(_QUOTE_MARKS).strip()
 
 
 def _quotes(
@@ -336,9 +352,7 @@ def _quotes(
             raw = _first(fields_by_recap.get(row.recap_id, []), pattern)
             if not _is_answer(raw) or len(_clean(raw)) < _MIN_QUOTE_CHARS:
                 continue
-            out.append(
-                RollupQuote(text=_excerpt(raw, _QUOTE_MAX_CHARS), ba=row.ba, store=row.store)
-            )
+            out.append(RollupQuote(text=_quote_text(raw), ba=row.ba, store=row.store))
     return out
 
 
@@ -354,9 +368,9 @@ def build_daily_retail_rollup(
     )
     custom_conv = [r for r in conv["recaps"] if r["kind"] == "custom"]
     legacy_conv = [r for r in conv["recaps"] if r["kind"] == "legacy"]
-    custom_rows, fields_by_recap, structured = _custom_rows(custom_conv)
+    custom_rows, fields_by_recap = _custom_rows(custom_conv)
     rows = sorted(custom_rows + _legacy_rows(legacy_conv), key=_sort_key)
-    third_party_rows, _, _ = _custom_rows(
+    third_party_rows, _ = _custom_rows(
         _third_party_conv_rows(tenant_id, window), third_party=True
     )
 
@@ -375,6 +389,6 @@ def build_daily_retail_rollup(
         rows=rows,
         third_party_rows=sorted(third_party_rows, key=_sort_key),
         top_store=top_store,
-        top_sku=_top_sku(rows, structured),
+        top_sku=_top_sku(rows),
         quotes=_quotes(rows, fields_by_recap),
     )
