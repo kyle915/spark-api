@@ -31,6 +31,12 @@ _GLUED_TRAILING_ZIP_RE = re.compile(r"(?<![A-Za-z])([A-Za-z]{2})(\d{5}(?:-\d{4})
 _TRAILING_CODE_RE = re.compile(r"(?:^|[\s.,])([A-Za-z]{2})$")
 _TRAILING_CODE_SHORT_NUMBER_RE = re.compile(r"(?:^|[\s.,])([A-Za-z]{2})[\s,]+\d{2,4}$")
 _STATE_NAMES_LONGEST_FIRST = sorted(US_STATE_NAME_TO_CODE, key=len, reverse=True)
+# "Houston, TX 77065 Unit C336": a unit typed after the zip.
+_UNIT_AFTER_ZIP_RE = re.compile(
+    r"(?<!\d)(\d{5}(?:-\d{4})?)[\s,]+(?:unit|suite|ste|apt|apartment|bldg|building|room|rm|#)"
+    r"\.?\s*#?\s*[A-Za-z0-9-]+\s*$",
+    re.IGNORECASE,
+)
 
 
 _VENUE_SEPARATOR_RE = re.compile(r"\s+(?:-|–|—|//|\|)\s+")
@@ -153,6 +159,7 @@ def parse_address_geo(address: str | None) -> AddressGeo:
     """
     if not address:
         return AddressGeo(None, None, None)
+    address = _UNIT_AFTER_ZIP_RE.sub(r"\1", address.strip())
     segments = [
         s.strip()
         for s in re.sub(r"[\t ]+", " ", address).split(",")

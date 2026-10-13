@@ -49,6 +49,9 @@ class JobBoardGig(models.Model):
     # against it, whether they booked here or an admin assigned them.
     open_shifts = models.PositiveSmallIntegerField()
     listed = models.BooleanField(default=True)
+    # The only notes BAs see (board + booking email). Plan and request notes
+    # are internal: they name BAs and carry client asks.
+    public_notes = models.TextField(blank=True, default="")
     updated_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,

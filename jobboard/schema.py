@@ -18,7 +18,7 @@ from django.db import transaction
 from events.demo_cancel import request_display_code
 from events.envelopes import _admin_request_url
 from events.event_confirmations import public_page_base
-from events.field_marketing import MARKETS, _active_tenant_for_user, _user_can_pick_any_tenant
+from events.field_marketing import _active_tenant_for_user, _user_can_pick_any_tenant
 from events.models import Request
 from events.mutations import (
     _notify_notification_group_users_for_request,
@@ -27,6 +27,7 @@ from events.mutations import (
     _resolve_request_location,
 )
 from jobboard.gigs import (
+    MARKET_LABELS,
     board_for_tenant,
     date_label,
     default_open_shifts,
@@ -49,9 +50,6 @@ from utils.graphql.permissions import StrictIsAuthenticated
 from utils.utils import build_mutation_response
 
 logger = logging.getLogger(__name__)
-
-_MARKET_LABELS = {key: label for key, label, *_ in MARKETS}
-
 
 @strawberry.type(name="JobBoardBooking")
 class JobBoardBookingType:
@@ -76,6 +74,7 @@ class JobBoardGigType:
     open_shifts: int
     default_open_shifts: int
     listed: bool
+    public_notes: str
     booked: int
     spots_left: int
     bookings: list[JobBoardBookingType]
@@ -123,13 +122,14 @@ def _gig_type(gig, bookings: list[JobBoardBooking]) -> JobBoardGigType:
         venue=gig.venue,
         date_label=date_label(gig),
         time_label=time_label(gig),
-        market=gig.area or _MARKET_LABELS.get(gig.plan.market, gig.plan.market or ""),
+        market=gig.area,
         type_label=gig.type_label,
         request_code=request_display_code(request.id),
         request_url=_admin_request_url(request),
         open_shifts=gig.open_shifts,
         default_open_shifts=default_open_shifts(gig.plan),
         listed=gig.listed,
+        public_notes=gig.public_notes,
         booked=gig.booked,
         spots_left=gig.spots_left,
         bookings=[_booking_type(b) for b in bookings],
@@ -162,7 +162,7 @@ def _pending_type(plan) -> JobBoardPendingPlanType:
         id=strawberry.ID(str(plan.uuid)),
         name=plan.name,
         starts_on=plan.starts_on.isoformat() if plan.starts_on else None,
-        market=_MARKET_LABELS.get(plan.market, plan.market or ""),
+        market=MARKET_LABELS.get(plan.market, plan.market or ""),
         request_code=request_display_code(plan.request_id),
         request_url=_admin_request_url(plan.request),
         reason=reason.code,
@@ -197,6 +197,7 @@ class SetJobBoardGigInput(SparkGraphQLInput):
     gig_id: strawberry.ID
     open_shifts: int | None = None
     listed: bool | None = None
+    public_notes: str | None = None
 
 
 @strawberry.input
@@ -242,7 +243,13 @@ def _set_gig(user, input: SetJobBoardGigInput) -> JobBoardGigType:
         raise GraphQLError("That gig is no longer upcoming.")
     if input.open_shifts is not None and input.open_shifts < 0:
         raise GraphQLError("Open shifts can't be negative.")
-    set_gig(gig, open_shifts=input.open_shifts, listed=input.listed, actor=user)
+    set_gig(
+        gig,
+        open_shifts=input.open_shifts,
+        listed=input.listed,
+        public_notes=input.public_notes,
+        actor=user,
+    )
     bookings = list(
         JobBoardBooking.objects.filter(event=gig.event, cancelled_at__isnull=True).order_by("created_at")
     )

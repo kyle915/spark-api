@@ -260,7 +260,7 @@ class TestJobBoard(EventsGraphQLTestCase):
         for label in ("BA Sampling Guide", "Torch Demo Playbook", "Product Sales Sheets"):
             assert label in html
         assert "What to bring" in html
-        assert "Sampling tent at the north entrance" in html
+        assert "Sampling tent at the north entrance" not in html
         assert "spark ba app" not in html.lower()
 
         [internal] = _of(sent, JobBoardBookingInternalMailer)
@@ -364,6 +364,53 @@ class TestJobBoard(EventsGraphQLTestCase):
 
         # The same BA can book again once the slot reopens.
         assert self._apply([gig.uuid]).json()["results"][0]["status"] == "booked"
+
+    def test_board_and_booking_email_show_only_public_notes(self, sent):
+        gig = self._gig()
+        em.Request.objects.filter(id=gig.request_id).update(
+            notes="*Please book Carlos Espana and Esmeralda Alvarado*"
+        )
+        em.FieldMarketingEvent.objects.filter(request=gig.request).update(
+            notes="Please schedule Carlos, Pedro and Esmeralda",
+            support_scope="I will send Carlos and Esmeralda a sheet",
+        )
+        body = self._board().content.decode()
+        assert self._board().json()["gigs"][0]["brief"] == ""
+        for internal in ("Carlos", "Esmeralda", "Sampling tent"):
+            assert internal not in body
+
+        updated = _set_gig(
+            self.admin,
+            SetJobBoardGigInput(
+                tenant_id=str(self.tenant.id),
+                gig_id=str(gig.uuid),
+                public_notes="  Park in lot C. Black Torch tee.  ",
+            ),
+        )
+        assert updated.public_notes == "Park in lot C. Black Torch tee."
+        assert updated.open_shifts == 2 and updated.listed is True
+        assert self._board().json()["gigs"][0]["brief"] == "Park in lot C. Black Torch tee."
+
+        self._apply([gig.uuid])
+        [ba] = _of(sent, JobBoardBookedMailer)
+        html = ba.render_template()
+        assert "Park in lot C. Black Torch tee." in html
+        assert "250 NW 24th St, Miami, FL 33127" in html
+        for internal in ("Carlos", "Esmeralda", "Pedro"):
+            assert internal not in html
+
+    def test_gig_city_comes_from_address_with_unit_after_zip(self):
+        self._gig(
+            "LOAD IN / SET UP for RARE Steak Championship Houston",
+            address="10015 N Eldridge Pkwy, Houston, TX 77065 Unit C336",
+        )
+        [gig] = self._board().json()["gigs"]
+        assert gig["market"] == "Houston, TX"
+        assert "Eldridge" not in self._board().content.decode()
+
+    def test_gig_without_parseable_address_falls_back_to_plan_market(self):
+        self._gig("Pop-up", address="Somewhere downtown")
+        assert self._board().json()["gigs"][0]["market"] == "Miami"
 
     def test_brand_users_cannot_reach_admin_controls(self):
         gig = self._gig()
