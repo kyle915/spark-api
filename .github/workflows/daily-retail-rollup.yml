@@ -8,9 +8,11 @@ name: Daily retail roll-up
 # (set via the "Set daily retail roll-up" workflow) and recipients get mail.
 # Empty days are skipped; a day is never sent twice (TenantDailyRollupSend).
 #
-# Schedule: 14:05 and 15:05 UTC with not_before=7, so the send lands at
-# 7:05 AM Pacific in both PDT and PST (the earlier fire skips in winter, the
-# later one dedupes in summer).
+# Schedule: 19:00, 20:00 and 21:00 UTC gated to 12:00–13:59 Pacific
+# (not_before=12, not_after=14), so the send lands at 12:00 PM Pacific in both
+# PDT and PST. PDT: 12 PM sends, 1 PM is a backup for a dropped/late noon run,
+# 2 PM skips. PST: 11 AM skips (unless GitHub delays it past noon), 12 PM
+# sends, 1 PM is the backup. The per-day stamp keeps it to one email.
 #
 # Manual runs default to DRY RUN. preview_to sends ONE copy to an
 # @igniteproductions.co address even while the tenant is off; include_html
@@ -21,8 +23,9 @@ name: Daily retail roll-up
 
 on:
   schedule:
-    - cron: "5 14 * * *"
-    - cron: "5 15 * * *"
+    - cron: "0 19 * * *"
+    - cron: "0 20 * * *"
+    - cron: "0 21 * * *"
   workflow_dispatch:
     inputs:
       tenant:
@@ -71,8 +74,10 @@ jobs:
             exit 1
           fi
           NOT_BEFORE=""
+          NOT_AFTER=""
           if [ "$SCHEDULED" = "true" ]; then
-            NOT_BEFORE="7"
+            NOT_BEFORE="12"
+            NOT_AFTER="14"
           fi
           STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
             -X POST "$CRON_URL" \
@@ -82,6 +87,7 @@ jobs:
             --data-urlencode "preview_to=$PREVIEW_TO" \
             --data-urlencode "include_html=$INCLUDE_HTML" \
             --data-urlencode "not_before=$NOT_BEFORE" \
+            --data-urlencode "not_after=$NOT_AFTER" \
             -H "X-Cron-Secret: $CRON_SECRET")
           echo "HTTP $STATUS"
           mkdir -p /tmp/rollup
