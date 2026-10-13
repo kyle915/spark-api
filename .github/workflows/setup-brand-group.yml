@@ -1,0 +1,56 @@
+name: Setup brand group
+
+# FAMUS Energy / Alcohol Armor / Wook Water: tenants, Retail Sampling + Event
+# Activation programs, catalogs + SKU images, co-activation recap templates,
+# photo buckets, theme/logo, standing check-in codes (minted once, never
+# rotated) and the shared brand group. Idempotent.
+#
+# RUN apply=false FIRST AND READ THE LOG.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tenant:
+        description: "One brand slug (blank = all three)"
+        required: false
+        default: ""
+      skip_images:
+        description: "Skip SKU image / logo downloads"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+      apply:
+        description: "Actually write (read the dry run first)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+jobs:
+  setup-brand-group:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire setup-brand-group cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/setup-brand-group
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          TENANT: ${{ github.event.inputs.tenant }}
+          SKIP_IMAGES: ${{ github.event.inputs.skip_images }}
+          APPLY: ${{ github.event.inputs.apply }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            --max-time 600 \
+            -X POST "$CRON_URL" \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            --data-urlencode "tenant=$TENANT" \
+            --data-urlencode "skip_images=$SKIP_IMAGES" \
+            --data-urlencode "apply=$APPLY")
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          echo ""
+          [ "$STATUS" != "200" ] && exit 1 || exit 0
