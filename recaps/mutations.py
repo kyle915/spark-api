@@ -14,6 +14,7 @@ from django.utils import timezone as django_timezone
 from django.conf import settings
 from django.utils.text import slugify
 
+from recaps import co_activation
 from recaps import types
 from recaps import models
 from recaps import inputs
@@ -3645,16 +3646,30 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
             record_label="Custom recap",
         )
 
+        # A multi-brand activation is reviewed once: every brand slice moves
+        # with the host recap, whichever of them was clicked.
+        siblings = await sync_to_async(co_activation.activation_recaps)(custom_recap)
+        for sibling in siblings:
+            if sibling.id != custom_recap.id:
+                await self._assert_caller_authorized_for_recap_tenant(
+                    sibling.tenant_id,
+                    action="approve",
+                    block_ambassadors=True,
+                    record_label="Custom recap",
+                )
+
         @sync_to_async
         def approve_custom_recap_transaction():
             with transaction.atomic():
-                _stamp_recap_approval(
-                    custom_recap, approved=self.input.approved, actor=self.user
-                )
-                custom_recap.save()
-                return custom_recap
+                for row in siblings:
+                    _stamp_recap_approval(
+                        row, approved=self.input.approved, actor=self.user
+                    )
+                    row.save()
+                return next(r for r in siblings if r.id == custom_recap.id)
 
         custom_recap = await approve_custom_recap_transaction()
+        slice_ids = [r.id for r in siblings if r.id != custom_recap.id]
 
         # Approving the recap is what LOGS THE HOURS. Walk-ups (mobile code,
         # web check-in, standing link) sit at is_approved=False and stay out of
@@ -3665,9 +3680,10 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
         if self.input.approved:
             from ambassadors.walkup import approve_booking_for_recap
 
+            # Hours live on the host brand's event, never a co-brand copy.
             changed = await sync_to_async(approve_booking_for_recap)(
-                ambassador_id=custom_recap.ambassador_id,
-                event_id=custom_recap.event_id,
+                ambassador_id=siblings[0].ambassador_id,
+                event_id=siblings[0].event_id,
                 actor=self.user,
             )
             if changed.get("bookings_approved"):
@@ -3701,6 +3717,29 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
                     "recap-approved notification failed for custom_recap=%s",
                     custom_recap.id,
                 )
+            # Each brand slice mails its OWN brand's recipients (its event
+            # and tenant), never the host brand's.
+            for slice_id in slice_ids:
+                slice_recap = await sync_to_async(
+                    models.CustomRecap.objects.select_related(
+                        "event",
+                        "event__tenant",
+                        "event__rmm_asigned",
+                        "event__timezone",
+                        "job",
+                        "retailer",
+                        "timezone",
+                        "ambassador",
+                        "ambassador__user",
+                    ).get
+                )(id=slice_id)
+                try:
+                    await _kick_recap_approved_notify(slice_recap, "custom")
+                except Exception:
+                    logger.exception(
+                        "recap-approved notification failed for custom_recap=%s",
+                        slice_id,
+                    )
 
         return custom_recap
 
@@ -3801,25 +3840,28 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
             record_label="Custom recap",
         )
 
+        siblings = await sync_to_async(co_activation.activation_recaps)(custom_recap)
+
         @sync_to_async
         def archive_custom_recap_transaction():
             with transaction.atomic():
-                _stamp_recap_archive(
-                    custom_recap,
-                    archived=True,
-                    actor=self.user,
-                    reason=self.input.reason,
-                )
-                custom_recap.save(
-                    update_fields=[
-                        "archived_at",
-                        "archived_by",
-                        "archive_reason",
-                        "updated_by",
-                        "updated_at",
-                    ]
-                )
-                return custom_recap
+                for row in siblings:
+                    _stamp_recap_archive(
+                        row,
+                        archived=True,
+                        actor=self.user,
+                        reason=self.input.reason,
+                    )
+                    row.save(
+                        update_fields=[
+                            "archived_at",
+                            "archived_by",
+                            "archive_reason",
+                            "updated_by",
+                            "updated_at",
+                        ]
+                    )
+                return next(r for r in siblings if r.id == custom_recap.id)
 
         return await archive_custom_recap_transaction()
 
@@ -3843,20 +3885,23 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
             record_label="Custom recap",
         )
 
+        siblings = await sync_to_async(co_activation.activation_recaps)(custom_recap)
+
         @sync_to_async
         def unarchive_custom_recap_transaction():
             with transaction.atomic():
-                _stamp_recap_archive(custom_recap, archived=False, actor=self.user)
-                custom_recap.save(
-                    update_fields=[
-                        "archived_at",
-                        "archived_by",
-                        "archive_reason",
-                        "updated_by",
-                        "updated_at",
-                    ]
-                )
-                return custom_recap
+                for row in siblings:
+                    _stamp_recap_archive(row, archived=False, actor=self.user)
+                    row.save(
+                        update_fields=[
+                            "archived_at",
+                            "archived_by",
+                            "archive_reason",
+                            "updated_by",
+                            "updated_at",
+                        ]
+                    )
+                return next(r for r in siblings if r.id == custom_recap.id)
 
         return await unarchive_custom_recap_transaction()
 
@@ -4359,12 +4404,23 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
             record_label="Custom recap",
         )
 
+        siblings = await sync_to_async(co_activation.activation_recaps)(custom_recap)
+        for sibling in siblings:
+            if sibling.id != custom_recap.id:
+                await self._assert_caller_authorized_for_recap_tenant(
+                    sibling.tenant_id,
+                    action="decline",
+                    block_ambassadors=True,
+                    record_label="Custom recap",
+                )
+
         @sync_to_async
         def decline_custom_recap_transaction():
             with transaction.atomic():
-                _stamp_recap_approval(custom_recap, approved=False, actor=self.user)
-                custom_recap.save()
-                return custom_recap
+                for row in siblings:
+                    _stamp_recap_approval(row, approved=False, actor=self.user)
+                    row.save()
+                return next(r for r in siblings if r.id == custom_recap.id)
 
         return await decline_custom_recap_transaction()
 

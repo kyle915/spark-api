@@ -476,6 +476,14 @@ class CreateRequestProductInput(SparkGraphQLInput):
 
 
 @strawberry.input
+class CoBrandInput(SparkGraphQLInput):
+    """One sibling brand on a multi-brand activation, with its SKUs."""
+
+    tenant_id: strawberry.ID
+    product_ids: List[strawberry.ID]
+
+
+@strawberry.input
 class CreateRequestInput(BaseNameableInput):
     date: str
     start_time: str
@@ -526,6 +534,8 @@ class CreateRequestInput(BaseNameableInput):
     store_manager_phone: str | None = None
     details: List[CreateRequestDetailInput]
     products: List[CreateRequestProductInput]
+    # Multi-brand activation. Not a Request field — saved as RequestCoBrand.
+    co_brands: List[CoBrandInput] | None = None
 
 
 @strawberry.input
@@ -559,6 +569,8 @@ class UpdateRequestInput(BaseNameableInput):
     store_manager_phone: str | None = None
     details: List[CreateRequestDetailInput]
     products: List[CreateRequestProductInput]
+    # Multi-brand activation. Not a Request field — saved as RequestCoBrand.
+    co_brands: List[CoBrandInput] | None = None
 
 
 @strawberry.input
@@ -609,6 +621,8 @@ class CreateRequestWithDependenciesInput(BaseNameableInput):
     store_manager_phone: str
     details: List[CreateRequestDetailInput]
     products: List[CreateRequestProductInput]
+    # Multi-brand activation. Not a Request field — saved as RequestCoBrand.
+    co_brands: List[CoBrandInput] | None = None
 
 
 @strawberry.input

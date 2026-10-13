@@ -975,6 +975,11 @@ def public_checkin_recap(request: HttpRequest, code: str) -> HttpResponse:
                 else ""
             ),
             store_number=_str_field(data, "storeNumber"),
+            co_brands=(
+                data.get("coBrands")
+                if isinstance(data.get("coBrands"), list)
+                else None
+            ),
         )
     except checkin_web.RecapNeedsAPhoto as exc:
         # The BA's to fix, not a server fault — so a 400 carrying the SAME

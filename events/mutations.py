@@ -42,6 +42,7 @@ from .routing import (
     ROUTED_TENANT_SLUGS,
     suppress_cc,
 )
+from .co_brands import replace_request_co_brands
 from .demo_cancel import DemoCancelError, request_demo_cancellation
 from .request_soft_delete import soft_delete_request
 from .torch_portal import (
@@ -819,7 +820,7 @@ class EventMutations:
             request_service.auto_approve = True
 
             request_params: dict[str, Any] = request_input.to_dict(
-                ["tenant_id", "id", "details", "products"]
+                ["tenant_id", "id", "details", "products", "notify_requestor", "co_brands"]
             )
             request_params = request_service._normalize_id_fields(request_params)
 
@@ -2389,7 +2390,9 @@ class RequestMutationService(BaseMutationService):
             if self.is_public and self.input.tenant_id:
                 self.tenant_id = self.input.tenant_id
 
-        params: dict[str, Any] = self.input.to_dict(["tenant_id", "id", "store_manager_id"])
+        params: dict[str, Any] = self.input.to_dict(
+            ["tenant_id", "id", "store_manager_id", "co_brands"]
+        )
         params = self._normalize_id_fields(params)
         for key, value in params.items():
             if not hasattr(model, key):
@@ -2404,6 +2407,7 @@ class RequestMutationService(BaseMutationService):
         _localize_model_times_to_own_tz(model)
         model.save()
         self._replace_request_products_sync(model)
+        replace_request_co_brands(model, getattr(self.input, "co_brands", None))
         self._sync_request_store_manager(model)
         return model
 
@@ -2892,6 +2896,7 @@ class RequestWithDependenciesMutationService(BaseMutationService):
                         product.created_by = self.user
                     product.save()
 
+            replace_request_co_brands(request, getattr(self.input, "co_brands", None))
             return request
 
     async def save(self) -> models.Request:
@@ -2906,7 +2911,7 @@ class RequestWithDependenciesMutationService(BaseMutationService):
         # set the parameters
         params: dict[str, Any] = self.input.to_dict(
             # notify_requestor is a create-time option, not a Request field.
-            ["tenant_id", "id", "details", "products", "notify_requestor"]
+            ["tenant_id", "id", "details", "products", "notify_requestor", "co_brands"]
         )
         params = self._normalize_id_fields(params)
 

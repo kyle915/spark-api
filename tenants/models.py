@@ -473,6 +473,15 @@ class Tenant(Asyncable, models.Model):
         default=False,
         help_text="When ON, this brand receives the weekly field-marketing digest email (sent to recap_recipient_emails). OFF by default — opt-in only.",
     )
+    # Sibling brands Ignite runs as one program (multi-brand activations,
+    # per-brand recap slices, the Compare brands tab). Null = standalone.
+    brand_group = models.ForeignKey(
+        "tenants.BrandGroup",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="tenants",
+    )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.RESTRICT,
@@ -520,6 +529,58 @@ class Tenant(Asyncable, models.Model):
         is what makes the feature mail nobody until it is explicitly set up.
         """
         return parse_recipient_emails(self.recap_recipient_emails)
+
+
+class BrandGroup(models.Model):
+    """Tenants Ignite runs together (e.g. brands sold by one parent company).
+
+    Drives the request form's multi-brand selector, per-brand recap slices
+    on co-activations, and the Compare brands tab. Membership never grants
+    one brand's client users access to another brand's data — that takes
+    an explicit :class:`BrandGroupAccess` row (Ignite staff always see it).
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    name = models.CharField(max_length=100)
+    slug = models.SlugField(max_length=60, unique=True)
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self) -> str:
+        return self.name
+
+    def member_tenants(self):
+        return Tenant.objects.filter(brand_group_id=self.id).order_by("name", "id")
+
+
+class BrandGroupAccess(models.Model):
+    """Lets one (client) user see a brand group's Compare tab."""
+
+    id = models.BigAutoField(primary_key=True)
+    brand_group = models.ForeignKey(
+        BrandGroup, on_delete=models.CASCADE, related_name="access_grants"
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="brand_group_access",
+    )
+    granted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="brand_group_access_granted",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["brand_group", "user"], name="uniq_brand_group_access"
+            )
+        ]
 
 
 class TenantTheme(models.Model):

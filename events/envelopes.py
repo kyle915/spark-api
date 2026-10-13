@@ -4,6 +4,7 @@ from django.conf import settings
 
 from utils.mailer import Envelope, Mailer
 from events import models
+from events.co_brands import co_brand_lines
 
 
 def _apply_offset(
@@ -85,6 +86,10 @@ def _request_product_names(request) -> list[str]:
             if name and name not in seen:
                 seen.add(name)
                 names.append(name)
+        for line in co_brand_lines(request):
+            if line not in seen:
+                seen.add(line)
+                names.append(line)
         return names
     except Exception:
         return []

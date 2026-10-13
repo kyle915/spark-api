@@ -492,6 +492,35 @@ async def _resolve_recap_type(instance) -> str:
 
 
 @strawberry.type
+class CoActivationInfo:
+    key: str
+    is_primary: bool
+    brand_names: List[str]
+
+
+def _co_activation_info(recap) -> CoActivationInfo | None:
+    key = getattr(recap, "co_activation_key", None)
+    if not key:
+        return None
+    others = (
+        models.CustomRecap.objects.filter(co_activation_key=key)
+        .exclude(id=recap.id)
+        .select_related("tenant")
+        .order_by("id")
+    )
+    names: list[str] = []
+    for row in others:
+        name = (row.tenant.name or "").strip() if row.tenant_id else ""
+        if name and name not in names:
+            names.append(name)
+    return CoActivationInfo(
+        key=str(key),
+        is_primary=recap.co_activation_parent_id is None,
+        brand_names=names,
+    )
+
+
+@strawberry.type
 class RecapMetricEditType:
     id: strawberry.ID
     batch: str
@@ -1296,6 +1325,15 @@ class CustomRecap(Node):
     async def metric_edits(self, info: strawberry.Info) -> List[RecapMetricEditType]:
         """Staff corrections to this recap, newest first (admins only)."""
         return await _metric_edits_for_admin(info, custom_recap_id=self.pk)
+
+    @strawberry.field(
+        description=(
+            "Set when this recap is one brand's slice of a multi-brand "
+            "activation. Names only — never another brand's numbers."
+        )
+    )
+    async def co_activation(self) -> CoActivationInfo | None:
+        return await sync_to_async(_co_activation_info)(self)
 
     # ---- Lightweight list-card aggregates -----------------------------
     #

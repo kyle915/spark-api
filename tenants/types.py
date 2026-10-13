@@ -3,7 +3,7 @@ import strawberry
 import strawberry_django
 from asgiref.sync import sync_to_async
 from utils.gcs import extract_blob_name_from_url, public_url
-from .models import Tenant, Role, User, TenantTheme, SupportTicket
+from .models import ARCHIVED_NAME_PREFIX, Tenant, Role, User, TenantTheme, SupportTicket
 from strawberry.relay import Node
 
 
@@ -52,6 +52,69 @@ def _checkin_event_type_names(tenant) -> list[str]:
     return names
 
 
+def _tenant_image_url(tenant) -> str | None:
+    field_file = getattr(tenant, "image", None)
+    if not field_file:
+        return None
+    blob = getattr(field_file, "name", None) or str(field_file)
+    return public_url(extract_blob_name_from_url(blob))
+
+
+def _tenant_primary_color(tenant) -> str | None:
+    for theme in tenant.themes.all():
+        value = (theme.css_variables or {}).get("--color-primary")
+        if value:
+            return str(value)
+    return None
+
+
+@strawberry.type
+class BrandGroupBrandType:
+    pk: int
+    name: str
+    slug: str
+    request_url_name: str | None
+    image: str | None
+    primary_color: str | None
+    is_self: bool
+
+
+@strawberry.type
+class BrandGroupType:
+    pk: int
+    name: str
+    slug: str
+    brands: list[BrandGroupBrandType]
+
+
+def _brand_group_for(tenant) -> BrandGroupType | None:
+    group = tenant.brand_group
+    if group is None:
+        return None
+    members = list(
+        group.tenants.exclude(name__istartswith=ARCHIVED_NAME_PREFIX)
+        .prefetch_related("themes")
+        .order_by("name")
+    )
+    return BrandGroupType(
+        pk=group.id,
+        name=group.name,
+        slug=group.slug,
+        brands=[
+            BrandGroupBrandType(
+                pk=member.id,
+                name=member.name,
+                slug=member.slug,
+                request_url_name=member.request_url_name,
+                image=_tenant_image_url(member),
+                primary_color=_tenant_primary_color(member),
+                is_self=member.id == tenant.id,
+            )
+            for member in members
+        ],
+    )
+
+
 @strawberry_django.type(Role)
 class RoleType(Node):
     uuid: strawberry.auto
@@ -98,6 +161,12 @@ class TenantType(Node):
         Names only — helpers and minimums stay on the check-in page.
         """
         return _checkin_bucket_labels(getattr(self, "checkin_photo_buckets", None))
+
+    @strawberry.field(
+        description="Brand group this tenant belongs to (multi-brand activations)."
+    )
+    async def brand_group(self) -> BrandGroupType | None:
+        return await sync_to_async(_brand_group_for)(self)
 
     @strawberry.field(name="checkinEventTypeNames")
     async def checkin_program_names(self) -> list[str]:
