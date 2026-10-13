@@ -7725,7 +7725,8 @@ class SetupJobBoardView(View):
     it shows. An existing board token is kept, never re-minted.
 
     Params: tenant (exact slug / request_url_name, default torch-thc),
-    apply (default DRY RUN).
+    apply (default DRY RUN), post_waiting (approve + create the event for
+    waiting plans so they list; no emails).
     """
 
     def _run(self, request: HttpRequest) -> HttpResponse:
@@ -7741,6 +7742,8 @@ class SetupJobBoardView(View):
             kwargs["tenant"] = _str("tenant")
         if _str("apply").lower() in ("1", "true", "yes", "on"):
             kwargs["apply"] = True
+        if _str("post_waiting").lower() in ("1", "true", "yes", "on"):
+            kwargs["post_waiting"] = True
 
         out = io.StringIO()
         try:

@@ -27,7 +27,15 @@ from jobboard.mail import (
     JobBoardCancelledMailer,
 )
 from jobboard.models import JobBoard, JobBoardBooking, JobBoardGig
-from jobboard.schema import _cancel, _set_gig, build_admin_board, CancelJobBoardBookingInput, SetJobBoardGigInput
+from jobboard.schema import (
+    CancelJobBoardBookingInput,
+    PostJobBoardPlanInput,
+    SetJobBoardGigInput,
+    _cancel,
+    _post_plan,
+    _set_gig,
+    build_admin_board,
+)
 from jobs.models import AmbassadorJob
 from utils.mailer import Mailer, is_placeholder_recipient_email
 
@@ -409,6 +417,143 @@ class TestJobBoard(EventsGraphQLTestCase):
         assert em.Event.objects.filter(tenant=self.tenant).count() == 1
         ae = AmbassadorEvent.objects.get(event=gig)
         assert ae.is_approved is True
+
+    # ── waiting plans ──
+
+    def _request_status(self, slug, name=None, **extra):
+        return em.RequestStatus.objects.get_or_create(
+            tenant=self.tenant,
+            slug=slug,
+            defaults={"name": name or slug.title(), "created_by": self.sys, **extra},
+        )[0]
+
+    def _waiting(self, name="RARE Steak Championship", slug="pending", days_out=2, count=3):
+        status = self._request_status(slug)
+        self._request_status("approved")
+        day = self.today + timedelta(days=days_out)
+        starts = datetime.combine(day, time(17, 0), tzinfo=MIAMI)
+        request = em.Request.objects.create(
+            name=name,
+            date=starts,
+            start_time=starts,
+            end_time=starts + timedelta(hours=4),
+            address="1 Main St, Houston, TX 77002",
+            notes=f"BA count: {count}",
+            request_type=self.request_type,
+            tenant=self.tenant,
+            status=status,
+            requestor_email="alec@torchdrinks.com",
+            created_by=self.brand_user,
+        )
+        return em.FieldMarketingEvent.objects.create(
+            tenant=self.tenant,
+            request=request,
+            market="houston",
+            activity="event_activation",
+            name=name,
+            starts_on=day,
+            address=request.address,
+            needs_field_support=True,
+            ambassador_count=count,
+            status="submitted",
+            created_by=self.brand_user,
+        )
+
+    def test_waiting_list_says_why_each_plan_is_off_the_board(self):
+        self._waiting("Pending one", slug="pending", count=3)
+        self._waiting("Queued one", slug="queue", count=2)
+        self._waiting("Approved no event", slug="approved", count=1)
+        self._waiting("Archived one", slug="archived")
+        rows = {p.name: p for p in build_admin_board(self.tenant).pending}
+        assert rows["Pending one"].reason == "pending"
+        assert rows["Pending one"].action_label == "Approve & post"
+        assert rows["Pending one"].open_shifts == 3
+        assert rows["Queued one"].reason_label == "In Queue for Ignite: not approved yet"
+        assert rows["Queued one"].action_label == "Approve & post"
+        assert rows["Approved no event"].action_label == "Post to board"
+        assert rows["Archived one"].action_label is None
+        assert rows["Archived one"].reason_label == "Request is Archived"
+        assert self._board().json()["gigs"] == []
+
+    @pytest.mark.asyncio
+    async def test_approve_and_post_lists_gig_and_sends_normal_approval(self, sent):
+        self.schema = schema_clients
+        self.endpoint_path = "/api/v1/graphql/clients"
+        plan = await sync_to_async(self._waiting)(slug="queue", count=3)
+        mutation = """
+        mutation P($input: PostJobBoardPlanInput!) {
+          postJobBoardPlan(input: $input) { success message }
+        }
+        """
+        variables = {"input": {"tenantId": str(self.tenant.id), "planId": str(plan.uuid)}}
+        brand = await self._execute_mutation_authenticated(mutation, variables, user=self.brand_user)
+        assert brand.errors
+        res = await self._execute_mutation_authenticated(mutation, variables, user=self.admin)
+        assert res.errors is None, res.errors
+        assert res.data["postJobBoardPlan"]["message"] == (
+            "RARE Steak Championship is on the board with 3 open shifts."
+        )
+
+        def _check():
+            request = em.Request.objects.select_related("status").get(id=plan.request_id)
+            assert request.status.slug == "approved" and request.approved_by == self.admin
+            assert em.RequestActivityLog.objects.filter(
+                request=request, metadata__via="job_board"
+            ).exists()
+            [gig] = self._board().json()["gigs"]
+            assert gig["venue"] == "RARE Steak Championship"
+            assert gig["openShifts"] == 3 and gig["spotsLeft"] == 3
+            assert build_admin_board(self.tenant).pending == []
+
+        await sync_to_async(_check)()
+        assert any(
+            "alec@torchdrinks.com" in env.to_emails for _, env in sent
+        ), "the submitter gets the same approval email approveRequest sends"
+
+    def test_post_to_board_for_approved_request_sends_nothing(self, sent):
+        plan = self._waiting(slug="approved", count=2)
+        _, approved, _ = _post_plan(
+            self.admin, PostJobBoardPlanInput(tenant_id=str(self.tenant.id), plan_id=str(plan.uuid))
+        )
+        assert approved is False
+        assert em.Event.objects.filter(request_id=plan.request_id).count() == 1
+        assert self._board().json()["gigs"][0]["openShifts"] == 2
+        assert sent == []
+
+    def test_archived_request_cannot_be_posted(self):
+        plan = self._waiting(slug="archived")
+        with pytest.raises(Exception, match="Request is Archived"):
+            _post_plan(
+                self.admin, PostJobBoardPlanInput(tenant_id=str(self.tenant.id), plan_id=str(plan.uuid))
+            )
+        assert not em.Event.objects.filter(request_id=plan.request_id).exists()
+
+    def test_setup_command_posts_waiting_plans_silently(self, sent):
+        a = self._waiting("Load in", slug="pending", count=2)
+        b = self._waiting("Main day", slug="queue", days_out=3, count=4)
+        self._waiting("Archived one", slug="archived")
+
+        out = io.StringIO()
+        call_command("setup_job_board", "--post-waiting", stdout=out)
+        log = out.getvalue()
+        assert "WOULD POST (dry run) 2 waiting plan(s)" in log
+        assert "status='queue'" in log and "In Queue for Ignite" in log
+        assert not em.Event.objects.filter(tenant=self.tenant).exists()
+
+        out = io.StringIO()
+        call_command("setup_job_board", "--post-waiting", "--apply", stdout=out)
+        assert "POSTING 2 waiting plan(s)" in out.getvalue()
+        for plan in (a, b):
+            request = em.Request.objects.select_related("status").get(id=plan.request_id)
+            assert request.status.slug == "approved"
+            assert em.Event.objects.filter(request=request).count() == 1
+        gigs = self._board().json()["gigs"]
+        assert [(g["venue"], g["openShifts"]) for g in gigs] == [("Load in", 2), ("Main day", 4)]
+        assert sent == []
+        # Re-running finds nothing left to post.
+        out = io.StringIO()
+        call_command("setup_job_board", "--post-waiting", "--apply", stdout=out)
+        assert "POSTING 0 waiting plan(s)" in out.getvalue()
 
     # ── setup command ──
 

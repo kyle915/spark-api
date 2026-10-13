@@ -21,6 +21,11 @@ on:
         required: false
         default: "torch-thc"
         type: string
+      post_waiting:
+        description: "Also approve + create events for waiting plans so they list (no emails)."
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   fire-setup-job-board:
@@ -32,6 +37,7 @@ jobs:
           CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
           APPLY: ${{ github.event.inputs.apply }}
           TENANT: ${{ github.event.inputs.tenant || 'torch-thc' }}
+          POST_WAITING: ${{ github.event.inputs.post_waiting }}
         run: |
           set -euo pipefail
           if [ -z "$CRON_SECRET" ]; then
@@ -43,6 +49,7 @@ jobs:
             -X POST "$CRON_URL" \
             --data-urlencode "tenant=$TENANT" \
             --data-urlencode "apply=$APPLY" \
+            --data-urlencode "post_waiting=$POST_WAITING" \
             -H "X-Cron-Secret: $CRON_SECRET")
           echo "HTTP $STATUS"
           python3 -c "import json; d=json.load(open('/tmp/cron-response.json')); print(d.get('log') or d); print(d.get('detail') or '')"
