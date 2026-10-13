@@ -1,4 +1,5 @@
 import datetime
+import re
 from html import escape
 from typing import Iterable as _Iterable
 
@@ -900,15 +901,11 @@ def _fmt_day(value: "datetime.date | None") -> str:
     return value.strftime("%a, %b %-d") if value else "Date not set"
 
 
+_DRY_DEMO_SUFFIX_RE = re.compile(r"\s*\(dry demo\)", re.IGNORECASE)
+
+
 def _kpi_block(metrics: dict) -> dict:
     """Display strings for one sales_program_metrics() result."""
-    dry = int(metrics.get("dry_demos") or 0)
-    dry_note = ""
-    if dry:
-        dry_note = (
-            f"Includes {dry:,} dry demo{'' if dry == 1 else 's'} counted by "
-            f"People engaged ({int(metrics.get('dry_people_engaged') or 0):,})."
-        )
     return {
         "demos": _fmt_int(metrics.get("demos")),
         "recaps": _fmt_int(metrics.get("recaps")),
@@ -917,7 +914,6 @@ def _kpi_block(metrics: dict) -> dict:
         "cans_sold": _fmt_int(metrics.get("cans_sold")),
         "packs_sold": _fmt_int(metrics.get("packs_sold")),
         "conversion": _fmt_pct(metrics.get("conversion_pct")),
-        "dry_note": dry_note,
     }
 
 
@@ -966,9 +962,9 @@ class DailyRetailRollupMailer(Mailer):
         token = make_recap_token(row.kind, int(row.recap_id))
         if row.dry_demo:
             base_label = (
-                f"{_fmt_int(row.consumers_sampled)} people engaged (dry demo)"
+                f"{_fmt_int(row.consumers_sampled)} people engaged"
                 if row.consumers_sampled
-                else "Dry demo · no people engaged count"
+                else "No people-engaged count"
             )
         else:
             base_label = (
@@ -987,7 +983,7 @@ class DailyRetailRollupMailer(Mailer):
             "units": f"{row.units_sold:,} unit{'' if row.units_sold == 1 else 's'} sold",
             "conversion": _fmt_pct(row.conversion_pct),
             "counted": row.counted,
-            "sample_format": row.sample_format,
+            "sample_format": _DRY_DEMO_SUFFIX_RE.sub("", row.sample_format),
             "products": ", ".join(products) + (f" +{more} more" if more > 0 else ""),
             "competitor": row.competitor,
             "link": f"{public_base}/r/{token}",

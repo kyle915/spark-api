@@ -91,7 +91,6 @@
                 </table>
                 <p style="margin:10px 0 0 0;font-size:12px;line-height:18px;color:#5a6354;">
                   Units: {{ day.cans_sold }} single cans · {{ day.packs_sold }} packs (each counts as 1 unit).
-                  {% if day.dry_note %}{{ day.dry_note }}{% endif %}
                   {% if uncounted %}{{ uncounted }} recap{{ uncounted|pluralize }} had no consumers-sampled count, so {{ uncounted|pluralize:"it is,they are" }} listed below but not in conversion.{% endif %}
                 </p>
               </td>
@@ -254,8 +253,8 @@
                 <hr style="border:0;border-top:1px solid #ef5a2a;margin:0;" />
                 <p style="margin:14px 0 0 0;font-size:11px;line-height:17px;color:#7a8074;">
                   How these numbers work: Retail Sampling recaps only; 3rd-party and archived recaps are excluded.
-                  Conversion is units sold (a single can or a pack each count as 1 unit) divided by consumers sampled;
-                  for dry demos (no product tasted) the base is People engaged. Quotes are verbatim excerpts from recap notes.
+                  Conversion is units sold (a single can or a pack each count as 1 unit) divided by consumers sampled.
+                  Quotes are verbatim excerpts from recap notes.
                 </p>
                 <p style="margin:10px 0 0 0;font-size:12px;line-height:18px;color:#7a8074;font-style:italic;">
                   Automated daily roll-up from Spark, Ignite's field marketing platform. Questions or a different cadence? Just reply.
