@@ -63,6 +63,7 @@ urlpatterns = [
     # looking for GraphQL surface don't trip on it. See
     # `digest/cron_views.py` for the secret-validation flow.
     path("internal/cron/", include("digest.urls")),
+    path("internal/cron/", include("timeclock.cron_urls")),
     # Public, token-authenticated endpoints (no JWT). These power the
     # one-click "Review & approve" email flow — clients click a signed
     # link and land on a page they can actually act on, even if they're
@@ -91,6 +92,10 @@ urlpatterns = [
     # Public BA job board: `/jobs/<token>` lists a brand's open plan gigs
     # and books BAs onto them. See `jobboard/views.py`.
     path("api/public/", include("jobboard.urls")),
+    # Generic public clock in/out: `/clock/<token>` (name, email, market,
+    # address + one GPS fix per punch, mirrored to a Google Sheet). See
+    # `timeclock/views.py`.
+    path("api/public/", include("timeclock.urls")),
     # On-demand recap photo thumbnails (utils/thumb_views.py).
     path("api/public/img/", include("utils.thumb_urls")),
     # Inline recap video playback. .mov is redirected with Content-Type

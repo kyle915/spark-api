@@ -25,6 +25,7 @@ from wingspan.schema import WingspanQueryClient
 from chats.schema import ChatQueryClient, ChatMutationsClient
 from announcements.schema import AnnouncementQueryClient, AnnouncementMutationsClient
 from jobboard.schema import JobBoardMutations, JobBoardQueries
+from timeclock.schema import ClockLinkMutations, ClockLinkQueries
 from utils.utils import BlockIntrospectionForAnonymous
 from utils.graphql.gcs_schema import GCSQuery
 
@@ -48,6 +49,7 @@ QueryClients = merge_types(
         ReceiptQueryClient,
         BillingQueryClient,
         JobBoardQueries,
+        ClockLinkQueries,
     ),
 )
 MutationClients = merge_types(
@@ -69,6 +71,7 @@ MutationClients = merge_types(
         ReceiptMutationsClient,
         BillingMutationsClient,
         JobBoardMutations,
+        ClockLinkMutations,
     ),
 )
 
