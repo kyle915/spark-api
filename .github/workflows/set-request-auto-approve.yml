@@ -18,7 +18,7 @@ on:
         description: "Comma-separated CC emails (blank = keep stored list)"
         required: false
         default: "kyle@igniteproductions.co,baesha@igniteproductions.co,keis@igniteproductions.co,nevena@igniteproductions.co,myriant@igniteproductions.co"
-      off:
+      turn_off:
         description: "Turn auto-approve OFF instead"
         required: false
         default: "false"
@@ -41,7 +41,7 @@ jobs:
           CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
           TENANTS: ${{ github.event.inputs.tenants }}
           CC: ${{ github.event.inputs.cc }}
-          OFF: ${{ github.event.inputs.off }}
+          OFF: ${{ github.event.inputs.turn_off }}
           APPLY: ${{ github.event.inputs.apply }}
         run: |
           if [ -z "$CRON_SECRET" ]; then
