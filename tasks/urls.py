@@ -7,6 +7,7 @@ with the `X-Tasks-Secret` shared secret; see `tasks/views.py` for the check.
 from django.urls import path
 
 from tasks import views
+from timeclock.views import clock_sheet_sync_task
 
 urlpatterns = [
     path(
@@ -18,6 +19,11 @@ urlpatterns = [
         "heic-convert",
         views.heic_convert_view,
         name="tasks.heic_convert",
+    ),
+    path(
+        "clock-sheet-sync",
+        clock_sheet_sync_task,
+        name="tasks.clock_sheet_sync",
     ),
     path(
         "connecteam-import-recap",

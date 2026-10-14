@@ -51,6 +51,7 @@ if DEBUG:
 CORS_ALLOW_HEADERS = (
     *default_headers,
     "x-checkin-session",
+    "x-clock-session",
 )
 
 
@@ -89,6 +90,7 @@ INSTALLED_APPS = [
     "documents",
     "announcements",
     "jobboard",
+    "timeclock",
     # Cloud Tasks handler endpoints (no models). Registered so its app label
     # resolves; the routes are mounted under `api/tasks/` in config/urls.py.
     "tasks",

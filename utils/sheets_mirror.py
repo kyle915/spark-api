@@ -101,8 +101,8 @@ def extract_sheet_id(url: str) -> str | None:
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 
-def _credentials():
-    """Resolve Sheets API credentials.
+def _credentials(scopes: list[str] | None = None):
+    """Resolve Sheets API credentials (``scopes`` defaults to Sheets only).
 
     Preference order:
       1. An explicit service-account JSON in GOOGLE_CALENDAR_CREDENTIALS
@@ -116,13 +116,14 @@ def _credentials():
     Returns None only if neither path yields usable creds, in which case
     callers no-op (a Sheets miss must never break a Request save).
     """
+    scopes = scopes or SCOPES
     info = getattr(settings, "GOOGLE_CALENDAR_CREDENTIALS", None) or getattr(
         settings, "GS_CREDENTIALS", None
     )
     if info:
         try:
             return service_account.Credentials.from_service_account_info(
-                info, scopes=SCOPES
+                info, scopes=scopes
             )
         except Exception as e:
             logger.warning(
@@ -133,7 +134,7 @@ def _credentials():
     try:
         import google.auth
 
-        creds, _project = google.auth.default(scopes=SCOPES)
+        creds, _project = google.auth.default(scopes=scopes)
         return creds
     except Exception as e:
         logger.warning("sheets_mirror: ADC credentials unavailable: %s", e)
