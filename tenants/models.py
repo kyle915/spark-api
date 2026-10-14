@@ -452,6 +452,17 @@ class Tenant(Asyncable, models.Model):
         default="",
         help_text="Extra email addresses (comma/newline/semicolon-separated) that receive recap-approval emails for this brand, in addition to the RMM, client-role users, and requestor.",
     )
+    # Brand-submitted requests (public spark-form + client portal login) land
+    # approved — Event materialized like an Approvals click — instead of
+    # waiting in Approvals. The approval email then goes to the requestor with
+    # `request_approved_cc_emails` on CC in place of the whole-Ignite roll-up.
+    # Recaps are untouched: they keep the admin-approval gate. OFF by default.
+    auto_approve_requests = models.BooleanField(default=False)
+    request_approved_cc_emails = models.TextField(
+        blank=True,
+        default="",
+        help_text="Emails (comma/newline/semicolon-separated) CC'd on this brand's auto-approved request email.",
+    )
     # Opt-in switch for the scheduled monthly client performance report
     # (the `send_scheduled_client_reports` cron). SAFE DEFAULT: OFF — a
     # tenant is NEVER emailed a scheduled report until Ignite explicitly

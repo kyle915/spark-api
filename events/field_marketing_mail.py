@@ -17,14 +17,18 @@ people get the plan notification for the same submission.
 from __future__ import annotations
 
 import logging
-import re
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
 from django.conf import settings
 
 from events import models
-from events.envelopes import ClientRequestCreatedNotificationMailer, _admin_request_url
+from events.envelopes import (
+    ClientRequestCreatedNotificationMailer,
+    _admin_request_url,
+    brand_accent,
+    ink_on,
+)
 from events.mutations import _get_request_cc_emails
 from utils.mailer import Envelope, Mailer
 
@@ -44,7 +48,6 @@ ADMIN_PORTAL_URL = "https://admin.igniteproductions.co"
 FROM_EMAIL = "Spark by Ignite <no-reply@igniteproductions.co>"
 SPARK_LIME = "#c5f546"
 _INK = "#0a0d09"
-_HEX_COLOR = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
 _RETIRED_HOSTS = frozenset(
     {"spark.igniteproductions.co", "spark-admin.web.app", "spark-new-admin.web.app"}
 )
@@ -91,32 +94,6 @@ def client_plan_url() -> str:
 
 def admin_plan_url() -> str:
     return f"{_portal_url('ADMIN_FRONTEND_URL', ADMIN_PORTAL_URL)}/field-marketing"
-
-
-def brand_accent(tenant) -> str | None:
-    """Tenant primary from its theme, hex only (email clients can't do oklch)."""
-    try:
-        theme = tenant.themes.first()
-    except Exception:
-        return None
-    css = getattr(theme, "css_variables", None) or {}
-    if not isinstance(css, dict):
-        return None
-    for key in ("--color-primary", "--p", "primary", "--recap-brand"):
-        raw = css.get(key)
-        if isinstance(raw, str) and _HEX_COLOR.match(raw.strip()):
-            return raw.strip()
-    return None
-
-
-def _ink_on(hex_color: str) -> str:
-    """Dark or white text, whichever reads on the accent."""
-    raw = hex_color.lstrip("#")
-    if len(raw) == 3:
-        raw = "".join(ch * 2 for ch in raw)
-    r, g, b = (int(raw[i : i + 2], 16) for i in (0, 2, 4))
-    luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255
-    return _INK if luminance > 0.6 else "#ffffff"
 
 
 def submitter_name(user) -> str:
@@ -169,7 +146,7 @@ class PlanSubmittedConfirmationMailer(Mailer):
             context={
                 "c": c,
                 "accent": self.accent,
-                "accent_ink": _ink_on(self.accent),
+                "accent_ink": ink_on(self.accent),
                 "plan_url": client_plan_url(),
             },
         )

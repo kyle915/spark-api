@@ -86,13 +86,13 @@
             <tr>
               <td class="pad" style="padding:24px 40px 16px 40px;">
                 <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%"
-                       style="border-radius:14px;background:#eef9c6;border:1px solid #b8d343;">
+                       style="border-radius:14px;{% if brand_color %}background:{{ brand_color }};border:1px solid {{ brand_color }};{% else %}background:#eef9c6;border:1px solid #b8d343;{% endif %}">
                   <tr>
                     <td align="center"
                         style="padding:14px;
                                font-family:Georgia,'Times New Roman',serif;
                                font-weight:700;font-size:18px;
-                               letter-spacing:0.02em;color:#3f5610;">
+                               letter-spacing:0.02em;color:{% if brand_color %}{{ brand_ink }}{% else %}#3f5610{% endif %};">
                       ✓ APPROVED
                     </td>
                   </tr>
@@ -205,7 +205,7 @@
                 <ol style="margin:0;padding-left:18px;font-size:13px;line-height:20px;color:#3b4034;">
                   <li>Ignite staffs a brand ambassador for the activation.</li>
                   <li>A calendar invite goes to you and the brand POC.</li>
-                  <li>Your BA clocks in via GPS on the day, and you'll get the recap automatically when they wrap.</li>
+                  <li>Your BA clocks in via GPS on the day, and you'll get the recap once the Ignite team reviews it.</li>
                 </ol>
                 <p style="margin:14px 0 0 0;font-size:12px;line-height:18px;color:#7a8074;">
                   Need to change the date or scope? Reply to this email and
@@ -213,6 +213,20 @@
                 </p>
               </td>
             </tr>
+
+            {% if request_again_url %}
+            <tr>
+              <td class="pad" style="padding:20px 40px 4px 40px;">
+                <a class="cta" href="{{ request_again_url }}"
+                   style="display:inline-block;padding:12px 22px;border-radius:999px;
+                          background:{{ brand_color|default:'#0a0d09' }};
+                          color:{{ brand_ink|default:'#ffffff' }};
+                          font-size:14px;font-weight:700;text-decoration:none;">
+                  Request another activation
+                </a>
+              </td>
+            </tr>
+            {% endif %}
 
             <!-- Sign-off -->
             <tr>
@@ -226,7 +240,7 @@
             <!-- Divider -->
             <tr>
               <td class="pad" style="padding:8px 40px 0 40px;">
-                <hr style="border:0;border-top:1px solid #ef5a2a;margin:0;" />
+                <hr style="border:0;border-top:1px solid {{ brand_color|default:'#ef5a2a' }};margin:0;" />
               </td>
             </tr>
 

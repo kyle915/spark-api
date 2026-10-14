@@ -133,6 +133,8 @@ class TestCoActivation(_CoActivationBase):
                 "Retail Sampling",
             ]
             assert tenant.insights_trend_series == Tenant.TREND_SERIES_SALES
+            assert tenant.auto_approve_requests is True
+            assert "baesha@igniteproductions.co" in tenant.request_approved_cc_emails
 
         call_command("setup_brand_group", apply=True, skip_images=True, stdout=_Sink())
         for tenant in (self.ww, self.famus, self.aa):
@@ -148,6 +150,9 @@ class TestCoActivation(_CoActivationBase):
         assert slice_recap.tenant_id == self.famus.id
         assert slice_recap.event.tenant_id == self.famus.id
         assert slice_recap.event.co_activation_host_id == self.event.id
+        # Request auto-approve is on for the group; recaps still wait for review.
+        assert self.ww.auto_approve_requests is True
+        assert host.approved is False
         assert slice_recap.approved is False
 
         host_values = self._values(host)

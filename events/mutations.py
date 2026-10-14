@@ -34,6 +34,7 @@ from .envelopes import (
     RequestorRequestCreatedMailer,
     RmmAssignedRequestMailer,
     NoteMentionMailer,
+    brand_accent,
 )
 from .routing import (
     assign_rmm_for_request,
@@ -45,6 +46,12 @@ from .routing import (
 from .co_brands import replace_request_co_brands
 from .demo_cancel import DemoCancelError, request_demo_cancellation
 from .plan_event_types import event_type_for_request
+from .request_auto_approve import (
+    auto_approved_request_lists,
+    request_form_url,
+    tenant_auto_approves_requests,
+    tenant_request_cc_emails,
+)
 from .request_soft_delete import soft_delete_request
 from .torch_portal import (
     should_auto_approve_public_request,
@@ -2559,11 +2566,11 @@ class PublicRequestMutations:
             tenant_for_gate = await sync_to_async(
                 lambda: Tenant.objects.filter(id=service.tenant_id).first()
             )()
-            # Torch public spark-form ONLY. LD / Feel Free / Girl Beer / KKC
-            # stay pending until a human approves.
+            # Torch's public spark-form, plus brands with auto_approve_requests
+            # on. Everyone else stays pending until a human approves.
             if should_auto_approve_public_request(
                 request_url_name, tenant_for_gate
-            ):
+            ) or tenant_auto_approves_requests(tenant_for_gate):
                 service.auto_approve = True
             request: models.Request = await service.save()
             request_with_relations: models.Request = await sync_to_async(
@@ -2609,6 +2616,28 @@ class PublicRequestMutations:
                 except Exception:
                     pass
                 await _notify_torch_portal_request_approved(
+                    request_with_relations, location, delay_seconds=1
+                )
+                return build_mutation_response(
+                    types.RequestDetailResponse,
+                    success=True,
+                    message="Request created successfully.",
+                    input_obj=input,
+                    request=request_with_relations,
+                )
+            if tenant_auto_approves_requests(request_with_relations.tenant):
+                # Same side effects as an Approvals click; no client approver
+                # / RMM routing mail since there's nothing left to approve.
+                await _materialize_approved_event_for_request(
+                    request_with_relations, None
+                )
+                await _log_request_auto_approved(
+                    request_with_relations, "Public form · auto-approved"
+                )
+                request_with_relations = await _stamp_external_request_state(
+                    request_with_relations
+                )
+                await _notify_requestor_for_request_auto_approved(
                     request_with_relations, location, delay_seconds=1
                 )
                 return build_mutation_response(
@@ -2666,38 +2695,9 @@ class PublicRequestMutations:
                 await _notify_ignite_for_unroutable_request(
                     request_with_relations, location
                 )
-            # assign_rmm_for_request set the RMM but NOT request.state — and the
-            # RMMs filter their sheet by the Market/State column, so external-
-            # form requests (a shortened form with no state field) showed a
-            # blank Market and fell out of their view. Stamp the state from the
-            # address (and assign the RMM if assign_rmm couldn't, e.g. a tenant
-            # routing via default_external_rmm), then re-sync the sheet row.
-            # Best-effort: never fail the create.
-            try:
-                from events.routing import route_request_sync
-
-                _a, _c, _routed = await sync_to_async(route_request_sync)(
-                    request_with_relations
-                )
-                # Re-sync unconditionally: _routed=False (nothing stamped, e.g.
-                # state never resolved) is when the row is most likely missing.
-                request_with_relations = await sync_to_async(
-                    models.Request.objects.select_related(
-                        "tenant", "timezone", "request_type",
-                        "retailer__location__state",
-                        "distributor__location__state",
-                        "state", "rmm_asigned",
-                    ).get
-                )(id=request_with_relations.id)
-                from utils.sheets_mirror import upsert_request_row
-
-                await sync_to_async(upsert_request_row)(request_with_relations)
-            except Exception:
-                logger.warning(
-                    "external-form state stamp failed for request=%s",
-                    getattr(request_with_relations, "id", None),
-                    exc_info=True,
-                )
+            request_with_relations = await _stamp_external_request_state(
+                request_with_relations
+            )
             await _notify_requestor_for_request_created(
                 request_with_relations, location, delay_seconds=2
             )
@@ -2715,6 +2715,58 @@ class PublicRequestMutations:
                 message=str(e),
                 input_obj=input,
             )
+
+
+async def _stamp_external_request_state(
+    request: models.Request,
+) -> models.Request:
+    """Stamp state from the address (+ RMM when unassigned), re-sync the sheet.
+
+    assign_rmm_for_request sets the RMM but NOT request.state — and the RMMs
+    filter their sheet by the Market/State column, so external-form requests
+    (a shortened form with no state field) showed a blank Market and fell out
+    of their view. Also assigns the RMM if assign_rmm couldn't (e.g. a tenant
+    routing via default_external_rmm). Best-effort: never fails the create.
+    Returns the refreshed request.
+    """
+    try:
+        from events.routing import route_request_sync
+
+        await sync_to_async(route_request_sync)(request)
+        # Re-sync unconditionally: nothing stamped (state never resolved) is
+        # when the row is most likely missing.
+        request = await sync_to_async(
+            models.Request.objects.select_related(
+                "tenant", "timezone", "request_type",
+                "retailer__location__state",
+                "distributor__location__state",
+                "state", "rmm_asigned",
+            ).get
+        )(id=request.id)
+        from utils.sheets_mirror import upsert_request_row
+
+        await sync_to_async(upsert_request_row)(request)
+    except Exception:
+        logger.warning(
+            "external-form state stamp failed for request=%s",
+            getattr(request, "id", None),
+            exc_info=True,
+        )
+    return request
+
+
+async def _log_request_auto_approved(request: models.Request, summary: str) -> None:
+    try:
+        await sync_to_async(models.RequestActivityLog.objects.create)(
+            tenant=request.tenant,
+            request=request,
+            kind=models.RequestActivityLog.KIND_STATUS_CHANGED,
+            actor_user=None,
+            summary=summary,
+            metadata={"from": "pending", "to": "approved"},
+        )
+    except Exception:
+        pass
 
 
 def _localize_naive_to_offset(value, offset_minutes):
@@ -3041,6 +3093,14 @@ async def _notify_spark_admins_for_client_request(
     """
     try:
         ignite_team = await _get_request_cc_emails_async()
+        # A brand's auto-approval CC list already gets the approval email.
+        already_copied = {
+            e.lower()
+            for e in await sync_to_async(
+                lambda: tenant_request_cc_emails(request.tenant)
+            )()
+        }
+        ignite_team = [e for e in ignite_team if e.lower() not in already_copied]
         if not ignite_team:
             return
         status_slug = await sync_to_async(
@@ -3380,9 +3440,28 @@ async def _notify_requestor_for_request_auto_approved(
     delay_seconds: int | float | None = None,
 ) -> None:
     requestor_email = await _resolve_requestor_email(request)
-    if not requestor_email:
+    tenant = await sync_to_async(lambda: request.tenant)()
+    if tenant_auto_approves_requests(tenant):
+        if requestor_email:
+            request.requestor_email = requestor_email
+        to_emails, cc_emails = auto_approved_request_lists(tenant, requestor_email)
+        if not to_emails:
+            return
+        mailer = RequestorRequestApprovedMailer(
+            request=request,
+            location=location,
+            to_emails=to_emails,
+            cc_emails=cc_emails,
+            approver_email_fallback="Spark (auto-approved)",
+            auto_approved=True,
+            brand_color=await sync_to_async(brand_accent)(tenant),
+            request_again_url=request_form_url(tenant),
+        )
+        await sync_to_async(mailer.send)(delay_seconds=delay_seconds)
         return
 
+    if not requestor_email:
+        return
     request.requestor_email = requestor_email
 
     # Auto-approved requests should notify with the same approval email flow.
