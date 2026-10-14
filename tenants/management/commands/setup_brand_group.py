@@ -45,6 +45,8 @@ from events.models import (
     Product,
     ProductType,
     Request,
+    RequestCoBrand,
+    RequestProduct,
     RequestStatus,
     RequestType,
 )
@@ -54,14 +56,20 @@ from recaps.co_activation import CO_BRAND_SECTIONS_KEY
 from recaps.management.commands.setup_total_wireless_checkin import _match_field_type
 from recaps.models import (
     CustomField,
+    CustomFieldValue,
     CustomRecap,
     CustomRecapFieldType,
+    CustomRecapProductSample,
+    CustomRecapSalePerformance,
     CustomRecapTemplate,
     FileRecapCategory,
+    ProductSamples,
     RecapSection,
+    SalesPerformance,
     TypeOfGood,
 )
 from recaps.products_sampled import PRODUCTS_SAMPLED_FIELD
+from tenants.brand_group_demo import DEMO_DOMAIN
 from tenants.models import BrandGroup, Tenant, TenantTheme
 from tenants.mutations import (
     DEFAULT_ATTENDANCE_STATUS_TEMPLATES,
@@ -106,6 +114,9 @@ class Brand:
     primary_color: str
     logo_url: str
     skus: tuple[Sku, ...] = field(default_factory=tuple)
+    # Discontinued SKUs: removed from the catalog when nothing references them.
+    retired_skus: tuple[str, ...] = ()
+    sells_packs: bool = True
 
 
 BRANDS: tuple[Brand, ...] = (
@@ -140,15 +151,9 @@ BRANDS: tuple[Brand, ...] = (
                 "Slayberry 2oz Shot",
                 "https://cdn.shopify.com/s/files/1/0696/3639/1234/files/AlcoholArmor-SB-Shot-Front_f2272953-e391-486d-8b20-8cedc4426a46.png?v=1761267306&width=1200",
             ),
-            Sku(
-                "Boujee Berry 12-Pack",
-                "https://cdn.shopify.com/s/files/1/0696/3639/1234/files/AlcoholArmor-BoujeeBerry-Shipper2_cbf43402-e0c2-4642-90ec-293d986ba73a.png?v=1761266458&width=1200",
-            ),
-            Sku(
-                "Slayberry 12-Pack",
-                "https://cdn.shopify.com/s/files/1/0696/3639/1234/files/AlcoholArmor-Slayberry-Shipper2_f7510a12-e1b8-42a6-ad40-e203ca02d054.png?v=1761267048&width=1200",
-            ),
         ),
+        retired_skus=("Boujee Berry 12-Pack", "Slayberry 12-Pack"),
+        sells_packs=False,
     ),
     Brand(
         name="Wook Water",
@@ -173,19 +178,9 @@ BRANDS: tuple[Brand, ...] = (
                 "Pineapple Peak 12oz Can",
                 "https://cdn.shopify.com/s/files/1/0929/3771/6083/files/pineapple_hero_single.png?v=1785249962&width=1200",
             ),
-            Sku(
-                "Berry Groovy 4-Pack",
-                "https://cdn.shopify.com/s/files/1/0929/3771/6083/files/4pk_berry_-_website_df61984d-defc-4315-bc3f-3860ab33cf42.png?v=1783535527&width=1080",
-            ),
-            Sku(
-                "Laser Lime 4-Pack",
-                "https://cdn.shopify.com/s/files/1/0929/3771/6083/files/4pk_lime_-_website_e43cd5cb-220f-4e23-853c-ae8497908688.png?v=1783535528&width=1080",
-            ),
-            Sku(
-                "Pineapple Peak 4-Pack",
-                "https://cdn.shopify.com/s/files/1/0929/3771/6083/files/pineapple4pk.jpg?v=1785249819&width=1080",
-            ),
         ),
+        retired_skus=("Berry Groovy 4-Pack", "Laser Lime 4-Pack", "Pineapple Peak 4-Pack"),
+        sells_packs=False,
     ),
 )
 
@@ -194,7 +189,11 @@ FieldSpec = tuple[str, str, bool, list[str]]
 SectionSpec = tuple[str, list[FieldSpec]]
 
 
-def retail_spec(brand_name: str) -> list[SectionSpec]:
+def retail_spec(brand: Brand) -> list[SectionSpec]:
+    brand_name = brand.name
+    packs: list[FieldSpec] = (
+        [("How many packs did consumers purchase?", "number", True, [])] if brand.sells_packs else []
+    )
     return [
         (
             "Shift Overview",
@@ -235,7 +234,7 @@ def retail_spec(brand_name: str) -> list[SectionSpec]:
                     True,
                     [],
                 ),
-                ("How many packs did consumers purchase?", "number", True, []),
+                *packs,
                 (PRODUCTS_SAMPLED_FIELD, "multiselect", True, []),
             ],
         ),
@@ -378,7 +377,7 @@ class Command(BaseCommand):
 
         event_types = self._programs(tenant)
         self._products(tenant, brand)
-        for program, spec in ((RETAIL, retail_spec(brand.name)), (EVENT, event_spec(brand.name))):
+        for program, spec in ((RETAIL, retail_spec(brand)), (EVENT, event_spec(brand.name))):
             self._template(tenant, brand, program, spec, event_types.get(program))
         self._sync_products_sampled(tenant)
         self._photo_buckets(tenant)
@@ -393,7 +392,7 @@ class Command(BaseCommand):
         self.stdout.write(f"  SKUs ({len(brand.skus)}):")
         for sku in brand.skus:
             self.stdout.write(f"    - {brand.product_type} — {sku.name}")
-        for program, spec in ((RETAIL, retail_spec(brand.name)), (EVENT, event_spec(brand.name))):
+        for program, spec in ((RETAIL, retail_spec(brand)), (EVENT, event_spec(brand.name))):
             self.stdout.write(f"  template {template_name(brand, program)!r}")
             for section, fields in spec:
                 tag = " (per brand)" if section in PER_BRAND_SECTIONS else " (shared)"
@@ -523,6 +522,7 @@ class Command(BaseCommand):
     # -------------------------------------------------------------- catalog
 
     def _products(self, tenant: Tenant, brand: Brand) -> None:
+        self._retire_skus(tenant, brand)
         if not self.apply:
             existing = set(
                 Product.objects.filter(tenant_id=tenant.id).values_list("name", flat=True)
@@ -554,6 +554,32 @@ class Command(BaseCommand):
                 f"  {'+' if made else '='} SKU [{product.id}] {sku.name!r}"
                 f"{' · ' + note if note else ''}{'' if product.image else ' · NO IMAGE'}"
             )
+
+    def _retire_skus(self, tenant: Tenant, brand: Brand) -> None:
+        for name in brand.retired_skus:
+            product = Product.objects.filter(tenant_id=tenant.id, name__iexact=name).first()
+            if product is None:
+                continue
+            refs = {
+                "request SKU picks": RequestProduct.objects.filter(product=product).count(),
+                "co-brand SKU picks": RequestCoBrand.products.through.objects.filter(
+                    product_id=product.id
+                ).count(),
+                "recap samples": CustomRecapProductSample.objects.filter(product=product).count()
+                + ProductSamples.objects.filter(product=product).count(),
+                "recap sales rows": CustomRecapSalePerformance.objects.filter(product=product).count()
+                + SalesPerformance.objects.filter(product=product).count(),
+            }
+            used = {k: v for k, v in refs.items() if v}
+            if used:
+                detail = ", ".join(f"{v} {k}" for k, v in used.items())
+                self.stdout.write(
+                    self.style.WARNING(f"  kept retired SKU [{product.id}] {name!r} (in use: {detail})")
+                )
+                continue
+            self.stdout.write(f"  - retire SKU [{product.id}] {name!r}")
+            if self.apply:
+                product.delete()
 
     def _download(self, url: str) -> bytes | None:
         try:
@@ -626,6 +652,12 @@ class Command(BaseCommand):
         n_fields = sum(len(fields) for _, fields in spec)
         if not self.apply or event_type is None:
             self.stdout.write(f"  template {name!r}: {len(spec)} sections / {n_fields} fields")
+            current = CustomRecapTemplate.objects.filter(tenant_id=tenant.id, name=name).first()
+            if current is not None:
+                wanted = {fname for _, fields in spec for fname, *_ in fields}
+                for row in CustomField.objects.filter(custom_recap_template=current).order_by("id"):
+                    if row.name not in wanted:
+                        self._drop_stale_field(row)
             return
         with transaction.atomic():
             template, made = CustomRecapTemplate.objects.get_or_create(
@@ -678,9 +710,8 @@ class Command(BaseCommand):
             stale = CustomField.objects.filter(custom_recap_template=template).exclude(
                 id__in=keep
             )
-            n_stale = stale.count()
-            if n_stale and not CustomRecap.objects.filter(custom_recap_template=template).exists():
-                stale.delete()
+            for row in stale.order_by("id"):
+                self._drop_stale_field(row)
 
             # resolve_template_for_event takes the lowest id on the event type.
             others = CustomRecapTemplate.objects.filter(
@@ -703,6 +734,25 @@ class Command(BaseCommand):
                 f"({len(spec)} sections / {n_fields} fields)"
             )
         )
+
+    def _drop_stale_field(self, row: CustomField) -> None:
+        """Remove a field the spec dropped. Answers on demo recaps go with it;
+        a field with real answers stays (and stays on the form)."""
+        answers = CustomFieldValue.objects.filter(custom_field=row)
+        real = answers.exclude(custom_recap__ambassador__user__email__iendswith=f"@{DEMO_DOMAIN}")
+        n_real = real.count()
+        if n_real:
+            self.stdout.write(
+                self.style.WARNING(f"  kept dropped field {row.name!r} ({n_real} submitted answer(s))")
+            )
+            return
+        n_demo = answers.count()
+        self.stdout.write(
+            f"  - drop field {row.name!r}" + (f" (+{n_demo} demo answer(s))" if n_demo else "")
+        )
+        if self.apply:
+            answers.delete()
+            row.delete()
 
     # ---------------------------------------------------------- walk-up/brand
 

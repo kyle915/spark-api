@@ -13,11 +13,13 @@ import pytest
 from asgiref.sync import sync_to_async
 from django.core.management import call_command
 from django.core.management.base import CommandError
+from django.db.models import RestrictedError
 
 from ambassadors import checkin_web
 from config.schema_client import schema_clients
 from events import models as em
 from events.management.commands import import_store_roster
+from events.market import parse_address_geo
 from events.tests.base import EventsGraphQLTestCase
 
 FIELDS = ["roster_no", "store_name", "address", "city", "state", "zip", "brands", "maps_match"]
@@ -31,6 +33,21 @@ ROWS = [
     ["4", "Smokers Outlet", "240 Eastbrooke Pkwy #105, Mt Washington, KY 40047", "Mt Washington",
      "KY", "40047", "famus-energy", "Verified"],
 ]
+
+
+def test_committed_roster_has_store_names_and_parseable_addresses():
+    rows = import_store_roster.read_roster(import_store_roster.DEFAULT_FILE)
+    legal = [
+        r["store_name"] for r in rows
+        if import_store_roster.is_placeholder_name(r["store_name"])
+        and "(name to confirm)" not in r["store_name"]
+    ]
+    assert legal == []
+    keys = [checkin_web.normalize_place(r["address"]) for r in rows]
+    assert len(keys) == len(set(keys))
+    for r in rows:
+        geo = parse_address_geo(r["address"])
+        assert (geo.city, geo.state_code, geo.zip) == (r["city"], r["state"], r["zip"]), r["roster_no"]
 
 
 @pytest.mark.django_db(transaction=True)
@@ -136,6 +153,87 @@ class TestImportStoreRoster(EventsGraphQLTestCase):
         assert circle_k.name == "Circle K #720"
         assert circle_k.location_id == self.boonville.id
         assert not em.Retailer.objects.filter(tenant=self.tenants["famus-energy"]).exists()
+
+    def test_placeholder_name_takes_the_trading_name(self):
+        legal = em.Retailer.objects.create(
+            tenant=self.tenants["famus-energy"], name="Avni Petroleum INC",
+            address="1303 S Main St, Bluffton, IN 46714", created_by=self.sys,
+        )
+        fallback = em.Retailer.objects.create(
+            tenant=self.tenants["famus-energy"], name="2926 Nashville Rd (name to confirm)",
+            address="2926 Nashville Rd, Bowling Green, KY 42103", created_by=self.sys,
+        )
+        edited = em.Retailer.objects.create(
+            tenant=self.tenants["famus-energy"], name="Smokers Outlet Mt Washington",
+            address="240 Eastbrooke Pkwy #105, Mt Washington, KY 40047", created_by=self.sys,
+        )
+        dry = self.run_import("--tenant", "famus-energy")
+        assert "renamed=2" in dry
+        legal.refresh_from_db()
+        assert legal.name == "Avni Petroleum INC"
+
+        log = self.run_import("--apply", "--tenant", "famus-energy")
+        assert "rename 'Avni Petroleum INC' -> 'Shell'" in log
+        assert "famus-energy: created=0" in log and "renamed=2" in log
+        for row in (legal, fallback, edited):
+            row.refresh_from_db()
+        assert (legal.name, fallback.name, edited.name) == ("Shell", "BP", "Smokers Outlet Mt Washington")
+        assert legal.updated_by_id == self.owner.id
+        assert "renamed=0" in self.run_import("--apply", "--tenant", "famus-energy")
+
+    def test_roster_name_to_confirm_never_overwrites_a_real_name(self):
+        path = import_store_roster.DATA_DIR / "roster.csv"
+        with path.open("a", newline="") as fh:
+            csv.writer(fh).writerow(
+                ["5", "720 N 3rd St (name to confirm)", "720 N 3rd St, Boonville, IN 47601",
+                 "Boonville", "IN", "47601", "famus-energy", "Not found"]
+            )
+        em.Retailer.objects.create(
+            tenant=self.tenants["famus-energy"], name="Ace Food Mart LLC",
+            address="720 N 3rd St, Boonville, IN 47601", created_by=self.sys,
+        )
+        self.run_import("--apply", "--tenant", "famus-energy")
+        assert em.Retailer.objects.get(address__startswith="720 N").name == "Ace Food Mart LLC"
+
+    def test_not_a_store_row_retires_the_account(self):
+        fields = [*FIELDS, "store_type"]
+        rows = [[*ROWS[0][:7], "Verified", "Not a store"], [*ROWS[1], "Gas Station"]]
+        with (import_store_roster.DATA_DIR / "roster.csv").open("w", newline="") as fh:
+            writer = csv.writer(fh)
+            writer.writerow(fields)
+            writer.writerows(rows)
+        home = em.Retailer.objects.create(
+            tenant=self.tenants["wook-water"], name="Some Holdings LLC",
+            address="1303 S Main St, Bluffton, IN 46714", created_by=self.sys,
+        )
+        dry = self.run_import()
+        assert "wook-water: created=0 updated=0 unchanged=0 renamed=0 retired=1" in dry
+        assert em.Retailer.objects.filter(pk=home.pk).exists()
+
+        log = self.run_import("--apply")
+        assert "famus-energy: created=0" in log and "retired=0" in log
+        assert not em.Retailer.objects.filter(address__startswith="1303 S Main").exists()
+        assert em.Retailer.objects.filter(tenant=self.tenants["alcohol-armor"]).count() == 1
+        assert "retired=0" in self.run_import("--apply").split("wook-water:")[1]
+
+    def test_not_a_store_account_with_requests_is_kept(self, monkeypatch):
+        def restricted(self, *args, **kwargs):
+            raise RestrictedError("referenced by a request", set())
+
+        monkeypatch.setattr(em.Retailer, "delete", restricted)
+        fields = [*FIELDS, "store_type"]
+        with (import_store_roster.DATA_DIR / "roster.csv").open("w", newline="") as fh:
+            writer = csv.writer(fh)
+            writer.writerow(fields)
+            writer.writerow([*ROWS[1][:7], "Verified", "Not a store"])
+        home = em.Retailer.objects.create(
+            tenant=self.tenants["alcohol-armor"], name="Some Holdings LLC",
+            address="720 N 3rd St, Boonville, IN 47601", created_by=self.sys,
+        )
+        log = self.run_import("--apply")
+        assert "retired=0" in log
+        assert "has requests/events" in log
+        assert em.Retailer.objects.filter(pk=home.pk).exists()
 
     def test_missing_tenant_fails_before_writing(self):
         self.tenants["wook-water"].slug = "wook-water-old"
