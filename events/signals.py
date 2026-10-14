@@ -30,6 +30,7 @@ from django.utils import timezone as django_timezone
 from events.models import Event, Request
 from ambassadors.models import AmbassadorEvent
 from events.tasks import sync_event_to_all_connected_users
+from utils.outbound import block_if_suppressed
 from utils.queues import Queues
 
 logger = logging.getLogger(__name__)
@@ -54,6 +55,8 @@ _CALENDAR_SKIP_UPDATE_FIELDS = frozenset({
 
 @receiver(post_save, sender=Event)
 def sync_event_on_create_or_update(sender, instance: Event, created: bool, **kwargs):
+    if block_if_suppressed("calendar sync", instance.id):
+        return
     user = instance.created_by
     # If the user is an ambassador, skip the sync
     if user and user.role and user.role._is_ambassador:
@@ -384,6 +387,8 @@ def auto_create_pending_job_on_request_approval(
     # before the resolver materializes the Event, so on the create/approve
     # paths it's a no-op (no events yet) and the resolver calls the helper
     # directly. Kept for any path that re-saves an already-evented request.
+    if block_if_suppressed("job board auto-post", instance.id):
+        return
     create_pending_jobs_for_request(instance)
 
 
@@ -397,6 +402,8 @@ def auto_create_pending_job_on_request_approval(
 # back to inline sync on dev/test where there's no Redis.
 @receiver(post_save, sender=Request)
 def mirror_request_to_sheets(sender, instance: Request, created: bool, **kwargs):
+    if block_if_suppressed("sheets mirror", instance.id):
+        return
     try:
         from utils.sheets_mirror import sheet_mirror_suppressed, upsert_request_row
         if sheet_mirror_suppressed():

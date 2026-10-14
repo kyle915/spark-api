@@ -43,6 +43,7 @@ from events.torch_portal import is_torch_tenant
 from tenants.models import normalize_checkin_resources
 from recaps import co_activation
 from recaps.fresh_vintage import inject_roadshow_calcs
+from utils.outbound import block_if_suppressed
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
@@ -1794,6 +1795,8 @@ def _finalize_recap_offthread(recap_id: int) -> None:
     fresh thread (its own loop, no asgiref thread-local) so a nested
     thread-sensitive DB write can't deadlock the calling ASGI worker. Both are
     best-effort — a failure here never fails the submitted recap."""
+    if block_if_suppressed("recap submitted notifications", recap_id):
+        return
 
     async def _run():
         from asgiref.sync import sync_to_async

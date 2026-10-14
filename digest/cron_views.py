@@ -5928,6 +5928,47 @@ class SetupBrandGroupView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class SeedBrandGroupDemoView(View):
+    """POST `/internal/cron/seed-brand-group-demo`.
+
+    Runs `seed_brand_group_demo`: the FAMUS / Alcohol Armor / Wook Water demo
+    activations (DEMO-labeled requests, events, approved recaps incl. split
+    co-activations). Sends nothing. `mode=purge` removes every demo row.
+
+    Params: mode (seed|purge, default seed), apply (default DRY RUN).
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _param(key: str) -> str:
+            return (request.GET.get(key) or request.POST.get(key) or "").strip().lower()
+
+        mode = _param("mode") or "seed"
+        if mode not in ("seed", "purge"):
+            return JsonResponse({"ok": False, "error": "mode must be seed or purge"}, status=400)
+        apply_it = _param("apply") in ("1", "true", "yes", "on")
+
+        out = io.StringIO()
+        try:
+            call_command(
+                "seed_brand_group_demo",
+                stdout=out,
+                apply=apply_it,
+                purge=mode == "purge",
+            )
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("seed-brand-group-demo cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc), "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse({"ok": True, "mode": mode, "apply": apply_it, "log": out.getvalue()})
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class SetupDudeWipesCheckinView(View):
     """GET/POST `/internal/cron/setup-dude-wipes-checkin`.
 
@@ -10652,6 +10693,7 @@ def _registered_views() -> dict[str, Any]:
         "setup-pivot-energy-checkin": SetupPivotEnergyCheckinView,
         "setup-dude-wipes-checkin": SetupDudeWipesCheckinView,
         "setup-brand-group": SetupBrandGroupView,
+        "seed-brand-group-demo": SeedBrandGroupDemoView,
         "setup-fresh-vintage-checkin": SetupFreshVintageCheckinView,
         "backfill-torch-public-form-sheet": BackfillTorchPublicFormSheetView,
         "inspect-tenants": InspectTenantsView,

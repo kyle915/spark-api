@@ -20,6 +20,7 @@ from django_rq import job
 from django.core.mail import EmailMultiAlternatives
 from rq import Retry
 
+from utils.outbound import block_if_suppressed
 from utils.queues import Queues, rq_is_enabled
 
 resend.api_key = settings.RESEND_API_KEY
@@ -446,6 +447,8 @@ class MailDrivers:
         }
 
     def send(self, envelope: Envelope) -> None:
+        if block_if_suppressed("email", envelope.subject):
+            return
         self.drivers[self.driver].send(envelope)
 
 
@@ -596,6 +599,8 @@ class Mailer:
         envelope: Envelope = self.envelope()
         envelope = self._prepare_envelope(envelope)
         if _skip_if_no_recipients(envelope):
+            return
+        if block_if_suppressed("email", envelope.subject):
             return
 
         # Cloud Run has no Redis. Skip the queue entirely so we never
