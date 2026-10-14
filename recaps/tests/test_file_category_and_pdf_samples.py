@@ -791,7 +791,8 @@ class TestCustomRecapPdfSamplesB6(_Base):
         assert "Total units sold: 23" in html
         assert "Product Samples" in html
         assert "Mountain Water 16oz - Qty: 42" in html
-        assert "Beverage — Mountain Water 16oz" in html
+        assert "<span>Products Sampled</span><p>Mountain Water 16oz</p>" in html
+        assert "Beverage — " not in html
         assert '["' not in html.split("<body>", 1)[1]
 
     @pytest.mark.asyncio

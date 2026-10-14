@@ -15,9 +15,18 @@ from graphql import GraphQLError
 from ambassadors import checkin_web
 from ambassadors.tests.base import AmbassadorsGraphQLTestCase
 from events.co_brands import co_brand_lines, replace_request_co_brands, resolve_co_brands
-from events.models import Event, EventType, Product, RequestCoBrand, RequestType
+from events.models import (
+    Event,
+    EventType,
+    Location,
+    Product,
+    RequestCoBrand,
+    RequestType,
+    Retailer,
+)
 from recaps import co_activation
 from recaps.models import CustomField, CustomRecap, CustomRecapTemplate, FileType
+from recaps.pdf import build_recap_pdf_html
 from recaps.queries import CustomRecapQueriesService
 from tenants.brand_groups import build_brand_group_compare, user_can_compare
 from tenants.models import BrandGroup, BrandGroupAccess, Tenant
@@ -175,6 +184,47 @@ class TestCoActivation(_CoActivationBase):
         assert not CustomRecap.objects.filter(co_activation_parent=host).exists()
         assert not Event.objects.filter(id=copy_event_id).exists()
         assert host.co_activation_key is None
+
+    def test_recap_pdf_labels_co_activation_and_keeps_host_store(self):
+        location = Location.objects.create(
+            name="Charlotte", code="CLT", zip="28202", created_by=self.admin
+        )
+        self.event.location = location
+        self.event.retailer = Retailer.objects.create(
+            name="Publix",
+            address="100 Main St, Charlotte, NC 28202",
+            store_contact="",
+            location=location,
+            tenant=self.ww,
+            created_by=self.admin,
+        )
+        self.event.save(update_fields=["location", "retailer"])
+        host = self._submit([self._famus_entry()])
+        slice_recap = CustomRecap.objects.get(co_activation_parent=host)
+
+        host_html = build_recap_pdf_html(host, [], public_share=True)
+        slice_html = build_recap_pdf_html(slice_recap, [], public_share=True)
+
+        assert "Co-activation with FAMUS Energy" in host_html
+        assert "Co-activation with Wook Water" in slice_html
+        assert "<span>City</span><strong>Charlotte</strong>" in slice_html
+        assert "<span>Retailer</span><strong>Publix</strong>" in slice_html
+        assert "<span>Total Engagements</span><strong>25</strong>" in slice_html
+        assert "<span>Total Engagements</span><strong>60</strong>" in host_html
+
+        checkin_web.submit_checkin_recap(
+            event=self.event,
+            ambassador=self.ba,
+            template=self.ww_tpl,
+            field_values=[
+                {"customFieldId": str(_field(self.ww_tpl, "consumers sampled").id), "value": "60"},
+            ],
+            files=[{"blobName": self._blob("host")}],
+            total_engagements=None,
+            co_brands=[],
+        )
+        host.refresh_from_db()
+        assert "Co-activation" not in build_recap_pdf_html(host, [], public_share=True)
 
     def test_needs_review_lists_host_only(self):
         host = self._submit([self._famus_entry()])
