@@ -28,6 +28,8 @@ ROWS = [
      "alcohol-armor", "Verified"],
     ["3", "BP", "2926 Nashville Rd, Bowling Green, KY 42103", "Bowling Green", "KY", "42103",
      "famus-energy|alcohol-armor|wook-water", "Probable - confirm"],
+    ["4", "Smokers Outlet", "240 Eastbrooke Pkwy #105, Mt Washington, KY 40047", "Mt Washington",
+     "KY", "40047", "famus-energy", "Verified"],
 ]
 
 
@@ -58,6 +60,9 @@ class TestImportStoreRoster(EventsGraphQLTestCase):
         self.boonville = em.Location.objects.create(
             name="Boonville", code="IN", zip="47601", state=self.indiana, created_by=self.sys
         )
+        self.mount_washington = em.Location.objects.create(
+            name="Mount Washington", code="KY", zip="40047", state=self.kentucky, created_by=self.sys
+        )
         monkeypatch.setattr(import_store_roster, "DATA_DIR", tmp_path)
         with (tmp_path / "roster.csv").open("w", newline="") as fh:
             writer = csv.writer(fh)
@@ -75,7 +80,7 @@ class TestImportStoreRoster(EventsGraphQLTestCase):
     def test_dry_run_writes_nothing(self):
         log = self.run_import()
         assert "DRY-RUN" in log
-        assert "famus-energy: created=2 updated=0 unchanged=0" in log
+        assert "famus-energy: created=3 updated=0 unchanged=0" in log
         assert "alcohol-armor: created=2" in log
         assert "wook-water: created=2" in log
         assert "stores on more than one brand: 2" in log
@@ -87,7 +92,7 @@ class TestImportStoreRoster(EventsGraphQLTestCase):
         log = self.run_import("--apply")
         assert "APPLY" in log
         famus = em.Retailer.objects.filter(tenant=self.tenants["famus-energy"])
-        assert sorted(famus.values_list("name", flat=True)) == ["BP", "Shell"]
+        assert sorted(famus.values_list("name", flat=True)) == ["BP", "Shell", "Smokers Outlet"]
         assert em.Retailer.objects.filter(tenant=self.tenants["wook-water"]).count() == 2
         assert em.Retailer.objects.filter(tenant=self.tenants["alcohol-armor"]).count() == 2
 
@@ -105,12 +110,19 @@ class TestImportStoreRoster(EventsGraphQLTestCase):
         ) == {bowling_green.id}
         assert "#3 BP — 2926 Nashville Rd, Bowling Green, KY 42103: Google Maps probable - confirm" in log
 
+    def test_catalog_spelling_variant_matches_by_zip(self):
+        log = self.run_import("--apply", "--tenant", "famus-energy")
+        outlet = em.Retailer.objects.get(name="Smokers Outlet")
+        assert outlet.location_id == self.mount_washington.id
+        assert not em.Location.objects.filter(name="Mt Washington").exists()
+        assert "-> catalog Mount Washington (same zip)" in log
+
     def test_rerun_is_idempotent(self):
         self.run_import("--apply")
         log = self.run_import("--apply")
-        assert "famus-energy: created=0 updated=0 unchanged=2" in log
+        assert "famus-energy: created=0 updated=0 unchanged=3" in log
         assert "cities added to Location catalog: 0" in log
-        assert em.Retailer.objects.count() == 6
+        assert em.Retailer.objects.count() == 7
         assert em.Location.objects.filter(name="Bowling Green").count() == 1
 
     def test_existing_account_at_same_address_is_reused(self):

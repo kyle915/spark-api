@@ -8,8 +8,10 @@ and walk-up list it, and a multi-brand activation there resolves on every
 brand.
 
 Accounts land as regional (``is_national=False``) stores linked to the city
-``Location`` resolved by the shared address parser (``events.market``); a
-city missing from the catalog is added. Re-runs are idempotent: a store is
+``Location`` resolved by the shared address parser (``events.market``). A
+city name the catalog spells differently ("Mt Sterling" vs "Mount Sterling")
+falls back to the catalog city with the same state + zip; only a city with
+neither is added. Re-runs are idempotent: a store is
 matched on (tenant, normalized address) and never duplicated.
 
 SAFE: dry-run by default; ``--apply`` writes.
@@ -128,19 +130,28 @@ class Command(BaseCommand):
                     city = resolution.geo.city or row["city"]
                     loc_key = (city.lower(), resolution.state_id)
                     if loc_key not in new_locations:
-                        counts["_locations"]["created"] += 1
-                        w(f"  + city {city}, {row['state']} {row['zip']} (not in Location catalog)")
-                        new_locations[loc_key] = (
-                            Location.objects.create(
-                                name=city[:50],
-                                code=row["state"],
-                                zip=row["zip"],
-                                state_id=resolution.state_id,
-                                created_by=owner,
-                            )
-                            if apply
-                            else None
+                        same_zip = (
+                            Location.objects.filter(state_id=resolution.state_id, zip=row["zip"])
+                            .order_by("id")
+                            .first()
                         )
+                        if same_zip is not None:
+                            w(f"  = city {city}, {row['state']} {row['zip']} -> catalog {same_zip.name} (same zip)")
+                            new_locations[loc_key] = same_zip
+                        else:
+                            counts["_locations"]["created"] += 1
+                            w(f"  + city {city}, {row['state']} {row['zip']} (not in Location catalog)")
+                            new_locations[loc_key] = (
+                                Location.objects.create(
+                                    name=city[:50],
+                                    code=row["state"],
+                                    zip=row["zip"],
+                                    state_id=resolution.state_id,
+                                    created_by=owner,
+                                )
+                                if apply
+                                else None
+                            )
                     loc = new_locations[loc_key]
                     location_id = loc.id if loc is not None else None
 
