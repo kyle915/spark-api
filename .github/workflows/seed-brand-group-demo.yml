@@ -1,0 +1,53 @@
+name: Seed brand group demo
+
+# FAMUS Energy / Alcohol Armor / Wook Water demo activations for walkthroughs:
+# DEMO-labeled requests, events and approved recaps (single-brand Retail +
+# Event per brand, a Wook Water + FAMUS retail co-activation and a three-brand
+# event co-activation, each split per brand). Sends NOTHING — no email, push,
+# Sheets, calendar or job board. Idempotent.
+#
+# mode=purge removes every demo row (and its photos). Purge before inviting
+# real client contacts to these brands.
+#
+# RUN apply=false FIRST AND READ THE LOG.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "seed = create the demo, purge = remove it"
+        required: true
+        default: "seed"
+        type: choice
+        options: ["seed", "purge"]
+      apply:
+        description: "Actually write (read the dry run first)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+jobs:
+  seed-brand-group-demo:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire seed-brand-group-demo cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/seed-brand-group-demo
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          MODE: ${{ github.event.inputs.mode }}
+          APPLY: ${{ github.event.inputs.apply }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            --max-time 900 \
+            -X POST "$CRON_URL" \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            --data-urlencode "mode=$MODE" \
+            --data-urlencode "apply=$APPLY")
+          echo "HTTP $STATUS"
+          python3 -c "import json; d=json.load(open('/tmp/cron-response.json')); print(d.get('log') or d); print(d.get('detail') or '')"
+          [ "$STATUS" != "200" ] && exit 1 || exit 0
