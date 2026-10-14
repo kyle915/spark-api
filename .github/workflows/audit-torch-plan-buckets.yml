@@ -2,8 +2,9 @@ name: Audit Torch plan buckets
 
 # Manual. Where Torch recaps land on field-marketing plans (Planned vs
 # Actual): plan, tactic, contributed vs recap values, and flags. Read-only
-# unless both attach_missing and apply are true; then it only links approved
-# recaps to the plan that booked their request (never edits a recap).
+# unless apply plus a fix flag: attach_missing links approved recaps to the
+# plan that booked their request; fix_event_types sets plan events with no
+# recap to the plan's program. Never edits a recap.
 # See events/management/commands/audit_torch_plan_buckets.py.
 
 on:
@@ -15,6 +16,12 @@ on:
         default: ""
       attach_missing:
         description: "Link missing recaps to their booked plan"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+      fix_event_types:
+        description: "Set plan events with no recap to the plan's program"
         required: false
         default: "false"
         type: choice
@@ -36,6 +43,7 @@ jobs:
           CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
           SINCE: ${{ github.event.inputs.since || '' }}
           ATTACH_MISSING: ${{ github.event.inputs.attach_missing || 'false' }}
+          FIX_EVENT_TYPES: ${{ github.event.inputs.fix_event_types || 'false' }}
           APPLY: ${{ github.event.inputs.apply || 'false' }}
         run: |
           set -euo pipefail
@@ -50,6 +58,7 @@ jobs:
             -X POST "$CRON_URL" \
             --data-urlencode "since=$SINCE" \
             --data-urlencode "attach_missing=$ATTACH_MISSING" \
+            --data-urlencode "fix_event_types=$FIX_EVENT_TYPES" \
             --data-urlencode "apply=$APPLY" \
             -H "X-Cron-Secret: $CRON_SECRET")
 
