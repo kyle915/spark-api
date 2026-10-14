@@ -1,11 +1,11 @@
 roster_no,store_name,store_type,address,city,state,zip,brands,address_source,maps_match
 1,Cloudz N Things,Smoke / Vape Shop,"1113 State St, Lawrenceville, IL 62439",Lawrenceville,IL,62439,alcohol-armor,google_maps_verified,Verified
-2,BP,Gas Station,"1927 Broadway St, Anderson, IN 46012",Anderson,IN,46012,famus-energy,google_maps_verified,Verified
+2,BP,Gas Station,"1927 Broadway St, Anderson, IN 46012",Anderson,IN,46012,famus-energy|alcohol-armor,google_maps_verified,Verified
 3,Manchester Market,Gas Station,"10477 IN-48, Aurora, IN 47001",Aurora,IN,47001,famus-energy,google_maps_verified,Verified
 4,BP,Gas Station,"170 S state rd. 135, Bargersville, IN 46146",Bargersville,IN,46146,alcohol-armor,roster,Probable - confirm
 5,Shell,Gas Station,"90 North St #135, Bargersville, IN 46106",Bargersville,IN,46106,famus-energy,google_maps_verified,Verified
 6,Batesville Food Mart,Gas Station,"1340 IN-46, Batesville, IN 47006",Batesville,IN,47006,alcohol-armor,google_maps_verified,Verified
-7,Shell,Gas Station,"1303 S Main St, Bluffton, IN 46714",Bluffton,IN,46714,famus-energy|wook-water,google_maps_verified,Verified
+7,Shell,Gas Station,"1303 S Main St, Bluffton, IN 46714",Bluffton,IN,46714,famus-energy|wook-water|alcohol-armor,google_maps_verified,Verified
 8,Circle K,Gas Station,"720 N 3rd St, Boonville, IN 47601",Boonville,IN,47601,alcohol-armor,google_maps_verified,Verified
 9,BP,Gas Station,"2601 State St, Columbus, IN 47201",Columbus,IN,47201,famus-energy|alcohol-armor,google_maps_verified,Verified
 10,BP,Gas Station,"1450 Darlington Ave, Crawfordsville, IN 47933",Crawfordsville,IN,47933,famus-energy,google_maps_verified,Verified
@@ -42,22 +42,22 @@ roster_no,store_name,store_type,address,city,state,zip,brands,address_source,map
 41,Fast Mart,Gas Station,"1151 Bloomfield Rd, Bardstown, KY 40004",Bardstown,KY,40004,alcohol-armor|wook-water,google_maps_verified,Verified
 42,Smiley Wine & Spirits #4,Liquor Store,"624 Bloomfield Rd, Bardstown, KY 40004",Bardstown,KY,40004,alcohol-armor,roster,Verified
 43,Log Cabin (Speedy Mart),Gas Station,"450 E Stephen Foster Ave, Bardstown, KY 40004",Bardstown,KY,40004,wook-water,google_maps_verified,Verified
-44,Beaver Dam Key Stop,Gas Station,"724 S Main St, Beaver Dam, KY 42320",Beaver Dam,KY,42320,famus-energy,google_maps_verified,Verified
+44,Beaver Dam Key Stop,Gas Station,"724 S Main St, Beaver Dam, KY 42320",Beaver Dam,KY,42320,famus-energy|alcohol-armor,google_maps_verified,Verified
 45,Beaver Dam Liquors,Liquor Store,"1091 N Main St, Beaver Dam, KY 42320",Beaver Dam,KY,42320,alcohol-armor,google_maps_verified,Verified
-46,Marathon Gas,Gas Station,"1110 N Main St #3, Beaver Dam, KY 42320",Beaver Dam,KY,42320,famus-energy,google_maps_verified,Verified
+46,Marathon Gas,Gas Station,"1110 N Main St #3, Beaver Dam, KY 42320",Beaver Dam,KY,42320,famus-energy|alcohol-armor,google_maps_verified,Verified
 47,76 Liquor And Tobacco,Liquor Store,"809 Paint Lick Rd, Berea, KY 40403",Berea,KY,40403,alcohol-armor,google_maps_verified,Verified
 48,Smoke World,Smoke / Vape Shop,"130 Walton Ave Unit C, Bowling Green, KY 42104",Bowling Green,KY,42104,alcohol-armor,roster,Verified
 49,Citgo,Gas Station,"4800 Main St, Bremen, KY 42325",Bremen,KY,42325,famus-energy,google_maps_verified,Verified
-50,Marathon Gas,Gas Station,"105 KY-56, Calhoun, KY 42327",Calhoun,KY,42327,famus-energy|wook-water,google_maps_verified,Verified
+50,Marathon Gas,Gas Station,"105 KY-56, Calhoun, KY 42327",Calhoun,KY,42327,famus-energy|wook-water|alcohol-armor,google_maps_verified,Verified
 51,Sunoco,Gas Station,"890 Main St, Calhoun, KY 42327",Calhoun,KY,42327,famus-energy,google_maps_verified,Verified
 52,Marathon Gas,Gas Station,"3520 Ivor Rd, California, KY 41007",California,KY,41007,alcohol-armor,google_maps_verified,Verified
-53,Smiley's,Gas Station,"725 E Broadway St, Campbellsville, KY 42718",Campbellsville,KY,42718,famus-energy|wook-water,google_maps_verified,Verified
+53,Smiley's,Gas Station,"725 E Broadway St, Campbellsville, KY 42718",Campbellsville,KY,42718,famus-energy|wook-water|alcohol-armor,google_maps_verified,Verified
 54,Marathon Gas,Gas Station,"1315 Elkhorn Rd, Campbellsville, KY 42718",Campbellsville,KY,42718,alcohol-armor|wook-water,google_maps_verified,Verified
-55,Marathon Gas,Gas Station,"208 State Route 109 N, Clay, KY 42404",Clay,KY,42404,famus-energy,roster,Probable - confirm
+55,Marathon Gas,Gas Station,"208 State Route 109 N, Clay, KY 42404",Clay,KY,42404,famus-energy|alcohol-armor,roster,Probable - confirm
 56,Sunoco,Gas Station,"4140 Alexandria Pike, Cold Spring, KY 41076",Cold Spring,KY,41076,famus-energy|alcohol-armor,google_maps_verified,Verified
 57,Marathon,Gas Station,"1125 Campbellsville Rd, Columbia, KY 42728",Columbia,KY,42728,famus-energy,google_maps_verified,Verified
 58,Dawson Quikstop,Gas Station,"25 Oak Heights, Dawson Springs, KY 42408",Dawson Springs,KY,42408,famus-energy,google_maps_verified,Verified
-59,Marathon Gas,Gas Station,"403 US-41 Alt N, Dixon, KY 42409",Dixon,KY,42409,famus-energy,google_maps_verified,Verified
+59,Marathon Gas,Gas Station,"403 US-41 Alt N, Dixon, KY 42409",Dixon,KY,42409,famus-energy|alcohol-armor,google_maps_verified,Verified
 60,Eastview Food Mart,Gas Station,"13420 Leitchfield Rd, Eastview, KY 42732",Eastview,KY,42732,wook-water,google_maps_verified,Verified
 61,Shell,Gas Station,"5197 S Wilson Rd, Elizabethtown, KY 42701",Elizabethtown,KY,42701,alcohol-armor,google_maps_verified,Verified
 62,Danny's Tobacco,Smoke / Vape Shop,"615 N Main St, Elizabethtown, KY 42701",Elizabethtown,KY,42701,famus-energy|alcohol-armor|wook-water,google_maps_verified,Verified
@@ -71,19 +71,19 @@ roster_no,store_name,store_type,address,city,state,zip,brands,address_source,map
 70,Junction,Convenience Store,"1000 KY-54, Fordsville, KY 42343",Fordsville,KY,42343,alcohol-armor,google_maps_verified,Verified
 71,Madhouse Vapes,Smoke / Vape Shop,"260 Versailles Rd #601, Frankfort, KY 40601",Frankfort,KY,40601,alcohol-armor,google_maps_verified,Verified
 72,Skyview Shell,Gas Station,"40 Steadmantown Ln Ste A, Frankfort, KY 40601",Frankfort,KY,40601,alcohol-armor|wook-water,google_maps_verified,Verified
-73,Marathon Gas,Gas Station,"101 Cassidy Ave, Fredonia, KY 42411",Fredonia,KY,42411,famus-energy,google_maps_verified,Verified
+73,Marathon Gas,Gas Station,"101 Cassidy Ave, Fredonia, KY 42411",Fredonia,KY,42411,famus-energy|alcohol-armor,google_maps_verified,Verified
 74,Marathon,Gas Station,"109 Main St, Ghent, KY 41045",Ghent,KY,41045,famus-energy|alcohol-armor,google_maps_verified,Verified
 75,Travelers Food Mart / Valero,Gas Station,"601 N Race St, Glasgow, KY 42141",Glasgow,KY,42141,famus-energy|wook-water,google_maps_verified,Verified
 76,Hartford Smoke Outlet,Smoke / Vape Shop,"1115 S Main Street, Hartford, KY 42347",Hartford,KY,42347,alcohol-armor,roster,Verified
-77,Valero,Gas Station,"436 S Main St, Hartford, KY 42347",Hartford,KY,42347,wook-water,google_maps_verified,Verified
+77,Valero,Gas Station,"436 S Main St, Hartford, KY 42347",Hartford,KY,42347,wook-water|alcohol-armor,google_maps_verified,Verified
 78,Bill's IGA Supermarket,Grocery / Market,"290 Hawes Blvd, Hawesville, KY 42348",Hawesville,KY,42348,alcohol-armor|wook-water,google_maps_verified,Verified
 79,Weber Store,Gas Station,"9637 KY-69, Hawesville, KY 42348",Hawesville,KY,42348,famus-energy,google_maps_verified,Verified
 80,Shell,Gas Station,"1650 2nd St, Henderson, KY 42420",Henderson,KY,42420,alcohol-armor,google_maps_verified,Verified
-81,Fast Fuel / Sky Vape & Smoke,Gas Station,"1775 S Green St, Henderson, KY 42420",Henderson,KY,42420,famus-energy|wook-water,roster,Probable - confirm
+81,Fast Fuel / Sky Vape & Smoke,Gas Station,"1775 S Green St, Henderson, KY 42420",Henderson,KY,42420,famus-energy|wook-water|alcohol-armor,roster,Probable - confirm
 82,BP,Gas Station,"421 S Lincoln Blvd, Hodgenville, KY 42748",Hodgenville,KY,42748,alcohol-armor,roster,Probable - confirm
 83,Lincoln's General Store,Gas Station,"2784 Lincoln Farm Rd, Hodgenville, KY 42748",Hodgenville,KY,42748,famus-energy|alcohol-armor|wook-water,google_maps_verified,Verified
 84,Shell,Gas Station,"701 S Lincoln Blvd, Hodgenville, KY 42748",Hodgenville,KY,42748,famus-energy|alcohol-armor|wook-water,google_maps_verified,Verified
-85,In & Out Market,Gas Station,"11929 Taylor Mill Rd, Independence, KY 41051",Independence,KY,41051,famus-energy,google_maps_verified,Verified
+85,In & Out Market,Gas Station,"11929 Taylor Mill Rd, Independence, KY 41051",Independence,KY,41051,famus-energy|alcohol-armor,google_maps_verified,Verified
 86,Marathon / Valero,Gas Station,"10976 South Preston Hwy, Lebanon Junction, KY 40150",Lebanon Junction,KY,40150,alcohol-armor,roster,Probable - confirm
 87,Shell,Gas Station,"715 S Main St, Leitchfield, KY 42754",Leitchfield,KY,42754,wook-water,google_maps_verified,Verified
 88,Hey Buddy,Gas Station,"1590 4th St, Lewisport, KY 42351",Lewisport,KY,42351,wook-water,google_maps_verified,Verified
@@ -108,21 +108,21 @@ roster_no,store_name,store_type,address,city,state,zip,brands,address_source,map
 107,Super USA,Gas Station,"2300 Breckenridge St, Owensboro, KY 42303",Owensboro,KY,42303,famus-energy,roster,Probable - confirm
 108,Star Vape & Smoke,Smoke / Vape Shop,"1650 Starlite Dr Ste G, Owensboro, KY 42301",Owensboro,KY,42301,alcohol-armor|wook-water,google_maps_verified,Verified
 109,Quality Quick #23,Gas Station,"955 Southtown Blvd, Owensboro, KY 42301",Owensboro,KY,42301,alcohol-armor,google_maps_verified,Verified
-110,Shell,Gas Station,"3511 Frederica St, Owensboro, KY 42301",Owensboro,KY,42301,wook-water,google_maps_verified,Verified
+110,Shell,Gas Station,"3511 Frederica St, Owensboro, KY 42301",Owensboro,KY,42301,wook-water|alcohol-armor,google_maps_verified,Verified
 111,Even Steven (Marathon),Gas Station,"3400 Old hartford rd, Owensboro, KY 42303",Owensboro,KY,42303,famus-energy|wook-water,roster,Verified
 112,Quick Mart,Gas Station,"1538 W 2nd St, Owensboro, KY 42301",Owensboro,KY,42301,wook-water,google_maps_verified,Verified
 113,Discount Liquor 54,Liquor Store,"3101 Alvey Park Dr E Ste E, Owensboro, KY 42303",Owensboro,KY,42303,alcohol-armor,google_maps_verified,Verified
-114,Quality Quick 10,Gas Station,"2030 W Parrish Ave, Owensboro, KY 42301",Owensboro,KY,42301,famus-energy,google_maps_verified,Verified
+114,Quality Quick 10,Gas Station,"2030 W Parrish Ave, Owensboro, KY 42301",Owensboro,KY,42301,famus-energy|alcohol-armor,google_maps_verified,Verified
 115,American Fuel,Gas Station,"1211 Breckenridge St, Owensboro, KY 42303",Owensboro,KY,42303,famus-energy|alcohol-armor|wook-water,google_maps_verified,Verified
 116,Marathon,Gas Station,"1035 Tamarack Rd, Owensboro, KY 42301",Owensboro,KY,42301,famus-energy|alcohol-armor|wook-water,google_maps_verified,Verified
-117,Marathon Gas,Gas Station,"2910 KY-54, Owensboro, KY 42303",Owensboro,KY,42303,famus-energy|wook-water,google_maps_verified,Verified
+117,Marathon Gas,Gas Station,"2910 KY-54, Owensboro, KY 42303",Owensboro,KY,42303,famus-energy|wook-water|alcohol-armor,google_maps_verified,Verified
 118,Jimmie's Drive-In Liquor Store,Liquor Store,"1101 W 9th St, Owensboro, KY 42301",Owensboro,KY,42301,alcohol-armor,google_maps_verified,Verified
 119,Shell,Gas Station,"3815 Carter Rd, Owensboro, KY 42301",Owensboro,KY,42301,alcohol-armor|wook-water,google_maps_verified,Verified
 120,Fast Fuel,Gas Station,"4123 Frederica St, Owensboro, KY 42303",Owensboro,KY,42303,famus-energy|alcohol-armor|wook-water,google_maps_verified,Verified
 121,Larry's Little Giant,Convenience Store,"5005 Graham Ln, Owensboro, KY 42303",Owensboro,KY,42303,famus-energy,google_maps_verified,Verified
 122,Super USA,Gas Station,"3015 Burlew Blvd, Owensboro, KY 42303",Owensboro,KY,42303,alcohol-armor,google_maps_verified,Verified
 123,Battlefield Food Mart & Deli,Gas Station,"303 E 2nd St, Perryville, KY 40468",Perryville,KY,40468,famus-energy|wook-water,google_maps_verified,Verified
-124,Minit Mart,Gas Station,"2300 S Dixie Blvd, Radcliff, KY 40160",Radcliff,KY,40160,famus-energy|wook-water,google_maps_verified,Verified
+124,Minit Mart,Gas Station,"2300 S Dixie Blvd, Radcliff, KY 40160",Radcliff,KY,40160,famus-energy|wook-water|alcohol-armor,google_maps_verified,Verified
 125,Best Buy Liquor,Liquor Store,"117 W Lincoln Trail Blvd, Radcliff, KY 40160",Radcliff,KY,40160,alcohol-armor|wook-water,google_maps_verified,Verified
 126,Shell,Gas Station,"601 W Lincoln Trail Blvd, Radcliff, KY 40160",Radcliff,KY,40160,famus-energy|alcohol-armor,google_maps_verified,Verified
 127,Marathon Gas,Gas Station,"1619 W Steve Wariner Dr, Russell Springs, KY 42642",Russell Springs,KY,42642,wook-water,google_maps_verified,Verified
@@ -136,7 +136,7 @@ roster_no,store_name,store_type,address,city,state,zip,brands,address_source,map
 135,Lee's Quick Stop,Gas Station,"100 Jefferson St, Taylorsville, KY 40071",Taylorsville,KY,40071,famus-energy|alcohol-armor|wook-water,google_maps_verified,Verified
 136,Shell,Gas Station,"6520 US-231, Utica, KY 42376",Utica,KY,42376,famus-energy,google_maps_verified,Verified
 137,Vik's Food Mart,Gas Station,"11707 US-231, Utica, KY 42376",Utica,KY,42376,famus-energy|alcohol-armor,google_maps_verified,Verified
-138,Basham's Foodmart,Gas Station,"3425 US-60, Vine Grove, KY 40175",Vine Grove,KY,40175,wook-water,google_maps_verified,Verified
+138,Basham's Foodmart,Gas Station,"3425 US-60, Vine Grove, KY 40175",Vine Grove,KY,40175,wook-water|alcohol-armor,google_maps_verified,Verified
 139,J's Smoke,Smoke / Vape Shop,"100 Vineland Centre Dr, Vine Grove, KY 40175",Vine Grove,KY,40175,alcohol-armor,google_maps_verified,Verified
 140,Shell,Gas Station,"10000 Main St, Whitesville, KY 42378",Whitesville,KY,42378,alcohol-armor,google_maps_verified,Verified
 141,Marshall Marathon,Gas Station,"2203 OH-125, Amelia, OH 45102",Amelia,OH,45102,alcohol-armor,google_maps_verified,Verified
@@ -149,7 +149,7 @@ roster_no,store_name,store_type,address,city,state,zip,brands,address_source,map
 148,Hilltop One Stop,Gas Station,"647 Old State Rte 74, Cincinnati, OH 45244",Cincinnati,OH,45244,alcohol-armor,google_maps_verified,Verified
 149,Shell,Gas Station,"5984 Glenway Ave, Cincinnati, OH 45238",Cincinnati,OH,45238,alcohol-armor,google_maps_verified,Verified
 150,Village Keg Wine & Spirit Shop,Liquor Store,"5 Enfield St, Cincinnati, OH 45218",Cincinnati,OH,45218,famus-energy|alcohol-armor|wook-water,google_maps_verified,Verified
-151,Vine Street Market,Gas Station,"7111 Vine St, Cincinnati, OH 45216",Cincinnati,OH,45216,famus-energy|wook-water,google_maps_verified,Verified
+151,Vine Street Market,Gas Station,"7111 Vine St, Cincinnati, OH 45216",Cincinnati,OH,45216,famus-energy|wook-water|alcohol-armor,google_maps_verified,Verified
 152,Marathon,Gas Station,"5361 Kennedy Ave, Cincinnati, OH 45213",Cincinnati,OH,45213,alcohol-armor,google_maps_verified,Verified
 153,Brentwood Spirits,Liquor Store,"8621 Winton Rd, Cincinnati, OH 45231",Cincinnati,OH,45231,alcohol-armor,google_maps_verified,Verified
 154,Topup Shop,Gas Station,"2607 Victory Pkwy, Cincinnati, OH 45206",Cincinnati,OH,45206,alcohol-armor,google_maps_verified,Verified
@@ -192,7 +192,7 @@ roster_no,store_name,store_type,address,city,state,zip,brands,address_source,map
 191,Sidney Arco,Gas Station,"2598 Wapakoneta Ave, Sidney, OH 45365",Sidney,OH,45365,wook-water,google_maps_verified,Verified
 192,Elm Mart Convenience Store,Convenience Store,"119 S Elm St, Troy, OH 45373",Troy,OH,45373,famus-energy,google_maps_verified,Verified
 193,Pettit's,Gas Station,"303 E Court St, Washington Court House, OH 43160",Washington Court House,OH,43160,alcohol-armor|wook-water,google_maps_verified,Verified
-194,Court House Corner Market,Liquor Store,"1106 Washington Ave, Washington Court House, OH 43160",Washington Court House,OH,43160,famus-energy,google_maps_verified,Verified
+194,Court House Corner Market,Liquor Store,"1106 Washington Ave, Washington Court House, OH 43160",Washington Court House,OH,43160,famus-energy|alcohol-armor,google_maps_verified,Verified
 195,Shell,Gas Station,"9210 Cincinnati Columbus Rd, West Chester Twp, OH 45069",West Chester Twp,OH,45069,alcohol-armor,google_maps_verified,Verified
 196,Stop N Go Shell West Chester,Gas Station,"9655 Cincinnati Dayton Rd, West Chester Twp, OH 45069",West Chester Twp,OH,45069,famus-energy|alcohol-armor|wook-water,google_maps_verified,Verified
 197,Marathon Gas,Gas Station,"5205 US-22, Wilmington, OH 45177",Wilmington,OH,45177,famus-energy|wook-water,google_maps_verified,Verified
@@ -206,40 +206,40 @@ roster_no,store_name,store_type,address,city,state,zip,brands,address_source,map
 205,KDS Quickstop,Gas Station,"3645 Flaherty Rd, Vine Grove, KY 40175",Vine Grove,KY,40175,famus-energy|wook-water,google_maps_verified,Verified
 206,PeeDee's,Gas Station,"915 Court St, Wickliffe, KY 42087",Wickliffe,KY,42087,famus-energy,google_maps_verified,Verified
 207,Daily Mart,Convenience Store,"5804 Hamilton Ave #2, Cincinnati, OH 45224",Cincinnati,OH,45224,famus-energy,google_maps_verified,Verified
-208,Shell,Gas Station,"6164 N Suncoast Blvd, Crystal River, FL 34428",Crystal River,FL,34428,famus-energy,google_maps_verified,Verified
+208,Shell,Gas Station,"6164 N Suncoast Blvd, Crystal River, FL 34428",Crystal River,FL,34428,famus-energy|alcohol-armor,google_maps_verified,Verified
 209,Park Lane Smoke Shop,Smoke / Vape Shop,"5750 SW 75th CT Suite 50, Gainesville, FL 32608",Gainesville,FL,32608,famus-energy,roster,Verified
-210,Conoco,Gas Station,"606 S Commercial St, Harrisburg, IL 62946",Harrisburg,IL,62946,famus-energy,roster,Probable - confirm
+210,Conoco,Gas Station,"606 S Commercial St, Harrisburg, IL 62946",Harrisburg,IL,62946,famus-energy|alcohol-armor,roster,Probable - confirm
 211,Boston Food Mart,Gas Station,"12365 Boston Rd, Boston, KY 40107",Boston,KY,40107,famus-energy,google_maps_verified,Verified
 212,BP,Gas Station,"2926 Nashville Rd, Bowling Green, KY 42101",Bowling Green,KY,42101,famus-energy,google_maps_verified,Verified
 213,Plano Country Store,Gas Station,"3205 Plano Rd, Bowling Green, KY 42104",Bowling Green,KY,42104,famus-energy,google_maps_verified,Verified
 214,Marathon Gas,Gas Station,"2229 Nashville Rd, Bowling Green, KY 42101",Bowling Green,KY,42101,famus-energy,google_maps_verified,Verified
-215,Burgin Food Express,Gas Station,"107 E Main St, Burgin, KY 40310",Burgin,KY,40310,famus-energy,google_maps_verified,Verified
-216,Vic's Stop N Go,Gas Station,"1050 Hustonville Rd, Danville, KY 40422",Danville,KY,40422,famus-energy|wook-water,google_maps_verified,Verified
+215,Burgin Food Express,Gas Station,"107 E Main St, Burgin, KY 40310",Burgin,KY,40310,famus-energy|alcohol-armor,google_maps_verified,Verified
+216,Vic's Stop N Go,Gas Station,"1050 Hustonville Rd, Danville, KY 40422",Danville,KY,40422,famus-energy|wook-water|alcohol-armor,google_maps_verified,Verified
 217,Elsmere Mini Mart,Convenience Store,"719 Garvey Ave, Elsmere, KY 41018",Elsmere,KY,41018,famus-energy,google_maps_verified,Verified
 218,United Liquor,Liquor Store,"8470 US-42, Florence, KY 41042",Florence,KY,41042,famus-energy,google_maps_verified,Verified
 219,Shell,Gas Station,"101 Limestone Dr, Frankfort, KY 40601",Frankfort,KY,40601,famus-energy,google_maps_verified,Verified
 220,Franklin Tobacco Outlet,Smoke / Vape Shop,"200 Walker St, Franklin, KY 42134",Franklin,KY,42134,famus-energy,roster,Verified
 221,BP,Gas Station,"1620 S Green St, Glasgow, KY 42141",Glasgow,KY,42141,famus-energy|wook-water,google_maps_verified,Verified
 222,Powers Express,Gas Station,"515 Main St, Hawesville, KY 42348",Hawesville,KY,42348,famus-energy|wook-water,google_maps_verified,Verified
-223,Lansdowne Marathon,Gas Station,"3527 Lansdowne Dr, Lexington, KY 40517",Lexington,KY,40517,famus-energy,google_maps_verified,Verified
+223,Lansdowne Marathon,Gas Station,"3527 Lansdowne Dr, Lexington, KY 40517",Lexington,KY,40517,famus-energy|alcohol-armor,google_maps_verified,Verified
 224,Shell,Gas Station,"130 Wallace Wilkinson Blvd, Liberty, KY 42539",Liberty,KY,42539,famus-energy|wook-water,google_maps_verified,Verified
 225,Marathon Gas,Gas Station,"291 London Shopping Center, London, KY 40741",London,KY,40741,famus-energy|wook-water,google_maps_verified,Verified
-226,Bowman Field Wine & Spirits,Liquor Store,"2800 Taylorsville Rd, Louisville, KY 40205",Louisville,KY,40205,famus-energy|wook-water,google_maps_verified,Verified
+226,Bowman Field Wine & Spirits,Liquor Store,"2800 Taylorsville Rd, Louisville, KY 40205",Louisville,KY,40205,famus-energy|wook-water|alcohol-armor,google_maps_verified,Verified
 227,BP,Gas Station,"3301 Newburg Rd, Louisville, KY 40218",Louisville,KY,40218,famus-energy|wook-water,google_maps_verified,Verified
 228,Discount Smokes,Smoke / Vape Shop,"6434 N Preston Hwy #3, Louisville, KY 40229",Louisville,KY,40229,famus-energy,google_maps_verified,Verified
 229,Platinum Food Mart,Gas Station,"1025 W Broadway, Louisville, KY 40203",Louisville,KY,40203,famus-energy|wook-water,google_maps_verified,Verified
-230,Liquor World Goldsmith Ln,Liquor Store,"2207 Goldsmith Ln, Louisville, KY 40218",Louisville,KY,40218,famus-energy|wook-water,google_maps_verified,Verified
-231,Smokers Outlet,Smoke / Vape Shop,"240 Eastbrooke Pkwy #105, Mt Washington, KY 40047",Mt Washington,KY,40047,famus-energy,google_maps_verified,Verified
-232,Sunoco,Gas Station,"1710 E Parrish Ave, Owensboro, KY 42303",Owensboro,KY,42303,famus-energy,google_maps_verified,Verified
-233,Main Street Gulf,Gas Station,"421 W Main St, Richmond, KY 40475",Richmond,KY,40475,famus-energy,google_maps_verified,Verified
+230,Liquor World Goldsmith Ln,Liquor Store,"2207 Goldsmith Ln, Louisville, KY 40218",Louisville,KY,40218,famus-energy|wook-water|alcohol-armor,google_maps_verified,Verified
+231,Smokers Outlet,Smoke / Vape Shop,"240 Eastbrooke Pkwy #105, Mt Washington, KY 40047",Mt Washington,KY,40047,famus-energy|alcohol-armor,google_maps_verified,Verified
+232,Sunoco,Gas Station,"1710 E Parrish Ave, Owensboro, KY 42303",Owensboro,KY,42303,famus-energy|alcohol-armor,google_maps_verified,Verified
+233,Main Street Gulf,Gas Station,"421 W Main St, Richmond, KY 40475",Richmond,KY,40475,famus-energy|alcohol-armor,google_maps_verified,Verified
 234,Valero,Gas Station,"199 W Steve Wariner Dr, Russell Springs, KY 42642",Russell Springs,KY,42642,famus-energy,google_maps_verified,Verified
 235,USA Fuel,Gas Station,"245 W H Brown Rd, Russellville, KY 42276",Russellville,KY,42276,famus-energy,google_maps_verified,Verified
-236,Valero (1 Stop Fuel),Gas Station,"720 Miller St, Stanford, KY 40484",Stanford,KY,40484,famus-energy|wook-water,google_maps_verified,Verified
-237,Sunoco,Gas Station,"633 E College Ave, Stanton, KY 40380",Stanton,KY,40380,famus-energy,google_maps_verified,Verified
+236,Valero (1 Stop Fuel),Gas Station,"720 Miller St, Stanford, KY 40484",Stanford,KY,40484,famus-energy|wook-water|alcohol-armor,google_maps_verified,Verified
+237,Sunoco,Gas Station,"633 E College Ave, Stanton, KY 40380",Stanton,KY,40380,famus-energy|alcohol-armor,google_maps_verified,Verified
 238,Shell,Gas Station,"2827 Verona-Mudlick Rd, Verona, KY 41092",Verona,KY,41092,famus-energy,google_maps_verified,Verified
 239,Private residence (not a store),Not a store,"5854 Swallow Ave, Kalamazoo, MI 49009",Kalamazoo,MI,49009,famus-energy,roster,Not found
 240,BP,Gas Station,"1605 Spartanburg Hwy, Hendersonville, NC 28792",Hendersonville,NC,28792,famus-energy|wook-water,google_maps_verified,Verified
-241,Ameristop Food Mart,Gas Station,"1098 Old State Rte 74, Batavia, OH 45103",Batavia,OH,45103,famus-energy,google_maps_verified,Verified
+241,Ameristop Food Mart,Gas Station,"1098 Old State Rte 74, Batavia, OH 45103",Batavia,OH,45103,famus-energy|alcohol-armor,google_maps_verified,Verified
 242,Smokeology Smoke Shop,Smoke / Vape Shop,"640 S Highland St, Memphis, TN 38111",Memphis,TN,38111,famus-energy,google_maps_verified,Verified
 243,Chevron,Gas Station,"15000 NW US Hwy 441, Alachua, FL 32615",Alachua,FL,32615,famus-energy,web_listing_verified,Verified
 244,Archer Road Chevron,Gas Station,"12210 SW Archer Rd, Archer, FL 32618",Archer,FL,32618,famus-energy,web_listing_verified,Verified
@@ -271,44 +271,44 @@ roster_no,store_name,store_type,address,city,state,zip,brands,address_source,map
 270,Cherry Lake General Store,Gas Station,"8061 FL-53, Madison, FL 32340",Madison,FL,32340,famus-energy,web_listing_verified,Verified
 271,BP 250,Gas Station,"3710 SW College Rd, Ocala, FL 34474",Ocala,FL,34474,famus-energy,client_sheet,Probable - confirm
 272,Boulevard Citgo,Gas Station,"1737 E Silver Springs Blvd, Ocala, FL 34470",Ocala,FL,34470,famus-energy,client_sheet,Probable - confirm
-273,BP,Gas Station,"5160 S Pine Ave, Ocala, FL 34480",Ocala,FL,34480,famus-energy,client_sheet,Probable - confirm
+273,BP,Gas Station,"5160 S Pine Ave, Ocala, FL 34480",Ocala,FL,34480,famus-energy|alcohol-armor,client_sheet,Probable - confirm
 274,Sunrise Foodmart #1,Convenience Store,"3820 NW Blitchton Rd, Ocala, FL 34482",Ocala,FL,34482,famus-energy,client_sheet,Probable - confirm
-275,Marion Liquor,Liquor Store,"3951 S Pine Ave, Ocala, FL 34480",Ocala,FL,34480,famus-energy,client_sheet,Probable - confirm
+275,Marion Liquor,Liquor Store,"3951 S Pine Ave, Ocala, FL 34480",Ocala,FL,34480,famus-energy|alcohol-armor,client_sheet,Probable - confirm
 276,Salt Springs Pit Stop (Sunoco),Gas Station,"13444 N Hwy 19, Salt Springs, FL 32134",Salt Springs,FL,32134,famus-energy,web_listing_verified,Verified
 277,Sunoco T-Mart,Gas Station,"313 Cardinal Dr, Elizabethtown, KY 42701",Elizabethtown,KY,42701,famus-energy|wook-water,client_sheet,Probable - confirm
 278,AJ Market,Convenience Store,"534 W Dixie Ave, Elizabethtown, KY 42701",Elizabethtown,KY,42701,famus-energy|wook-water,client_sheet,Probable - confirm
 279,BP,Gas Station,"1401 Louisville Rd, Frankfort, KY 40601",Frankfort,KY,40601,famus-energy|wook-water,web_listing_verified,Verified
 280,Shell,Gas Station,"748 N Main St, Greenville, KY 42345",Greenville,KY,42345,famus-energy|wook-water,web_listing_verified,Verified
-281,Valero,Gas Station,"1411 E 9th St, Hopkinsville, KY 42240",Hopkinsville,KY,42240,famus-energy|wook-water,web_listing_verified,Verified
-282,62 Stop-N-Shop,Gas Station,"2093 Beaver Dam Rd, Leitchfield, KY 42754",Leitchfield,KY,42754,famus-energy,web_listing_verified,Verified
-283,Shell,Gas Station,"906 US-68, Maysville, KY 41056",Maysville,KY,41056,famus-energy|wook-water,web_listing_verified,Verified
+281,Valero,Gas Station,"1411 E 9th St, Hopkinsville, KY 42240",Hopkinsville,KY,42240,famus-energy|wook-water|alcohol-armor,web_listing_verified,Verified
+282,62 Stop-N-Shop,Gas Station,"2093 Beaver Dam Rd, Leitchfield, KY 42754",Leitchfield,KY,42754,famus-energy|alcohol-armor,web_listing_verified,Verified
+283,Shell,Gas Station,"906 US-68, Maysville, KY 41056",Maysville,KY,41056,famus-energy|wook-water|alcohol-armor,web_listing_verified,Verified
 284,Midway Food Mart,Gas Station,"1004 Green Gables Dr, Midway, KY 40347",Midway,KY,40347,famus-energy|wook-water,web_listing_verified,Verified
 285,E-Z Mart (Circle K),Gas Station,"6059 US-62, Nortonville, KY 42442",Nortonville,KY,42442,famus-energy|wook-water,web_listing_verified,Verified
 286,Quality Quick #21,Gas Station,"2630 W Parrish Ave, Owensboro, KY 42301",Owensboro,KY,42301,famus-energy|wook-water,web_listing_verified,Verified
-287,Quality Quick 11 (Shell),Gas Station,"30 Bon Harbor Hills, Owensboro, KY 42301",Owensboro,KY,42301,famus-energy|wook-water,web_listing_verified,Verified
-288,Brooks Market,Convenience Store,"1575 S Wilson Rd, Radcliff, KY 40160",Radcliff,KY,40160,famus-energy|wook-water,client_sheet,Probable - confirm
+287,Quality Quick 11 (Shell),Gas Station,"30 Bon Harbor Hills, Owensboro, KY 42301",Owensboro,KY,42301,famus-energy|wook-water|alcohol-armor,web_listing_verified,Verified
+288,Brooks Market,Convenience Store,"1575 S Wilson Rd, Radcliff, KY 40160",Radcliff,KY,40160,famus-energy|wook-water|alcohol-armor,client_sheet,Probable - confirm
 289,Amoco,Gas Station,"100 Moberly Rd, Richmond, KY 40475",Richmond,KY,40475,famus-energy|wook-water,web_listing_verified,Verified
-290,Shell,Gas Station,"105 April Way Dr, Winchester, KY 40391",Winchester,KY,40391,famus-energy,web_listing_verified,Verified
+290,Shell,Gas Station,"105 April Way Dr, Winchester, KY 40391",Winchester,KY,40391,famus-energy|alcohol-armor,web_listing_verified,Verified
 291,BP,Gas Station,"5575 Dixie Hwy, Fairfield, OH 45014",Fairfield,OH,45014,famus-energy,web_listing_verified,Verified
 292,BP,Gas Station,"625 W High St, Hicksville, OH 43526",Hicksville,OH,43526,famus-energy|wook-water,web_listing_verified,Verified
 293,Beverage Dock,Drive-Thru / Carryout,"776 S South St, Wilmington, OH 45177",Wilmington,OH,45177,famus-energy|wook-water,web_listing_verified,Verified
 294,BP 10K Food Mart,Gas Station,"2960 Brandenburg Rd, Brandenburg, KY 40108",Brandenburg,KY,40108,wook-water,google_maps_verified,Verified
 295,Marathon,Gas Station,"300 S Washington St, Crawfordsville, IN 47933",Crawfordsville,IN,47933,wook-water,google_maps_verified,Verified
 296,Main & High Shortstop,Convenience Store,"81 N Main St, Frankfort, OH 45628",Frankfort,OH,45628,wook-water,google_maps_verified,Verified
-297,Infinity Smoke Shop & Vape,Smoke / Vape Shop,"5425 Valley Station Rd, Louisville, KY 40272",Louisville,KY,40272,wook-water,google_maps_verified,Verified
-298,Quality Quick (Marathon),Gas Station,"300 W Reservoir Ave, Central City, KY 42330",Central City,KY,42330,wook-water,google_maps_verified,Verified
+297,Infinity Smoke Shop & Vape,Smoke / Vape Shop,"5425 Valley Station Rd, Louisville, KY 40272",Louisville,KY,40272,wook-water|alcohol-armor,google_maps_verified,Verified
+298,Quality Quick (Marathon),Gas Station,"300 W Reservoir Ave, Central City, KY 42330",Central City,KY,42330,wook-water|alcohol-armor,google_maps_verified,Verified
 299,Even Steven Friendly Village (Marathon),Gas Station,"7155 KY-81, Owensboro, KY 42301",Owensboro,KY,42301,wook-water,google_maps_verified,Verified
 300,BP,Gas Station,"29459 IN-19, Atlanta, IN 46031",Atlanta,IN,46031,wook-water,google_maps_verified,Verified
 301,Sunoco,Gas Station,"2101 W Morris St, Indianapolis, IN 46221",Indianapolis,IN,46221,wook-water,google_maps_verified,Verified
-302,Doe Valley Express (Marathon),Gas Station,"155 Old Mill Rd, Brandenburg, KY 40108",Brandenburg,KY,40108,wook-water,google_maps_verified,Verified
+302,Doe Valley Express (Marathon),Gas Station,"155 Old Mill Rd, Brandenburg, KY 40108",Brandenburg,KY,40108,wook-water|alcohol-armor,google_maps_verified,Verified
 303,Niagara Food Mart,Gas Station,"3949 KY-416, Henderson, KY 42420",Henderson,KY,42420,wook-water,google_maps_verified,Verified
-304,Sunoco,Gas Station,"204 W Main St, Oblong, IL 62449",Oblong,IL,62449,wook-water,google_maps_verified,Verified
+304,Sunoco,Gas Station,"204 W Main St, Oblong, IL 62449",Oblong,IL,62449,wook-water|alcohol-armor,google_maps_verified,Verified
 305,Sunoco,Gas Station,"11520 N Florida Ave, Dunnellon, FL 34434",Dunnellon,FL,34434,wook-water,google_maps_verified,Verified
-306,Crown Smoke Shop & Cigar Lounge,Smoke / Vape Shop,"4507 N Dixie Hwy, Elizabethtown, KY 42701",Elizabethtown,KY,42701,wook-water,google_maps_verified,Verified
+306,Crown Smoke Shop & Cigar Lounge,Smoke / Vape Shop,"4507 N Dixie Hwy, Elizabethtown, KY 42701",Elizabethtown,KY,42701,wook-water|alcohol-armor,google_maps_verified,Verified
 307,31E Food Mart (Sunoco),Gas Station,"706 N 3rd St, Bardstown, KY 40004",Bardstown,KY,40004,wook-water,google_maps_verified,Verified
 308,Smoke City,Smoke / Vape Shop,"1612 Ring Rd Ste 100, Elizabethtown, KY 42701",Elizabethtown,KY,42701,wook-water,google_maps_verified,Verified
 309,Dixie Gas And Go (ARCO),Gas Station,"6909 Dixie Hwy, Florence, KY 41042",Florence,KY,41042,wook-water,google_maps_verified,Verified
-310,Ameristop Food Mart,Convenience Store,"1039 Eaton Ave, Hamilton, OH 45013",Hamilton,OH,45013,wook-water,google_maps_verified,Verified
+310,Ameristop Food Mart,Convenience Store,"1039 Eaton Ave, Hamilton, OH 45013",Hamilton,OH,45013,wook-water|alcohol-armor,google_maps_verified,Verified
 311,Hanna One Stop (Conoco),Gas Station,"2202 E Hanna Ave, Indianapolis, IN 46227",Indianapolis,IN,46227,wook-water,google_maps_verified,Verified
 312,Lottoland Lottery & Tobacco Outlet,Smoke / Vape Shop,"3765 Nashville Rd, Franklin, KY 42134",Franklin,KY,42134,wook-water,google_maps_verified,Verified
 313,Tom's Express Mart,Convenience Store,"7529 Fairground Rd, Blanchester, OH 45107",Blanchester,OH,45107,wook-water,google_maps_verified,Verified
@@ -320,23 +320,102 @@ roster_no,store_name,store_type,address,city,state,zip,brands,address_source,map
 319,Short Stop Food Mart (Valero),Gas Station,"101 Main St, West Point, KY 40177",West Point,KY,40177,wook-water,google_maps_verified,Verified
 320,Otterbein Express,Gas Station,"9150 W 500 N, West Lafayette, IN 47906",West Lafayette,IN,47906,wook-water,google_maps_verified,Verified
 321,Hart Food Mart (BP),Gas Station,"192 S Jackson Hwy, Hardyville, KY 42746",Hardyville,KY,42746,wook-water,google_maps_verified,Verified
-322,Sunoco,Gas Station,"101 N Quarry St, Bainbridge, OH 45612",Bainbridge,OH,45612,wook-water,google_maps_verified,Verified
+322,Sunoco,Gas Station,"101 N Quarry St, Bainbridge, OH 45612",Bainbridge,OH,45612,wook-water|alcohol-armor,google_maps_verified,Verified
 323,Even Steven Sorgho (Marathon),Gas Station,"6572 KY-56, Owensboro, KY 42301",Owensboro,KY,42301,wook-water,google_maps_verified,Verified
 324,BP,Gas Station,"1545 E 38th St, Indianapolis, IN 46205",Indianapolis,IN,46205,wook-water,google_maps_verified,Verified
 325,Smoker's Castle Outlet,Smoke / Vape Shop,"4431 Dixie Hwy Ste 101, Louisville, KY 40216",Louisville,KY,40216,wook-water,google_maps_verified,Verified
 326,Munfordville Tobacco Outlet,Smoke / Vape Shop,"1120 Main St, Munfordville, KY 42765",Munfordville,KY,42765,wook-water,google_maps_verified,Verified
 327,Quick King Food Store #13 (Sunoco),Gas Station,"10251 US-441 Ste 5, Belleview, FL 34420",Belleview,FL,34420,wook-water,google_maps_verified,Verified
 328,Shell,Gas Station,"310 S Memorial Dr, New Castle, IN 47362",New Castle,IN,47362,wook-water,google_maps_verified,Verified
-329,By-Pass Quick Stop,Gas Station,"305 Bypass Rd, Brandenburg, KY 40108",Brandenburg,KY,40108,wook-water,google_maps_verified,Probable - confirm
+329,By-Pass Quick Stop,Gas Station,"305 Bypass Rd, Brandenburg, KY 40108",Brandenburg,KY,40108,wook-water|alcohol-armor,google_maps_verified,Probable - confirm
 330,Shell,Gas Station,"8151 Winton Rd, Cincinnati, OH 45224",Cincinnati,OH,45224,wook-water,google_maps_verified,Verified
-331,Shell,Gas Station,"7809 Cincinnati Dayton Rd, West Chester Twp, OH 45069",West Chester Twp,OH,45069,wook-water,google_maps_verified,Verified
-332,BP,Gas Station,"915 Kathys Way, Greensburg, IN 47240",Greensburg,IN,47240,wook-water,google_maps_verified,Verified
+331,Shell,Gas Station,"7809 Cincinnati Dayton Rd, West Chester Twp, OH 45069",West Chester Twp,OH,45069,wook-water|alcohol-armor,google_maps_verified,Verified
+332,BP,Gas Station,"915 Kathys Way, Greensburg, IN 47240",Greensburg,IN,47240,wook-water|alcohol-armor,google_maps_verified,Verified
 333,101 N Main St (name to confirm),Unverified,"101 N Main St, Fordsville, KY 42343",Fordsville,KY,42343,wook-water,roster,Not found
 334,Kwik King Food Store (Sunoco),Gas Station,"3761 W Homosassa Trl, Lecanto, FL 34461",Lecanto,FL,34461,wook-water,google_maps_verified,Verified
-335,Next Door Spirit Shoppe & Food Mart,Liquor Store,"3303 Newburg Rd, Louisville, KY 40218",Louisville,KY,40218,wook-water,google_maps_verified,Verified
+335,Next Door Spirit Shoppe & Food Mart,Liquor Store,"3303 Newburg Rd, Louisville, KY 40218",Louisville,KY,40218,wook-water|alcohol-armor,google_maps_verified,Verified
 336,Sunoco,Gas Station,"22984 W US Hwy 27, High Springs, FL 32643",High Springs,FL,32643,wook-water,google_maps_verified,Verified
 337,Mini Mart (Marathon),Gas Station,"1581 E Broadway St, Campbellsville, KY 42718",Campbellsville,KY,42718,wook-water,google_maps_verified,Verified
-338,Quick Mart,Gas Station,"2508 Washington Ave, Evansville, IN 47714",Evansville,IN,47714,wook-water,google_maps_verified,Verified
+338,Quick Mart,Gas Station,"2508 Washington Ave, Evansville, IN 47714",Evansville,IN,47714,wook-water|alcohol-armor,google_maps_verified,Verified
 339,The Hat Don (BP),Gas Station,"3950 S Keystone Ave, Indianapolis, IN 46227",Indianapolis,IN,46227,wook-water,google_maps_verified,Verified
 340,ARCO,Gas Station,"6900 Lefferson Rd, Middletown, OH 45044",Middletown,OH,45044,wook-water,google_maps_verified,Verified
 341,Amoco,Gas Station,"1154 Old State Rte 74, Batavia, OH 45103",Batavia,OH,45103,wook-water,google_maps_verified,Probable - confirm
+342,Salt Springs Grocery (Marathon),Gas Station,"13535 FL-19, Fort McCoy, FL 32134",Fort McCoy,FL,32134,alcohol-armor,google_maps_verified,Probable - confirm
+343,Lake Harris Food Mart,Gas Station,"1400 S 14th St, Leesburg, FL 34748",Leesburg,FL,34748,alcohol-armor,google_maps_verified,Verified
+344,Sunoco,Gas Station,"963 E Silver Springs Blvd, Ocala, FL 34470",Ocala,FL,34470,alcohol-armor,google_maps_verified,Verified
+345,Quick King Food Store #8,Gas Station,"14725 US-441, Summerfield, FL 34491",Summerfield,FL,34491,alcohol-armor,google_maps_verified,Verified
+346,394 W Main St (name to confirm),Unverified,"394 W Main St, Brookport, IL 62910",Brookport,IL,62910,alcohol-armor,roster,Not found
+347,Mid-Way Package Liquor,Liquor Store,"100 SW 6th St, Fairfield, IL 62837",Fairfield,IL,62837,alcohol-armor,google_maps_verified,Verified
+348,Kraemart,Gas Station,"209 W Cumberland St, Martinsville, IL 62442",Martinsville,IL,62442,alcohol-armor,google_maps_verified,Verified
+349,Shawnee Quick Mart,Gas Station,"111 W Shawnee Ave, Shawneetown, IL 62984",Shawneetown,IL,62984,alcohol-armor,google_maps_verified,Verified
+350,Elements Smoke Shop,Smoke / Vape Shop,"102 S Market St, Delphi, IN 46923",Delphi,IN,46923,alcohol-armor,google_maps_verified,Verified
+351,Circle J,Gas Station,"201 W Main St, Francisco, IN 47649",Francisco,IN,47649,alcohol-armor,google_maps_verified,Verified
+352,Friendly Tobacco,Smoke / Vape Shop,"5 Putnam Plaza, Greencastle, IN 46135",Greencastle,IN,46135,alcohol-armor,google_maps_verified,Verified
+353,Marathon,Gas Station,"1107 Indianapolis Rd, Greencastle, IN 46135",Greencastle,IN,46135,alcohol-armor,google_maps_verified,Verified
+354,Marathon,Gas Station,"3723 Southeastern Ave, Indianapolis, IN 46203",Indianapolis,IN,46203,alcohol-armor,google_maps_verified,Verified
+355,"Cloud Craze Smoke, Vape & Tobacco",Smoke / Vape Shop,"5333 W 10th St, Indianapolis, IN 46224",Indianapolis,IN,46224,alcohol-armor,google_maps_verified,Verified
+356,Purkey's Package Liquor,Liquor Store,"728 E Broadway St, Ingalls, IN 46048",Ingalls,IN,46048,alcohol-armor,google_maps_verified,Verified
+357,BP,Gas Station,"2020 S Washington St, Kokomo, IN 46902",Kokomo,IN,46902,alcohol-armor,google_maps_verified,Verified
+358,15th Street Grocery Store,Grocery / Market,"2024 N 15th St, Lafayette, IN 47904",Lafayette,IN,47904,alcohol-armor,google_maps_verified,Verified
+359,Marion C Mart,Gas Station,"702 S Washington St, Marion, IN 46953",Marion,IN,46953,alcohol-armor,google_maps_verified,Verified
+360,Fast Track Citgo,Gas Station,"589 Morton Ave, Martinsville, IN 46151",Martinsville,IN,46151,alcohol-armor,google_maps_verified,Verified
+361,3400 N Egbert Rd (name to confirm),Gas Station,"3400 N Egbert Rd, Martinsville, IN 46151",Martinsville,IN,46151,alcohol-armor,roster,Not found
+362,BP,Gas Station,"7474 E State Road 350, Milan, IN 47031",Milan,IN,47031,alcohol-armor,roster,Probable - confirm
+363,Little Point Auto & Truck Stop,Gas Station,"9620 N Little Point Rd, Stilesville, IN 46180",Stilesville,IN,46180,alcohol-armor,google_maps_verified,Verified
+364,BP,Gas Station,"8845 IN-46, Sunman, IN 47041",Sunman,IN,47041,alcohol-armor,google_maps_verified,Verified
+365,College Corner Liquor Mart,Liquor Store,"100 Brookville Pike, West College Corner, IN 47003",West College Corner,IN,47003,alcohol-armor,google_maps_verified,Verified
+366,Quick Pick,Gas Station,"901 N Main St, Winslow, IN 47598",Winslow,IN,47598,alcohol-armor,google_maps_verified,Verified
+367,J D's Food Mart,Gas Station,"2483 Burlington Pike, Burlington, KY 41005",Burlington,KY,41005,alcohol-armor,google_maps_verified,Verified
+368,15 Music Ln (name to confirm),Unverified,"15 Music Ln, Columbia, KY 42728",Columbia,KY,42728,alcohol-armor,roster,Not found
+369,Liquor King,Liquor Store,"1601 Cumberland Falls Hwy Suite 6, Corbin, KY 40701",Corbin,KY,40701,alcohol-armor,google_maps_verified,Verified
+370,38 State Route 983 (name to confirm),Unverified,"38 State Route 983, Dixon, KY 42409",Dixon,KY,42409,alcohol-armor,roster,Not found
+371,John O's Liquor Outlet,Liquor Store,"111 Roanoke Dr, Elizabethtown, KY 42701",Elizabethtown,KY,42701,alcohol-armor,google_maps_verified,Verified
+372,M&S Food Mart,Gas Station,"4500 N Dixie Hwy, Elizabethtown, KY 42701",Elizabethtown,KY,42701,alcohol-armor,google_maps_verified,Verified
+373,BP,Gas Station,"506 Commonwealth Ave, Erlanger, KY 41018",Erlanger,KY,41018,alcohol-armor,google_maps_verified,Verified
+374,Happy Valley Food Mart,Gas Station,"4485 Happy Valley Rd Ste B, Glasgow, KY 42141",Glasgow,KY,42141,alcohol-armor,google_maps_verified,Verified
+375,My Town Greensburg Country Store,Gas Station,"267 Industrial Park Rd, Greensburg, KY 42743",Greensburg,KY,42743,alcohol-armor,google_maps_verified,Verified
+376,Harrodsburg Liquor & Tobacco,Liquor Store,"636 S College St, Harrodsburg, KY 40330",Harrodsburg,KY,40330,alcohol-armor,google_maps_verified,Verified
+377,Marathon,Gas Station,"25 Silver Beach Rd, Hartford, KY 42347",Hartford,KY,42347,alcohol-armor,google_maps_verified,Verified
+378,Bills Wine & Spirit,Liquor Store,"285 US-60, Hawesville, KY 42348",Hawesville,KY,42348,alcohol-armor,google_maps_verified,Verified
+379,Hebron Shell,Gas Station,"2144 Kilgore Pl, Hebron, KY 41048",Hebron,KY,41048,alcohol-armor,google_maps_verified,Verified
+380,Raj Tobacco And Food Mart,Smoke / Vape Shop,"925 Madison St, Henderson, KY 42420",Henderson,KY,42420,alcohol-armor,google_maps_verified,Verified
+381,Sunoco,Gas Station,"4102 Richardson Rd, Independence, KY 41051",Independence,KY,41051,alcohol-armor,google_maps_verified,Verified
+382,Our Place Liquors & Wine,Liquor Store,"3808 Poplar Level Rd, Louisville, KY 40213",Louisville,KY,40213,alcohol-armor,google_maps_verified,Verified
+383,Liquor Castle,Liquor Store,"4002 Preston Hwy, Louisville, KY 40213",Louisville,KY,40213,alcohol-armor,google_maps_verified,Verified
+384,National Liquors (L & Q Liquors),Liquor Store,"8808 National Tpke, Louisville, KY 40118",Louisville,KY,40118,alcohol-armor,google_maps_verified,Verified
+385,St Andrews Liquors,Liquor Store,"7835 St Andrews Church Rd, Louisville, KY 40214",Louisville,KY,40214,alcohol-armor,google_maps_verified,Verified
+386,Valero,Gas Station,"4903 Poplar Level Rd, Louisville, KY 40219",Louisville,KY,40219,alcohol-armor,google_maps_verified,Verified
+387,Monticello Food Mart,Gas Station,"1772 N Main St, Monticello, KY 42633",Monticello,KY,42633,alcohol-armor,google_maps_verified,Verified
+388,Mt Washington Liquors,Liquor Store,"1123 N Bardstown Rd Unit 5, Mt Washington, KY 40047",Mt Washington,KY,40047,alcohol-armor,google_maps_verified,Verified
+389,Marathon,Gas Station,"9295 W Hwy 80, Nancy, KY 42544",Nancy,KY,42544,alcohol-armor,google_maps_verified,Verified
+390,Owensboro Smoke Shop - Smoke World,Smoke / Vape Shop,"410 Southtown Blvd #1, Owensboro, KY 42303",Owensboro,KY,42303,alcohol-armor,google_maps_verified,Verified
+391,Tobacco Road & Liquor Store,Convenience Store,"1366 Carter Rd, Owensboro, KY 42301",Owensboro,KY,42301,alcohol-armor,google_maps_verified,Verified
+392,Logsdon Food Mart,Gas Station,"1601 N Logsdon Pkwy, Radcliff, KY 40160",Radcliff,KY,40160,alcohol-armor,google_maps_verified,Verified
+393,Liquor World,Liquor Store,"50 Haven Hill Rd, Shelbyville, KY 40065",Shelbyville,KY,40065,alcohol-armor,google_maps_verified,Verified
+394,Edwards Food Mart,Gas Station,"1114 KY-1247, Somerset, KY 42503",Somerset,KY,42503,alcohol-armor,google_maps_verified,Verified
+395,Shell,Gas Station,"2615 KY-80, Somerset, KY 42503",Somerset,KY,42503,alcohol-armor,google_maps_verified,Verified
+396,Valero Express,Gas Station,"401 Monticello St, Somerset, KY 42501",Somerset,KY,42501,alcohol-armor,google_maps_verified,Verified
+397,ARCO KY Petro Stop,Gas Station,"1020 Fairlane Dr S, Vanceburg, KY 41179",Vanceburg,KY,41179,alcohol-armor,google_maps_verified,Verified
+398,1271 W Ohio Pike (name to confirm),Unverified,"1271 W Ohio Pike #125, Amelia, OH 45102",Amelia,OH,45102,alcohol-armor,roster,Not found
+399,Marathon Gas,Gas Station,"2199 Winemiller Ln, Batavia, OH 45103",Batavia,OH,45103,alcohol-armor,google_maps_verified,Verified
+400,Ameristop,Gas Station,"3670 Muddy Creek Rd, Cincinnati, OH 45238",Cincinnati,OH,45238,alcohol-armor,google_maps_verified,Verified
+401,BP,Gas Station,"6135 Montgomery Rd, Cincinnati, OH 45213",Cincinnati,OH,45213,alcohol-armor,google_maps_verified,Verified
+402,Marathon,Gas Station,"6790 Kellogg Rd, Cincinnati, OH 45230",Cincinnati,OH,45230,alcohol-armor,google_maps_verified,Verified
+403,Kwik Stop Sunoco,Gas Station,"320 W Main St, Circleville, OH 43113",Circleville,OH,43113,alcohol-armor,google_maps_verified,Verified
+404,Marathon,Gas Station,"2250 Wagner Ford Rd, Dayton, OH 45414",Dayton,OH,45414,alcohol-armor,google_maps_verified,Verified
+405,Asian Market Hamilton,Grocery / Market,"4103 Hamilton Middletown Rd, Hamilton, OH 45011",Hamilton,OH,45011,alcohol-armor,google_maps_verified,Verified
+406,Marathon Gas,Gas Station,"1920 E Whipp Rd, Kettering, OH 45440",Kettering,OH,45440,alcohol-armor,google_maps_verified,Verified
+407,761 S Commerce St (name to confirm),Unverified,"761 S Commerce St, Lewisburg, OH 45338",Lewisburg,OH,45338,alcohol-armor,roster,Not found
+408,Ameristop Food Mart,Convenience Store,"6583 Cincinnati Dayton Rd, Liberty Township, OH 45044",Liberty Township,OH,45044,alcohol-armor,google_maps_verified,Verified
+409,Londonderry Drive Thru,Drive-Thru / Carryout,"35699 US-50, Londonderry, OH 45647",Londonderry,OH,45647,alcohol-armor,google_maps_verified,Verified
+410,Mason Kwik Mart (Marathon),Gas Station,"131 E Main St, Mason, OH 45040",Mason,OH,45040,alcohol-armor,google_maps_verified,Verified
+411,BP,Gas Station,"6164 OH-122, Middletown, OH 45005",Middletown,OH,45005,alcohol-armor,google_maps_verified,Verified
+412,Clark's Pump-N-Shop,Gas Station,"201 N Jackson St, Oak Hill, OH 45656",Oak Hill,OH,45656,alcohol-armor,google_maps_verified,Probable - confirm
+413,Pump-n-Pack,Gas Station,"1115 Celina Rd, St Marys, OH 45885",St Marys,OH,45885,alcohol-armor,google_maps_verified,Verified
+414,Marathon,Gas Station,"620 Wooster Pike, Terrace Park, OH 45174",Terrace Park,OH,45174,alcohol-armor,google_maps_verified,Verified
+415,Troy's Quick Mart,Convenience Store,"10 W Race St, Troy, OH 45373",Troy,OH,45373,alcohol-armor,google_maps_verified,Verified
+416,The Smoker's Paradise,Smoke / Vape Shop,"225 W Emmitt Ave Unit 6, Waverly, OH 45690",Waverly,OH,45690,alcohol-armor,google_maps_verified,Verified
+417,Hidden Foodmart & Drive-Thru,Convenience Store,"975 W Main St, Wilmington, OH 45177",Wilmington,OH,45177,alcohol-armor,google_maps_verified,Verified
+418,MAPCO,Gas Station,"2142 Central Ave, Memphis, TN 38104",Memphis,TN,38104,alcohol-armor,google_maps_verified,Verified
+419,F51 Food Mart (Marathon),Gas Station,"3760 NW Blitchton Rd, Ocala, FL 34475",Ocala,FL,34475,alcohol-armor,google_maps_verified,Verified
+420,Food Mart and Smoke Shop,Convenience Store,"10440 Plainfield Rd, Blue Ash, OH 45241",Blue Ash,OH,45241,alcohol-armor,google_maps_verified,Verified
