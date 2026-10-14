@@ -30,16 +30,21 @@ never join it.
 (``auto_attach_on_approval``) when the booked plan's tactic matches the
 recap type. ``--fix-event-types --apply`` sets WRONG_PROGRAM events with no
 recap yet to the plan's program (events with recaps are listed, not
-changed). A recap's own numbers are never touched.
+changed). ``--attach custom:1867=REQ-MJM5`` (repeatable, optional
+``:key+key`` metric list, default = the tactic's defaults) links one approved
+recap to one plan the way ops' Push to plan does, after printing the recap's
+own place / notes evidence and the plan's Actuals before and after (a dry run
+rolls the link back). A recap's own numbers are never touched.
 
     python manage.py audit_torch_plan_buckets [--since YYYY-MM-DD]
-        [--attach-missing] [--fix-event-types] [--apply]
+        [--attach-missing] [--fix-event-types] [--attach SPEC ...] [--apply]
 """
 
 from __future__ import annotations
 
 import csv
 import io
+import re
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta
 
@@ -53,17 +58,25 @@ from events.demo_cancel import request_display_code
 from events.field_marketing import _recap_logged, is_torch_tenant
 from events.models import Event, FieldMarketingEvent
 from events.plan_event_types import event_type_fits_plan, event_type_for_plan
-from events.plan_actuals import RECAP_RELATED, Total, counts_toward_results, recap_day
+from events.plan_actuals import (
+    RECAP_RELATED,
+    Total,
+    counts_toward_results,
+    plan_actuals,
+    recap_day,
+)
 from events.plan_results import (
     EXECUTION_LABELS,
     MARKET_STATES,
     SUGGEST_WINDOW_DAYS,
     TACTICS_FOR_EXECUTION,
+    PlanResultsError,
     _ba_name,
     _day_gap,
     _recap_market,
     auto_attach_on_approval,
     build_plan_results,
+    push_recap,
 )
 from events.torch_retail_routing import (
     EXECUTION_RETAIL,
@@ -120,6 +133,11 @@ PLAN_COLUMNS = (
     "flags",
 )
 _SUMMED_KEYS = tuple(k for k in pm.METRIC_ORDER if k != pm.SAMPLE_FORMAT)
+_ATTACH_RE = re.compile(r"^(custom|legacy):(\d+)=([^:]+)(?::([\w+]+))?$")
+_EVIDENCE_FIELD_RE = re.compile(
+    r"venue|location|event|address|store|where|note|feedback|summary|highlight|describe|comment",
+    re.I,
+)
 
 
 def _should_count(recap) -> bool:
@@ -174,6 +192,12 @@ class Command(BaseCommand):
             action="store_true",
             help="Set plan events with no recap to the plan's program.",
         )
+        parser.add_argument(
+            "--attach",
+            action="append",
+            default=[],
+            help="kind:recap_id=PLAN (REQ code or plan uuid)[:metric+metric]; repeatable.",
+        )
         parser.add_argument("--apply", action="store_true", help="Write (default dry-run).")
 
     def handle(self, *args, **opts):
@@ -183,7 +207,13 @@ class Command(BaseCommand):
         self.apply = bool(opts["apply"])
         self.attach = bool(opts["attach_missing"])
         self.fix_types = bool(opts["fix_event_types"])
-        writes = self.apply and (self.attach or self.fix_types)
+        self.attach_specs = [
+            piece.strip()
+            for raw in opts["attach"] or []
+            for piece in re.split(r"[;\s]+", raw or "")
+            if piece.strip()
+        ]
+        writes = self.apply and (self.attach or self.fix_types or self.attach_specs)
         mode = "APPLY (writing)" if writes else "DRY-RUN (no writes)"
         w = self.stdout.write
         for tenant in tenants:
@@ -371,6 +401,7 @@ class Command(BaseCommand):
             w("  none")
 
         self._attach_missing(missing)
+        self._attach_explicit(tenant, plans)
         self._plan_events(plans)
         plan_rows = self._plans(plans)
 
@@ -400,6 +431,114 @@ class Command(BaseCommand):
             with transaction.atomic():
                 link = auto_attach_on_approval(kind=kind, recap_id=recap.id, actor=None)
             w(f"  ATTACHED {what} → {link.plan.name if link else 'nothing (no metrics)'}")
+
+    def _find_plan(self, plans, ref: str):
+        ref = ref.strip()
+        for plan in plans.values():
+            if plan.deleted_at is not None:
+                continue
+            if str(plan.uuid) == ref:
+                return plan
+            if plan.request_id and request_display_code(plan.request_id).lower() == ref.lower():
+                return plan
+        return None
+
+    def _evidence(self, recap, kind: str) -> list[str]:
+        event = recap.event
+        lines = [
+            f"recap name={recap.name!r} ba={_ba_name(recap)!r} day={recap_day(recap)}",
+            f"event={event.id} name={event.name!r} address={event.address!r}",
+        ]
+        if kind == pm.KIND_CUSTOM:
+            for cfv in recap.custom_field_value.select_related("custom_field").order_by(
+                "custom_field__order", "custom_field_id"
+            ):
+                name = getattr(cfv.custom_field, "name", "") or ""
+                value = (cfv.value or "").strip()
+                if value and _EVIDENCE_FIELD_RE.search(name) and not value.isdigit():
+                    lines.append(f"{name}: {value[:300]!r}")
+        return lines
+
+    def _actual_lines(self, plan) -> list[str]:
+        payload = build_plan_results(plan, is_admin=True)
+        lines = [f"counted recaps={payload['counted']} in review={payload['pending']}"]
+        for row in payload["rows"]:
+            actual = row.text if row.actual is None else f"{row.actual:g}"
+            planned = "—" if row.planned is None else f"{row.planned:g}"
+            parts = f" ({', '.join(f'{n} × {q}' for n, q in row.parts)})" if row.parts else ""
+            lines.append(f"{row.label}: planned {planned} · actual {actual or '—'}{parts}")
+        logged = _recap_logged(plan, plan_actuals([plan.id]).get(plan.id, {}))
+        for field in ("logged_full_cans", "logged_emails", "logged_cases"):
+            manual = getattr(plan, field)
+            if manual is not None:
+                lines.append(f"scorecard {field}={manual} (manual log — wins over recaps)")
+            elif field in logged:
+                lines.append(f"scorecard {field}={logged[field]} (from recaps)")
+        return lines
+
+    def _attach_explicit(self, tenant, plans) -> None:
+        if not self.attach_specs:
+            return
+        w = self.stdout.write
+        w("== Attach recaps to plans ==")
+        for spec in self.attach_specs:
+            m = _ATTACH_RE.match(spec)
+            if not m:
+                w(f"  SKIP {spec!r}: expected kind:recap_id=PLAN[:metric+metric]")
+                continue
+            kind, recap_id, plan_ref, keys_raw = m.group(1), int(m.group(2)), m.group(3), m.group(4)
+            plan = self._find_plan(plans, plan_ref)
+            if plan is None:
+                w(f"  SKIP {spec}: no live plan {plan_ref!r}")
+                continue
+            model = CustomRecap if kind == pm.KIND_CUSTOM else Recap
+            recap = model.objects.select_related(*RECAP_RELATED).filter(id=recap_id).first()
+            if recap is None or recap.event.tenant_id != tenant.id:
+                w(f"  SKIP {spec}: recap not found for this brand")
+                continue
+            execution = torch_recap_execution_type(recap)
+            why_not = None
+            if not _should_count(recap):
+                why_not = "not approved, archived or 3rd party"
+            elif plan.activity not in TACTICS_FOR_EXECUTION.get(execution, frozenset()):
+                why_not = f"recap type {EXECUTION_LABELS[execution]} ≠ plan tactic {plan.activity}"
+            available = pm.recap_metrics(recap, kind)
+            have = {m.key for m in available}
+            asked = [k for k in keys_raw.split("+") if k] if keys_raw else []
+            keys = [k for k in asked if k in have] if asked else pm.default_keys(recap, available)
+            w(f"  {kind} recap {recap_id} → {plan.name!r} ({plan.starts_on}, {plan.market}, {plan.activity})")
+            w(f"    plan address={plan.address!r}")
+            for line in self._evidence(recap, kind):
+                w(f"    evidence · {line}")
+            w(f"    recap values: {_fmt_metrics(available)}")
+            w(f"    metrics to count: {', '.join(keys) or 'none'}")
+            if set(asked) - have:
+                w(f"    not on this recap (skipped): {', '.join(sorted(set(asked) - have))}")
+            if why_not:
+                w(f"    LEAVE: {why_not}")
+                continue
+            w("    plan Actuals BEFORE:")
+            for line in self._actual_lines(plan):
+                w(f"      {line}")
+            try:
+                with transaction.atomic():
+                    push_recap(
+                        kind=kind,
+                        recap_id=recap_id,
+                        plan_id=str(plan.uuid),
+                        metric_keys=keys,
+                        actor=None,
+                        confirm_move=False,
+                    )
+                    w("    plan Actuals AFTER:")
+                    for line in self._actual_lines(plan):
+                        w(f"      {line}")
+                    if not self.apply:
+                        transaction.set_rollback(True)
+            except PlanResultsError as exc:
+                w(f"    LEAVE: {exc}")
+                continue
+            w("    ATTACHED" if self.apply else "    WOULD ATTACH (dry run, rolled back)")
 
     def _plan_events(self, plans) -> None:
         w = self.stdout.write

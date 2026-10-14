@@ -9946,7 +9946,8 @@ class AuditTorchPlanBucketsView(View):
     """POST `/internal/cron/audit-torch-plan-buckets` — where Torch recaps
     land on field-marketing plans (`audit_torch_plan_buckets`).
 
-    Params: since (YYYY-MM-DD), attach_missing=1, fix_event_types=1, apply=1.
+    Params: since (YYYY-MM-DD), attach_missing=1, fix_event_types=1,
+    attach ("custom:1867=REQ-MJM5; ..."), apply=1.
     Read-only unless apply plus a fix flag; then it only adds plan links /
     sets the program on plan events with no recap (never edits a recap).
     Sends nothing. Secret-gated.
@@ -9970,6 +9971,8 @@ class AuditTorchPlanBucketsView(View):
             cmd_args.append("--attach-missing")
         if _on("fix_event_types"):
             cmd_args.append("--fix-event-types")
+        if _get("attach"):
+            cmd_args += ["--attach", _get("attach")]
         if _on("apply"):
             cmd_args.append("--apply")
         out = io.StringIO()

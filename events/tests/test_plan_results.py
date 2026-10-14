@@ -26,7 +26,9 @@ from events.plan_results import (
     push_recap,
     remove_recap,
     suggest_plans,
+    suggest_recaps,
 )
+from events.demo_cancel import request_display_code
 from events.tests.base import EventsGraphQLTestCase
 from recaps import models as rm
 from recaps import plan_metrics as pm
@@ -598,6 +600,99 @@ class TestPlanResults(EventsGraphQLTestCase):
             lambda: rm.PlanRecapLink.objects.filter(custom_recap=recap).first()
         )()
         assert link is not None and link.auto and link.plan_id == plan.id
+
+    # -- attach from the plan side -------------------------------------------
+
+    def test_plan_side_suggestions_skip_third_party_and_other_tactics(self):
+        plan = self._plan(name="Dania Beach Food & Wine", sampling_format="pour")
+        walkup = self._event_recap(self._event(address="1 Ocean Dr, Dania Beach, FL 33004"))
+        booked = self._event_recap(self._event(request=plan.request))
+        agency = self._event_recap(self._event())
+        agency.is_third_party = agency.exclude_from_aggregates = True
+        agency.save(update_fields=["is_third_party", "exclude_from_aggregates"])
+        seeding_event = self._event(event_type=self.seeding_type)
+        seeding = rm.CustomRecap.objects.create(
+            name="Seeding", event=seeding_event, tenant=self.tenant,
+            custom_recap_template=self.seeding_template, approved=True, created_by=self.sys,
+        )
+        far = self._event_recap(self._event(day="2026-10-30"))
+
+        ids = [s.recap.id for s in suggest_recaps(plan)]
+        assert ids[0] == booked.id
+        assert walkup.id in ids
+        assert agency.id not in ids and seeding.id not in ids and far.id not in ids
+
+        push_recap(kind="custom", recap_id=walkup.id, plan_id=str(plan.uuid),
+                   metric_keys=[pm.EMAILS_COLLECTED], actor=self.admin, confirm_move=False)
+        assert walkup.id not in [s.recap.id for s in suggest_recaps(plan)]
+
+    @pytest.mark.asyncio
+    async def test_graphql_plan_recap_suggestions_admin_only(self):
+        plan = await sync_to_async(self._plan)()
+        recap = await sync_to_async(self._event_recap)(await sync_to_async(self._event)())
+        query = """
+        query S($planId: String!) {
+          planRecapSuggestions(planId: $planId) {
+            recapId kind href reasons currentPlanName metrics { key defaultOn }
+          }
+        }
+        """
+        denied = await self._execute_mutation(query, {"planId": str(plan.uuid)}, user=self.marketer)
+        assert denied.errors
+        ok = await self._execute_mutation(query, {"planId": str(plan.uuid)}, user=self.admin)
+        assert ok.errors is None, ok.errors
+        row = ok.data["planRecapSuggestions"][0]
+        assert row["recapId"] == str(recap.id) and row["currentPlanName"] is None
+        assert "Same tactic (Event)" in row["reasons"]
+        assert pm.EMAILS_COLLECTED in [m["key"] for m in row["metrics"] if m["defaultOn"]]
+
+    def test_audit_attach_dry_run_rolls_back_and_apply_links(self):
+        plan = self._plan(name="Dania Beach Food & Wine")
+        code = request_display_code(plan.request_id)
+        first = self._event_recap(self._event(address="Frost Park, Dania Beach, FL 33004"))
+        second = self._event_recap(self._event(address="Frost Park, Dania Beach, FL 33004"))
+        unapproved = self._event_recap(self._event(), approved=False)
+        specs = (
+            f"custom:{first.id}={code}; custom:{second.id}={code}:clocked_hours+photos+people_engaged;"
+            f" custom:{unapproved.id}={code}"
+        )
+
+        log = self._audit("--attach", specs)
+        assert "address='Frost Park, Dania Beach, FL 33004'" in log
+        assert "Consumers sampled: planned — · actual 85" in log
+        assert "WOULD ATTACH (dry run, rolled back)" in log
+        assert "LEAVE: not approved" in log
+        assert not rm.PlanRecapLink.objects.exists()
+
+        self._audit("--attach", specs, "--apply")
+        links = {link.custom_recap_id: link for link in rm.PlanRecapLink.objects.all()}
+        assert set(links) == {first.id, second.id}
+        assert not links[first.id].auto and pm.CONSUMERS_SAMPLED in links[first.id].metric_keys
+        assert links[second.id].metric_keys == [pm.PEOPLE_ENGAGED]
+        rows = {r.key: r for r in build_plan_results(plan, is_admin=True)["rows"]}
+        assert rows[pm.CONSUMERS_SAMPLED].actual == 85
+        assert rows[pm.PEOPLE_ENGAGED].actual == 280
+        assert rows["brand_ambassadors"].actual == 1
+
+    def test_seeding_recap_on_plan_event_attaches_cases_locations_mileage(self):
+        plan = self._plan(submit=False, activity="product_seeding", name="Bar drops")
+        plan.request = em.Request.objects.create(
+            name="Bar drops", tenant=self.tenant, created_by=self.sys,
+            request_type=em.RequestType.objects.get(tenant=self.tenant),
+        )
+        plan.save(update_fields=["request"])
+        event = self._event(request=plan.request, event_type=self.seeding_type)
+        recap = rm.CustomRecap.objects.create(
+            name="Seeding", event=event, tenant=self.tenant,
+            custom_recap_template=self.seeding_template, approved=True, created_by=self.sys,
+        )
+        stops = [{"placeName": "Bar A", "skus": [{"productId": "1", "productName": "Nonactive", "cases": 2}]}]
+        self._field(recap, "Drop-off Locations", json.dumps(stops), self.seeding_template)
+        self._field(recap, "Total mileage", "12", self.seeding_template)
+        link = auto_attach_on_approval(kind="custom", recap_id=recap.id, actor=self.admin)
+        assert link.metric_keys == [pm.CASES_DROPPED, pm.DROP_OFF_LOCATIONS, pm.MILEAGE]
+        kpis = {k["key"]: k for k in build_board(self.tenant, "2026-09")["kpis"]}
+        assert kpis["full_cans"]["logged"] is None
 
     def test_unknown_kind_and_missing_plan(self):
         with pytest.raises(PlanResultsError):

@@ -32,7 +32,13 @@ from django.views.decorators.http import require_http_methods
 
 from ambassadors import checkin_web
 from ambassadors.payable_mileage import NeedsPayableMileage
-from jobboard.checkin import booked_event_for
+from jobboard.checkin import (
+    booked_event_for,
+    join_plan_gig,
+    plan_gig_for_place,
+    plan_gigs_on,
+    public_gig,
+)
 from recaps.spend_amount import SpendAmountNeedsCents
 from events.checkin_tokens import (
     BadSignature,
@@ -214,6 +220,46 @@ def _parse_iso_date(value: str):
         return _date(int(y), int(m), int(d))
     except Exception:  # noqa: BLE001 — any malformed input is just "no date"
         return None
+
+
+def _in_checkin_window(on_date) -> bool:
+    delta = (on_date - dj_tz.localdate()).days
+    return -CHECKIN_MAX_PAST_DAYS <= delta <= CHECKIN_MAX_FUTURE_DAYS
+
+
+def _plan_gig_event(tenant, data: dict, on_date, ambassador):
+    """``(event, error)`` for a standing-link BA working a plan gig.
+
+    ``planEventId`` is the BA's answer to "Is this one of today's scheduled
+    events?": a gig id joins that gig, ``"none"`` skips plan matching. With
+    no answer (older page) the typed / GPS place joins a gig only when it
+    clearly names one, and never over a shift the BA already clocked today.
+    """
+    raw = str(data.get("planEventId") or "").strip()
+    if raw.lower() == "none" or on_date is None or not _in_checkin_window(on_date):
+        return None, None
+    chosen_type = checkin_web.resolve_checkin_event_type(
+        tenant, data.get("eventTypeId") or data.get("event_type_id")
+    )
+    gigs = plan_gigs_on(tenant=tenant, on_date=on_date, chosen_type=chosen_type)
+    if raw:
+        gig = next((g for g in gigs if str(g.event.id) == raw), None)
+        if gig is None:
+            return None, _err(
+                "That scheduled event isn't on for this day and event type. "
+                "Pick it again, or choose “No, a different event”.",
+                code="plan_gig_unavailable",
+            )
+        return join_plan_gig(gig, chosen_type), None
+    address = _str_field(data, "address") or _str_field(data, "storeAddress")
+    gig = plan_gig_for_place(gigs, address)
+    if gig is None:
+        return None, None
+    if checkin_web.existing_shift_event_for(
+        ambassador=ambassador, tenant=tenant, on_date=on_date, address=address
+    ) is not None:
+        return None, None
+    return join_plan_gig(gig, chosen_type), None
 
 
 def _str_field(data: dict, key: str) -> str:
@@ -473,6 +519,11 @@ def public_checkin_identify(request: HttpRequest, code: str) -> HttpResponse:
             ),
         )
 
+    if kind == "tenant" and event is None and not agency:
+        event, err = _plan_gig_event(target, data, on_date, ambassador)
+        if err is not None:
+            return err
+
     if kind == "tenant" and event is None:
         address = (data.get("address") or data.get("storeAddress") or "").strip()
         store_name = (data.get("storeName") or data.get("eventName") or "").strip()
@@ -692,6 +743,31 @@ def public_checkin_unfiled_recaps(request: HttpRequest, code: str) -> HttpRespon
             ),
         }
     )
+
+
+# --------------------------------------------------------------------------
+# POST plan gigs (standing link — "Is this one of today's scheduled events?")
+# --------------------------------------------------------------------------
+@csrf_exempt
+@require_http_methods(["POST"])
+def public_checkin_plan_gigs(request: HttpRequest, code: str) -> HttpResponse:
+    """The brand's plan gigs on the picked date for the picked program.
+
+    Public fields only (the same ones the job board shows). Empty for event
+    codes, the 3rd-party agency link and dates outside the check-in window.
+    """
+    if _over_limit("plan-gigs-ip", _client_ip(request), limit=60, window=300):
+        return _rate_limited()
+    kind, target = checkin_web.resolve_checkin_target(code)
+    if kind != "tenant" or checkin_web.is_third_party_code(code, target):
+        return JsonResponse({"gigs": []})
+    data = _body(request)
+    on_date = _parse_iso_date(_str_field(data, "eventDate"))
+    if on_date is None or not _in_checkin_window(on_date):
+        return JsonResponse({"gigs": []})
+    chosen_type = checkin_web.resolve_checkin_event_type(target, data.get("eventTypeId"))
+    gigs = plan_gigs_on(tenant=target, on_date=on_date, chosen_type=chosen_type)
+    return JsonResponse({"gigs": [public_gig(g) for g in gigs]})
 
 
 # --------------------------------------------------------------------------
