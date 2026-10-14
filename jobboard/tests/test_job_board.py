@@ -18,6 +18,7 @@ from django.utils import timezone
 from ambassadors.checkin_web import get_or_create_checkin_ambassador
 from ambassadors.models import AmbassadorEvent
 from events import models as em
+from events.plan_results import auto_attach_on_approval, build_plan_results
 from events.tests.base import EventsGraphQLTestCase
 from jobboard.config import TORCH_JOB_BOARD
 from jobboard.gigs import board_for_tenant, list_gigs
@@ -37,6 +38,7 @@ from jobboard.schema import (
     build_admin_board,
 )
 from jobs.models import AmbassadorJob
+from recaps import models as rm
 from utils.mailer import Mailer, is_placeholder_recipient_email
 
 MIAMI = ZoneInfo("America/New_York")
@@ -464,6 +466,128 @@ class TestJobBoard(EventsGraphQLTestCase):
         assert em.Event.objects.filter(tenant=self.tenant).count() == 1
         ae = AmbassadorEvent.objects.get(event=gig)
         assert ae.is_approved is True
+
+    # ── walk-up → plan gig ("Is this one of today's scheduled events?") ──
+
+    def _plan_gig(self, **kwargs):
+        gig = self._gig(days_out=0, start=time(23, 0), end=time(23, 30), **kwargs)
+        em.Event.objects.filter(id=gig.id).update(event_type=self.activation_type)
+        gig.refresh_from_db()
+        return gig
+
+    def _identify(self, code="TH-2HRV3D", event_type=None, **extra):
+        body = {
+            "firstName": "Sam Lee",
+            "phone": "(305) 555-0199",
+            "eventDate": self.today.isoformat(),
+            "eventTypeId": str((event_type or self.activation_type).id),
+            **extra,
+        }
+        return Client().post(
+            f"/api/public/checkin/{code}/identify",
+            data=json.dumps(body),
+            content_type="application/json",
+        )
+
+    def _plan_gigs(self, code="TH-2HRV3D", event_type=None):
+        return Client().post(
+            f"/api/public/checkin/{code}/plan-gigs",
+            data=json.dumps(
+                {
+                    "eventDate": self.today.isoformat(),
+                    "eventTypeId": str((event_type or self.activation_type).id),
+                }
+            ),
+            content_type="application/json",
+        )
+
+    def test_walkup_pick_list_shows_days_plan_gigs_without_street(self):
+        gig = self._plan_gig(name="Dania Beach Food & Wine")
+        self._gig(name="Next week fest", days_out=7)
+        res = self._plan_gigs()
+        assert res.status_code == 200
+        gigs = res.json()["gigs"]
+        assert [g["id"] for g in gigs] == [str(gig.id)]
+        assert gigs[0]["name"] == "Dania Beach Food & Wine"
+        assert gigs[0]["area"] == "Miami, FL"
+        assert "250 NW" not in res.content.decode()
+        assert self._plan_gigs(event_type=self.retail_type).json()["gigs"] == []
+
+    def test_walkup_pick_joins_the_plan_event_from_any_address(self):
+        gig = self._plan_gig()
+        res = self._identify(planEventId=str(gig.id), address="1 Ocean Dr, Miami Beach, FL 33139")
+        assert res.status_code == 200, res.content
+        assert res.json()["event"]["uuid"] == str(gig.uuid)
+        assert em.Event.objects.filter(tenant=self.tenant).count() == 1
+        assert AmbassadorEvent.objects.filter(event=gig).count() == 1
+
+    def test_walkup_no_answer_skips_plan_and_stale_pick_errors(self):
+        gig = self._plan_gig()
+        res = self._identify(planEventId="none", address="99 Biscayne Blvd, Miami, FL 33132")
+        assert res.status_code == 200, res.content
+        walkin = em.Event.objects.filter(tenant=self.tenant).exclude(id=gig.id).get()
+        assert walkin.request_id is None
+
+        stale = self._identify(planEventId="999999", address="99 Biscayne Blvd, Miami, FL 33132")
+        assert stale.status_code == 400
+        assert stale.json()["error"] == "plan_gig_unavailable"
+
+    def test_walkup_same_city_joins_only_an_unambiguous_gig(self):
+        gig = self._plan_gig()
+        res = self._identify(address="99 Biscayne Blvd, Miami, FL 33132")
+        assert res.status_code == 200, res.content
+        assert em.Event.objects.filter(tenant=self.tenant).count() == 1
+        assert AmbassadorEvent.objects.filter(event=gig).exists()
+
+        self._plan_gig(name="Second Miami gig", address="1 SE 1st Ave, Miami, FL 33131")
+        cache.clear()
+        res = self._identify(phone="(305) 555-0111", address="500 Brickell Ave, Miami, FL 33131")
+        assert res.status_code == 200, res.content
+        assert em.Event.objects.filter(tenant=self.tenant, request__isnull=True).count() == 1
+
+    def test_walkup_retail_store_never_joins_a_plan_by_city(self):
+        gig = self._gig(days_out=0, start=time(23, 0), end=time(23, 30), activity="sales_support")
+        res = self._identify(event_type=self.retail_type, address="99 Biscayne Blvd, Miami, FL 33132")
+        assert res.status_code == 200, res.content
+        assert not AmbassadorEvent.objects.filter(event=gig).exists()
+        assert em.Event.objects.filter(tenant=self.tenant).count() == 2
+
+    def test_team_recap_link_joins_plan_gig_and_agency_link_never_does(self):
+        self.tenant.checkin_team_code = "TH-RHTGP9"
+        self.tenant.checkin_recap_code = "TH-AGENCY"
+        self.tenant.save(update_fields=["checkin_team_code", "checkin_recap_code"])
+        gig = self._plan_gig()
+        assert self._plan_gigs(code="TH-AGENCY").json()["gigs"] == []
+        assert len(self._plan_gigs(code="TH-RHTGP9").json()["gigs"]) == 1
+        res = self._identify(code="TH-RHTGP9", planEventId=str(gig.id), phone="")
+        assert res.status_code == 200, res.content
+        assert AmbassadorEvent.objects.filter(event=gig).count() == 1
+        assert em.Event.objects.filter(tenant=self.tenant).count() == 1
+
+    def test_walkup_recap_on_plan_event_reaches_plan_actuals(self):
+        gig = self._plan_gig()
+        assert self._identify(planEventId=str(gig.id)).status_code == 200
+        ae = AmbassadorEvent.objects.get(event=gig)
+        template = rm.CustomRecapTemplate.objects.create(
+            name="Torch THC-Event Activation", event_type=self.activation_type,
+            tenant=self.tenant, created_by=self.sys,
+        )
+        recap = rm.CustomRecap.objects.create(
+            name="Fest recap", event=gig, tenant=self.tenant, ambassador=ae.ambassador,
+            custom_recap_template=template, approved=True, created_by=self.sys,
+        )
+        line = em.ProductType.objects.create(tenant=self.tenant, name="Cans", created_by=self.sys)
+        rm.CustomRecapProductSample.objects.create(
+            custom_recap=recap,
+            product=em.Product.objects.create(
+                tenant=self.tenant, product_type=line, name="Black Cherry 10mg", created_by=self.sys
+            ),
+            quantity=95,
+        )
+        link = auto_attach_on_approval(kind="custom", recap_id=recap.id, actor=self.admin)
+        plan = em.FieldMarketingEvent.objects.get(request_id=gig.request_id)
+        assert link is not None and link.plan_id == plan.id
+        assert build_plan_results(plan, is_admin=True)["counted"] == 1
 
     # ── waiting plans ──
 

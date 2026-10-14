@@ -47,6 +47,11 @@ urlpatterns = [
         name="events.public_checkin_unfiled_recaps",
     ),
     path(
+        "checkin/<str:code>/plan-gigs",
+        checkin_views.public_checkin_plan_gigs,
+        name="events.public_checkin_plan_gigs",
+    ),
+    path(
         "checkin/<str:code>/clock",
         checkin_views.public_checkin_clock,
         name="events.public_checkin_clock",

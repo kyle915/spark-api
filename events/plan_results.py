@@ -14,12 +14,13 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 import strawberry
 from asgiref.sync import sync_to_async
 from django.db import transaction
 from django.db.models import Q
+from django.utils import timezone
 from graphql import GraphQLError
 from strawberry import relay
 
@@ -246,6 +247,89 @@ def suggest_plans(recap, kind: str, query: str | None = None) -> list[Suggestion
         out.append(Suggestion(plan=plan, score=score, reasons=reasons, linked=linked, gap=gap))
     out.sort(key=lambda s: (-s.score, s.gap, -s.plan.starts_on.toordinal()))
     return out if text else out[:SUGGEST_LIMIT]
+
+
+@dataclass
+class RecapSuggestion:
+    recap: object
+    kind: str
+    score: int
+    reasons: list[str]
+    current_plan: object | None
+
+
+def _recaps_near(plan, kind: str, lo: date, hi: date):
+    start = timezone.make_aware(datetime.combine(lo, datetime.min.time()))
+    end = timezone.make_aware(datetime.combine(hi + timedelta(days=1), datetime.min.time()))
+    when = Q(event__start_time__gte=start, event__start_time__lt=end) | Q(
+        event__start_time__isnull=True, event__date__gte=start, event__date__lt=end
+    )
+    if plan.request_id:
+        when |= Q(event__request_id=plan.request_id)
+    if kind == pm.KIND_CUSTOM:
+        qs = CustomRecap.objects.filter(Q(tenant_id=plan.tenant_id) | Q(event__tenant_id=plan.tenant_id))
+        related = (*RECAP_RELATED, "custom_recap_template", "custom_recap_template__event_type")
+    else:
+        qs = Recap.objects.filter(event__tenant_id=plan.tenant_id)
+        related = RECAP_RELATED
+    return (
+        qs.filter(when, archived_at__isnull=True)
+        .select_related(*related, "plan_link__plan")
+        .distinct()
+        .order_by("id")
+    )
+
+
+def suggest_recaps(plan) -> list[RecapSuggestion]:
+    """Recaps ops may want on ``plan``: booked from it, or the same tactic
+    within a week of its days, best first. 3rd-party recaps never show."""
+    end = plan.starts_on + timedelta(days=max(1, plan.days or 1) - 1)
+    lo = plan.starts_on - timedelta(days=SUGGEST_WINDOW_DAYS)
+    hi = end + timedelta(days=SUGGEST_WINDOW_DAYS)
+    markets = _markets()
+    out: list[RecapSuggestion] = []
+    for kind in (pm.KIND_CUSTOM, pm.KIND_LEGACY):
+        for recap in _recaps_near(plan, kind, lo, hi):
+            if getattr(recap, "exclude_from_aggregates", False):
+                continue
+            link = getattr(recap, "plan_link", None)
+            if link is not None and link.plan_id == plan.id:
+                continue
+            execution = torch_recap_execution_type(recap)
+            booked = bool(plan.request_id) and recap.event.request_id == plan.request_id
+            same_tactic = plan.activity in TACTICS_FOR_EXECUTION.get(execution, frozenset())
+            if not booked and not same_tactic:
+                continue
+            gap = _day_gap(plan, recap_day(recap))
+            score = 0
+            reasons: list[str] = []
+            if booked:
+                score += 1000
+                reasons.append("Filed on this plan's event")
+            if same_tactic:
+                score += 100
+                reasons.append(f"Same tactic ({EXECUTION_LABELS.get(execution, execution)})")
+            market_key, state = _recap_market(recap)
+            market = markets.get(plan.market)
+            if market_key and plan.market == market_key:
+                score += 50
+                reasons.append(market.label if market else plan.market)
+            elif state and MARKET_STATES.get(plan.market) == state:
+                score += 20
+                reasons.append(f"Same state ({state})")
+            score += max(0, 35 - 5 * gap)
+            reasons.append("Same day" if gap == 0 else f"{gap} day{'s' if gap != 1 else ''} apart")
+            out.append(
+                RecapSuggestion(
+                    recap=recap,
+                    kind=kind,
+                    score=score,
+                    reasons=reasons,
+                    current_plan=link.plan if link is not None else None,
+                )
+            )
+    out.sort(key=lambda s: (-s.score, -s.recap.id))
+    return out[:SEARCH_LIMIT]
 
 
 # --- push / remove ---------------------------------------------------------
@@ -664,6 +748,45 @@ def build_picker(kind: str, recap_id, query: str | None) -> RecapPlanPickerType:
     )
 
 
+@strawberry.type(name="PlanRecapSuggestion")
+class PlanRecapSuggestionType:
+    recap_id: str
+    kind: str
+    name: str
+    date: str
+    ba_name: str
+    status: str
+    href: str
+    reasons: list[str]
+    current_plan_name: str | None
+    metrics: list[RecapPlanMetricType]
+
+
+def build_recap_suggestions(plan_id: str) -> list[PlanRecapSuggestionType]:
+    plan = _FM.objects.filter(uuid=plan_id, deleted_at__isnull=True).first() if plan_id else None
+    if plan is None:
+        raise PlanResultsError("That plan isn't available.")
+    out = []
+    for s in suggest_recaps(plan):
+        metrics = pm.recap_metrics(s.recap, s.kind)
+        on = set(pm.default_keys(s.recap, metrics))
+        out.append(
+            PlanRecapSuggestionType(
+                recap_id=str(s.recap.id),
+                kind=s.kind,
+                name=s.recap.name or "Recap",
+                date=recap_day(s.recap).isoformat(),
+                ba_name=_ba_name(s.recap),
+                status=_status(s.recap),
+                href=recap_href(s.recap, s.kind),
+                reasons=s.reasons,
+                current_plan_name=s.current_plan.name if s.current_plan else None,
+                metrics=[_metric_type(m, m.key in on) for m in metrics],
+            )
+        )
+    return out
+
+
 def _results_type(payload: dict) -> PlanResultsType:
     return PlanResultsType(
         plan_id=payload["plan_id"],
@@ -722,6 +845,17 @@ class PlanResultsQueries:
         await _require_admin(user)
         try:
             return await sync_to_async(build_picker)(kind, recap_id, query)
+        except PlanResultsError as exc:
+            raise GraphQLError(str(exc)) from exc
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def plan_recap_suggestions(
+        self, info: strawberry.Info, plan_id: str
+    ) -> list[PlanRecapSuggestionType]:
+        user = await SparkGraphQLMixin().get_user(info)
+        await _require_admin(user)
+        try:
+            return await sync_to_async(build_recap_suggestions)(plan_id)
         except PlanResultsError as exc:
             raise GraphQLError(str(exc)) from exc
 
