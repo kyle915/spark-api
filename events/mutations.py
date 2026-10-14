@@ -44,6 +44,7 @@ from .routing import (
 )
 from .co_brands import replace_request_co_brands
 from .demo_cancel import DemoCancelError, request_demo_cancellation
+from .plan_event_types import event_type_for_request
 from .request_soft_delete import soft_delete_request
 from .torch_portal import (
     should_auto_approve_public_request,
@@ -3490,6 +3491,7 @@ async def _materialize_approved_event_for_request(
         event = await models.Event.objects.from_request(
             request=request,
             created_by=user,
+            event_type=await sync_to_async(event_type_for_request)(request),
             status=event_approved_status,
         )
     except Exception as exc:

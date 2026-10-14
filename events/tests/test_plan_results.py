@@ -7,12 +7,18 @@ from datetime import datetime
 from unittest.mock import patch
 
 import pytest
-from asgiref.sync import sync_to_async
+from asgiref.sync import async_to_sync, sync_to_async
 from django.core.management import call_command
 from django.utils import timezone
 
 from events import models as em
 from events.field_marketing import build_board, log_results, plan_event
+from events.mutations import _materialize_approved_event_for_request
+from events.plan_event_types import (
+    event_type_fits_plan,
+    event_type_for_plan,
+    event_type_for_request,
+)
 from events.plan_results import (
     PlanResultsError,
     auto_attach_on_approval,
@@ -471,6 +477,67 @@ class TestPlanResults(EventsGraphQLTestCase):
         rows = {int(r["recap_id"]): r for r in self._csv_rows(self._audit(), "RECAPS")}
         assert rows[missing.id]["flags"] == ""
         assert rows[missing.id]["counted"] == "yes"
+
+    # -- plan event program -------------------------------------------------
+
+    def _torch_programs(self):
+        def make(name, slug, **extra):
+            return em.EventType.objects.create(
+                name=name, slug=slug, tenant=self.tenant, created_by=self.sys, **extra
+            )
+
+        return {
+            "retail": make("Retail Sampling", "rs-torch", is_default=True),
+            "event": make("Event", "ev-torch"),
+            "guerilla": make("Guerilla Activation", "ga-torch"),
+        }
+
+    def test_plan_books_on_its_tactics_program(self):
+        programs = self._torch_programs()
+        event_plan = self._plan()
+        guerilla_plan = self._plan(
+            submit=False, activity="guerilla", name="Pop-up", needs_field_support=True
+        )
+        seeding_plan = self._plan(submit=False, activity="product_seeding", name="Seed")
+        sales_plan = self._plan(
+            submit=False, activity="sales_support", name="Visit", support_type="retail_visit"
+        )
+        assert event_type_for_plan(event_plan) == self.event_type
+        assert event_type_for_plan(guerilla_plan) == programs["guerilla"]
+        assert event_type_for_plan(seeding_plan) == self.seeding_type
+        assert event_type_for_plan(sales_plan) is None
+        assert not event_type_fits_plan(programs["guerilla"], event_plan)
+        assert not event_type_fits_plan(programs["retail"], event_plan)
+        assert event_type_fits_plan(programs["event"], event_plan)
+        assert event_type_for_request(event_plan.request) == self.event_type
+
+        em.EventStatus.objects.create(
+            name="Approved", slug="approved", tenant=self.tenant, created_by=self.sys
+        )
+        event = async_to_sync(_materialize_approved_event_for_request)(
+            event_plan.request, self.admin
+        )
+        assert event.event_type_id == self.event_type.id
+
+    def test_audit_sets_plan_event_program_only_before_recaps(self):
+        programs = self._torch_programs()
+        plan = self._plan()
+        empty = self._event(request=plan.request, event_type=programs["retail"])
+        filed = self._event(request=plan.request, event_type=programs["retail"])
+        self._event_recap(filed)
+
+        log = self._audit("--fix-event-types")
+        assert f"event={empty.id} program='Retail Sampling'" in log
+        assert "WOULD SET 'Event Activation'" in log
+        assert "LEAVE (recaps already filed)" in log
+        empty.refresh_from_db()
+        assert empty.event_type_id == programs["retail"].id
+
+        self._audit("--fix-event-types", "--apply")
+        empty.refresh_from_db()
+        filed.refresh_from_db()
+        assert empty.event_type_id == self.event_type.id
+        assert filed.event_type_id == programs["retail"].id
 
     # -- GraphQL ------------------------------------------------------------
 

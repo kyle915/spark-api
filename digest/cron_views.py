@@ -9946,9 +9946,10 @@ class AuditTorchPlanBucketsView(View):
     """POST `/internal/cron/audit-torch-plan-buckets` — where Torch recaps
     land on field-marketing plans (`audit_torch_plan_buckets`).
 
-    Params: since (YYYY-MM-DD), attach_missing=1, apply=1. Read-only unless
-    both attach_missing and apply; then it only adds plan links (never edits
-    a recap). Sends nothing. Secret-gated.
+    Params: since (YYYY-MM-DD), attach_missing=1, fix_event_types=1, apply=1.
+    Read-only unless apply plus a fix flag; then it only adds plan links /
+    sets the program on plan events with no recap (never edits a recap).
+    Sends nothing. Secret-gated.
     """
 
     def post(self, request: HttpRequest) -> HttpResponse:
@@ -9967,6 +9968,8 @@ class AuditTorchPlanBucketsView(View):
             cmd_args += ["--since", _get("since")]
         if _on("attach_missing"):
             cmd_args.append("--attach-missing")
+        if _on("fix_event_types"):
+            cmd_args.append("--fix-event-types")
         if _on("apply"):
             cmd_args.append("--apply")
         out = io.StringIO()
