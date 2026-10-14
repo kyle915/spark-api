@@ -4855,6 +4855,58 @@ class OffboardClientUsersView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class ImportStoreRosterView(View):
+    """POST `/internal/cron/import-store-roster`.
+
+    Fires `import_store_roster` — preloads a committed store roster CSV as
+    Retailer accounts on each brand it lists. DRY-RUN by default; only
+    `apply=true` writes.
+
+    Params (query or POST): owner_email required; file, tenant, apply optional.
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _str(name: str) -> str:
+            return (request.GET.get(name) or request.POST.get(name) or "").strip()
+
+        apply = _str("apply").lower() in ("1", "true", "yes", "on")
+        kwargs: dict[str, Any] = {
+            "apply": apply,
+            "owner_email": _str("owner_email"),
+            "tenant": _str("tenant"),
+        }
+        if _str("file"):
+            kwargs["file"] = _str("file")
+
+        out = io.StringIO()
+        try:
+            call_command("import_store_roster", stdout=out, **kwargs)
+        except CommandError as exc:
+            return JsonResponse(
+                {"ok": False, "error": "bad-input", "detail": str(exc), "log": out.getvalue()},
+                status=400,
+            )
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("import-store-roster cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc),
+                 "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse({"ok": True, "applied": apply, "log": out.getvalue()})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class DescribeSheetTabsView(View):
     """GET/POST `/internal/cron/describe-sheet-tabs` — read-only.
 
@@ -10575,6 +10627,7 @@ def _registered_views() -> dict[str, Any]:
         "backfill-recap-retailers": BackfillRecapRetailersView,
     "backfill-store-recap-names": BackfillStoreRecapNamesView,
     "offboard-client-users": OffboardClientUsersView,
+    "import-store-roster": ImportStoreRosterView,
     "audit-torch-recaps": AuditTorchRecapsView,
         "describe-sheet-tabs": DescribeSheetTabsView,
         "fix-ld-kpi-totals": FixLdKpiTotalsView,

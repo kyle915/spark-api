@@ -2334,14 +2334,15 @@ def addresses_fuzzy_match(a: str, b: str) -> bool:
     return True
 
 
-def recent_checkin_locations(tenant, limit: int = 30) -> list:
-    """Distinct recent store names + addresses for this tenant, newest first.
+def recent_checkin_locations(tenant, limit: int = 30, account_limit: int = 500) -> list:
+    """Distinct recent store names + addresses for this tenant, newest first,
+    then the brand's Retailer accounts (preloaded store rosters) by name.
 
     Feeds the autocomplete on the store step. Its real job is data hygiene: a BA
     picking a known store re-uses its exact spelling, so the normalized key
     matches and they join the existing event instead of creating a near-dupe.
     """
-    from events.models import Event
+    from events.models import Event, Retailer
 
     seen: set = set()
     out: list = []
@@ -2358,6 +2359,24 @@ def recent_checkin_locations(tenant, limit: int = 30) -> list:
         seen.add(key)
         out.append({"name": row.get("name") or "", "address": row.get("address") or ""})
         if len(out) >= limit:
+            break
+
+    accounts = (
+        Retailer.objects.filter(tenant=tenant)
+        .exclude(address__isnull=True)
+        .exclude(address="")
+        .order_by("name", "id")
+        .values("name", "address")[: account_limit * 2]
+    )
+    added = 0
+    for row in accounts:
+        key = normalize_place(row["address"])
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append({"name": row["name"] or "", "address": row["address"]})
+        added += 1
+        if added >= account_limit:
             break
     return out
 
