@@ -20,11 +20,20 @@ Plan check: each plan's Actual rows (``build_plan_results``) vs an
 independent sum of the contributed values of its countable recaps, and the
 board's Logged value (manual log wins, else recaps).
 
+Plan events: each live plan's booked event(s) with their program (event
+type), BAs assigned and recaps filed. WRONG_PROGRAM = the event runs a
+program that doesn't match the plan's tactic (e.g. an Event Activation plan
+booked as Retail Sampling), so BAs get the wrong recap form and walk-ups
+never join it.
+
 ``--attach-missing --apply`` links MISSING recaps exactly as approval does
 (``auto_attach_on_approval``) when the booked plan's tactic matches the
-recap type. Links only; a recap's own numbers are never touched.
+recap type. ``--fix-event-types --apply`` sets WRONG_PROGRAM events with no
+recap yet to the plan's program (events with recaps are listed, not
+changed). A recap's own numbers are never touched.
 
-    python manage.py audit_torch_plan_buckets [--since YYYY-MM-DD] [--attach-missing] [--apply]
+    python manage.py audit_torch_plan_buckets [--since YYYY-MM-DD]
+        [--attach-missing] [--fix-event-types] [--apply]
 """
 
 from __future__ import annotations
@@ -39,9 +48,11 @@ from django.db import transaction
 from django.db.models import Min, Q
 from django.utils import timezone
 
+from ambassadors.models import AmbassadorEvent
 from events.demo_cancel import request_display_code
 from events.field_marketing import _recap_logged, is_torch_tenant
-from events.models import FieldMarketingEvent
+from events.models import Event, FieldMarketingEvent
+from events.plan_event_types import event_type_fits_plan, event_type_for_plan
 from events.plan_actuals import RECAP_RELATED, Total, counts_toward_results, recap_day
 from events.plan_results import (
     EXECUTION_LABELS,
@@ -158,6 +169,11 @@ class Command(BaseCommand):
             action="store_true",
             help="Link MISSING recaps to their booked plan when the tactic matches.",
         )
+        parser.add_argument(
+            "--fix-event-types",
+            action="store_true",
+            help="Set plan events with no recap to the plan's program.",
+        )
         parser.add_argument("--apply", action="store_true", help="Write (default dry-run).")
 
     def handle(self, *args, **opts):
@@ -166,7 +182,9 @@ class Command(BaseCommand):
             raise CommandError("No Torch tenant found.")
         self.apply = bool(opts["apply"])
         self.attach = bool(opts["attach_missing"])
-        mode = "APPLY (writing links)" if self.apply and self.attach else "DRY-RUN (no writes)"
+        self.fix_types = bool(opts["fix_event_types"])
+        writes = self.apply and (self.attach or self.fix_types)
+        mode = "APPLY (writing)" if writes else "DRY-RUN (no writes)"
         w = self.stdout.write
         for tenant in tenants:
             w(
@@ -353,6 +371,7 @@ class Command(BaseCommand):
             w("  none")
 
         self._attach_missing(missing)
+        self._plan_events(plans)
         plan_rows = self._plans(plans)
 
         w("")
@@ -381,6 +400,48 @@ class Command(BaseCommand):
             with transaction.atomic():
                 link = auto_attach_on_approval(kind=kind, recap_id=recap.id, actor=None)
             w(f"  ATTACHED {what} → {link.plan.name if link else 'nothing (no metrics)'}")
+
+    def _plan_events(self, plans) -> None:
+        w = self.stdout.write
+        w("== Plan events (program BAs get on the booked event) ==")
+        live = [p for p in plans.values() if p.request_id and p.deleted_at is None]
+        if not live:
+            w("  none")
+            return
+        for plan in sorted(live, key=lambda p: (p.starts_on, p.id)):
+            target = event_type_for_plan(plan)
+            events = list(
+                Event.objects.filter(request_id=plan.request_id)
+                .select_related("event_type")
+                .order_by("id")
+            )
+            if not events:
+                w(f"  {plan.starts_on} {plan.name!r} [{plan.activity}]: no event yet")
+                continue
+            for event in events:
+                filed = (
+                    CustomRecap.objects.filter(event=event).count()
+                    + Recap.objects.filter(event=event).count()
+                )
+                bas = AmbassadorEvent.objects.filter(event=event).count()
+                fits = event_type_fits_plan(event.event_type, plan)
+                program = getattr(event.event_type, "name", None) or "none"
+                line = (
+                    f"  {plan.starts_on} {plan.name!r} [{plan.activity}] event={event.id} "
+                    f"program={program!r} bas_assigned={bas} recaps={filed}"
+                )
+                if fits:
+                    w(line)
+                    continue
+                if target is None:
+                    w(f"{line} WRONG_PROGRAM (no matching program for this tactic)")
+                elif filed:
+                    w(f"{line} WRONG_PROGRAM — LEAVE (recaps already filed)")
+                elif self.fix_types and self.apply:
+                    Event.objects.filter(pk=event.pk).update(event_type=target)
+                    w(f"{line} WRONG_PROGRAM — FIXED → {target.name!r}")
+                else:
+                    w(f"{line} WRONG_PROGRAM — WOULD SET {target.name!r}")
 
     def _plans(self, plans) -> list[dict]:
         w = self.stdout.write

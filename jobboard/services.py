@@ -30,6 +30,7 @@ from events.models import (
     RequestActivityLog,
     RequestStatus,
 )
+from events.plan_event_types import event_type_for_request
 from events.signals import create_pending_jobs_for_request
 from jobboard.config import JobBoardConfig
 from jobboard.gigs import Gig, date_label, list_gigs, waiting_reason
@@ -374,6 +375,7 @@ def post_waiting_plan(plan: FieldMarketingEvent, actor, *, post_spark_job: bool)
         event = async_to_sync(Event.objects.from_request)(
             request=request,
             created_by=actor,
+            event_type=event_type_for_request(request),
             status=EventStatus.objects.filter(slug="approved", tenant_id=request.tenant_id)
             .order_by("id")
             .first(),

@@ -11,25 +11,16 @@ from datetime import date
 from django.db import transaction
 
 from events.models import Event, FieldMarketingEvent
-from jobboard.gigs import GIG_TYPE_LABELS, gig_zone
+from events.plan_event_types import event_type_fits_plan
+from jobboard.gigs import gig_zone
 from jobboard.models import JobBoardBooking
 from recaps.models import CustomRecap, Recap
-
-# A picked program fits a gig when its name carries the plan tactic's keyword.
-_TYPE_KEYWORDS = {
-    "Event Activation": "activation",
-    "Guerilla": "guerilla",
-    "Product Seeding": "seeding",
-}
 
 
 def _fits(chosen_type, event: Event, plan: FieldMarketingEvent | None) -> bool:
     if chosen_type is None or event.event_type_id in (None, chosen_type.id):
         return True
-    if plan is None:
-        return False
-    keyword = _TYPE_KEYWORDS.get(GIG_TYPE_LABELS.get(plan.activity, ""))
-    return bool(keyword and keyword in (chosen_type.name or "").lower())
+    return plan is not None and event_type_fits_plan(chosen_type, plan)
 
 
 def _norm(value: str) -> str:
