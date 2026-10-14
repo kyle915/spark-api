@@ -236,23 +236,49 @@ class TestDailyRetailRollup(AmbassadorsGraphQLTestCase):
         stamp = TenantDailyRollupSend.objects.get()
         assert stamp.report_date == DAY and stamp.recap_count == 3
 
-    def test_not_before_skips_until_local_morning(self):
+    def _scheduled_fire(self, utc: datetime.datetime) -> int:
+        with mock.patch.object(send_mod.DailyRetailRollupMailer, "send_now") as send, \
+                mock.patch.object(send_mod.timezone, "now", return_value=utc):
+            call_command(
+                "send_daily_retail_rollup", "--not-before", "12", "--not-after", "14"
+            )
+        return send.call_count
+
+    def test_noon_window_sends_once_in_pdt(self):
         self._seed_day()
         TenantDailyRollup.objects.create(
             tenant=self.tenant, enabled=True, recipients=["ryan@torchdrinks.com"]
         )
-        six_am_pt = datetime.datetime(2026, 10, 13, 13, 5, tzinfo=datetime.timezone.utc)
-        with mock.patch.object(send_mod.DailyRetailRollupMailer, "send_now") as send, \
-                mock.patch.object(send_mod.timezone, "now", return_value=six_am_pt):
-            call_command("send_daily_retail_rollup", "--not-before", "7")
-            assert send.call_count == 0
-        with mock.patch.object(send_mod.DailyRetailRollupMailer, "send_now") as send, \
-                mock.patch.object(
-                    send_mod.timezone, "now", return_value=six_am_pt + datetime.timedelta(hours=1)
-                ):
-            call_command("send_daily_retail_rollup", "--not-before", "7")
-            assert send.call_count == 1
+        eleven_am_pdt = datetime.datetime(2026, 10, 13, 18, 0, tzinfo=datetime.timezone.utc)
+        hour = datetime.timedelta(hours=1)
+        assert self._scheduled_fire(eleven_am_pdt) == 0
+        assert self._scheduled_fire(eleven_am_pdt + hour) == 1
+        assert self._scheduled_fire(eleven_am_pdt + 2 * hour) == 0
+        assert self._scheduled_fire(eleven_am_pdt + 3 * hour) == 0
         assert TenantDailyRollupSend.objects.get().report_date == DAY
+
+    def test_noon_window_backup_fire_sends_when_noon_run_dropped(self):
+        self._seed_day()
+        TenantDailyRollup.objects.create(
+            tenant=self.tenant, enabled=True, recipients=["ryan@torchdrinks.com"]
+        )
+        one_pm_pdt = datetime.datetime(2026, 10, 13, 20, 0, tzinfo=datetime.timezone.utc)
+        two_pm_pdt = one_pm_pdt + datetime.timedelta(hours=1)
+        assert self._scheduled_fire(two_pm_pdt) == 0
+        assert self._scheduled_fire(one_pm_pdt) == 1
+
+    def test_noon_window_in_pst_after_dst_ends(self):
+        day = datetime.date(2026, 11, 2)
+        TenantDailyRollup.objects.create(
+            tenant=self.tenant, enabled=True, recipients=["ryan@torchdrinks.com"]
+        )
+        nineteen_utc = datetime.datetime(2026, 11, 3, 19, 0, tzinfo=datetime.timezone.utc)
+        with mock.patch.object(send_mod, "build_daily_retail_rollup") as build:
+            build.return_value.has_content = False
+            assert self._scheduled_fire(nineteen_utc) == 0
+            build.assert_not_called()
+            assert self._scheduled_fire(nineteen_utc + datetime.timedelta(hours=1)) == 0
+            assert build.call_args[0][1] == day
 
     def test_failed_send_releases_the_day(self):
         self._seed_day()

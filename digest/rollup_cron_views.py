@@ -1,8 +1,8 @@
 """Cron endpoints for the executive daily retail roll-up.
 
 * ``/internal/cron/send-daily-retail-rollup`` — runs ``send_daily_retail_rollup``.
-  Params: dry_run, tenant, date (YYYY-MM-DD), preview_to, not_before (local
-  hour), include_html. With
+  Params: dry_run, tenant, date (YYYY-MM-DD), preview_to, not_before /
+  not_after (local hour window), include_html. With
   ``include_html`` (requires tenant) the rendered email is returned as
   ``html`` so the workflow can save it as an artifact.
 * ``/internal/cron/set-daily-retail-rollup`` — runs ``set_daily_retail_rollup``.
@@ -62,8 +62,9 @@ class SendDailyRetailRollupView(View):
             args += ["--date", _param(request, "date")]
         if preview_to:
             args += ["--preview-to", preview_to]
-        if _param(request, "not_before").isdigit():
-            args += ["--not-before", _param(request, "not_before")]
+        for name in ("not_before", "not_after"):
+            if _param(request, name).isdigit():
+                args += [f"--{name.replace('_', '-')}", _param(request, name)]
         html_path = ""
         if include_html:
             fd, html_path = tempfile.mkstemp(suffix=".html")
