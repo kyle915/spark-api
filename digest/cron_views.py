@@ -9901,6 +9901,52 @@ class AuditRoutingStateView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class AuditTorchPlanBucketsView(View):
+    """POST `/internal/cron/audit-torch-plan-buckets` — where Torch recaps
+    land on field-marketing plans (`audit_torch_plan_buckets`).
+
+    Params: since (YYYY-MM-DD), attach_missing=1, apply=1. Read-only unless
+    both attach_missing and apply; then it only adds plan links (never edits
+    a recap). Sends nothing. Secret-gated.
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _get(n: str) -> str:
+            return (request.GET.get(n) or request.POST.get(n) or "").strip()
+
+        def _on(n: str) -> bool:
+            return _get(n).lower() in ("1", "true", "yes")
+
+        cmd_args: list[str] = []
+        if _get("since"):
+            cmd_args += ["--since", _get("since")]
+        if _on("attach_missing"):
+            cmd_args.append("--attach-missing")
+        if _on("apply"):
+            cmd_args.append("--apply")
+        out = io.StringIO()
+        try:
+            call_command("audit_torch_plan_buckets", *cmd_args, stdout=out)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("audit_torch_plan_buckets cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc), "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse({"ok": True, "log": out.getvalue()})
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        return JsonResponse({"ok": True, "endpoint": "audit-torch-plan-buckets"})
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class SetRecapChoiceOptionsView(View):
     """POST `/internal/cron/set-recap-choice-options` — set a custom-recap
     choice field's allowed options (the builder only sets them at create time).
@@ -10574,6 +10620,7 @@ def _registered_views() -> dict[str, Any]:
         "fix-tracker-markets": FixTrackerMarketsView,
         "audit-request-statuses": AuditRequestStatusesView,
         "audit-routing-state": AuditRoutingStateView,
+        "audit-torch-plan-buckets": AuditTorchPlanBucketsView,
         "set-recap-choice-options": SetRecapChoiceOptionsView,
         "send-update-check-push": SendUpdateCheckPushView,
         "backfill-event-coordinates": BackfillEventCoordinatesView,

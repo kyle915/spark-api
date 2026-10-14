@@ -148,6 +148,8 @@ def _ba_name(recap) -> str:
 def _status(recap) -> str:
     if recap.archived_at is not None:
         return "archived"
+    if getattr(recap, "exclude_from_aggregates", False):
+        return "third_party"
     return "approved" if recap.approved else "needs_review"
 
 
@@ -309,6 +311,8 @@ def auto_attach_on_approval(*, kind: str, recap_id: int, actor) -> PlanRecapLink
     the plan nearest the recap date when one request backs several plans.
     """
     recap = _load_recap(kind, recap_id)
+    if getattr(recap, "exclude_from_aggregates", False):
+        return None
     if _link_for(recap, kind) is not None:
         return None
     request_id = getattr(getattr(recap, "event", None), "request_id", None)

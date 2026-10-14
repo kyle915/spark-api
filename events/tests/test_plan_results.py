@@ -1,11 +1,14 @@
 """Recap metrics pushed to field-marketing plans: Planned vs Actual."""
 
+import csv
+import io
 import json
 from datetime import datetime
 from unittest.mock import patch
 
 import pytest
 from asgiref.sync import sync_to_async
+from django.core.management import call_command
 from django.utils import timezone
 
 from events import models as em
@@ -406,6 +409,68 @@ class TestPlanResults(EventsGraphQLTestCase):
 
         walkup = self._event_recap(self._event())
         assert auto_attach_on_approval(kind="custom", recap_id=walkup.id, actor=self.admin) is None
+
+    def test_third_party_recaps_stay_out_of_plan_actuals(self):
+        plan = self._plan()
+        event = self._event(request=plan.request)
+        agency = self._event_recap(event, emails="500", sampled="500")
+        agency.is_third_party = agency.exclude_from_aggregates = True
+        agency.save(update_fields=["is_third_party", "exclude_from_aggregates"])
+        assert auto_attach_on_approval(kind="custom", recap_id=agency.id, actor=self.admin) is None
+
+        ours = self._event_recap(event)
+        for recap in (agency, ours):
+            push_recap(kind="custom", recap_id=recap.id, plan_id=str(plan.uuid),
+                       metric_keys=[pm.EMAILS_COLLECTED], actor=self.admin, confirm_move=False)
+        view = build_plan_results(plan, is_admin=True)
+        assert view["counted"] == 1
+        assert {row.key: row for row in view["rows"]}[pm.EMAILS_COLLECTED].actual == 110
+        assert sorted(r["status"] for r in view["recaps"]) == ["approved", "third_party"]
+        board = build_board(self.tenant, "2026-09", include_pending=True)
+        row = next(r for r in board["events"] if r["id"] == str(plan.uuid))
+        assert (row["results_counted"], row["results_pending"]) == (1, 0)
+        assert {k["key"]: k for k in board["kpis"]}["emails"]["logged"] == 110
+
+    # -- audit ----------------------------------------------------------------
+
+    def _audit(self, *args) -> str:
+        out = io.StringIO()
+        call_command("audit_torch_plan_buckets", *args, stdout=out)
+        return out.getvalue()
+
+    def _csv_rows(self, log: str, section: str) -> list[dict]:
+        body = log.split(f"----- {section} CSV BEGIN -----\n", 1)[1]
+        body = body.split(f"\n----- {section} CSV END -----", 1)[0]
+        return list(csv.DictReader(io.StringIO(body)))
+
+    def test_audit_flags_missing_and_wrong_tactic_and_attaches_on_apply(self):
+        plan = self._plan()
+        missing = self._event_recap(self._event(request=plan.request))
+        seeding_plan = self._plan(
+            submit=False, name="Seeding run", activity="product_seeding", starts_on="2026-09-12"
+        )
+        misfiled = self._event_recap(self._event())
+        push_recap(kind="custom", recap_id=misfiled.id, plan_id=str(seeding_plan.uuid),
+                   metric_keys=[pm.EMAILS_COLLECTED], actor=self.admin, confirm_move=False)
+
+        log = self._audit("--attach-missing")
+        rows = {int(r["recap_id"]): r for r in self._csv_rows(log, "RECAPS")}
+        assert rows[missing.id]["flags"] == "MISSING"
+        assert "WRONG_TACTIC" in rows[misfiled.id]["flags"].split()
+        assert rows[misfiled.id]["contributed"] == "emails_collected=110"
+        assert "WOULD ATTACH" in log
+        assert not rm.PlanRecapLink.objects.filter(custom_recap=missing).exists()
+        plans = {r["plan_name"]: r for r in self._csv_rows(log, "PLANS")}
+        assert plans["Seeding run"]["actual_rows"] == "emails_collected=110"
+        assert plans["Seeding run"]["flags"] == ""
+
+        log = self._audit("--attach-missing", "--apply")
+        link = rm.PlanRecapLink.objects.get(custom_recap=missing)
+        assert link.plan_id == plan.id and link.auto
+        assert pm.SAMPLES_BY_SKU in link.metric_keys
+        rows = {int(r["recap_id"]): r for r in self._csv_rows(self._audit(), "RECAPS")}
+        assert rows[missing.id]["flags"] == ""
+        assert rows[missing.id]["counted"] == "yes"
 
     # -- GraphQL ------------------------------------------------------------
 
