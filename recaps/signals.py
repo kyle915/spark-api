@@ -14,6 +14,7 @@ from django.db.models.signals import post_save
 from django.dispatch import receiver
 
 from recaps.models import CustomRecap
+from utils.outbound import block_if_suppressed
 from utils.queues import Queues
 
 logger = logging.getLogger(__name__)
@@ -25,6 +26,8 @@ queues: Queues = Queues()
 def mirror_recap_export_on_save(sender, instance: CustomRecap, **kwargs):
     tenant = getattr(instance, "tenant", None)
     if tenant is None or not getattr(tenant, "recap_export_on_submit", False):
+        return
+    if block_if_suppressed("recap sheet export", instance.id):
         return
     try:
         from recaps.recap_sheet_export import refresh_recap_export

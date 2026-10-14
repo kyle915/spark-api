@@ -24,6 +24,20 @@ class DefaultStatusManager(models.Manager):
 
         return queryset.first()
 
+    def get_by_slug(self, slug: str, tenant=None) -> models.Model | None:
+        """
+        Return the status by slug.
+
+        If a tenant is provided, the lookup will be scoped to that tenant.
+        Returns `None` when no status with the given slug exists.
+        """
+        queryset = self.get_queryset().filter(slug=slug)
+
+        if tenant is not None:
+            queryset = queryset.filter(tenant=tenant)
+
+        return queryset.first()
+
 
 class ClientManager(BaseManager, models.Manager):
     """Manager for Client model with async support."""
@@ -43,20 +57,6 @@ class RequestStatusManager(DefaultStatusManager):
         Returns `None` when no status for approval exists.
         """
         queryset = self.get_queryset().filter(create_event=True)
-
-        if tenant is not None:
-            queryset = queryset.filter(tenant=tenant)
-
-        return queryset.first()
-
-    def get_by_slug(self, slug: str, tenant=None) -> models.Model | None:
-        """
-        Return the status by slug.
-
-        If a tenant is provided, the lookup will be scoped to that tenant.
-        Returns `None` when no status with the given slug exists.
-        """
-        queryset = self.get_queryset().filter(slug=slug)
 
         if tenant is not None:
             queryset = queryset.filter(tenant=tenant)

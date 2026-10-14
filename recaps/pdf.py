@@ -1080,6 +1080,12 @@ def build_recap_pdf_html(
         badge_html = (
             f'<div class="badge {badge_class}"><span>{status_chip}</span></div>'
         )
+    if (getattr(recap, "source_label", "") or "").startswith("DEMO"):
+        subtitle = "Demo recap · illustrative data, not a real activation"
+        badge_html = (
+            '<div style="display:flex;gap:6px;align-items:center">'
+            f'<div class="badge badge-draft"><span>DEMO</span></div>{badge_html}</div>'
+        )
     co_activation = _co_activation_label(recap)
     co_activation_html = (
         f'<p class="co-activation">{escape(co_activation)}</p>' if co_activation else ""

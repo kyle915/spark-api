@@ -42,6 +42,7 @@ from django.contrib.auth import get_user_model
 from django.db import connections
 from django.utils import timezone
 
+from utils.outbound import block_if_suppressed
 from utils.expo_push import (
     ExpoPushClient,
     ExpoPushError,
@@ -195,6 +196,8 @@ async def send_push_to_user(
     """
     user_id = user.pk if hasattr(user, "pk") else int(user)
     client = client or expo_push_client
+    if block_if_suppressed("push", title):
+        return 0
 
     # Log the in-app record FIRST, before the device check — the BA's
     # Notifications inbox should reflect everything we sent even when no device
@@ -476,6 +479,8 @@ def enqueue_push(
         # deadlocks against pytest's blocked main event loop (asgiref
         # main-thread executor). Prod (DEBUG=false) is unaffected.
         logger.debug("PUSH_ENABLED=false — dropping push to user_id=%s", user_id)
+        return
+    if block_if_suppressed("push", title):
         return
     try:
         from utils.queues import Queues

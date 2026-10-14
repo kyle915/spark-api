@@ -29,6 +29,8 @@ import logging
 
 from django.conf import settings
 
+from utils.outbound import block_if_suppressed
+
 logger = logging.getLogger(__name__)
 
 _CLOUD_TASKS_HOST = "https://cloudtasks.googleapis.com"
@@ -63,6 +65,8 @@ def enqueue(path: str, payload: dict) -> bool:
     caller can safely fall back to inline execution. Never raises.
     """
     if not _is_enabled():
+        return False
+    if block_if_suppressed("cloud task", path):
         return False
 
     try:
@@ -128,6 +132,8 @@ def enqueue_or_background(path: str, payload: dict, fallback) -> None:
 
     from django.db import close_old_connections
 
+    if block_if_suppressed("cloud task", path):
+        return
     if enqueue(path, payload):
         return
 
