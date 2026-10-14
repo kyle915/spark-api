@@ -1,0 +1,69 @@
+name: Import store roster (manual)
+
+# Manually fires `/internal/cron/import-store-roster` on Cloud Run to run
+# `import_store_roster`: preloads a committed store roster CSV
+# (events/management/commands/data/<file>) as Retailer accounts on every brand
+# the roster lists, so the stores show in each brand's request form and
+# walk-up store list. Idempotent — matched on brand + normalized address.
+# See events/management/commands/import_store_roster.py.
+#
+# SAFE — DRY-RUN IS THE DEFAULT. Set dry_run=false to write. Secret-gated via
+# X-Cron-Secret (shared INTERNAL_CRON_SECRET) — a HEADER, never the URL.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (no DB writes). Leave true to preview; set false to apply."
+        required: true
+        default: true
+        type: boolean
+      file:
+        description: "Roster CSV name in events/management/commands/data."
+        required: true
+        default: "famus_aa_wook_store_roster.csv"
+        type: string
+      tenant:
+        description: "Only this brand slug (blank = every brand in the file)."
+        required: false
+        default: ""
+        type: string
+      owner_email:
+        description: "Spark admin recorded as created_by."
+        required: true
+        default: "kyle@igniteproductions.co"
+        type: string
+
+jobs:
+  fire-import-store-roster:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire import-store-roster cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/import-store-roster
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+          FILE: ${{ github.event.inputs.file }}
+          TENANT: ${{ github.event.inputs.tenant }}
+          OWNER_EMAIL: ${{ github.event.inputs.owner_email }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          if [ "$DRY_RUN" = "false" ]; then APPLY=true; else APPLY=false; fi
+
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL" \
+            --data-urlencode "apply=$APPLY" \
+            --data-urlencode "file=$FILE" \
+            --data-urlencode "tenant=$TENANT" \
+            --data-urlencode "owner_email=$OWNER_EMAIL" \
+            -H "X-Cron-Secret: $CRON_SECRET")
+          echo "HTTP $STATUS"
+          python3 -c "import json; d=json.load(open('/tmp/cron-response.json')); print(d.get('log') or d)"
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS — see body above."
+            exit 1
+          fi
