@@ -81,7 +81,7 @@ def retail_brand(
             "How many single cans / bottles / shots did consumers purchase?": str(
                 singles
             ),
-            "How many packs did consumers purchase?": str(packs),
+            **({} if packs is None else {"How many packs did consumers purchase?": str(packs)}),
         },
         feedback={
             "Consumer Feedback": feedback,
@@ -258,7 +258,7 @@ SCENARIOS: tuple[Scenario, ...] = (
                 aware=9,
                 willing=31,
                 singles=12,
-                packs=3,
+                packs=None,
                 skus=[(AA_SKUS[0], 31), (AA_SKUS[1], 27)],
                 feedback=(
                     "Slayberry was the favorite: bright berry flavor, easy to take as a shot. "
@@ -337,7 +337,7 @@ SCENARIOS: tuple[Scenario, ...] = (
             "Estimated store foot traffic": "780",
             "Sample format": "Sample cup / pour",
             "Account Feedback": (
-                "Grocery manager moved the 4-packs to an end cap after lunch when the shelf "
+                "Grocery manager moved the cans to an end cap after lunch when the shelf "
                 "facing ran low; asked about a repeat demo before the holidays."
             ),
             "Anything you'd change or do differently?": (
@@ -356,7 +356,7 @@ SCENARIOS: tuple[Scenario, ...] = (
                 aware=18,
                 willing=61,
                 singles=14,
-                packs=9,
+                packs=None,
                 skus=[(WW_SKUS[0], 36), (WW_SKUS[1], 31), (WW_SKUS[2], 27)],
                 feedback=(
                     'Pineapple Peak was the crowd favorite: "like a tropical sports drink '
@@ -368,8 +368,8 @@ SCENARIOS: tuple[Scenario, ...] = (
                     '"Berry Groovy tastes like a smoothie." (male, ~40)'
                 ),
                 decline=(
-                    "A few already had a hydration mix at home; some wanted single cans "
-                    "only to try before committing to a 4-pack."
+                    "A few already had a hydration mix at home; some wanted to try one can "
+                    "before buying more."
                 ),
             ),
         ),
@@ -455,11 +455,11 @@ SCENARIOS: tuple[Scenario, ...] = (
                 aware=12,
                 willing=41,
                 singles=8,
-                packs=6,
+                packs=None,
                 skus=[(WW_SKUS[0], 24), (WW_SKUS[1], 22), (WW_SKUS[2], 20)],
                 feedback=(
                     "Pineapple Peak led again; shoppers liked having a no-sugar hydration "
-                    "option next to an energy drink. Laser Lime sold best in 4-packs."
+                    "option next to an energy drink. Laser Lime sold best."
                 ),
                 quotes='"I\'ll take the lime for my shift." (female, ~35, nurse)',
                 decline="Some only wanted singles; a few were already holding a full basket.",

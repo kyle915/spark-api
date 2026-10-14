@@ -80,8 +80,7 @@ class _CoActivationBase(AmbassadorsGraphQLTestCase):
             {"customFieldId": str(_field(self.ww_tpl, "foot traffic").id), "value": "400"},
             {"customFieldId": str(_field(self.ww_tpl, "Sample format").id), "value": "Full can / bottle"},
             {"customFieldId": str(_field(self.ww_tpl, "consumers sampled").id), "value": "60"},
-            {"customFieldId": str(_field(self.ww_tpl, "single cans").id), "value": "6"},
-            {"customFieldId": str(_field(self.ww_tpl, "packs did").id), "value": "2"},
+            {"customFieldId": str(_field(self.ww_tpl, "single cans").id), "value": "8"},
         ]
         return checkin_web.submit_checkin_recap(
             event=self.event,
