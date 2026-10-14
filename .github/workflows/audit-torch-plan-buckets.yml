@@ -1,0 +1,61 @@
+name: Audit Torch plan buckets
+
+# Manual. Where Torch recaps land on field-marketing plans (Planned vs
+# Actual): plan, tactic, contributed vs recap values, and flags. Read-only
+# unless both attach_missing and apply are true; then it only links approved
+# recaps to the plan that booked their request (never edits a recap).
+# See events/management/commands/audit_torch_plan_buckets.py.
+
+on:
+  workflow_dispatch:
+    inputs:
+      since:
+        description: "YYYY-MM-DD (blank = first plan)"
+        required: false
+        default: ""
+      attach_missing:
+        description: "Link missing recaps to their booked plan"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+      apply:
+        description: "Write (false = dry run)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+jobs:
+  audit-torch-plan-buckets:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire audit-torch-plan-buckets cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/audit-torch-plan-buckets
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          SINCE: ${{ github.event.inputs.since || '' }}
+          ATTACH_MISSING: ${{ github.event.inputs.attach_missing || 'false' }}
+          APPLY: ${{ github.event.inputs.apply || 'false' }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            --max-time 900 \
+            -X POST "$CRON_URL" \
+            --data-urlencode "since=$SINCE" \
+            --data-urlencode "attach_missing=$ATTACH_MISSING" \
+            --data-urlencode "apply=$APPLY" \
+            -H "X-Cron-Secret: $CRON_SECRET")
+
+          echo "HTTP $STATUS"
+          python3 -c 'import json; d=json.load(open("/tmp/cron-response.json")); print(d.get("log") or d)'
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS — see body above."
+            exit 1
+          fi
