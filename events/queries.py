@@ -2430,6 +2430,18 @@ class RetailerQueriesService(BaseEventQueriesService):
         """Get the queryset for the service."""
         return self.get_model().objects.select_related("location")
 
+    def get_filtered_queryset(
+        self, tenant_id: int | None = None, q: str | None = None
+    ) -> QuerySet:
+        """Search matches the store address too: a roster has dozens of
+        stores named "Shell", so people find theirs by street or city."""
+        queryset = self.get_queryset()
+        if tenant_id:
+            queryset = queryset.filter(tenant_id=tenant_id)
+        if q:
+            queryset = queryset.filter(Q(name__icontains=q) | Q(address__icontains=q))
+        return queryset
+
 
 @strawberry.type
 class RetailerQueries:

@@ -210,6 +210,34 @@ class TestTenantCheckinLink(AmbassadorsGraphQLTestCase):
         assert len(keys) == len(out), "no duplicate stores in the autocomplete"
         assert len(out) == 2
 
+    def test_recent_locations_append_the_brands_store_accounts(self):
+        """Preloaded store rosters (Retailer accounts) follow the recent
+        events, so a BA at a known account picks it instead of typing."""
+        from events.models import Retailer
+
+        Event.objects.create(
+            tenant=self.tenant, name="Walk-in", address="58 E Lake St, Chicago, IL",
+            created_by=self.system_user,
+        )
+        for name, address in (
+            ("Shell", "1303 S Main St, Bluffton, IN 46714"),
+            ("Lake St account", "58 e lake st, chicago, il"),
+            ("Banner only", ""),
+        ):
+            Retailer.objects.create(
+                tenant=self.tenant, name=name, address=address, created_by=self.system_user,
+            )
+        other = self.create_tenant(name=f"Other {uuid.uuid4().hex[:6]}")
+        Retailer.objects.create(
+            tenant=other, name="Not ours", address="1 Other Rd, Austin, TX",
+            created_by=self.system_user,
+        )
+        out = checkin_web.recent_checkin_locations(self.tenant)
+        assert out == [
+            {"name": "Walk-in", "address": "58 E Lake St, Chicago, IL"},
+            {"name": "Shell", "address": "1303 S Main St, Bluffton, IN 46714"},
+        ]
+
     # -- event naming -------------------------------------------------------
 
     def test_event_is_titled_date_then_address(self):
