@@ -152,6 +152,8 @@ class TenantType(Node):
     # rules as checkin_code.
     checkin_team_code: strawberry.auto
     checkin_team_title: strawberry.auto
+    # Brand-submitted requests land approved (spark-form confirmation copy).
+    auto_approve_requests: strawberry.auto
 
     @strawberry.field(name="checkinPhotoBuckets")
     def checkin_photo_bucket_names(self) -> list[str]:

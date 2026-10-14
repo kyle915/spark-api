@@ -10633,6 +10633,53 @@ class SetTenantJobReminderEmailsView(View):
         )
 
 
+@method_decorator(csrf_exempt, name="dispatch")
+class SetRequestAutoApproveView(View):
+    """POST `/internal/cron/set-request-auto-approve`.
+
+    Runs `set_request_auto_approve`: per-tenant request auto-approve on/off
+    plus the CC list on the auto-approved request email. Recaps unaffected.
+
+    Params: tenants (comma-separated slugs, required), cc (comma-separated
+    emails; omit to keep the stored list), off, apply (default DRY RUN).
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _param(name: str) -> str:
+            return (request.GET.get(name) or request.POST.get(name) or "").strip()
+
+        def _bool(name: str) -> bool:
+            return _param(name).lower() in ("1", "true", "yes", "on")
+
+        tenants = _param("tenants")
+        if not tenants:
+            return JsonResponse({"ok": False, "error": "tenants is required"}, status=400)
+        kwargs: dict = {"tenants": tenants}
+        if _param("cc"):
+            kwargs["cc"] = _param("cc")
+        if _bool("off"):
+            kwargs["off"] = True
+        apply_it = _bool("apply")
+        if apply_it:
+            kwargs["apply"] = True
+
+        out = io.StringIO()
+        try:
+            call_command("set_request_auto_approve", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("set-request-auto-approve cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc),
+                 "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse({"ok": True, "apply": apply_it, "log": out.getvalue()})
+
+
 def _registered_views() -> dict[str, Any]:
     """Map URL path → view class. Lets `digest/urls.py` mount these
     without each one being re-exported explicitly.
@@ -10646,6 +10693,7 @@ def _registered_views() -> dict[str, Any]:
         "activation-reminders": SendActivationRemindersView,
         "send-event-confirmations": SendEventConfirmationsView,
         "set-tenant-job-reminder-emails": SetTenantJobReminderEmailsView,
+        "set-request-auto-approve": SetRequestAutoApproveView,
         "auto-clock-out": AutoClockOutStaleShiftsView,
         "no-show-alerts": SendNoShowAlertsView,
         "pre-shift-checklists": SendPreShiftChecklistsView,

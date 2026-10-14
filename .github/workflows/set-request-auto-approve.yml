@@ -1,0 +1,62 @@
+name: Set request auto-approve
+
+# Per-tenant request auto-approve: brand-submitted requests (public spark-form
+# + client portal login) land approved with the Event created, and the
+# approval email goes to the requestor with the CC list below. Recaps keep
+# the admin-approval gate.
+#
+# RUN apply=false FIRST AND READ THE LOG.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tenants:
+        description: "Comma-separated tenant slugs"
+        required: true
+        default: "famus-energy,alcohol-armor,wook-water"
+      cc:
+        description: "Comma-separated CC emails (blank = keep stored list)"
+        required: false
+        default: "kyle@igniteproductions.co,baesha@igniteproductions.co,keis@igniteproductions.co,nevena@igniteproductions.co,myriant@igniteproductions.co"
+      off:
+        description: "Turn auto-approve OFF instead"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+      apply:
+        description: "Actually write (read the dry run first)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+jobs:
+  set-request-auto-approve:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire set-request-auto-approve cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/set-request-auto-approve
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          TENANTS: ${{ github.event.inputs.tenants }}
+          CC: ${{ github.event.inputs.cc }}
+          OFF: ${{ github.event.inputs.off }}
+          APPLY: ${{ github.event.inputs.apply }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            --max-time 120 \
+            -X POST "$CRON_URL" \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            --data-urlencode "tenants=$TENANTS" \
+            --data-urlencode "cc=$CC" \
+            --data-urlencode "off=$OFF" \
+            --data-urlencode "apply=$APPLY")
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          echo ""
+          [ "$STATUS" != "200" ] && exit 1 || exit 0

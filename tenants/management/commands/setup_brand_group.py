@@ -11,7 +11,8 @@ createTenant-style seeds when missing):
   BA form writes one recap per brand on a co-activation,
 * photo buckets, standing walk-up programs, address location mode,
   "sales" Insights trend series, light theme + logo,
-* one standing check-in code per brand — minted once, never rotated.
+* one standing check-in code per brand — minted once, never rotated,
+* brand-submitted requests auto-approve, CC'ing ``REQUEST_APPROVED_CC``.
 
 Then the three tenants join one :class:`BrandGroup`.
 
@@ -311,6 +312,15 @@ PHOTO_BUCKETS_BY_PROGRAM: dict[str, list[dict]] = {
 }
 
 CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+
+# Brand-submitted requests auto-approve; the approval email CCs this list.
+REQUEST_APPROVED_CC = (
+    "kyle@igniteproductions.co",
+    "baesha@igniteproductions.co",
+    "keis@igniteproductions.co",
+    "nevena@igniteproductions.co",
+    "myriant@igniteproductions.co",
+)
 
 
 def template_name(brand: Brand, program: str) -> str:
@@ -783,6 +793,8 @@ class Command(BaseCommand):
             "checkin_location_mode": Tenant.CHECKIN_LOCATION_ADDRESS,
             "insights_trend_series": Tenant.TREND_SERIES_SALES,
             "activation_mix_includes_walkups": True,
+            "auto_approve_requests": True,
+            "request_approved_cc_emails": ", ".join(REQUEST_APPROVED_CC),
         }
         changed = [k for k, v in wanted.items() if getattr(tenant, k) != v]
         for key in changed:
