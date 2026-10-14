@@ -109,6 +109,31 @@ def test_custom_field_sections_skip_unanswered_fields():
     assert _custom_field_sections(recap) == {"Consumer Engagement": [("People engaged", "40")]}
 
 
+def test_products_sampled_prints_sku_names_without_catalog_type():
+    results = SimpleNamespace(name="Brand Results")
+    recap = SimpleNamespace(
+        custom_field_value=RelatedList(
+            [
+                SimpleNamespace(
+                    value='["Energy Drink — OG Luxe (Tropical Ice) 16oz", "Havana Nights 16oz"]',
+                    custom_field=SimpleNamespace(name="Products Sampled", recap_section=results),
+                ),
+                SimpleNamespace(
+                    value='["Full can — cold", "Sample cup"]',
+                    custom_field=SimpleNamespace(name="Sample format", recap_section=results),
+                ),
+            ]
+        )
+    )
+
+    assert _custom_field_sections(recap) == {
+        "Brand Results": [
+            ("Products Sampled", "OG Luxe (Tropical Ice) 16oz, Havana Nights 16oz"),
+            ("Sample format", "Full can — cold, Sample cup"),
+        ]
+    }
+
+
 def test_build_recap_pdf_html_limits_fields_for_total_wireless():
     recap = SimpleNamespace(
         name="Recap Name",
@@ -174,6 +199,7 @@ def test_build_recap_pdf_html_limits_fields_for_total_wireless():
     assert "Sales Performance" not in html
     assert "Demographics" not in html
     assert "Positive Stories" not in html
+    assert "Co-activation" not in html
 
 
 def test_build_recap_pdf_html_keeps_default_fields_for_other_tenants():

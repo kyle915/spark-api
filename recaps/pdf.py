@@ -21,9 +21,11 @@ from recaps.drop_off_locations import (
     parse_drop_off_locations,
     sku_label,
 )
+from events.event_confirmations import PRODUCT_CATEGORY_SEPARATOR
+from recaps.products_sampled import is_products_sampled_field
 from recaps.sample_qty import sample_qty_labels
 from recaps.template_fallback import is_activation_template
-from recaps.types import _sold_unit_lines
+from recaps.types import _co_activation_info, _sold_unit_lines
 
 # We import WeasyPrint lazily inside build_recap_pdf to avoid startup crashes
 # when the native dependencies are missing.
@@ -265,7 +267,42 @@ def _event_state(recap):
     return getattr(r_loc, "state", None) if r_loc else None
 
 
+def _co_activation_host(recap):
+    """The host recap a co-brand slice was split from; None for any other recap."""
+    if not getattr(recap, "co_activation_parent_id", None):
+        return None
+    return getattr(recap, "co_activation_parent", None)
+
+
 def _event_retailer(recap):
+    """Retailer for the custom-recap PDF branch. A co-brand slice's copy event
+    has no store of its own (Retailer rows are host-tenant data), so it prints
+    the host recap's store — the same shared store the BA worked."""
+    retailer = _own_event_retailer(recap)
+    host = _co_activation_host(recap)
+    if retailer is None and host is not None:
+        return _own_event_retailer(host)
+    return retailer
+
+
+def _recap_city(recap):
+    location = getattr(recap, "location", None)
+    host = _co_activation_host(recap)
+    if location is None and host is not None:
+        return getattr(host, "location", None)
+    return location
+
+
+def _co_activation_label(recap) -> str:
+    """'Co-activation with FAMUS Energy & Alcohol Armor' — names only, like the web chip."""
+    if not getattr(recap, "co_activation_key", None):
+        return ""
+    info = _co_activation_info(recap)
+    names = [n for n in (info.brand_names if info else []) if n]
+    return f"Co-activation with {' & '.join(names)}" if names else ""
+
+
+def _own_event_retailer(recap):
     """Retailer for the custom-recap PDF branch, matching the ``event_retailer``
     resolver's fallback so the PDF agrees with the info panel. Prefers the
     Recap's own Retailer FK, then walks the event:
@@ -369,10 +406,29 @@ def _custom_field_sections(recap) -> dict[str, list[tuple[str, object]]]:
             if stops:
                 sections.setdefault(section_name, []).append((field_name, stops))
             continue
+        raw = custom_field_value.value
+        if is_products_sampled_field(field_name):
+            raw = _sku_names_only(raw)
         sections.setdefault(section_name, []).append(
-            (field_name, _format_field_value(custom_field_value.value))
+            (field_name, _format_field_value(raw))
         )
     return sections
+
+
+def _sku_names_only(raw):
+    """Products Sampled pills are stored as catalog ``Type — Name`` labels;
+    print just the SKU names ("OG Luxe 16oz", not "Energy Drink — OG Luxe 16oz")."""
+    try:
+        parsed = json.loads(str(raw).strip())
+    except (TypeError, ValueError):
+        return raw
+    if not isinstance(parsed, list) or not all(isinstance(v, str) for v in parsed):
+        return raw
+    names = []
+    for label in parsed:
+        _, sep, name = label.partition(PRODUCT_CATEGORY_SEPARATOR)
+        names.append(name.strip() if sep and name.strip() else label)
+    return json.dumps(names)
 
 
 def _drop_off_locations_html(label: str, stops: list[DropOffLocation]) -> str:
@@ -771,7 +827,7 @@ def build_recap_pdf_html(
         <div><span>Ambassador</span><strong>{safe(ambassador_name)}</strong></div>
         <div><span>Ambassador Email</span><strong>{safe(ambassador_email)}</strong></div>
         <div><span>State</span><strong>{format_object_name(_event_state(recap))}</strong></div>
-        <div><span>City</span><strong>{format_object_name(getattr(recap, "location", None))}</strong></div>
+        <div><span>City</span><strong>{format_object_name(_recap_city(recap))}</strong></div>
         <div><span>Retailer</span><strong>{format_object_name(_event_retailer(recap))}</strong></div>
       </div>
     </section>
@@ -1024,6 +1080,10 @@ def build_recap_pdf_html(
         badge_html = (
             f'<div class="badge {badge_class}"><span>{status_chip}</span></div>'
         )
+    co_activation = _co_activation_label(recap)
+    co_activation_html = (
+        f'<p class="co-activation">{escape(co_activation)}</p>' if co_activation else ""
+    )
     mark_src = _spark_mark_src(invert=invert_spark_mark)
     return f"""
 <!doctype html>
@@ -1039,6 +1099,7 @@ def build_recap_pdf_html(
         {eyebrow_html}
         <h1>{safe(recap.name)}</h1>
         <p class="subtitle">{subtitle}</p>
+        {co_activation_html}
       </div>
       {badge_html}
     </header>
@@ -1101,6 +1162,20 @@ _DROP_OFF_CSS = """
             font-size: 10px;
             font-weight: 600;
             color: #5c6154;
+        }"""
+
+_CO_ACTIVATION_CSS = """
+        .co-activation {
+            display: inline-block;
+            margin: 8px 0 0 0;
+            padding: 4px 10px;
+            border-radius: 999px;
+            border: 1px solid rgba(63, 92, 18, 0.45);
+            color: #3f5c12;
+            font-size: 9px;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
         }"""
 
 
@@ -1301,7 +1376,7 @@ def build_recap_pdf(
         """
     if accent != _DEFAULT_PDF_ACCENT:
         theme_css = theme_css.replace(_DEFAULT_PDF_ACCENT, accent)
-    css = CSS(string=_PDF_BASE_CSS + theme_css + _DROP_OFF_CSS)
+    css = CSS(string=_PDF_BASE_CSS + theme_css + _DROP_OFF_CSS + _CO_ACTIVATION_CSS)
 
     return HTML(string=html).write_pdf(stylesheets=[css])
 
@@ -1704,5 +1779,5 @@ def build_campaign_report_pdf(
         .empty { margin: 0; color: #9ca3af; font-style: italic; }
     """
 
-    css = CSS(string=_PDF_BASE_CSS + single_pdf_css + cover_css + _DROP_OFF_CSS)
+    css = CSS(string=_PDF_BASE_CSS + single_pdf_css + cover_css + _DROP_OFF_CSS + _CO_ACTIVATION_CSS)
     return HTML(string=html_doc).write_pdf(stylesheets=[css])
