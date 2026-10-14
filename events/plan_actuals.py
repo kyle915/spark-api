@@ -1,7 +1,8 @@
 """Recap actuals rolled up per field-marketing plan.
 
 Only approved, non-archived attached recaps count — the same gate clients
-see on ``Event.recaps``. Values are re-read from each recap on every call,
+see on ``Event.recaps`` — and never 3rd-party ``exclude_from_aggregates``
+recaps, which stay out of every rollup. Values are re-read from each recap on every call,
 limited to the metrics ops ticked when attaching.
 """
 
@@ -48,7 +49,11 @@ def link_recap(link: PlanRecapLink):
 
 
 def counts_toward_results(recap) -> bool:
-    return bool(recap.approved) and recap.archived_at is None
+    return (
+        bool(recap.approved)
+        and recap.archived_at is None
+        and not getattr(recap, "exclude_from_aggregates", False)
+    )
 
 
 def selected_metrics(link: PlanRecapLink) -> list[pm.RecapMetric]:
@@ -112,11 +117,12 @@ def result_counts(plan_ids) -> dict[int, tuple[int, int]]:
         "recap__archived_at",
         "custom_recap__approved",
         "custom_recap__archived_at",
+        "custom_recap__exclude_from_aggregates",
     )
-    for plan_id, custom_id, r_ok, r_arch, c_ok, c_arch in rows:
+    for plan_id, custom_id, r_ok, r_arch, c_ok, c_arch, c_excluded in rows:
         approved, archived = (c_ok, c_arch) if custom_id else (r_ok, r_arch)
         bucket = out.setdefault(plan_id, [0, 0])
-        if archived is not None:
+        if archived is not None or (custom_id and c_excluded):
             continue
         bucket[0 if approved else 1] += 1
     return {plan_id: (row[0], row[1]) for plan_id, row in out.items()}
