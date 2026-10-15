@@ -9994,6 +9994,55 @@ class AuditTorchPlanBucketsView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class SetPlanSetupDayView(View):
+    """POST `/internal/cron/set-plan-setup-day` — flag a Torch plan as a
+    setup / load-in day so it never counts as an event day
+    (`set_plan_setup_day`).
+
+    Params: search (lists matching plans), plan (uuid or REQ-XXXX), off=1
+    (clear instead), apply=1. Dry run prints the scorecard before / after and
+    rolls back. Sends nothing; never touches a recap. Secret-gated.
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _get(n: str) -> str:
+            return (request.GET.get(n) or request.POST.get(n) or "").strip()
+
+        def _on(n: str) -> bool:
+            return _get(n).lower() in ("1", "true", "yes")
+
+        cmd_args: list[str] = []
+        if _get("search"):
+            cmd_args += ["--search", _get("search")]
+        if _get("plan"):
+            cmd_args += ["--plan", _get("plan")]
+        if _on("off"):
+            cmd_args.append("--off")
+        if _on("apply"):
+            cmd_args.append("--apply")
+        out = io.StringIO()
+        try:
+            call_command("set_plan_setup_day", *cmd_args, stdout=out)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("set_plan_setup_day cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc), "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse({"ok": True, "log": out.getvalue()})
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        return JsonResponse({"ok": True, "endpoint": "set-plan-setup-day"})
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class SetRecapChoiceOptionsView(View):
     """POST `/internal/cron/set-recap-choice-options` — set a custom-recap
     choice field's allowed options (the builder only sets them at create time).
@@ -10716,6 +10765,7 @@ def _registered_views() -> dict[str, Any]:
         "audit-request-statuses": AuditRequestStatusesView,
         "audit-routing-state": AuditRoutingStateView,
         "audit-torch-plan-buckets": AuditTorchPlanBucketsView,
+        "set-plan-setup-day": SetPlanSetupDayView,
         "set-recap-choice-options": SetRecapChoiceOptionsView,
         "send-update-check-push": SendUpdateCheckPushView,
         "backfill-event-coordinates": BackfillEventCoordinatesView,

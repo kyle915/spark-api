@@ -22,6 +22,7 @@ from recaps.management.commands.setup_torch_event_activation import (
     EMAIL_SECTION,
     EVENT_LABEL,
     SALES_FIELD_RE,
+    POURS_SERVED_FIELD,
     SAMPLE_FORMAT_FIELD,
     SAMPLE_FORMAT_OPTS,
     SPEC,
@@ -97,8 +98,17 @@ class TestSpec:
         assert method[1] == "multiselect"
         assert method[3] == ["QR code", "Tablet / sign-up form", "Paper sheet", "Other"]
 
+    @pytest.mark.parametrize("spec", [SPEC, GUERILLA_SPEC], ids=["event", "guerilla"])
+    def test_pours_served_follows_sample_format(self, spec):
+        labels = _labels(spec)
+        assert labels.index(POURS_SERVED_FIELD) == labels.index(SAMPLE_FORMAT_FIELD) + 1
+        _, kind, required, options, placeholder = _field(spec, POURS_SERVED_FIELD)
+        # Optional on the row; the walk-up requires it while 4oz pour is picked.
+        assert (kind, required, options) == ("number", False, [])
+        assert "Cans sampled" in placeholder
+
     def test_email_fields_never_read_as_kpis(self):
-        for name, *_ in EMAIL_FIELDS + [(SAMPLE_FORMAT_FIELD,)]:
+        for name, *_ in EMAIL_FIELDS + [(SAMPLE_FORMAT_FIELD,), (POURS_SERVED_FIELD,)]:
             assert not _CUSTOM_KPI_NAME_RE.search(name), name
             assert not _CONSUMERS_SAMPLED_RE.search(name), name
             assert not _PEOPLE_ENGAGED_RE.search(name), name
@@ -277,6 +287,37 @@ class TestSetupCommand(AmbassadorsGraphQLTestCase):
         retail_event = self.create_event(name="Store", tenant=self.tenant, event_type=self.retail)
         names = [s["name"] for s in checkin_web.serialize_template(retail_event)["sections"]]
         assert names.index(EMAIL_SECTION) == names.index("Consumer Engagement") + 1
+
+    def _shown_when(self, event_type):
+        event = self.create_event(name="Shift", tenant=self.tenant, event_type=event_type)
+        fields = [
+            f for s in checkin_web.serialize_template(event)["sections"] for f in s["fields"]
+        ]
+        by_name = {f["name"]: f for f in fields}
+        return fields, by_name
+
+    def test_pours_served_shows_only_when_4oz_pour_is_picked(self):
+        log = self._run()
+        assert "would set" in log and "fieldConditions" in log
+        self._run("--apply")
+        for name in (EVENT_TEMPLATE, GUERILLA_TEMPLATE, "Torch THC-Retail Sampling"):
+            tpl = self._tpl(name)
+            field = CustomField.objects.get(custom_recap_template=tpl, name=POURS_SERVED_FIELD)
+            assert field.required is False
+            fields, by_name = self._shown_when(tpl.event_type)
+            pours = by_name[POURS_SERVED_FIELD]
+            assert pours["showWhen"] == {
+                "fieldId": by_name[SAMPLE_FORMAT_FIELD]["id"],
+                "includes": "4oz pour",
+            }
+            assert pours["required"] is True
+            names = [f["name"] for f in fields]
+            assert names.index(POURS_SERVED_FIELD) == names.index(SAMPLE_FORMAT_FIELD) + 1
+            assert "showWhen" not in by_name[SAMPLE_FORMAT_FIELD]
+        seeding = self._tpl(SEEDING_TEMPLATE)
+        assert "fieldConditions" not in (seeding.layout or {})
+        _, by_name = self._shown_when(seeding.event_type)
+        assert not any("showWhen" in f for f in by_name.values())
 
     def test_apply_is_idempotent(self):
         self._run("--apply")

@@ -244,7 +244,7 @@ class TestFieldMarketing(EventsGraphQLTestCase):
                 created_by=self.sys,
             )
 
-    def test_new_activities_do_not_forecast_cans_or_fold_seeding_in(self):
+    def test_sampling_tactics_forecast_cans_and_pours_but_seeding_never_folds_in(self):
         self._seed_skus()
         assert sku_catalog(self.tenant) == list(FIELD_MARKETING_SKU_NAMES)
         self._plan(
@@ -291,8 +291,10 @@ class TestFieldMarketing(EventsGraphQLTestCase):
         pours = next(row for row in board["kpis"] if row["key"] == "pour_samples")
         days = next(row for row in board["kpis"] if row["key"] == "sponsorship_days")
         support = next(row for row in board["kpis"] if row["key"] == "retail_support")
-        assert cans["planned"] is None
-        assert pours["planned"] is None
+        # Both guerilla plans forecast cans and pours, whatever their primary
+        # format; seeding's forecast is dropped and never folds in.
+        assert cans["planned"] == 1000
+        assert pours["planned"] == 130
         assert days["planned"] == 2
         assert support["planned"] == 1
         seeding = next(row for row in board["events"] if row["name"] == "Backbar drop")

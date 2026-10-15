@@ -12,7 +12,12 @@ from django.core.management import call_command
 from django.utils import timezone
 
 from events import models as em
-from events.field_marketing import build_board, log_results, plan_event
+from events.field_marketing import (
+    build_board,
+    log_results,
+    plan_event,
+    set_forecast,
+)
 from events.mutations import _materialize_approved_event_for_request
 from events.plan_event_types import (
     event_type_fits_plan,
@@ -867,3 +872,143 @@ class TestPlanResults(EventsGraphQLTestCase):
         with pytest.raises(PlanResultsError, match="Pick a plan"):
             push_recap(kind="custom", recap_id=recap.id, plan_id="",
                        metric_keys=[pm.EMAILS_COLLECTED], actor=self.admin, confirm_move=False)
+
+    # -- split full cans / 4oz pours ------------------------------------------
+
+    def _pours(self, recap, pours):
+        self._field(recap, "4oz pours served", str(pours))
+        return recap
+
+    def test_pours_served_is_its_own_metric(self):
+        recap = self._pours(self._event_recap(self._event(), formats=("Full can", "4oz pour")), 300)
+        metrics = {m.key: m for m in pm.recap_metrics(recap, pm.KIND_CUSTOM)}
+        assert metrics[pm.POURS_SERVED].value == 300
+        assert metrics[pm.POURS_SERVED].unit == "pours"
+        assert metrics[pm.SAMPLES_BY_SKU].value == 64
+        assert metrics[pm.CONSUMERS_SAMPLED].value == 85
+        assert pm.POURS_SERVED in pm.default_keys(recap, list(metrics.values()))
+
+    def test_split_recap_counts_full_cans_and_pours_separately(self):
+        plan = self._plan(sampling_format="pour")
+        recap = self._pours(
+            self._event_recap(self._event(request=plan.request), formats=("4oz pour", "Full can")),
+            480,
+        )
+        self._push(plan, recap, [pm.SAMPLES_BY_SKU, pm.POURS_SERVED, pm.EMAILS_COLLECTED])
+        kpis = self._kpis()
+        assert kpis["full_cans"]["logged"] == 64
+        assert kpis["full_cans"]["note"] == ""
+        assert kpis["pour_samples"]["logged"] == 480
+        assert kpis["pour_samples"]["note"] == ""
+        assert kpis["emails"]["logged"] == 110
+        rows = {r.key: r for r in build_plan_results(plan, is_admin=True)["rows"]}
+        assert rows[pm.POURS_SERVED].actual == 480
+
+    def test_pour_only_recap_with_pour_count_logs_pours_not_cans(self):
+        plan = self._plan(sampling_format="full_can")
+        recap = self._pours(
+            self._event_recap(self._event(request=plan.request), formats=("4oz pour",)), 250
+        )
+        self._push(plan, recap, [pm.SAMPLES_BY_SKU, pm.POURS_SERVED])
+        kpis = self._kpis()
+        assert kpis["full_cans"]["logged"] is None
+        assert kpis["pour_samples"]["logged"] == 250
+        assert kpis["pour_samples"]["note"] == ""
+
+    def test_legacy_mixed_recap_without_pours_keeps_cans_and_note(self):
+        plan = self._plan(sampling_format="pour")
+        legacy = self._event_recap(self._event(request=plan.request), formats=("Full can", "4oz pour"))
+        self._push(plan, legacy, [pm.SAMPLES_BY_SKU])
+        kpis = self._kpis()
+        assert kpis["full_cans"]["logged"] == 64
+        assert "Includes 64 cans" in kpis["full_cans"]["note"]
+        assert kpis["pour_samples"]["logged"] is None
+
+    # -- plan forecasts --------------------------------------------------------
+
+    def test_event_plans_forecast_cans_pours_and_emails(self):
+        self._plan(sampling_format="pour", planned_full_cans=200, planned_pour_samples=900)
+        self._plan(submit=False, activity="guerilla", name="Pop-up", sampling_format="full_can",
+                   needs_field_support=False, planned_full_cans=96, planned_pour_samples=0)
+        seeding = self._plan(submit=False, activity="product_seeding", name="Seed",
+                             planned_full_cans=50, planned_pour_samples=50, planned_emails=20)
+        assert (seeding.planned_full_cans, seeding.planned_pour_samples) == (0, 0)
+        assert seeding.planned_emails == 20
+        kpis = self._kpis()
+        assert kpis["full_cans"]["planned"] == 296
+        assert kpis["pour_samples"]["planned"] == 900
+        assert kpis["emails"]["planned"] == 320
+
+    def test_forecast_edits_booked_plans_and_rejects_wrong_tactic(self):
+        plan = self._plan(planned_emails=0)
+        assert plan.request_id is not None
+        assert self._kpis()["pour_samples"]["planned"] is None
+        set_forecast(user=self.marketer, event_id=str(plan.uuid),
+                     payload={"planned_pour_samples": 1200, "planned_emails": 75},
+                     tenant_id=self.tenant.id)
+        plan.refresh_from_db()
+        assert (plan.planned_full_cans, plan.planned_pour_samples, plan.planned_emails) == (0, 1200, 75)
+        kpis = self._kpis()
+        assert kpis["pour_samples"]["planned"] == 1200
+        assert kpis["emails"]["planned"] == 75
+
+        visit = self._plan(submit=False, activity="sales_support", name="Visit",
+                           support_type="retail_visit", sampling_format="")
+        with pytest.raises(FieldMarketingError, match="don't forecast full cans"):
+            set_forecast(user=self.marketer, event_id=str(visit.uuid),
+                         payload={"planned_full_cans": 10}, tenant_id=self.tenant.id)
+        with pytest.raises(FieldMarketingError, match="setup / load-in"):
+            set_forecast(user=self.marketer, event_id=str(visit.uuid),
+                         payload={"setup_day": True}, tenant_id=self.tenant.id)
+        with pytest.raises(FieldMarketingError):
+            set_forecast(user=self.outsider, event_id=str(plan.uuid),
+                         payload={"planned_emails": 1}, tenant_id=self.other.id)
+
+    # -- setup / load-in days ---------------------------------------------------
+
+    def test_setup_day_plans_never_count_as_event_days(self):
+        show = self._plan(name="RARE Steak Championship", market="houston", starts_on="2026-09-15",
+                          address="1 Main St, Houston, TX 77002")
+        setup = self._plan(name="LOAD IN / SET UP for RARE Steak", market="houston",
+                           starts_on="2026-09-14", address="1 Main St, Houston, TX 77002",
+                           planned_emails=50)
+        assert self._kpis(market="houston")["sponsorship_days"]["planned"] == 2
+        set_forecast(user=self.admin, event_id=str(setup.uuid), payload={"setup_day": True},
+                     tenant_id=self.tenant.id)
+        recap = self._event_recap(self._event(request=setup.request, day="2026-09-14",
+                                              address="1 Main St, Houston, TX 77002"))
+        self._push(setup, recap, [pm.EMAILS_COLLECTED])
+        kpis = self._kpis(market="houston")
+        assert kpis["sponsorship_days"]["planned"] == 1
+        assert kpis["sponsorship_days"]["logged"] is None
+        assert "LOAD IN / SET UP for RARE Steak" in kpis["sponsorship_days"]["note"]
+        # Its recap still counts its own numbers and still lists under Event recaps.
+        assert kpis["emails"]["logged"] == 110
+        assert kpis["emails"]["planned"] == 200
+        rows = list_event_recaps(self.tenant, month="2026-09", markets=["houston"])["rows"]
+        assert [r.plan_id for r in rows] == [str(setup.uuid)]
+        board = build_board(self.tenant, "2026-09")
+        flags = {r["name"]: r["setup_day"] for r in board["events"]}
+        assert flags == {show.name: False, setup.name: True}
+
+    def test_setup_day_command_dry_run_then_apply(self):
+        setup = self._plan(name="LOAD IN / SET UP for RARE Steak", market="houston",
+                           starts_on="2026-09-14", address="1 Main St, Houston, TX 77002")
+        code = request_display_code(setup.request_id)
+        out = io.StringIO()
+        call_command("set_plan_setup_day", "--search", "rare", stdout=out)
+        assert code in out.getvalue() and str(setup.uuid) in out.getvalue()
+
+        out = io.StringIO()
+        call_command("set_plan_setup_day", "--plan", code, stdout=out)
+        log = out.getvalue()
+        assert "DRY-RUN" in log
+        assert "sponsorship_days actual — / planned 1" in log
+        assert "sponsorship_days actual — / planned —" in log or "planned 0" in log
+        setup.refresh_from_db()
+        assert setup.setup_day is False
+
+        call_command("set_plan_setup_day", "--plan", str(setup.uuid), "--apply", stdout=io.StringIO())
+        setup.refresh_from_db()
+        assert setup.setup_day is True
+

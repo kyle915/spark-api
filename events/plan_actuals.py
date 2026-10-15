@@ -102,11 +102,14 @@ class CountedRecap:
 
     ``formats`` is the recap's own "Sample format" answer whether or not
     it was ticked — it says what the per-SKU can count was used for.
+    ``pours_reported``: the recap answered "4oz pours served", so its cans
+    sampled are full cans only and its pours are their own count.
     """
 
     day: date
     selected: list[pm.RecapMetric]
     formats: tuple[str, ...]
+    pours_reported: bool = False
 
 
 def counted_recaps(plan_ids) -> dict[int, list[CountedRecap]]:
@@ -130,6 +133,7 @@ def counted_recaps(plan_ids) -> dict[int, list[CountedRecap]]:
                 day=recap_day(recap),
                 selected=[m for m in every if m.key in keys],
                 formats=formats,
+                pours_reported=any(m.key == pm.POURS_SERVED for m in every),
             )
         )
     return per_plan

@@ -1692,6 +1692,8 @@ class FieldMarketingEvent(models.Model):
     name = models.CharField(max_length=255)
     starts_on = models.DateField()
     days = models.PositiveIntegerField(default=1)
+    # Setup / load-in for another event: never an event day on the scorecard.
+    setup_day = models.BooleanField(default=False)
     address = models.TextField(blank=True, default="")
     notes = models.TextField(blank=True, default="")
     sampling_format = models.CharField(
