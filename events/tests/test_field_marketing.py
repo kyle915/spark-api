@@ -180,7 +180,8 @@ class TestFieldMarketing(EventsGraphQLTestCase):
         board = build_board(self.tenant, "2026-09")
         cans = next(row for row in board["kpis"] if row["key"] == "full_cans")
         pours = next(row for row in board["kpis"] if row["key"] == "pour_samples")
-        assert cans["planned"] == 0
+        # Not forecast is None, never a planned zero.
+        assert cans["planned"] is None
         assert pours["planned"] == 300
         assert pours["target"] == 3456
 
@@ -290,8 +291,8 @@ class TestFieldMarketing(EventsGraphQLTestCase):
         pours = next(row for row in board["kpis"] if row["key"] == "pour_samples")
         days = next(row for row in board["kpis"] if row["key"] == "sponsorship_days")
         support = next(row for row in board["kpis"] if row["key"] == "retail_support")
-        assert cans["planned"] == 0
-        assert pours["planned"] == 0
+        assert cans["planned"] is None
+        assert pours["planned"] is None
         assert days["planned"] == 2
         assert support["planned"] == 1
         seeding = next(row for row in board["events"] if row["name"] == "Backbar drop")

@@ -19,6 +19,8 @@ from events.plan_event_types import (
     event_type_for_plan,
     event_type_for_request,
 )
+from events.field_marketing import FieldMarketingError
+from events.field_marketing_recaps import list_event_recaps
 from events.plan_results import (
     PlanResultsError,
     auto_attach_on_approval,
@@ -59,6 +61,16 @@ query Results($planId: String!) {
     counted pending
     rows { key label planned actual unit text note parts { label value } }
     recaps { uuid status auto href metrics { key text } }
+  }
+}
+"""
+
+EVENT_RECAPS = """
+query EventRecaps($tenantId: ID, $month: String, $markets: [String!]) {
+  fieldMarketingEventRecaps(tenantId: $tenantId, month: $month, markets: $markets) {
+    start end canAttach truncated
+    rows { kind uuid date type typeLabel name market marketLabel cityState baName
+           consumersSampled samples samplesLabel emails planId planName href }
   }
 }
 """
@@ -186,7 +198,7 @@ class TestPlanResults(EventsGraphQLTestCase):
             custom_recap=recap, custom_field=field, value=value, created_by=self.sys
         )
 
-    def _event_recap(self, event, *, approved=True, emails="110", sampled="85"):
+    def _event_recap(self, event, *, approved=True, emails="110", sampled="85", formats=("Full can",)):
         recap = rm.CustomRecap.objects.create(
             name="Wynwood recap",
             event=event,
@@ -200,7 +212,7 @@ class TestPlanResults(EventsGraphQLTestCase):
         self._field(recap, "People engaged", "140")
         self._field(recap, "Email addresses collected", emails)
         self._field(recap, "Collection method", json.dumps(["QR code"]))
-        self._field(recap, "Sample format", json.dumps(["Full can"]))
+        self._field(recap, "Sample format", json.dumps(list(formats)))
         for name, qty in (("Black Cherry 10mg", 40), ("Watermelon Limeade 10mg", 24)):
             rm.CustomRecapProductSample.objects.create(
                 custom_recap=recap,
@@ -397,13 +409,70 @@ class TestPlanResults(EventsGraphQLTestCase):
         board = build_board(self.tenant, "2026-09")
         assert {k["key"]: k for k in board["kpis"]}["emails"]["logged"] == 90
 
-    def test_pour_plan_never_counts_cans_as_full_cans(self):
-        plan = self._plan(sampling_format="pour")
-        recap = self._event_recap(self._event(request=plan.request))
+    def _push(self, plan, recap, keys):
         push_recap(kind="custom", recap_id=recap.id, plan_id=str(plan.uuid),
-                   metric_keys=[pm.SAMPLES_BY_SKU], actor=self.admin, confirm_move=False)
-        kpis = {k["key"]: k for k in build_board(self.tenant, "2026-09")["kpis"]}
+                   metric_keys=keys, actor=self.admin, confirm_move=False)
+
+    def _kpis(self, **kwargs):
+        return {k["key"]: k for k in build_board(self.tenant, "2026-09", **kwargs)["kpis"]}
+
+    def test_pour_only_recap_never_counts_cans_as_full_cans_or_pours(self):
+        plan = self._plan(sampling_format="pour")
+        recap = self._event_recap(self._event(request=plan.request), formats=("4oz pour",))
+        self._push(plan, recap, [pm.SAMPLES_BY_SKU])
+        kpis = self._kpis()
         assert kpis["full_cans"]["logged"] is None
+        assert kpis["pour_samples"]["logged"] is None
+        assert "64 cans were opened for pours" in kpis["pour_samples"]["note"]
+
+    def test_mixed_format_recap_on_pour_plan_logs_cans_days_and_emails(self):
+        # Dania Beach: pour plan, recap says "4oz pour, Full can", per-SKU cans.
+        plan = self._plan(sampling_format="pour", planned_emails=0)
+        event = self._event(request=plan.request)
+        lead = self._event_recap(event, formats=("4oz pour", "Full can"))
+        second = self._event_recap(event, formats=("Full can", "4oz pour"))
+        self._push(plan, lead, [pm.SAMPLES_BY_SKU, pm.EMAILS_COLLECTED, pm.SAMPLE_FORMAT])
+        self._push(plan, second, [pm.CONSUMERS_SAMPLED])
+        kpis = self._kpis()
+        assert kpis["full_cans"]["logged"] == 64
+        assert "Includes 64 cans" in kpis["full_cans"]["note"]
+        assert kpis["full_cans"]["planned"] is None
+        assert kpis["pour_samples"]["logged"] is None
+        assert kpis["pour_samples"]["planned"] is None
+        assert kpis["sponsorship_days"]["logged"] == 1
+        assert kpis["sponsorship_days"]["planned"] == 1
+        assert kpis["emails"]["logged"] == 110
+        assert kpis["emails"]["planned"] is None
+
+    def test_event_days_count_distinct_recap_days_capped_and_manual_wins(self):
+        plan = self._plan(days=2)
+        for day in ("2026-09-12", "2026-09-13", "2026-09-14"):
+            self._push(plan, self._event_recap(self._event(request=plan.request, day=day)),
+                       [pm.EMAILS_COLLECTED])
+        assert self._kpis()["sponsorship_days"]["logged"] == 2
+        log_results(user=self.marketer, event_id=str(plan.uuid),
+                    payload={"logged_days": 1}, tenant_id=self.tenant.id)
+        assert self._kpis()["sponsorship_days"]["logged"] == 1
+
+    def test_unapproved_recaps_log_nothing(self):
+        plan = self._plan()
+        recap = self._event_recap(self._event(request=plan.request), approved=False)
+        self._push(plan, recap, [pm.SAMPLES_BY_SKU, pm.EMAILS_COLLECTED])
+        kpis = self._kpis(include_pending=True)
+        assert kpis["full_cans"]["logged"] is None
+        assert kpis["sponsorship_days"]["logged"] is None
+        assert kpis["emails"]["logged"] is None
+        assert kpis["full_cans"]["planned"] is None
+        assert kpis["emails"]["planned"] == 150
+
+    def test_retail_support_plan_counts_once_a_recap_lands(self):
+        plan = self._plan(activity="sales_support", support_type="retail_visit",
+                          name="Store visit", sampling_format="")
+        assert self._kpis()["retail_support"]["logged"] is None
+        recap = self._event_recap(self._event(request=plan.request))
+        self._push(plan, recap, [pm.EMAILS_COLLECTED])
+        kpis = self._kpis()
+        assert (kpis["retail_support"]["planned"], kpis["retail_support"]["logged"]) == (1, 1)
 
     # -- auto attach --------------------------------------------------------
 
@@ -693,6 +762,102 @@ class TestPlanResults(EventsGraphQLTestCase):
         assert link.metric_keys == [pm.CASES_DROPPED, pm.DROP_OFF_LOCATIONS, pm.MILEAGE]
         kpis = {k["key"]: k for k in build_board(self.tenant, "2026-09")["kpis"]}
         assert kpis["full_cans"]["logged"] is None
+
+    # -- event recaps under each RMM ------------------------------------------
+
+    def _named_event(self, name, address, day="2026-09-12", event_type=None):
+        event = self._event(address=address, day=day, event_type=event_type)
+        event.name = name
+        event.save(update_fields=["name"])
+        return event
+
+    def _event_recap_rows(self):
+        plan = self._plan(sampling_format="pour")
+        dania = self._event_recap(
+            self._named_event("Dania Beach Food & Wine", "1 N Beach Rd, Dania Beach, FL 33004"),
+            formats=("4oz pour", "Full can"),
+        )
+        self._push(plan, dania, [pm.SAMPLES_BY_SKU, pm.EMAILS_COLLECTED])
+        houston = self._event_recap(
+            self._named_event("Clutch City meetup", "1500 McKinney St, Houston, TX 77010"),
+            emails="9",
+        )
+        self._event_recap(
+            self._named_event("Unapproved fest", "250 NW 24th St, Miami, FL 33127"), approved=False
+        )
+        agency = self._event_recap(self._named_event("Agency", "250 NW 24th St, Miami, FL 33127"))
+        agency.is_third_party = agency.exclude_from_aggregates = True
+        agency.save(update_fields=["is_third_party", "exclude_from_aggregates"])
+        retail_type = em.EventType.objects.create(
+            name="Retail Sampling", slug="rs-torch", tenant=self.tenant, created_by=self.sys
+        )
+        retail_template = rm.CustomRecapTemplate.objects.create(
+            name="Torch Retail Sampling", event_type=retail_type, tenant=self.tenant,
+            created_by=self.sys,
+        )
+        rm.CustomRecap.objects.create(
+            name="Store demo", tenant=self.tenant, custom_recap_template=retail_template,
+            event=self._named_event("Total Wine #1", "1 Main St, Miami, FL 33131",
+                                    event_type=retail_type),
+            approved=True, created_by=self.sys,
+        )
+        self._event_recap(self._named_event("October fest", "1 N Beach Rd, Dania Beach, FL 33004",
+                                            day="2026-10-02"))
+        return plan, dania, houston
+
+    def test_event_recaps_list_scopes_market_type_period_and_attachment(self):
+        plan, dania, houston = self._event_recap_rows()
+        rows = list_event_recaps(self.tenant, month="2026-09")["rows"]
+        assert {r.name: r.market for r in rows} == {
+            "Dania Beach Food & Wine": "miami",
+            "Clutch City meetup": "houston",
+        }
+        miami = next(r for r in rows if r.market == "miami")
+        assert (miami.samples, miami.emails, miami.consumers_sampled) == (64, 110, 85)
+        assert miami.plan_id == str(plan.uuid) and miami.city_state == "Dania Beach, FL"
+        assert miami.href == f"/recap/view-custom/{dania.uuid}"
+
+        def names(**kw):
+            return [r.name for r in list_event_recaps(self.tenant, month="2026-09", **kw)["rows"]]
+
+        assert names(markets=["houston"]) == ["Clutch City meetup"]
+        assert names(attached="attached") == ["Dania Beach Food & Wine"]
+        assert names(attached="unattached") == ["Clutch City meetup"]
+        assert names(types=["guerilla", "seeding"]) == []
+        assert names(start="2026-09-01", end="2026-10-31", markets=["miami"]) == [
+            "October fest", "Dania Beach Food & Wine",
+        ]
+        with pytest.raises(FieldMarketingError):
+            names(markets=["chicago"])
+        with pytest.raises(FieldMarketingError):
+            names(types=["retail"])
+
+    def test_event_recap_without_address_market_falls_back_to_plan(self):
+        plan = self._plan(market="houston")
+        recap = self._event_recap(self._named_event("Walk-up", "Somewhere by the river"))
+        self._push(plan, recap, [pm.EMAILS_COLLECTED])
+        (row,) = list_event_recaps(self.tenant, month="2026-09")["rows"]
+        assert (row.market, row.market_label) == ("houston", "Houston")
+
+    @pytest.mark.asyncio
+    async def test_graphql_event_recaps_client_sees_list_admin_can_attach(self):
+        await sync_to_async(self._event_recap_rows)()
+        variables = {"tenantId": str(self.tenant.id), "month": "2026-09", "markets": ["miami"]}
+        mine = await self._execute_mutation(EVENT_RECAPS, variables, user=self.marketer)
+        assert mine.errors is None, mine.errors
+        data = mine.data["fieldMarketingEventRecaps"]
+        assert data["canAttach"] is False
+        assert [r["name"] for r in data["rows"]] == ["Dania Beach Food & Wine"]
+        assert data["rows"][0]["samplesLabel"] == "Total cans sampled"
+
+        ops = await self._execute_mutation(EVENT_RECAPS, variables, user=self.admin)
+        assert ops.errors is None, ops.errors
+        assert ops.data["fieldMarketingEventRecaps"]["canAttach"] is True
+
+        theirs = await self._execute_mutation(
+            EVENT_RECAPS, {**variables, "tenantId": str(self.other.id)}, user=self.outsider
+        )
+        assert theirs.errors
 
     def test_unknown_kind_and_missing_plan(self):
         with pytest.raises(PlanResultsError):
