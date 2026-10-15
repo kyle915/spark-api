@@ -43,6 +43,7 @@ from events.field_marketing import (
     _serialize,
     is_torch_tenant,
 )
+from events.torch_markets import torch_market_for_event
 from events.torch_retail_routing import (
     EXECUTION_EVENT,
     EXECUTION_GUERILLA,
@@ -87,12 +88,6 @@ MARKET_STATES = {
     "orlando": "FL",
     "houston": "TX",
     "austin-dallas": "TX",
-}
-_MARKET_WORDS = {
-    "miami": ("miami",),
-    "orlando": ("orlando",),
-    "houston": ("houston",),
-    "austin-dallas": ("austin", "dallas"),
 }
 
 
@@ -164,18 +159,17 @@ def tenant_has_plans(tenant) -> bool:
 
 
 def _recap_market(recap) -> tuple[str | None, str | None]:
-    """(market key, state code) the recap ran in, best effort."""
+    """(market key, state code) the recap ran in: its own address, then the RMM."""
     event = getattr(recap, "event", None)
+    state = state_code_from_event(event)
+    key = torch_market_for_event(event)
+    if key:
+        return key, state or MARKET_STATES.get(key)
     rmm = getattr(event, "rmm_asigned", None)
     rmm_email = (getattr(rmm, "email", None) or "").strip().lower()
     for key, _label, _manager, email, _phone in MARKETS:
         if rmm_email and rmm_email == email.lower():
             return key, MARKET_STATES.get(key)
-    address = (getattr(event, "address", None) or "").lower()
-    state = state_code_from_event(event)
-    for key, words in _MARKET_WORDS.items():
-        if any(word in address for word in words):
-            return key, state or MARKET_STATES.get(key)
     return None, state
 
 

@@ -60,9 +60,8 @@ from events.models import Event, FieldMarketingEvent
 from events.plan_event_types import event_type_fits_plan, event_type_for_plan
 from events.plan_actuals import (
     RECAP_RELATED,
-    Total,
+    counted_recaps,
     counts_toward_results,
-    plan_actuals,
     recap_day,
 )
 from events.plan_results import (
@@ -124,6 +123,7 @@ PLAN_COLUMNS = (
     "days",
     "deleted",
     "request",
+    "planned",
     "linked",
     "counted",
     "actual_rows",
@@ -467,8 +467,8 @@ class Command(BaseCommand):
             planned = "—" if row.planned is None else f"{row.planned:g}"
             parts = f" ({', '.join(f'{n} × {q}' for n, q in row.parts)})" if row.parts else ""
             lines.append(f"{row.label}: planned {planned} · actual {actual or '—'}{parts}")
-        logged = _recap_logged(plan, plan_actuals([plan.id]).get(plan.id, {}))
-        for field in ("logged_full_cans", "logged_emails", "logged_cases"):
+        logged = _recap_logged(plan, counted_recaps([plan.id]).get(plan.id, [])).values
+        for field in ("logged_full_cans", "logged_emails", "logged_days", "logged_cases"):
             manual = getattr(plan, field)
             if manual is not None:
                 lines.append(f"scorecard {field}={manual} (manual log — wins over recaps)")
@@ -622,11 +622,11 @@ class Command(BaseCommand):
                 flags.append("ACTUAL_MISMATCH")
                 mismatches += 1
             from_recaps = _recap_logged(
-                plan, {key: Total(key, key, value=value) for key, value in expected.items()}
-            )
+                plan, counted_recaps([plan.id]).get(plan.id, [])
+            ).values
             manual = {
                 f: getattr(plan, f)
-                for f in ("logged_full_cans", "logged_emails", "logged_cases")
+                for f in ("logged_full_cans", "logged_emails", "logged_days", "logged_cases")
                 if getattr(plan, f) is not None
             }
             overridden = [f for f, v in manual.items() if f in from_recaps and from_recaps[f] != v]
@@ -650,6 +650,11 @@ class Command(BaseCommand):
                     "days": plan.days,
                     "deleted": "yes" if plan.deleted_at else "no",
                     "request": request_display_code(plan.request_id) if plan.request_id else "",
+                    "planned": "; ".join(
+                        f"{f}={getattr(plan, f)}"
+                        for f in ("planned_full_cans", "planned_pour_samples", "planned_emails")
+                        if getattr(plan, f)
+                    ),
                     "linked": len(plan_links),
                     "counted": payload["counted"],
                     "actual_rows": _fmt_totals(actual),

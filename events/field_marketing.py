@@ -29,7 +29,7 @@ from events.activity_log import _safe_log
 from events.demo_cancel import request_display_code
 from events.field_marketing_mail import notify_plan_deleted, notify_plan_submitted
 from events.request_soft_delete import soft_delete_request
-from events.plan_actuals import plan_actuals, result_counts
+from events.plan_actuals import counted_recaps, result_counts, sum_metrics
 from recaps import plan_metrics as pm
 from recaps.models import CustomRecap, Recap
 from tenants.models import Tenant, TenantedUser
@@ -477,49 +477,106 @@ def _serialize(
     }
 
 
-def _sum_planned(events, field: str) -> int:
-    return sum(getattr(event, field) or 0 for event in events)
+def _sum_planned(events, field: str) -> int | None:
+    """Planned sum, or None when no plan in scope forecast this number.
+
+    Event Activation / Guerilla / Seeding plans don't ask for a can or pour
+    forecast, so their 0 is "not forecast", never a planned zero.
+    """
+    total = sum(getattr(event, field) or 0 for event in events)
+    return total or None
 
 
-def _sum_logged(events, field: str, actuals: dict | None = None) -> int | None:
-    """Manual log wins per plan; otherwise the attached recaps' actual."""
-    vals = []
-    for event in events:
-        value = getattr(event, field)
-        if value is None and actuals:
-            value = actuals.get(event.id, {}).get(field)
-        if value is not None:
-            vals.append(value)
-    if not vals:
-        return None
-    return sum(vals)
+@dataclass
+class PlanLogged:
+    """What a plan's counted recaps put in the scorecard's logged fields.
+
+    ``mixed_cans``: cans on recaps that served full cans AND 4oz pours —
+    counted as full cans because the recap doesn't split them.
+    ``poured_cans``: cans opened for pour-only service. Recaps count cans,
+    not pours, so these land in neither score (never converted to pours).
+    """
+
+    values: dict[str, int]
+    mixed_cans: int = 0
+    poured_cans: int = 0
 
 
-def _recap_logged(event: models.FieldMarketingEvent, totals: dict) -> dict[str, int]:
+_FULL_CAN_WORDS = ("full can",)
+_POUR_WORDS = ("pour",)
+
+
+def _serves(formats: tuple[str, ...], words: tuple[str, ...]) -> bool:
+    return any(word in fmt.lower() for fmt in formats for word in words)
+
+
+def _recap_logged(event: models.FieldMarketingEvent, rows) -> PlanLogged:
     """Attached-recap actuals in the scorecard's logged fields.
 
-    Cans count only on full-can-only plans: on a pour plan, cans sampled
-    are cans opened for pours, not full cans handed out.
+    Cans follow each recap's own "Sample format": a Full can answer puts its
+    cans sampled in Full can samples (mixed Full can + 4oz pour too — flagged);
+    pour-only cans are noted but never become full cans or pours. A recap
+    with no format answer falls back to the plan's format. Event days are the
+    distinct days with a counted recap, capped at the plan's days.
     """
-    out: dict[str, int] = {}
+    rows = list(rows or [])
+    totals = sum_metrics(row.selected for row in rows)
+    out = PlanLogged(values={})
     emails = totals.get(pm.EMAILS_COLLECTED)
     if emails and emails.value is not None:
-        out["logged_emails"] = int(emails.value)
-    samples = totals.get(pm.SAMPLES_BY_SKU)
-    if (
-        samples
-        and samples.value is not None
-        and _accepts_cans(event)
-        and not _accepts_pours(event)
-    ):
-        out["logged_full_cans"] = int(samples.value)
+        out.values["logged_emails"] = int(emails.value)
+
+    if _accepts_cans(event) or _accepts_pours(event):
+        full: int | None = None
+        for row in rows:
+            samples = next((m for m in row.selected if m.key == pm.SAMPLES_BY_SKU), None)
+            if samples is None or samples.value is None:
+                continue
+            cans = int(samples.value)
+            if _serves(row.formats, _FULL_CAN_WORDS):
+                full = (full or 0) + cans
+                if _serves(row.formats, _POUR_WORDS):
+                    out.mixed_cans += cans
+            elif _serves(row.formats, _POUR_WORDS):
+                out.poured_cans += cans
+            elif not row.formats and _accepts_cans(event) and not _accepts_pours(event):
+                full = (full or 0) + cans
+            elif not row.formats and _accepts_pours(event):
+                out.poured_cans += cans
+        if full is not None:
+            out.values["logged_full_cans"] = full
+
     cases = totals.get(pm.CASES_DROPPED)
     if (
         cases
         and cases.value is not None
         and event.activity == models.FieldMarketingEvent.ACTIVITY_PRODUCT_SEEDING
     ):
-        out["logged_cases"] = int(cases.value)
+        out.values["logged_cases"] = int(cases.value)
+
+    if rows and event.activity in _SPONSORSHIP_ACTIVITIES:
+        out.values["logged_days"] = min(max(1, event.days or 1), len({r.day for r in rows}))
+    return out
+
+
+@dataclass
+class _Score:
+    logged: int | None = None
+    mixed_cans: int = 0
+
+
+def _score(events, field: str, recap_logged: dict[int, PlanLogged]) -> _Score:
+    """Manual log wins per plan; otherwise the attached recaps' actual."""
+    out = _Score()
+    for event in events:
+        value = getattr(event, field)
+        from_recaps = recap_logged.get(event.id)
+        if value is None and from_recaps is not None:
+            value = from_recaps.values.get(field)
+            if field == "logged_full_cans":
+                out.mixed_cans += from_recaps.mixed_cans if value is not None else 0
+        if value is not None:
+            out.logged = (out.logged or 0) + value
     return out
 
 
@@ -594,21 +651,52 @@ def build_board(
     event_ids = [event.id for event in events]
     counts = result_counts(event_ids)
     by_id = {event.id: event for event in events}
-    actuals = {
-        plan_id: _recap_logged(by_id[plan_id], totals)
-        for plan_id, totals in plan_actuals(
+    recap_logged = {
+        plan_id: _recap_logged(by_id[plan_id], rows)
+        for plan_id, rows in counted_recaps(
             [plan_id for plan_id, (counted, _) in counts.items() if counted]
         ).items()
     }
     # Cans and pours ignore product seeding. Planned sums stay on the columns
-    # that were actually saved — seeding never writes those columns.
-    can_events = [event for event in events if _accepts_cans(event)]
+    # that were actually saved — seeding never writes those columns. A pour
+    # plan still logs full cans when its recaps say full cans were served.
+    can_events = [
+        event
+        for event in events
+        if _accepts_cans(event)
+        or "logged_full_cans" in getattr(recap_logged.get(event.id), "values", {})
+    ]
     pour_events = [event for event in events if _accepts_pours(event)]
     sponsorships = [
         event for event in events if event.activity in _SPONSORSHIP_ACTIVITIES
     ]
     retail = [event for event in events if event.activity in _RETAIL_ACTIVITIES]
-    retail_logged = [event for event in retail if event.logged_at is not None]
+    retail_logged = [
+        event
+        for event in retail
+        if event.logged_at is not None or event.id in recap_logged
+    ]
+    cans = _score(can_events, "logged_full_cans", recap_logged)
+    pours = _score(pour_events, "logged_pour_samples", recap_logged)
+    days = _score(sponsorships, "logged_days", recap_logged)
+    emails = _score(events, "logged_emails", recap_logged)
+    can_note = (
+        f"Includes {cans.mixed_cans:,} cans from events that served full cans "
+        "and 4oz pours — the recap doesn't split them."
+        if cans.mixed_cans
+        else ""
+    )
+    poured_cans = sum(
+        logged.poured_cans
+        for plan_id, logged in recap_logged.items()
+        if by_id[plan_id].logged_pour_samples is None
+    )
+    pour_note = (
+        f"{poured_cans:,} cans were opened for pours. Recaps count cans, "
+        "not pours, so they aren't converted — log pours on the plan."
+        if poured_cans
+        else ""
+    )
 
     def _target(key_name: str) -> int:
         # Keep monthly target numbers for UI reference; clients hide the
@@ -622,9 +710,12 @@ def build_board(
             "label": "Full can samples",
             "detail": "Product drops, donations, guerilla events. Drives trial and awareness.",
             "target": _target("full_cans"),
-            "planned": _sum_planned(can_events, "planned_full_cans"),
-            "logged": _sum_logged(can_events, "logged_full_cans", actuals),
+            "planned": _sum_planned(
+                [event for event in events if _accepts_cans(event)], "planned_full_cans"
+            ),
+            "logged": cans.logged,
             "unit": "cans",
+            "note": can_note,
         },
         {
             "key": "pour_samples",
@@ -632,8 +723,9 @@ def build_board(
             "detail": "Local sponsorships, events, festivals. 3,456 pours is 1,152 full cans.",
             "target": _target("pour_samples"),
             "planned": _sum_planned(pour_events, "planned_pour_samples"),
-            "logged": _sum_logged(pour_events, "logged_pour_samples"),
+            "logged": pours.logged,
             "unit": "pours",
+            "note": pour_note,
         },
         {
             "key": "sponsorship_days",
@@ -641,8 +733,9 @@ def build_board(
             "detail": "Minimum days. Builds meaningful local presence.",
             "target": _target("sponsorship_days"),
             "planned": sum(event.days or 0 for event in sponsorships),
-            "logged": _sum_logged(sponsorships, "logged_days"),
+            "logged": days.logged,
             "unit": "days",
+            "note": "",
         },
         {
             "key": "retail_support",
@@ -652,6 +745,7 @@ def build_board(
             "planned": len(retail),
             "logged": len(retail_logged) if retail_logged else None,
             "unit": "activations",
+            "note": "",
         },
         {
             "key": "emails",
@@ -659,8 +753,9 @@ def build_board(
             "detail": "Email addresses. Builds an addressable audience.",
             "target": _target("emails"),
             "planned": _sum_planned(events, "planned_emails"),
-            "logged": _sum_logged(events, "logged_emails", actuals),
+            "logged": emails.logged,
             "unit": "emails",
+            "note": "",
         },
     ]
     # Silence unused when all_dates — targets still returned for FE caption.
@@ -1309,9 +1404,10 @@ class FieldMarketingKpiType:
     label: str
     detail: str
     target: int
-    planned: int
+    planned: int | None
     logged: int | None
     unit: str
+    note: str = ""
 
 
 @strawberry.type(name="FieldMarketingEvent")

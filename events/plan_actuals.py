@@ -96,15 +96,51 @@ def sum_metrics(metric_lists) -> dict[str, Total]:
     return out
 
 
-def plan_actuals(plan_ids) -> dict[int, dict[str, Total]]:
-    """{plan id: totals} over the counted attached recaps."""
-    per_plan: dict[int, list[list[pm.RecapMetric]]] = {}
+@dataclass(frozen=True)
+class CountedRecap:
+    """One counted recap on a plan: the metrics ops ticked, plus context.
+
+    ``formats`` is the recap's own "Sample format" answer whether or not
+    it was ticked — it says what the per-SKU can count was used for.
+    """
+
+    day: date
+    selected: list[pm.RecapMetric]
+    formats: tuple[str, ...]
+
+
+def counted_recaps(plan_ids) -> dict[int, list[CountedRecap]]:
+    """{plan id: counted recaps} — approved, not archived, not 3rd party."""
+    per_plan: dict[int, list[CountedRecap]] = {}
     for link in links_for_plans(plan_ids):
-        recap, _kind = link_recap(link)
+        recap, kind = link_recap(link)
         if recap is None or not counts_toward_results(recap):
             continue
-        per_plan.setdefault(link.plan_id, []).append(selected_metrics(link))
-    return {plan_id: sum_metrics(lists) for plan_id, lists in per_plan.items()}
+        every = pm.recap_metrics(recap, kind)
+        keys = set(link.metric_keys or [])
+        formats = tuple(
+            piece.strip()
+            for m in every
+            if m.key == pm.SAMPLE_FORMAT
+            for piece in m.text.split(",")
+            if piece.strip()
+        )
+        per_plan.setdefault(link.plan_id, []).append(
+            CountedRecap(
+                day=recap_day(recap),
+                selected=[m for m in every if m.key in keys],
+                formats=formats,
+            )
+        )
+    return per_plan
+
+
+def plan_actuals(plan_ids) -> dict[int, dict[str, Total]]:
+    """{plan id: totals} over the counted attached recaps."""
+    return {
+        plan_id: sum_metrics(row.selected for row in rows)
+        for plan_id, rows in counted_recaps(plan_ids).items()
+    }
 
 
 def result_counts(plan_ids) -> dict[int, tuple[int, int]]:

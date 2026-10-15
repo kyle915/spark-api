@@ -30,6 +30,7 @@ from events.campaign_pnl import CampaignPnlQueries
 from events.activation_plans import ActivationPlanQueries, ActivationPlanMutations
 from events.field_marketing import FieldMarketingMutations, FieldMarketingQueries
 from events.plan_results import PlanResultsMutations, PlanResultsQueries
+from events.field_marketing_recaps import FieldMarketingRecapQueries
 
 
 @strawberry.type
@@ -60,6 +61,7 @@ class EventQueryClient(
     ActivationPlanQueries,
     FieldMarketingQueries,
     PlanResultsQueries,
+    FieldMarketingRecapQueries,
     queries.EventTypeQueries,
     queries.EventStatusQueries,
     queries.ClientQueries,
