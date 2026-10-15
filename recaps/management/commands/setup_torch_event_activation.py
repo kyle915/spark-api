@@ -7,8 +7,9 @@ Mark Anthony Brands Event Activation recaps, trimmed to sampling only: Torch
 does not sell at events, so there are no purchase, units-sold, spend, or
 can-purchase fields. Products Sampled resolves from the live Torch Product
 catalog (per-SKU sample counts on the walk-up), never a hardcoded SKU list.
-Every Torch sampling form also asks "Sample format" (Full can / 4oz pour)
-and carries an optional Email Data Collection section.
+Every Torch sampling form also asks "Sample format" (Full can / 4oz pour),
+then "4oz pours served" whenever 4oz pour is picked, and carries an optional
+Email Data Collection section.
 
 Photo dropzones are the LD/MAB activation buckets (Activation Set Up,
 Consumer Sampling Pictures, Expense Receipts (Parking)), keyed to the Event
@@ -33,6 +34,8 @@ import re
 
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
+
+from recaps.field_conditions import FIELD_CONDITIONS_KEY
 
 TENANT_SLUG = "torch-thc"
 TENANT_FORM_SLUG = "keee-torch-thc"
@@ -98,6 +101,21 @@ SAMPLE_FORMAT: Field = (
     "Pick both if you poured samples and handed out full cans",
 )
 
+# Pours are their own count: cans sampled stay full cans handed out, and a
+# can opened to pour is never converted into pours (or the other way).
+POUR_OPT = "4oz pour"
+POURS_SERVED_FIELD = "4oz pours served"
+POURS_SERVED: Field = (
+    POURS_SERVED_FIELD,
+    "number",
+    False,
+    [],
+    "Each 4oz cup = 1 pour. Full cans handed out go in Cans sampled.",
+)
+# Template layout: show "4oz pours served" only while Sample format has
+# 4oz pour picked, and require it then (see recaps.field_conditions).
+POURS_CONDITION = {"field": SAMPLE_FORMAT_FIELD, "includes": POUR_OPT, "required": True}
+
 # Email sign-ups are their own count — never consumers sampled or reach.
 EMAIL_SECTION = "Email Data Collection"
 EMAILS_COLLECTED_FIELD = "Email addresses collected"
@@ -148,6 +166,7 @@ SPEC_FIELDS: list[tuple[str, list[Field]]] = [
                 "",
             ),
             SAMPLE_FORMAT,
+            POURS_SERVED,
         ],
     ),
     (
@@ -312,9 +331,21 @@ class Command(BaseCommand):
     activation_buckets = ACTIVATION_BUCKETS
     sample_qty_layout = SAMPLE_QTY_LAYOUT
     section_order = SECTION_ORDER
+    # Show-when rules; only those whose field is in this form's spec are written.
+    field_conditions: dict = {POURS_SERVED_FIELD: POURS_CONDITION}
 
     def build_spec(self, product_opts: list[str]) -> list[tuple[str, list[Field]]]:
         return build_spec(product_opts)
+
+    def wanted_layout(self, spec) -> dict:
+        names = {name for _section, fields in spec for name, *_rest in fields}
+        conditions = {
+            name: dict(rule) for name, rule in self.field_conditions.items() if name in names
+        }
+        layout = dict(self.sample_qty_layout)
+        if conditions:
+            layout[FIELD_CONDITIONS_KEY] = conditions
+        return layout
 
     def add_arguments(self, parser):
         parser.add_argument(
@@ -544,6 +575,7 @@ class Command(BaseCommand):
         from recaps.models import CustomField, CustomFieldValue, CustomRecapTemplate
 
         spec = self.build_spec(self._product_options(tenant))
+        wanted_layout = self.wanted_layout(spec)
         template = CustomRecapTemplate.objects.filter(
             tenant_id=tenant.id, name=self.template_name
         ).first()
@@ -574,16 +606,16 @@ class Command(BaseCommand):
                 event_type=event_type,
                 product_samples=True,
                 sales_performance=False,
-                layout=dict(self.sample_qty_layout),
+                layout=dict(wanted_layout),
                 created_by=creator,
             )
             self.stdout.write(f"\nTemplate   : + {self.template_name!r} [{template.id}]")
         elif template is not None:
             self.stdout.write(f"\nTemplate   : {self.template_name!r} [{template.id}] (exists)")
             layout = template.layout if isinstance(template.layout, dict) else {}
-            if any(layout.get(k) != v for k, v in self.sample_qty_layout.items()):
+            if any(layout.get(k) != v for k, v in wanted_layout.items()):
                 verb = "set" if apply else "would set"
-                self.stdout.write(f"  layout   : {verb} {self.sample_qty_layout}")
+                self.stdout.write(f"  layout   : {verb} {wanted_layout}")
             if apply:
                 changed = []
                 if template.event_type_id != event_type.id:
@@ -596,8 +628,8 @@ class Command(BaseCommand):
                     template.sales_performance = False
                     changed.append("sales_performance")
                 layout = dict(template.layout) if isinstance(template.layout, dict) else {}
-                if any(layout.get(k) != v for k, v in self.sample_qty_layout.items()):
-                    template.layout = {**layout, **self.sample_qty_layout}
+                if any(layout.get(k) != v for k, v in wanted_layout.items()):
+                    template.layout = {**layout, **wanted_layout}
                     changed.append("layout")
                 if changed:
                     template.save(update_fields=[*changed, "updated_at"])

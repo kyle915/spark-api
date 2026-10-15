@@ -123,6 +123,14 @@ _STAFFED_ACTIVITIES = frozenset(
         models.FieldMarketingEvent.ACTIVITY_GUERILLA,
     }
 )
+# Sampling tactics that can hand out full cans and pour 4oz samples.
+_SAMPLING_ACTIVITIES = frozenset(
+    {
+        models.FieldMarketingEvent.ACTIVITY_SPONSORSHIP,
+        models.FieldMarketingEvent.ACTIVITY_EVENT_ACTIVATION,
+        models.FieldMarketingEvent.ACTIVITY_GUERILLA,
+    }
+)
 _SKU_ACTIVITIES = frozenset(
     {
         models.FieldMarketingEvent.ACTIVITY_EVENT_ACTIVATION,
@@ -261,39 +269,36 @@ def sku_catalog(tenant) -> list[str]:
     return [name for name in FIELD_MARKETING_SKU_NAMES if name in present]
 
 
-def _accepts_cans(event: models.FieldMarketingEvent) -> bool:
-    activity = event.activity
-    sampling = event.sampling_format or ""
-    if activity in (
-        models.FieldMarketingEvent.ACTIVITY_PRODUCT_SEEDING,
-        models.FieldMarketingEvent.ACTIVITY_POUR,
-    ) or activity in _RETAIL_ACTIVITIES:
-        return False
-    if activity == models.FieldMarketingEvent.ACTIVITY_GUERILLA:
-        return sampling == models.FieldMarketingEvent.SAMPLING_FULL_CAN
-    if activity == models.FieldMarketingEvent.ACTIVITY_EVENT_ACTIVATION:
-        return sampling in ("", models.FieldMarketingEvent.SAMPLING_FULL_CAN)
-    return activity in (
-        models.FieldMarketingEvent.ACTIVITY_FULL_CAN,
-        models.FieldMarketingEvent.ACTIVITY_SPONSORSHIP,
+def _takes_cans(activity: str) -> bool:
+    """Tactics that forecast and log full cans.
+
+    A plan's sampling format is the expected mix, not a limit: an event that
+    pours and also hands out cans logs both.
+    """
+    return activity in _SAMPLING_ACTIVITIES or (
+        activity == models.FieldMarketingEvent.ACTIVITY_FULL_CAN
     )
 
 
+def _takes_pours(activity: str) -> bool:
+    return activity in _SAMPLING_ACTIVITIES or (
+        activity == models.FieldMarketingEvent.ACTIVITY_POUR
+    )
+
+
+def _accepts_cans(event: models.FieldMarketingEvent) -> bool:
+    return _takes_cans(event.activity)
+
+
 def _accepts_pours(event: models.FieldMarketingEvent) -> bool:
-    activity = event.activity
-    sampling = event.sampling_format or ""
-    if activity in (
-        models.FieldMarketingEvent.ACTIVITY_PRODUCT_SEEDING,
-        models.FieldMarketingEvent.ACTIVITY_FULL_CAN,
-    ) or activity in _RETAIL_ACTIVITIES:
-        return False
-    if activity == models.FieldMarketingEvent.ACTIVITY_GUERILLA:
-        return sampling == models.FieldMarketingEvent.SAMPLING_POUR
-    if activity == models.FieldMarketingEvent.ACTIVITY_EVENT_ACTIVATION:
-        return sampling in ("", models.FieldMarketingEvent.SAMPLING_POUR)
-    return activity in (
-        models.FieldMarketingEvent.ACTIVITY_POUR,
-        models.FieldMarketingEvent.ACTIVITY_SPONSORSHIP,
+    return _takes_pours(event.activity)
+
+
+def _plan_serves_full_cans(event: models.FieldMarketingEvent) -> bool:
+    """What a recap with no Sample format answer served, per its plan."""
+    return (
+        event.activity == models.FieldMarketingEvent.ACTIVITY_FULL_CAN
+        or event.sampling_format == models.FieldMarketingEvent.SAMPLING_FULL_CAN
     )
 
 
@@ -441,6 +446,7 @@ def _serialize(
         "name": event.name,
         "starts_on": event.starts_on.isoformat(),
         "days": event.days,
+        "setup_day": bool(event.setup_day),
         "address": event.address or "",
         "notes": event.notes or "",
         "sampling_format": event.sampling_format or "",
@@ -480,8 +486,8 @@ def _serialize(
 def _sum_planned(events, field: str) -> int | None:
     """Planned sum, or None when no plan in scope forecast this number.
 
-    Event Activation / Guerilla / Seeding plans don't ask for a can or pour
-    forecast, so their 0 is "not forecast", never a planned zero.
+    A blank forecast saves as 0 and older plans never asked, so a 0 total
+    is "not forecast", never a planned zero.
     """
     total = sum(getattr(event, field) or 0 for event in events)
     return total or None
@@ -491,10 +497,11 @@ def _sum_planned(events, field: str) -> int | None:
 class PlanLogged:
     """What a plan's counted recaps put in the scorecard's logged fields.
 
-    ``mixed_cans``: cans on recaps that served full cans AND 4oz pours —
-    counted as full cans because the recap doesn't split them.
-    ``poured_cans``: cans opened for pour-only service. Recaps count cans,
-    not pours, so these land in neither score (never converted to pours).
+    ``mixed_cans``: cans on older recaps that served full cans AND 4oz pours
+    without a pour count — counted as full cans because the recap doesn't
+    split them.
+    ``poured_cans``: cans opened for pour-only service on recaps with no pour
+    count. They land in neither score (never converted to pours).
     """
 
     values: dict[str, int]
@@ -513,11 +520,13 @@ def _serves(formats: tuple[str, ...], words: tuple[str, ...]) -> bool:
 def _recap_logged(event: models.FieldMarketingEvent, rows) -> PlanLogged:
     """Attached-recap actuals in the scorecard's logged fields.
 
-    Cans follow each recap's own "Sample format": a Full can answer puts its
-    cans sampled in Full can samples (mixed Full can + 4oz pour too — flagged);
-    pour-only cans are noted but never become full cans or pours. A recap
-    with no format answer falls back to the plan's format. Event days are the
-    distinct days with a counted recap, capped at the plan's days.
+    Pours are the recap's own "4oz pours served". Cans follow each recap's
+    "Sample format": a Full can answer puts its cans sampled in Full can
+    samples. On an older mixed Full can + 4oz pour recap with no pour count
+    the cans still count as full cans (flagged); pour-only cans are noted but
+    never become full cans or pours. A recap with no format answer falls back
+    to the plan's format. Event days are the distinct days with a counted
+    recap, capped at the plan's days.
     """
     rows = list(rows or [])
     totals = sum_metrics(row.selected for row in rows)
@@ -528,23 +537,30 @@ def _recap_logged(event: models.FieldMarketingEvent, rows) -> PlanLogged:
 
     if _accepts_cans(event) or _accepts_pours(event):
         full: int | None = None
+        pours: int | None = None
         for row in rows:
+            served = next((m for m in row.selected if m.key == pm.POURS_SERVED), None)
+            if served is not None and served.value is not None:
+                pours = (pours or 0) + int(served.value)
             samples = next((m for m in row.selected if m.key == pm.SAMPLES_BY_SKU), None)
             if samples is None or samples.value is None:
                 continue
             cans = int(samples.value)
             if _serves(row.formats, _FULL_CAN_WORDS):
                 full = (full or 0) + cans
-                if _serves(row.formats, _POUR_WORDS):
+                if _serves(row.formats, _POUR_WORDS) and not row.pours_reported:
                     out.mixed_cans += cans
             elif _serves(row.formats, _POUR_WORDS):
-                out.poured_cans += cans
-            elif not row.formats and _accepts_cans(event) and not _accepts_pours(event):
+                if not row.pours_reported:
+                    out.poured_cans += cans
+            elif not row.formats and _plan_serves_full_cans(event):
                 full = (full or 0) + cans
-            elif not row.formats and _accepts_pours(event):
+            elif not row.formats:
                 out.poured_cans += cans
         if full is not None:
             out.values["logged_full_cans"] = full
+        if pours is not None:
+            out.values["logged_pour_samples"] = pours
 
     cases = totals.get(pm.CASES_DROPPED)
     if (
@@ -666,9 +682,22 @@ def build_board(
         if _accepts_cans(event)
         or "logged_full_cans" in getattr(recap_logged.get(event.id), "values", {})
     ]
-    pour_events = [event for event in events if _accepts_pours(event)]
+    pour_events = [
+        event
+        for event in events
+        if _accepts_pours(event)
+        or "logged_pour_samples" in getattr(recap_logged.get(event.id), "values", {})
+    ]
+    # Setup / load-in plans are work for another event, not event days.
     sponsorships = [
-        event for event in events if event.activity in _SPONSORSHIP_ACTIVITIES
+        event
+        for event in events
+        if event.activity in _SPONSORSHIP_ACTIVITIES and not event.setup_day
+    ]
+    setup_plans = [
+        event
+        for event in events
+        if event.activity in _SPONSORSHIP_ACTIVITIES and event.setup_day
     ]
     retail = [event for event in events if event.activity in _RETAIL_ACTIVITIES]
     retail_logged = [
@@ -681,8 +710,8 @@ def build_board(
     days = _score(sponsorships, "logged_days", recap_logged)
     emails = _score(events, "logged_emails", recap_logged)
     can_note = (
-        f"Includes {cans.mixed_cans:,} cans from events that served full cans "
-        "and 4oz pours — the recap doesn't split them."
+        f"Includes {cans.mixed_cans:,} cans from older recaps that served full "
+        "cans and 4oz pours without a pour count — they don't split them."
         if cans.mixed_cans
         else ""
     )
@@ -692,11 +721,18 @@ def build_board(
         if by_id[plan_id].logged_pour_samples is None
     )
     pour_note = (
-        f"{poured_cans:,} cans were opened for pours. Recaps count cans, "
-        "not pours, so they aren't converted — log pours on the plan."
+        f"{poured_cans:,} cans were opened for pours on recaps with no pour "
+        "count. Cans aren't converted into pours — log pours on the plan."
         if poured_cans
         else ""
     )
+    days_note = ""
+    if setup_plans:
+        names = ", ".join(event.name for event in setup_plans[:3])
+        more = f" +{len(setup_plans) - 3} more" if len(setup_plans) > 3 else ""
+        days_note = (
+            f"Setup / load-in days don't count as event days ({names}{more})."
+        )
 
     def _target(key_name: str) -> int:
         # Keep monthly target numbers for UI reference; clients hide the
@@ -735,7 +771,7 @@ def build_board(
             "planned": sum(event.days or 0 for event in sponsorships),
             "logged": days.logged,
             "unit": "days",
-            "note": "",
+            "note": days_note,
         },
         {
             "key": "retail_support",
@@ -885,32 +921,22 @@ def _clean_plan(data: dict, tenant) -> dict:
     if start_time:
         support_times = _times_label(start_time, end_time)
     emails = _nonneg(data.get("planned_emails") or 0, "Emails")
-    # New activities do not take a forecast of cans or pours. Legacy rows still do.
-    legacy = activity in (
-        models.FieldMarketingEvent.ACTIVITY_FULL_CAN,
-        models.FieldMarketingEvent.ACTIVITY_POUR,
-        models.FieldMarketingEvent.ACTIVITY_SPONSORSHIP,
-        models.FieldMarketingEvent.ACTIVITY_RETAIL_SUPPORT,
+    full_cans = (
+        _nonneg(data.get("planned_full_cans") or 0, "Full cans") if _takes_cans(activity) else 0
     )
-    if legacy:
-        full_cans = _nonneg(data.get("planned_full_cans") or 0, "Full cans")
-        pours = _nonneg(data.get("planned_pour_samples") or 0, "Pour samples")
-        if activity == models.FieldMarketingEvent.ACTIVITY_FULL_CAN:
-            pours = 0
-        elif activity == models.FieldMarketingEvent.ACTIVITY_POUR:
-            full_cans = 0
-        elif activity == models.FieldMarketingEvent.ACTIVITY_RETAIL_SUPPORT:
-            full_cans = 0
-            pours = 0
-    else:
-        full_cans = 0
-        pours = 0
+    pours = (
+        _nonneg(data.get("planned_pour_samples") or 0, "4oz pours")
+        if _takes_pours(activity)
+        else 0
+    )
+    setup_day = bool(data.get("setup_day")) and activity in _SPONSORSHIP_ACTIVITIES
     return {
         "market": market,
         "activity": activity,
         "name": name[:255],
         "starts_on": starts_on,
         "days": days,
+        "setup_day": setup_day,
         "address": (data.get("address") or "").strip(),
         "notes": (data.get("notes") or "").strip(),
         "sampling_format": sampling,
@@ -939,6 +965,8 @@ def _request_notes(event: models.FieldMarketingEvent) -> str:
         f"Activity: {ACTIVITIES.get(event.activity, event.activity)}",
         f"Days: {event.days}",
     ]
+    if event.setup_day:
+        lines.append("Setup / load-in day (not an event day)")
     if event.sampling_format:
         lines.append(
             f"Sampling: {SAMPLING_LABELS.get(event.sampling_format, event.sampling_format)}"
@@ -1057,7 +1085,7 @@ def _summary_rows(event: models.FieldMarketingEvent) -> list[tuple[str, str]]:
         tactic += f" · {SAMPLING_LABELS.get(event.sampling_format, event.sampling_format)}"
     rows = [
         ("Tactic", tactic),
-        ("Date", _date_range_label(event)),
+        ("Date", _date_range_label(event) + (" · setup / load-in" if event.setup_day else "")),
         (
             "Market",
             f"{market.label} · {market.manager}" if market else event.market,
@@ -1370,6 +1398,41 @@ def log_results(*, user, event_id: str, payload: dict, tenant_id=None) -> models
     return event
 
 
+@transaction.atomic
+def set_forecast(*, user, event_id: str, payload: dict, tenant_id=None) -> models.FieldMarketingEvent:
+    """Planned cans / pours / emails and the setup-day flag, on any live plan.
+
+    Booked plans can't be re-edited (the request owns the details), but the
+    forecast and setup flag only feed the scorecard, so they stay editable.
+    ``None`` leaves a value as it is; 0 means not forecast.
+    """
+    tenant = _require_torch_user(user, tenant_id=tenant_id)
+    event = _plan_for(tenant, event_id)
+    tactic = ACTIVITIES.get(event.activity, event.activity)
+    update_fields = ["updated_at"]
+    for field, label, allowed in (
+        ("planned_full_cans", "full cans", _accepts_cans(event)),
+        ("planned_pour_samples", "4oz pours", _accepts_pours(event)),
+        ("planned_emails", "emails", True),
+    ):
+        raw = payload.get(field)
+        if raw is None:
+            continue
+        value = _nonneg(raw, label.capitalize())
+        if value and not allowed:
+            raise FieldMarketingError(f"{tactic} plans don't forecast {label}.")
+        setattr(event, field, value if allowed else 0)
+        update_fields.append(field)
+    setup = payload.get("setup_day")
+    if setup is not None:
+        if setup and event.activity not in _SPONSORSHIP_ACTIVITIES:
+            raise FieldMarketingError("Only event plans can be a setup / load-in day.")
+        event.setup_day = bool(setup)
+        update_fields.append("setup_day")
+    event.save(update_fields=update_fields)
+    return event
+
+
 def empty_board(month: str | None = None):
     month_raw = (month or "").strip()
     if not month_raw or month_raw.lower() == "all":
@@ -1454,6 +1517,7 @@ class FieldMarketingEventType:
     delete_cancelled_request: bool
     results_counted: int = 0
     results_pending: int = 0
+    setup_day: bool = False
 
 
 @strawberry.type(name="FieldMarketingBoard")
@@ -1511,6 +1575,7 @@ class PlanFieldMarketingInput(SparkGraphQLInput):
     start_time: str = ""
     end_time: str = ""
     support_scope: str = ""
+    setup_day: bool = False
     submit: bool = False
     tenant_id: strawberry.ID | None = None
 
@@ -1538,6 +1603,17 @@ class UpdateFieldMarketingInput(SparkGraphQLInput):
     start_time: str = ""
     end_time: str = ""
     support_scope: str = ""
+    setup_day: bool = False
+    tenant_id: strawberry.ID | None = None
+
+
+@strawberry.input
+class ForecastFieldMarketingInput(SparkGraphQLInput):
+    event_id: str
+    planned_full_cans: int | None = None
+    planned_pour_samples: int | None = None
+    planned_emails: int | None = None
+    setup_day: bool | None = None
     tenant_id: strawberry.ID | None = None
 
 
@@ -1644,6 +1720,7 @@ def _payload_from_plan(input: PlanFieldMarketingInput | UpdateFieldMarketingInpu
         "start_time": input.start_time,
         "end_time": input.end_time,
         "support_scope": input.support_scope,
+        "setup_day": input.setup_day,
     }
 
 
@@ -1727,6 +1804,33 @@ class FieldMarketingMutations:
             FieldMarketingEventResponse,
             success=True,
             message="Logged. The scorecard uses this number.",
+            input_obj=input,
+            event=await sync_to_async(_event_type)(event),
+        )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def forecast_field_marketing(
+        self, info: strawberry.Info, input: ForecastFieldMarketingInput
+    ) -> FieldMarketingEventResponse:
+        user = await SparkGraphQLMixin().get_user(info)
+        try:
+            event = await sync_to_async(set_forecast)(
+                user=user,
+                event_id=input.event_id,
+                payload={
+                    "planned_full_cans": input.planned_full_cans,
+                    "planned_pour_samples": input.planned_pour_samples,
+                    "planned_emails": input.planned_emails,
+                    "setup_day": input.setup_day,
+                },
+                tenant_id=input.tenant_id,
+            )
+        except FieldMarketingError as exc:
+            raise GraphQLError(str(exc)) from exc
+        return build_mutation_response(
+            FieldMarketingEventResponse,
+            success=True,
+            message="Forecast saved. Planned on the scorecard uses it.",
             input_obj=input,
             event=await sync_to_async(_event_type)(event),
         )

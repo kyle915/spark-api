@@ -39,6 +39,7 @@ from events.field_marketing import (
     ACTIVITY_FILTERS,
     MARKETS,
     _accepts_cans,
+    _accepts_pours,
     _markets,
     _serialize,
     is_torch_tenant,
@@ -473,6 +474,10 @@ def comparison_rows(plan, counted_links: list[PlanRecapLink]) -> list[ResultRow]
         if samples and missed:
             note += " · not on recaps: " + ", ".join(missed)
     rows.append(_row(samples, pm.SAMPLES_BY_SKU, "Samples handed out", planned_cans, note))
+    planned_pours = plan.planned_pour_samples if _accepts_pours(plan) else 0
+    rows.append(
+        _row(totals.get(pm.POURS_SERVED), pm.POURS_SERVED, "4oz pours served", planned_pours)
+    )
 
     rows.append(_row(totals.get(pm.EMAILS_COLLECTED), pm.EMAILS_COLLECTED, "Emails collected", plan.planned_emails))
     rows.append(_row(totals.get(pm.SAMPLE_FORMAT), pm.SAMPLE_FORMAT, "Sample format"))

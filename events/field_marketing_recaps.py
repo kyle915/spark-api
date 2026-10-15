@@ -74,6 +74,7 @@ class EventRecapRow:
     samples: int | None
     samples_label: str
     sample_format: str
+    pours: int | None
     emails: int | None
     plan_id: str | None
     plan_name: str
@@ -174,6 +175,7 @@ def _row(kind: str, recap, markets) -> EventRecapRow:
         samples=_int(samples),
         samples_label=samples.label if samples else "",
         sample_format=fmt.text if fmt else "",
+        pours=_int(_metric(metrics, pm.POURS_SERVED)),
         emails=_int(_metric(metrics, pm.EMAILS_COLLECTED)),
         plan_id=str(plan.uuid) if plan else None,
         plan_name=plan.name if plan else "",
@@ -242,6 +244,7 @@ class FieldMarketingEventRecapType:
     samples: int | None
     samples_label: str
     sample_format: str
+    pours: int | None
     emails: int | None
     plan_id: str | None
     plan_name: str

@@ -21,7 +21,8 @@ which remains Retail Sampling only.
   Total mileage; the walk-up skips "Where are you working".
 * Retail, Event and Guerilla ask "Sample format" (Full can / 4oz pour,
   multi-select, required). Retail adds "No samples (dry demo)" so a dry demo
-  can still answer honestly.
+  can still answer honestly. Picking 4oz pour reveals a required
+  "4oz pours served" count (pours stay separate from cans sampled).
 * The optional Email Data Collection section (Email addresses collected /
   Collection method / notes) sits on exactly these four templates. Any other
   Torch template carrying it is listed and its unanswered email fields are
@@ -50,6 +51,9 @@ from recaps.management.commands.setup_torch_event_activation import (
     EMAIL_FIELDS,
     EMAIL_SECTION,
     EVENT_LABEL,
+    POURS_CONDITION,
+    POURS_SERVED,
+    POURS_SERVED_FIELD,
     PRODUCTS_SAMPLED,
     SAMPLE_FORMAT,
     SAMPLE_FORMAT_FIELD,
@@ -62,6 +66,7 @@ from recaps.management.commands.setup_torch_event_activation import (
     TRAFFIC_OPTS,
     Field,
 )
+from recaps.field_conditions import FIELD_CONDITIONS_KEY
 from recaps.management.commands.setup_torch_event_activation import (
     Command as EventActivationCommand,
 )
@@ -101,6 +106,13 @@ PICKER_OPTIONS: list[tuple[str, str, str]] = [
 RETAIL_DRY_DEMO_OPT = "No samples (dry demo)"
 RETAIL_SAMPLE_FORMAT_OPTS = [*SAMPLE_FORMAT_OPTS, RETAIL_DRY_DEMO_OPT]
 RETAIL_ANCHORS = ("People engaged", "Total number of consumers sampled")
+RETAIL_POURS_SERVED: Field = (
+    POURS_SERVED_FIELD,
+    "number",
+    False,
+    [],
+    "Each 4oz cup you poured = 1 pour.",
+)
 
 GUERILLA_SPOT_OPTS = [
     "Sidewalk / Street Corner",
@@ -133,6 +145,7 @@ GUERILLA_SPEC_FIELDS: list[tuple[str, list[Field]]] = [
             ("Describe the foot traffic", "select", True, list(TRAFFIC_OPTS), ""),
             (SERVED_FIELD, "multiselect", True, list(SERVED_OPTS), ""),
             SAMPLE_FORMAT,
+            POURS_SERVED,
         ],
     ),
     ("Consumer Engagement", list(_EA_ENGAGEMENT)),
@@ -354,6 +367,19 @@ class Command(EventActivationCommand):
         name, kind, required, _opts, placeholder = SAMPLE_FORMAT
         retail_format: Field = (name, kind, required, list(RETAIL_SAMPLE_FORMAT_OPTS), placeholder)
         self._upsert_field(tpl, engagement, retail_format, order, creator, apply, cache)
+        # Same order as Sample format: the newer row sorts right after it.
+        self._upsert_field(tpl, engagement, RETAIL_POURS_SERVED, order, creator, apply, cache)
+        layout = dict(tpl.layout) if isinstance(tpl.layout, dict) else {}
+        conditions = dict(layout.get(FIELD_CONDITIONS_KEY) or {})
+        if conditions.get(POURS_SERVED_FIELD) != POURS_CONDITION:
+            conditions[POURS_SERVED_FIELD] = dict(POURS_CONDITION)
+            self.stdout.write(
+                f"  layout   : {'set' if apply else 'would set'} "
+                f"{FIELD_CONDITIONS_KEY}[{POURS_SERVED_FIELD!r}] = {POURS_CONDITION}"
+            )
+            if apply:
+                tpl.layout = {**layout, FIELD_CONDITIONS_KEY: conditions}
+                tpl.save(update_fields=["layout", "updated_at"])
 
         # Own section row, ordered with Consumer Engagement so it renders right
         # after it (sections sort by order, then id).

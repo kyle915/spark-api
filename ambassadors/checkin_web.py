@@ -42,6 +42,7 @@ from django.utils.dateparse import parse_datetime
 from events.torch_portal import is_torch_tenant
 from tenants.models import normalize_checkin_resources
 from recaps import co_activation
+from recaps.field_conditions import apply_conditions
 from recaps.fresh_vintage import inject_roadshow_calcs
 from utils.outbound import block_if_suppressed
 
@@ -262,6 +263,8 @@ def _template_sections(tpl) -> tuple[list[dict], bool]:
                 "placeholder": (getattr(f, "placeholder", None) or "") or "",
             }
         )
+
+    apply_conditions(tpl, [f for section in sections for f in section["fields"]])
 
     has_products_sampled_pills = any(
         (f.name or "").strip().lower() == "products sampled"

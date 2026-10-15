@@ -43,6 +43,7 @@ KIND_CUSTOM = "custom"
 CONSUMERS_SAMPLED = "consumers_sampled"
 PEOPLE_ENGAGED = "people_engaged"
 SAMPLES_BY_SKU = "samples_by_sku"
+POURS_SERVED = "pours_served"
 EMAILS_COLLECTED = "emails_collected"
 SAMPLE_FORMAT = "sample_format"
 UNITS_SOLD = "units_sold"
@@ -57,6 +58,7 @@ METRIC_ORDER: tuple[str, ...] = (
     CONSUMERS_SAMPLED,
     PEOPLE_ENGAGED,
     SAMPLES_BY_SKU,
+    POURS_SERVED,
     EMAILS_COLLECTED,
     SAMPLE_FORMAT,
     UNITS_SOLD,
@@ -72,6 +74,7 @@ UNITS: dict[str, str] = {
     CONSUMERS_SAMPLED: "consumers",
     PEOPLE_ENGAGED: "people",
     SAMPLES_BY_SKU: "samples",
+    POURS_SERVED: "pours",
     EMAILS_COLLECTED: "emails",
     SAMPLE_FORMAT: "",
     UNITS_SOLD: "units",
@@ -87,6 +90,7 @@ _SAMPLING = (
     CONSUMERS_SAMPLED,
     PEOPLE_ENGAGED,
     SAMPLES_BY_SKU,
+    POURS_SERVED,
     EMAILS_COLLECTED,
     SAMPLE_FORMAT,
     CLOCKED_HOURS,
@@ -105,6 +109,7 @@ DEFAULT_KEYS: dict[str, tuple[str, ...]] = {
     EXECUTION_RETAIL: (
         CONSUMERS_SAMPLED,
         PEOPLE_ENGAGED,
+        POURS_SERVED,
         UNITS_SOLD,
         EMAILS_COLLECTED,
         SAMPLE_FORMAT,
@@ -114,6 +119,8 @@ DEFAULT_KEYS: dict[str, tuple[str, ...]] = {
 }
 
 _SAMPLE_FORMAT_RE = re.compile(r"^\s*sample\s+format\s*$", re.I)
+# "4oz pours served" — its own count, never folded into cans sampled.
+_POURS_SERVED_RE = re.compile(r"^\s*4\s*oz\s+pours?\s+served\s*$", re.I)
 _MILEAGE_RE = re.compile(r"\bmileage\b|\bmiles\b", re.I)
 
 
@@ -220,6 +227,13 @@ def _custom_metrics(recap) -> list[RecapMetric]:
                 parts,
             )
         )
+
+    for name, value in pairs:
+        if name and _POURS_SERVED_RE.search(name):
+            pours = _parse_recap_int(value)
+            if pours is not None:
+                out.append(_metric(POURS_SERVED, "4oz pours served", max(0, pours)))
+            break
 
     emails_raw = _first_value(pairs, EMAILS_COLLECTED_FIELD)
     emails = _parse_recap_int(emails_raw) if emails_raw is not None else None

@@ -19,6 +19,8 @@ from recaps.management.commands.setup_torch_event_activation import (
     ACTIVATION_BUCKETS,
     COMPETITOR_FIELD,
     EVENT_LABEL,
+    POURS_CONDITION,
+    POURS_SERVED_FIELD,
     SALES_FIELD_RE,
     SAMPLE_QTY_LAYOUT,
     SERVED_FIELD,
@@ -189,7 +191,10 @@ class TestSetupCommand(AmbassadorsGraphQLTestCase):
         tpl = self._ea_template()
         assert tpl.event_type.name == EVENT_LABEL
         assert tpl.product_samples is True and tpl.sales_performance is False
-        assert tpl.layout == SAMPLE_QTY_LAYOUT
+        assert tpl.layout == {
+            **SAMPLE_QTY_LAYOUT,
+            "fieldConditions": {POURS_SERVED_FIELD: POURS_CONDITION},
+        }
         fields = CustomField.objects.filter(custom_recap_template=tpl)
         assert sorted(f.name for f in fields) == sorted(_labels())
         assert not fields.filter(recap_section=self.retail_section).exists()
@@ -254,7 +259,10 @@ class TestSetupCommand(AmbassadorsGraphQLTestCase):
         assert updated.options == SERVED_OPTS
         assert CustomFieldValue.objects.filter(custom_field=updated).count() == 1
         tpl.refresh_from_db()
-        assert tpl.layout == SAMPLE_QTY_LAYOUT
+        assert tpl.layout == {
+            **SAMPLE_QTY_LAYOUT,
+            "fieldConditions": {POURS_SERVED_FIELD: POURS_CONDITION},
+        }
 
     def test_resolves_by_request_url_name(self):
         self.tenant.slug = "torch-prod-slug"
