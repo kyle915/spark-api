@@ -695,7 +695,7 @@ def build_board(
         f"{poured_cans:,} cans were opened for pours. Recaps count cans, "
         "not pours, so they aren't converted — log pours on the plan."
         if poured_cans
-        else "Recaps count cans, not pours — pours come from the plan's log."
+        else ""
     )
 
     def _target(key_name: str) -> int:
@@ -735,7 +735,7 @@ def build_board(
             "planned": sum(event.days or 0 for event in sponsorships),
             "logged": days.logged,
             "unit": "days",
-            "note": "Days with an approved recap on the plan, unless the plan logs days.",
+            "note": "",
         },
         {
             "key": "retail_support",
