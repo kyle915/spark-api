@@ -282,6 +282,7 @@ class EventManager(models.Manager):
             # with a NULL address (legacy/edge) still materializes instead of
             # tripping the not-null constraint.
             address=getattr(request, "address", None) or "",
+            notes=getattr(request, "notes", None),
             retailer_id=getattr(request, "retailer_id", None),
             distributor_id=getattr(request, "distributor_id", None),
             location_id=getattr(request, "location_id", None),

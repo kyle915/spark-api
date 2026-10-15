@@ -1,6 +1,6 @@
-import strawberry
 import datetime
 import logging
+import re
 
 import strawberry
 from strawberry import relay
@@ -54,6 +54,7 @@ from .request_auto_approve import (
 )
 from .request_soft_delete import soft_delete_request
 from .torch_portal import (
+    is_torch_tenant,
     should_auto_approve_public_request,
     torch_request_approved_lists,
 )
@@ -2905,6 +2906,31 @@ class RequestWithDependenciesMutationService(BaseMutationService):
             # venue's UTC offset; aware values pass through untouched).
             _localize_model_times_to_own_tz(request)
 
+            if not (getattr(request, "retailer_name", None) or "").strip():
+                fallback_retailer_name = ""
+                if getattr(request, "retailer_id", None):
+                    fallback_retailer_name = (
+                        models.Retailer.objects.filter(id=request.retailer_id)
+                        .values_list("name", flat=True)
+                        .first()
+                        or ""
+                    ).strip()
+                if not fallback_retailer_name and getattr(request, "name", None):
+                    fallback_retailer_name = re.sub(
+                        r"\s*·\s*\d{4}-\d{2}-\d{2}(?:\s*\(\d+/\d+\))?\s*$",
+                        "",
+                        str(request.name),
+                    ).strip()
+                if fallback_retailer_name:
+                    request.retailer_name = fallback_retailer_name[:50]
+            elif getattr(request, "retailer_name", None):
+                request.retailer_name = str(request.retailer_name).strip()[:50]
+
+            if not (getattr(request, "retailer_address", None) or "").strip() and (
+                getattr(request, "address", None) or ""
+            ).strip():
+                request.retailer_address = str(request.address).strip()
+
             request.save()
 
             if store_manager_id:
@@ -3441,6 +3467,11 @@ async def _notify_requestor_for_request_auto_approved(
 ) -> None:
     requestor_email = await _resolve_requestor_email(request)
     tenant = await sync_to_async(lambda: request.tenant)()
+    if is_torch_tenant(tenant):
+        await _notify_torch_portal_request_approved(
+            request, location, delay_seconds=delay_seconds
+        )
+        return
     if tenant_auto_approves_requests(tenant):
         if requestor_email:
             request.requestor_email = requestor_email
@@ -3500,9 +3531,25 @@ async def _notify_torch_portal_request_approved(
 
 
 async def _resolve_requestor_email(request: models.Request) -> str:
-    requestor_email = (request.requestor_email or "").strip()
+    requestor_email = (
+        getattr(request, "requestor_email", None)
+        or getattr(request, "client_email", None)
+        or ""
+    ).strip()
     if requestor_email:
         return requestor_email
+
+    if getattr(request, "client_id", None):
+        client_email = await sync_to_async(
+            lambda: (
+                models.Client.objects.filter(id=request.client_id)
+                .values_list("email", flat=True)
+                .first()
+                or ""
+            )
+        )()
+        if client_email.strip():
+            return client_email.strip()
 
     if not request.created_by_id:
         return ""
@@ -3940,10 +3987,9 @@ class RequestMutations:
                     # blow up — admin can still approve manually.
                     pass
 
-            # When the admin ticked "email the client" on the create form,
-            # send the same auto-approved confirmation the client self-serve
-            # flow sends. Default is silent (admin creates on their behalf).
-            if not is_client and getattr(input, "notify_requestor", None):
+            # Always send the auto-approved confirmation email on create_request
+            # (unless a caller explicitly passed notify_requestor=False).
+            if not is_client and getattr(input, "notify_requestor", None) is not False:
                 try:
                     location = await _resolve_request_location(
                         request_with_relations

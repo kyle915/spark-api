@@ -340,6 +340,53 @@ class TestRequestAutoApprove(EventsGraphQLTestCase):
         alert_to = {e.lower() for e in alert_cls.call_args.kwargs["to_emails"]}
         assert "kyle@igniteproductions.co" in alert_to
 
+    @pytest.mark.asyncio
+    async def test_admin_create_request_always_sends_confirmation_and_copies_details(
+        self,
+    ):
+        from asgiref.sync import sync_to_async
+        from config.schema_spark import schema_spark
+
+        admin = await sync_to_async(
+            lambda: self.create_user(
+                username="ops@igniteproductions.co",
+                email="ops@igniteproductions.co",
+                role=self.roles["spark_admin"],
+            )
+        )()
+        self.schema = schema_spark
+        self.endpoint_path = "/api/v1/graphql"
+        with patch("events.mutations.RequestorRequestApprovedMailer") as approved_cls:
+            result = await self._execute_mutation_authenticated(
+                CREATE_REQUEST,
+                {
+                    "input": _input(
+                        request_type_id=self.types[self.famus.id].id,
+                        timezone_id=self.timezone.id,
+                        extra={
+                            "tenantId": str(self.famus.id),
+                            "name": "american fuel · 2026-10-16",
+                            "notes": "Morning commuter rush\nBA count: 1",
+                        },
+                    )
+                },
+                user=admin,
+            )
+        payload = self._payload(result, "createRequest")
+        assert payload["request"]["status"]["slug"] == "approved"
+        approved_cls.assert_called_once()
+        kwargs = approved_cls.call_args.kwargs
+        assert kwargs["to_emails"] == ["ops@igniteproductions.co"]
+        assert kwargs["cc_emails"] == BRAND_CC
+
+        req_row = await em.Request.objects.aget(uuid=payload["request"]["uuid"])
+        assert req_row.retailer_name == "american fuel"
+        assert req_row.retailer_address == "100 Main St, Charlotte, NC 28202"
+
+        event = await self._event_for(payload["request"]["uuid"])
+        assert event is not None
+        assert event.notes == "Morning commuter rush\nBA count: 1"
+
     async def _acreate_client(self, email, tenant):
         from asgiref.sync import sync_to_async
 
