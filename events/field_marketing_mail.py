@@ -30,6 +30,7 @@ from events.envelopes import (
     ink_on,
 )
 from events.mutations import _get_request_cc_emails
+from events.torch_portal import suppress_torch_emails
 from utils.mailer import Envelope, Mailer
 
 logger = logging.getLogger(__name__)
@@ -234,7 +235,9 @@ def notify_plan_deleted(
     config = plan_submit_mail_for(event.tenant)
     if not config:
         return
-    internal = _normalize(config.internal_emails)
+    internal = suppress_torch_emails(
+        _normalize(config.internal_emails), tenant=event.tenant
+    )
     if not internal:
         return
     request = event.request
@@ -256,7 +259,11 @@ def notify_plan_deleted(
 
 def _alert_ignite_team(request: models.Request, exclude: set[str]) -> None:
     """The generic new-request alert, minus anyone who already got the plan email."""
-    team = [e for e in _get_request_cc_emails() if e.strip().lower() not in exclude]
+    team = [
+        e
+        for e in _get_request_cc_emails(tenant=request.tenant)
+        if e.strip().lower() not in exclude
+    ]
     if not team:
         return
     ClientRequestCreatedNotificationMailer(
@@ -275,10 +282,18 @@ def notify_plan_submitted(
 ) -> None:
     """Send the plan-submitted emails. Never raises: the plan is already saved."""
     config = plan_submit_mail_for(event.tenant)
-    internal = _normalize(config.internal_emails) if config else []
+    internal = (
+        suppress_torch_emails(_normalize(config.internal_emails), tenant=event.tenant)
+        if config
+        else []
+    )
     request = event.request
     if config:
-        submitter_email = (getattr(actor, "email", None) or "").strip()
+        raw_submitter = (getattr(actor, "email", None) or "").strip()
+        allowed_submitter = suppress_torch_emails(
+            [raw_submitter] if raw_submitter else [], tenant=event.tenant
+        )
+        submitter_email = allowed_submitter[0] if allowed_submitter else ""
         content = PlanMailContent(
             brand_label=config.brand_label,
             plan_name=event.name,

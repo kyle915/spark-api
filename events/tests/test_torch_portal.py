@@ -5,9 +5,11 @@ from types import SimpleNamespace
 from events.torch_portal import (
     TORCH_RECAP_SUBMIT_CC,
     TORCH_REQUEST_APPROVED_CC,
+    TORCH_SUPPRESS_EMAILS,
     is_torch_public_form_slug,
     is_torch_tenant,
     should_auto_approve_public_request,
+    suppress_torch_emails,
     torch_recap_submit_lists,
     torch_request_approved_lists,
 )
@@ -80,3 +82,20 @@ def test_recap_submit_lists_are_four_party_only():
         "keis@igniteproductions.co",
     ):
         assert blast not in lowered
+
+
+def test_baesha_is_suppressed_from_torch_emails_only():
+    torch = _tenant(slug="torch-thc", request_url_name="keee-torch-thc", name="Torch THC")
+    famus = _tenant(slug="famus-energy", request_url_name="famus-energy", name="FAMUS Energy")
+    raw = ["Baesha@igniteproductions.co", "kyle@igniteproductions.co"]
+
+    assert "baesha@igniteproductions.co" in TORCH_SUPPRESS_EMAILS
+    assert suppress_torch_emails(raw, tenant=torch) == ["kyle@igniteproductions.co"]
+    assert suppress_torch_emails(raw) == ["kyle@igniteproductions.co"]
+    assert suppress_torch_emails(raw, tenant=famus) == raw
+
+    to_emails, cc_emails = torch_request_approved_lists("Baesha@igniteproductions.co")
+    assert "baesha@igniteproductions.co" not in {e.lower() for e in cc_emails}
+    to_recap, cc_recap = torch_recap_submit_lists(["Baesha@igniteproductions.co", "buyer@store.com"])
+    assert to_recap == ["buyer@store.com"]
+    assert "baesha@igniteproductions.co" not in {e.lower() for e in cc_recap}

@@ -30,6 +30,24 @@ TORCH_RECAP_SUBMIT_CC: tuple[str, ...] = (
     "nevena@igniteproductions.co",
 )
 
+# Ignite addresses excluded from Torch-related Spark emails.
+TORCH_SUPPRESS_EMAILS: frozenset[str] = frozenset({
+    "baesha@igniteproductions.co",
+})
+
+
+def suppress_torch_emails(
+    emails: list[str] | tuple[str, ...],
+    tenant=None,
+) -> list[str]:
+    """Strip ``TORCH_SUPPRESS_EMAILS`` when ``tenant`` is Torch (or omitted)."""
+    if tenant is not None and not is_torch_tenant(tenant):
+        return list(emails)
+    return [
+        e for e in emails
+        if (e or "").strip().lower() not in TORCH_SUPPRESS_EMAILS
+    ]
+
 
 def _norm(value: str | None) -> str:
     return (value or "").strip().lower()
@@ -87,7 +105,7 @@ def torch_request_approved_lists(
 ) -> tuple[list[str], list[str]]:
     """To: requestor (or first CC). CC: Liberty + Ignite Torch list."""
     requestor = (requestor_email or "").strip()
-    cc = _dedupe_emails(TORCH_REQUEST_APPROVED_CC)
+    cc = suppress_torch_emails(_dedupe_emails(TORCH_REQUEST_APPROVED_CC))
     if requestor:
         requestor_key = requestor.lower()
         cc = [e for e in cc if e.lower() != requestor_key]
@@ -101,9 +119,12 @@ def torch_recap_submit_lists(
     requestor_emails: list[str] | tuple[str, ...],
 ) -> tuple[list[str], list[str]]:
     """To: requestor(s). CC: Liberty + events + Nevena. No Kyle/Harris blast."""
-    requestors = _dedupe_emails(requestor_emails)
+    requestors = suppress_torch_emails(_dedupe_emails(requestor_emails))
     seen = {e.lower() for e in requestors}
-    cc = [e for e in _dedupe_emails(TORCH_RECAP_SUBMIT_CC) if e.lower() not in seen]
+    cc = [
+        e for e in suppress_torch_emails(_dedupe_emails(TORCH_RECAP_SUBMIT_CC))
+        if e.lower() not in seen
+    ]
     if requestors:
         return requestors, cc
     if not cc:

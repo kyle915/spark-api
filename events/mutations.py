@@ -54,8 +54,10 @@ from .request_auto_approve import (
 )
 from .request_soft_delete import soft_delete_request
 from .torch_portal import (
+    TORCH_SUPPRESS_EMAILS,
     is_torch_tenant,
     should_auto_approve_public_request,
+    suppress_torch_emails,
     torch_request_approved_lists,
 )
 from utils.torch_public_form_sheet import (
@@ -3043,6 +3045,12 @@ async def _notify_notification_group_users_for_request(
         .values_list("user__email", flat=True)
         .distinct()
     )
+    is_torch = await sync_to_async(lambda: is_torch_tenant(request.tenant))()
+    if is_torch:
+        to_emails = [
+            e for e in to_emails
+            if (e or "").strip().lower() not in TORCH_SUPPRESS_EMAILS
+        ]
     if not to_emails:
         return
 
@@ -3084,9 +3092,12 @@ async def _notify_notification_group_users_for_request_created(
     if not recipients:
         return
 
+    is_torch = await sync_to_async(lambda: is_torch_tenant(request.tenant))()
     for recipient in recipients:
         recipient_email = (recipient.get("user__email") or "").strip()
         if not recipient_email:
+            continue
+        if is_torch and recipient_email.lower() in TORCH_SUPPRESS_EMAILS:
             continue
         first_name = (recipient.get("user__first_name") or "").strip()
         last_name = (recipient.get("user__last_name") or "").strip()
@@ -3118,12 +3129,13 @@ async def _notify_spark_admins_for_client_request(
     submitted. Best-effort — a mail failure here must NEVER break the create.
     """
     try:
-        ignite_team = await _get_request_cc_emails_async()
+        tenant = await sync_to_async(lambda: request.tenant)()
+        ignite_team = await _get_request_cc_emails_async(tenant=tenant)
         # A brand's auto-approval CC list already gets the approval email.
         already_copied = {
             e.lower()
             for e in await sync_to_async(
-                lambda: tenant_request_cc_emails(request.tenant)
+                lambda: tenant_request_cc_emails(tenant)
             )()
         }
         ignite_team = [e for e in ignite_team if e.lower() not in already_copied]
@@ -3163,8 +3175,9 @@ async def _notify_rmm_for_request_created(
     # @igniteproductions.co user) on the incoming-request routing email, minus
     # anyone already on the To: line so they aren't doubled up.
     to_lower = {(t or "").strip().lower() for t in to_emails}
+    tenant = await sync_to_async(lambda: request.tenant)()
     cc_emails = [
-        e for e in await _get_request_cc_emails_async() if e.lower() not in to_lower
+        e for e in await _get_request_cc_emails_async(tenant=tenant) if e.lower() not in to_lower
     ]
     mailer = RmmAssignedRequestMailer(
         request=request,
@@ -3191,7 +3204,8 @@ async def _notify_ignite_for_unroutable_request(
     `unroutable_reason` context flag is read by the template to show
     a yellow callout above the buttons.
     """
-    ignite_team = await _get_request_cc_emails_async()
+    tenant = await sync_to_async(lambda: request.tenant)()
+    ignite_team = await _get_request_cc_emails_async(tenant=tenant)
     mailer = RmmAssignedRequestMailer(
         request=request,
         location=location,
@@ -3301,7 +3315,10 @@ def _get_ignite_domain_emails() -> list[str]:
     return [e.strip() for e in emails if (e or "").strip()]
 
 
-def _get_request_cc_emails(exclude_email: str | None = None) -> list[str]:
+def _get_request_cc_emails(
+    exclude_email: str | None = None,
+    tenant=None,
+) -> list[str]:
     """The full CC set copied on EVERY request + approval/decline email: the
     configured review-copy list, the hardcoded Ignite ops CC, every active
     role=spark-admin, AND every active @igniteproductions.co user. Deduped
@@ -3329,11 +3346,17 @@ def _get_request_cc_emails(exclude_email: str | None = None) -> list[str]:
             continue
         seen.add(key)
         deduped.append(normalized)
-    return suppress_cc(deduped)
+    out = suppress_cc(deduped)
+    if tenant is not None:
+        out = suppress_torch_emails(out, tenant=tenant)
+    return out
 
 
-async def _get_request_cc_emails_async(exclude_email: str | None = None) -> list[str]:
-    return await sync_to_async(_get_request_cc_emails)(exclude_email)
+async def _get_request_cc_emails_async(
+    exclude_email: str | None = None,
+    tenant=None,
+) -> list[str]:
+    return await sync_to_async(_get_request_cc_emails)(exclude_email, tenant=tenant)
 
 
 async def _notify_requestor_for_request_approved(
@@ -3351,7 +3374,10 @@ async def _notify_requestor_for_request_approved(
     # ops CC, every active spark-admin, AND every active @igniteproductions.co
     # user — deduped against the requestor so no one CC's themselves. New
     # Ignite teammates are picked up automatically (no settings/code change).
-    copy_emails = await _get_request_cc_emails_async(exclude_email=requestor_email)
+    tenant = await sync_to_async(lambda: request.tenant)()
+    copy_emails = await _get_request_cc_emails_async(
+        exclude_email=requestor_email, tenant=tenant
+    )
     mailer = RequestorRequestApprovedMailer(
         request=request,
         location=location,
@@ -3376,7 +3402,10 @@ async def _notify_requestor_for_request_declined(
     request.requestor_email = requestor_email
     # Loop the whole Ignite team in on declines too (was: review-copy only) so
     # the same recipients see the request come in, get approved, or declined.
-    copy_emails = await _get_request_cc_emails_async(exclude_email=requestor_email)
+    tenant = await sync_to_async(lambda: request.tenant)()
+    copy_emails = await _get_request_cc_emails_async(
+        exclude_email=requestor_email, tenant=tenant
+    )
     mailer = RequestorRequestDeclinedMailer(
         request=request,
         location=location,
@@ -4506,11 +4535,7 @@ class RequestMutations:
         info: strawberry.Info,
         input: inputs.CancelDemoInput,
     ) -> types.CancelDemoResponse:
-        """Email every Ignite user that a demo should be cancelled.
-
-        Does not change the request status and does not email the BA.
-        Ops still takes the shift off the schedule after they read it.
-        """
+        """Cancel a scheduled demo, update request/event status, and email Ignite + brand."""
         try:
             service: RequestMutationService = RequestMutationService()
             user: User = await service.get_user(info)
@@ -4518,18 +4543,26 @@ class RequestMutations:
                 raise GraphQLError("You are not authorized to cancel demos.")
 
             is_spark_admin = await user.role.is_spark_admin
-            tenant_id: int | None = None
+            tenant_scope: int | list[int] | None = None
             if not is_spark_admin:
-                tenant = await sync_to_async(lambda: user.tenant)()
-                if tenant is None:
+                from tenants.models import TenantedUser
+
+                active_tids = await sync_to_async(
+                    lambda: list(
+                        TenantedUser.objects.filter(
+                            user=user, is_active=True
+                        ).values_list("tenant_id", flat=True)
+                    )
+                )()
+                if not active_tids:
                     raise GraphQLError("You are not authorized to cancel demos.")
-                tenant_id = tenant.id
+                tenant_scope = active_tids[0] if len(active_tids) == 1 else active_tids
 
             result = await sync_to_async(request_demo_cancellation)(
                 request_id=getattr(input, "request_id", None),
                 lookup=getattr(input, "lookup", None),
                 reason=input.reason,
-                tenant_id=tenant_id,
+                tenant_id=tenant_scope,
                 actor=user,
             )
             return build_mutation_response(

@@ -1090,6 +1090,7 @@ def _email_admins_checkin_landed(event, ambassador) -> None:
     from django.conf import settings
     from django.utils.html import escape
 
+    from events.torch_portal import is_torch_tenant, suppress_torch_emails
     from utils.mailer import Envelope, Mailer
 
     # The shared events@ inbox, NOT every Spark admin. This used to fan out via
@@ -1102,6 +1103,9 @@ def _email_admins_checkin_landed(event, ambassador) -> None:
         for e in getattr(settings, "CHECKIN_HOURS_NOTIFY_EMAILS", [])
         if (e or "").strip()
     ]
+    tenant = getattr(event, "tenant", None) if event is not None else None
+    if is_torch_tenant(tenant):
+        admins = suppress_torch_emails(admins, tenant=tenant)
     if not admins:
         return
     user = getattr(ambassador, "user", None)
@@ -2962,7 +2966,11 @@ def notify_checkin_recap_submitted(recap) -> None:
     from django.conf import settings
     from django.utils.html import escape
 
+    from events.torch_portal import is_torch_tenant, suppress_torch_emails
     from utils.mailer import Envelope, Mailer
+
+    event = getattr(recap, "event", None)
+    tenant = getattr(recap, "tenant", None) or getattr(event, "tenant", None)
 
     # People, by name — a recap is something a human reviews, unlike the clock
     # punches that go to the shared events@ inbox.
@@ -2971,11 +2979,11 @@ def notify_checkin_recap_submitted(recap) -> None:
         for e in getattr(settings, "CHECKIN_RECAP_NOTIFY_EMAILS", [])
         if (e or "").strip()
     ]
+    if is_torch_tenant(tenant):
+        to = suppress_torch_emails(to, tenant=tenant)
     if not to:
         return
 
-    event = getattr(recap, "event", None)
-    tenant = getattr(recap, "tenant", None) or getattr(event, "tenant", None)
     brand = getattr(tenant, "name", "") or ""
     where = getattr(event, "name", "") or "an event"
     address = getattr(event, "address", "") or ""

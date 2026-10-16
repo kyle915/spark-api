@@ -35,6 +35,24 @@ class TestDemoCancel(EventsGraphQLTestCase):
             tenant=self.tenant,
             created_by=self.sys,
         )
+        self.declined_status = em.RequestStatus.objects.create(
+            name="Declined",
+            slug="declined",
+            tenant=self.tenant,
+            created_by=self.sys,
+        )
+        self.event_status = em.EventStatus.objects.create(
+            name="Approved",
+            slug="approved",
+            tenant=self.tenant,
+            created_by=self.sys,
+        )
+        self.suspended_event_status = em.EventStatus.objects.create(
+            name="Suspended",
+            slug="suspended",
+            tenant=self.tenant,
+            created_by=self.sys,
+        )
         self.ignite = self.create_user(
             username="ops-cancel",
             email="ops-cancel@igniteproductions.co",
@@ -132,8 +150,36 @@ class TestDemoCancel(EventsGraphQLTestCase):
                 )
         send.assert_not_called()
 
-    def test_emails_ignite_and_leaves_status(self):
-        req = self._req(pk=424242, tenant=self.tenant, rt=self.rt, name="Vons #12")
+    def test_emails_ignite_and_brand_and_cancels_status_and_events(self):
+        self.tenant.auto_approve_requests = True
+        self.tenant.request_approved_cc_emails = "brand-cc@torchdrinks.com"
+        self.tenant.save(update_fields=["auto_approve_requests", "request_approved_cc_emails"])
+
+        rmm = self.create_user(
+            username="rmm-cancel",
+            email="rmm-cancel@torchdrinks.com",
+            role=self.roles["client"],
+        )
+        req = self._req(
+            pk=424242,
+            tenant=self.tenant,
+            rt=self.rt,
+            name="Vons #12",
+            requestor_email="requestor@torchdrinks.com",
+            client_email="client@torchdrinks.com",
+            rmm_asigned=rmm,
+        )
+        ev = self.create_event(
+            name="Vons #12",
+            tenant=self.tenant,
+            request=req,
+            status=self.event_status,
+        )
+        title = self.create_job_title("Brand Ambassador", self.tenant)
+        job = self.create_job(
+            "Vons #12 BA", "Sampling", "1 Main St", ev, title, self.tenant,
+            closed=False, ongoing=True,
+        )
         captured = {}
 
         def capture(mailer, *args, **kwargs):
@@ -142,7 +188,9 @@ class TestDemoCancel(EventsGraphQLTestCase):
             captured["subject"] = envelope.subject
             captured["html"] = envelope.render_template()
 
-        with patch("events.demo_cancel.DemoCancelRequestedMailer.send", capture):
+        with patch("events.demo_cancel.DemoCancelRequestedMailer.send", capture), patch(
+            "events.mutations._notify_assigned_ambassadors_for_suspended_event"
+        ) as notify_bas:
             result = request_demo_cancellation(
                 request_id="424242",
                 lookup=None,
@@ -152,20 +200,29 @@ class TestDemoCancel(EventsGraphQLTestCase):
             )
 
         req.refresh_from_db()
-        assert req.status_id == self.status.id
+        ev.refresh_from_db()
+        job.refresh_from_db()
+        assert req.status_id == self.declined_status.id
+        assert req.decline_reason == "The account cancelled this tasting."
         assert req.deleted_at is None
+        assert ev.status_id == self.suspended_event_status.id
+        assert job.closed is True
+        assert job.ongoing is False
+        notify_bas.assert_called_once_with(ev.id)
+
         assert result.request_code == request_display_code(req.id)
         assert result.request_code in captured["subject"]
         assert "Vons #12" in captured["subject"]
         assert "The account cancelled this tasting." in captured["html"]
         assert "buyer-cancel@torchdrinks.com" in captured["html"]
 
-        ignite = {e.lower() for e in _get_request_cc_emails()}
-        assert "ops-cancel@igniteproductions.co" in ignite
-        assert "buyer-cancel@torchdrinks.com" not in ignite
-        assert "ops-cancel@igniteproductions.co" in {e.lower() for e in captured["to"]}
-        assert "buyer-cancel@torchdrinks.com" not in {e.lower() for e in captured["to"]}
+        to_lower = {e.lower() for e in captured["to"]}
+        assert "ops-cancel@igniteproductions.co" in to_lower
+        assert "requestor@torchdrinks.com" in to_lower
+        assert "client@torchdrinks.com" in to_lower
+        assert "rmm-cancel@torchdrinks.com" in to_lower
+        assert "brand-cc@torchdrinks.com" in to_lower
 
         note = em.RequestActivityLog.objects.get(request=req)
         assert note.kind == em.RequestActivityLog.KIND_NOTE_ADDED
-        assert "Demo cancel requested" in note.summary
+        assert "Demo cancelled" in note.summary
