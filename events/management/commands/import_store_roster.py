@@ -43,10 +43,21 @@ DEFAULT_FILE = "famus_aa_wook_store_roster.csv"
 REQUIRED_COLUMNS = {"roster_no", "store_name", "address", "city", "state", "zip", "brands"}
 NOT_A_STORE = "not a store"
 PLACEHOLDER_NAME = re.compile(r"\b(llc|inc|corp|corporation)\b|\(name to confirm\)", re.IGNORECASE)
+GENERIC_STORE_NAMES = {"shell", "marathon", "marathon gas", "bp", "minit mart", "t-mart", "smoke city"}
 
 
 def is_placeholder_name(name: str) -> bool:
     return bool(PLACEHOLDER_NAME.search(name or ""))
+
+
+def should_rename_account(current_name: str, new_name: str) -> bool:
+    if not new_name or current_name == new_name or is_placeholder_name(new_name):
+        return False
+    if is_placeholder_name(current_name):
+        return True
+    return (current_name or "").strip().lower() in GENERIC_STORE_NAMES and (
+        new_name.strip().lower() not in GENERIC_STORE_NAMES
+    )
 
 
 def resolve_tenant(slug: str) -> Tenant | None:
@@ -196,7 +207,7 @@ class Command(BaseCommand):
                         found.location_id = location_id
                         fields.append("location")
                     name = row["store_name"][:255]
-                    if is_placeholder_name(found.name) and not is_placeholder_name(name) and found.name != name:
+                    if should_rename_account(found.name, name):
                         w(f"  ~ [{slug}] rename {found.name!r} -> {name!r} ({row['address']})")
                         counts[slug]["renamed"] += 1
                         found.name = name

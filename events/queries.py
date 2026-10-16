@@ -1348,6 +1348,7 @@ class RequestQueriesService(BaseEventQueriesService):
             "request_product__product",
             "event_set",
             "event_set__tenant",
+            "event_set__timezone",
             # Detail Field Reports panel traverses Request → events → recaps
             # and renders the FULL recap, so it keeps the prefetch (the list
             # path replaces these two with count annotations — see below).
@@ -1385,6 +1386,7 @@ class RequestQueriesService(BaseEventQueriesService):
         return self._base_queryset().prefetch_related(
             "request_product__product",
             "event_set",
+            "event_set__timezone",
             # Count-only filed rows: id + event_id is all recapsFiledCount /
             # recapEventUuid need. Empty clock-out stubs are excluded here
             # so the in-memory count matches "filed = submitted content".

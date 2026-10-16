@@ -10,6 +10,7 @@ digest goes to the full retail list, including the weekly-only people.
 from __future__ import annotations
 
 from events.routing import _state_code_from_request, extract_state_code
+from events.torch_portal import TORCH_SUPPRESS_EMAILS
 from recaps.recap_types import (
     RECAP_TYPE_EVENT,
     RECAP_TYPE_GUERILLA,
@@ -99,7 +100,7 @@ def _dedupe_emails(emails: list[str] | tuple[str, ...]) -> list[str]:
         if not normalized:
             continue
         key = normalized.lower()
-        if key in seen:
+        if key in seen or key in TORCH_SUPPRESS_EMAILS:
             continue
         seen.add(key)
         out.append(normalized)

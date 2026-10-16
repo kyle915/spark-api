@@ -181,6 +181,12 @@ class TestImportStoreRoster(EventsGraphQLTestCase):
         assert legal.updated_by_id == self.owner.id
         assert "renamed=0" in self.run_import("--apply", "--tenant", "famus-energy")
 
+    def test_generic_station_name_takes_specific_store_name(self):
+        assert import_store_roster.should_rename_account("Marathon Gas", "J&H Foodmart (Marathon)")
+        assert import_store_roster.should_rename_account("Shell", "KSP Care First (Shell)")
+        assert not import_store_roster.should_rename_account("Circle K #720", "Circle K")
+        assert not import_store_roster.should_rename_account("Shell", "Shell")
+
     def test_roster_name_to_confirm_never_overwrites_a_real_name(self):
         path = import_store_roster.DATA_DIR / "roster.csv"
         with path.open("a", newline="") as fh:

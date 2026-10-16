@@ -7,7 +7,11 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 
-from events.torch_portal import is_torch_tenant
+from events.torch_portal import (
+    TORCH_SUPPRESS_EMAILS,
+    is_torch_tenant,
+    suppress_torch_emails,
+)
 from events.torch_retail_routing import (
     EXECUTION_RETAIL,
     TORCH_RETAIL_IGNITE_OPS,
@@ -282,7 +286,7 @@ def _collect_recap_approved_recipients(
 
         def _push(email: str | None, first: str | None = None):
             e = (email or "").strip()
-            if not e or e.lower() in seen:
+            if not e or e.lower() in seen or e.lower() in TORCH_SUPPRESS_EMAILS:
                 return
             if is_placeholder_recipient_email(e):
                 return
@@ -469,6 +473,9 @@ async def _notify_recap_ready_for_review_to_admins(
         filer_email = (getattr(created_by, "email", "") or "").strip()
         recipients = [filer_email] if filer_email else []
 
+    tenant = await sync_to_async(recap_tenant)(recap)
+    if is_torch_tenant(tenant):
+        recipients = suppress_torch_emails(recipients, tenant=tenant)
     if not recipients:
         return
 
@@ -560,6 +567,9 @@ def _send_recap_data_quality_alert(
         from utils.mailer import Envelope, Mailer
 
         recipients = _resolve_ignite_recipients()
+        tenant = recap_tenant(custom_recap)
+        if is_torch_tenant(tenant):
+            recipients = suppress_torch_emails(recipients, tenant=tenant)
         if not recipients:
             return
         ev = getattr(custom_recap, "event", None)

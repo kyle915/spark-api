@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Cancel demo {{ request_code }}</title>
+    <title>Demo cancelled: {{ request_code }}</title>
   </head>
   <body
     style="margin:0;padding:0;background:#f4f4f0;
@@ -28,7 +28,7 @@
               <td style="padding:36px 40px 8px 40px;">
                 <p style="margin:0 0 4px 0;font-family:'Courier New',Courier,monospace;
                           font-size:10px;letter-spacing:0.22em;color:#5a6354;">
-                  CANCEL DEMO · {{ request_code }}
+                  DEMO CANCELLED · {{ request_code }}
                 </p>
                 <h1 style="margin:0;font-family:Georgia,'Times New Roman',serif;
                            font-weight:700;font-size:32px;line-height:36px;color:#0a0d09;">
@@ -41,7 +41,7 @@
                 <p style="margin:0;font-size:15px;line-height:22px;color:#3b4034;">
                   <strong>{{ asked_by }}</strong>
                   {% if asked_email and asked_email != "—" %}({{ asked_email }}){% endif %}
-                  asked Ignite to cancel this demo.
+                  cancelled this demo with the following note:
                 </p>
               </td>
             </tr>

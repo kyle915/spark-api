@@ -81,9 +81,31 @@ def _get_offset_minutes_from_instance(instance) -> int:
         return 0
 
 
+_TZ_ROW_BY_ID_CACHE: dict[int, models.TimeZone] = {}
+
+
 def _get_tz_row_from_instance(instance):
     """Return the TimeZone instance attached to an event/request, or None."""
     try:
+        state = getattr(instance, "_state", None)
+        fields_cache = getattr(state, "fields_cache", None)
+        if isinstance(fields_cache, dict) and "timezone" in fields_cache:
+            tz = fields_cache["timezone"]
+            if tz is not None and getattr(tz, "id", None) is not None:
+                _TZ_ROW_BY_ID_CACHE[tz.id] = tz
+            return tz
+        tz_id = getattr(instance, "timezone_id", None)
+        if tz_id is None:
+            return None
+        if tz_id in _TZ_ROW_BY_ID_CACHE:
+            return _TZ_ROW_BY_ID_CACHE[tz_id]
+        try:
+            for row in models.TimeZone.objects.all():
+                _TZ_ROW_BY_ID_CACHE[row.id] = row
+        except Exception:
+            pass
+        if tz_id in _TZ_ROW_BY_ID_CACHE:
+            return _TZ_ROW_BY_ID_CACHE[tz_id]
         return getattr(instance, "timezone", None)
     except Exception:
         return None
@@ -392,10 +414,11 @@ class Request(Node):
     def name(self) -> str:
         return _get_field(self, "name") or ""
 
-    # Date/time fields returned as stored, without server TZ conversion
     @strawberry.field
     def date(self) -> str | None:
-        return _serialize_dt(_get_field(self, "date"), offset_minutes=0)
+        return _serialize_dt_for_tz(
+            _get_field(self, "date"), _get_tz_row_from_instance(self)
+        )
 
     @strawberry.field
     def start_time(self) -> str | None:
@@ -1186,7 +1209,9 @@ class Event(Node):
 
     @strawberry.field
     def date(self) -> str | None:
-        return _serialize_dt(_get_field(self, "date"), offset_minutes=0)
+        return _serialize_dt_for_tz(
+            _get_field(self, "date"), _get_tz_row_from_instance(self)
+        )
 
     @strawberry.field
     def start_time(self) -> str | None:
