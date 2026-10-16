@@ -2344,6 +2344,22 @@ def addresses_fuzzy_match(a: str, b: str) -> bool:
     return True
 
 
+def _prefer_roster_name(current: str, roster_name: str) -> str:
+    """Show the roster trading name when a walk-in title is all we have.
+
+    Events are stored first, so a later Retailer at the same address used to
+    be dropped. The picker then only knew "8/2/2026 - 7117 Vine St" and a
+    search for "Valley Beer Drive In" missed the account.
+    """
+    roster = (roster_name or "").strip()
+    cur = (current or "").strip()
+    if not roster:
+        return cur
+    if roster.lower() in cur.lower():
+        return cur
+    return roster
+
+
 def recent_checkin_locations(tenant, limit: int = 30, account_limit: int = 500) -> list:
     """Distinct recent store names + addresses for this tenant, newest first,
     then the brand's Retailer accounts (preloaded store rosters) by name.
@@ -2351,6 +2367,8 @@ def recent_checkin_locations(tenant, limit: int = 30, account_limit: int = 500) 
     Feeds the autocomplete on the store step. Its real job is data hygiene: a BA
     picking a known store re-uses its exact spelling, so the normalized key
     matches and they join the existing event instead of creating a near-dupe.
+    When an event and a roster account share an address, the label becomes the
+    trading name so typing that name finds the row.
     """
     from events.models import Event, Retailer
 
@@ -2381,10 +2399,17 @@ def recent_checkin_locations(tenant, limit: int = 30, account_limit: int = 500) 
     added = 0
     for row in accounts:
         key = normalize_place(row["address"])
-        if not key or key in seen:
+        if not key:
+            continue
+        roster_name = row["name"] or ""
+        if key in seen:
+            for item in out:
+                if normalize_place(item["address"]) == key:
+                    item["name"] = _prefer_roster_name(item["name"], roster_name)
+                    break
             continue
         seen.add(key)
-        out.append({"name": row["name"] or "", "address": row["address"]})
+        out.append({"name": roster_name, "address": row["address"]})
         added += 1
         if added >= account_limit:
             break
