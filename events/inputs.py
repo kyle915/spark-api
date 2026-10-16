@@ -521,6 +521,9 @@ class CreateRequestInput(BaseNameableInput):
     # Torch spark-form: "How many cases to be shipped?" Auto-mapped onto Request.
     cases_to_be_shipped: str | None = None
     store_number: str | None = None
+    # Onsite BA headcount (1–20). Not required; brand-group Event
+    # Activation sends it. Auto-mapped onto Request.ba_count.
+    ba_count: int | None = None
     # Optional Activation Plan to attach this request to on create.
     activation_plan_id: strawberry.ID | None = None
     client_name: str | None = None
@@ -610,6 +613,8 @@ class CreateRequestWithDependenciesInput(BaseNameableInput):
     # Torch spark-form: "How many cases to be shipped?" Auto-mapped onto Request.
     cases_to_be_shipped: str | None = None
     store_number: str | None = None
+    # Onsite BA headcount (1–20). Auto-mapped onto Request.ba_count.
+    ba_count: int | None = None
     client_name: str
     client_email: str
     distributor_name: str

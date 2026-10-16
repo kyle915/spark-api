@@ -447,6 +447,7 @@ class Request(Node):
     additional_team_details: str | None = None
     cases_to_be_shipped: str | None = None
     store_number: str | None = None
+    ba_count: int | None = None
     notes: str | None = None
     coordinates: List[float]
     requestor_email: str | None = None

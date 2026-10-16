@@ -21,6 +21,7 @@ from typing import Any
 from django.conf import settings
 from googleapiclient.errors import HttpError
 
+from events.ba_count import ba_count_from_request
 from events.routing import extract_state_code
 from events.torch_portal import is_torch_public_form_slug, is_torch_tenant
 from utils.sheets_mirror import (
@@ -80,7 +81,6 @@ SPARK_EXTRA_HEADERS = [
 
 UUID_HEADER = SPARK_EXTRA_HEADERS[0]
 
-_BA_COUNT_RE = re.compile(r"BA count:\s*(\d+)", re.I)
 _COUNTRY_SUFFIX_RE = re.compile(
     r"[\s,]*(?:united states of america|united states|u\.?\s*s\.?\s*a\.?|"
     r"u\.?\s*s\.?)\s*$",
@@ -116,9 +116,8 @@ def _yes_no(value: Any) -> str:
 
 
 def _ba_count(request) -> str:
-    notes = getattr(request, "notes", None) or ""
-    match = _BA_COUNT_RE.search(notes)
-    return match.group(1) if match else ""
+    count = ba_count_from_request(request)
+    return "" if count is None else str(count)
 
 
 def _store_name(request) -> str:

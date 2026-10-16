@@ -19,6 +19,7 @@ from django.db.models.deletion import RestrictedError
 from events import types
 from events import models
 from events import inputs
+from events.ba_count import BaCountError, normalize_ba_count
 from utils.graphql.inputs import SparkGraphQLInput
 from utils.graphql.permissions import StrictIsAuthenticated
 from utils.graphql.relay import ensure_relay_mutation
@@ -2859,6 +2860,15 @@ class RequestWithDependenciesMutationService(BaseMutationService):
 
     def _save_sync(self, params: dict[str, Any]) -> models.Request:
         """Synchronous save method to handle transaction."""
+        if "ba_count" in params:
+            try:
+                normalized = normalize_ba_count(params.get("ba_count"))
+            except BaCountError as exc:
+                raise GraphQLError(str(exc)) from exc
+            if normalized is None:
+                params.pop("ba_count", None)
+            else:
+                params["ba_count"] = normalized
         with transaction.atomic():
             store_manager_id = params.pop("store_manager_id", None)
             # Create the request
@@ -4202,6 +4212,7 @@ class RequestMutations:
                     address=(copy.address or source.address),
                     notes=source.notes,
                     store_number=(copy.store_number or source.store_number),
+                    ba_count=source.ba_count,
                     coordinates=list(source.coordinates or []),
                     client_name=source.client_name,
                     client_email=source.client_email,
