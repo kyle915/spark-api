@@ -472,6 +472,10 @@ class Request(AddressGeoSyncMixin, models.Model):
     additional_team_details = models.TextField(null=True, blank=True)
     # Torch spark-form: "How many cases to be shipped?" (5MG+10MG gate).
     cases_to_be_shipped = models.CharField(max_length=32, null=True, blank=True)
+    # Onsite brand ambassadors requested. Nullable so retail rows and
+    # older requests stay untouched; the notes line "BA count: N" remains
+    # a fallback for rows that predate this column.
+    ba_count = models.PositiveIntegerField(null=True, blank=True)
     store_number = models.CharField(max_length=254, null=True)
     coordinates = ArrayField(
         models.FloatField(),

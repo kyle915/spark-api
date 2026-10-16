@@ -44,6 +44,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
 from events import models
+from events.ba_count import ba_count_from_request
 from tenants.models import Tenant
 from utils.sheets_mirror import upsert_request_row
 
@@ -94,14 +95,11 @@ def _public_product_names(req: models.Request) -> list[str]:
 
 
 def _public_ba_count(req: models.Request) -> int | None:
-    """BA count the requestor asked for (notes: 'BA count: N')."""
-    import re
+    """BA count the requestor asked for.
 
-    notes = getattr(req, "notes", None) or ""
-    match = re.search(r"BA count:\s*(\d+)", notes, re.I)
-    if match:
-        return int(match.group(1))
-    return None
+    Prefers Request.ba_count. Older rows only have ``BA count: N`` in notes.
+    """
+    return ba_count_from_request(req)
 
 
 def _serialize_request_for_public(req: models.Request) -> dict[str, Any]:
