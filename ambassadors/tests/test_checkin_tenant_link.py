@@ -234,7 +234,7 @@ class TestTenantCheckinLink(AmbassadorsGraphQLTestCase):
         )
         out = checkin_web.recent_checkin_locations(self.tenant)
         assert out == [
-            {"name": "Walk-in", "address": "58 E Lake St, Chicago, IL"},
+            {"name": "Lake St account", "address": "58 E Lake St, Chicago, IL"},
             {"name": "Shell", "address": "1303 S Main St, Bluffton, IN 46714"},
         ]
 

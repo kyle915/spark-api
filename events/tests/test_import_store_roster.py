@@ -281,3 +281,15 @@ class TestImportStoreRoster(EventsGraphQLTestCase):
         )
         assert res.errors is None, res.errors
         assert [e["node"]["name"] for e in res.data["publicRetailers"]["edges"]] == ["Shell"]
+
+        both = await self._execute_mutation(
+            query, {"q": "Shell Bluffton", "filters": {"isNational": False}}
+        )
+        assert both.errors is None, both.errors
+        assert [e["node"]["name"] for e in both.data["publicRetailers"]["edges"]] == ["Shell"]
+
+        miss = await self._execute_mutation(
+            query, {"q": "Shell Boonville", "filters": {"isNational": False}}
+        )
+        assert miss.errors is None, miss.errors
+        assert miss.data["publicRetailers"]["edges"] == []

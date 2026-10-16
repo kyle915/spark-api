@@ -2448,13 +2448,21 @@ class RetailerQueriesService(BaseEventQueriesService):
     def get_filtered_queryset(
         self, tenant_id: int | None = None, q: str | None = None
     ) -> QuerySet:
-        """Search matches the store address too: a roster has dozens of
-        stores named "Shell", so people find theirs by street or city."""
+        """Each typed word must hit the trading name or the address.
+
+        A roster has dozens of stores named "Shell", so "Shell Bluffton"
+        has to match the name and the city together. One icontains on the
+        whole string misses that, because "Shell Bluffton" is not a
+        substring of either field.
+        """
         queryset = self.get_queryset()
         if tenant_id:
             queryset = queryset.filter(tenant_id=tenant_id)
-        if q:
-            queryset = queryset.filter(Q(name__icontains=q) | Q(address__icontains=q))
+        for word in (q or "").split():
+            word = word.strip()
+            if not word:
+                continue
+            queryset = queryset.filter(Q(name__icontains=word) | Q(address__icontains=word))
         return queryset
 
 
