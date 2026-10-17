@@ -27,6 +27,7 @@ import uuid
 
 from events.models import Event, EventStatus, EventType, Product, RequestCoBrand
 from recaps import models as rmodels
+from recaps.photo_reuse import normalize_content_sha256
 from recaps.mutation_parts.file_categories import (
     _resolve_explicit_file_recap_category,
     _resolve_file_recap_category,
@@ -471,6 +472,9 @@ def _write_slice(
             ),
             custom_recap=slice_recap,
             approved=False,
+            content_sha256=normalize_content_sha256(
+                getattr(host_file, "content_sha256", "") or ""
+            ),
             created_by=actor,
         )
 
@@ -499,6 +503,9 @@ def _write_slice(
             or _resolve_file_recap_category("1", tenant_id=sibling.id),
             custom_recap=slice_recap,
             approved=False,
+            content_sha256=normalize_content_sha256(
+                file_input.get("sha256") or file_input.get("contentSha256") or ""
+            ),
             created_by=actor,
         )
     return slice_recap

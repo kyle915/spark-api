@@ -28,6 +28,7 @@ than letting it bubble out of GraphQL.
 
 from __future__ import annotations
 
+import base64
 import json
 from typing import Callable, TypeVar
 
@@ -332,6 +333,72 @@ def generate_json(
         # json_schema, empty completion, bad/garbled JSON, non-object result)
         # degrades to None. The unconfigured-key guard already raised
         # AiUnavailable above, before we got here, so it still propagates.
+        return None
+
+
+def generate_vision_json(
+    system: str,
+    user: str,
+    *,
+    image_bytes: bytes,
+    content_type: str,
+    schema: dict,
+    max_tokens: int = 400,
+) -> dict | None:
+    """Classify one image with a strict JSON schema.
+
+    Same auth and model-fallback path as :func:`generate_json`. The image is
+    sent as a data URL on the user message. Callers must not ask the model
+    to identify people — this helper does not add a face feature of its own.
+
+    Raises:
+        AiUnavailable: Only when ``OPENAI_API_KEY`` is unset.
+
+    Returns:
+        The parsed object, or ``None`` on any mid-flight failure.
+    """
+    headers = _auth_headers()
+    mime = content_type if content_type.startswith("image/") else "image/jpeg"
+    data_url = "data:" + mime + ";base64," + base64.b64encode(image_bytes).decode("ascii")
+
+    def _ask(model_name: str) -> dict:
+        payload = {
+            "model": model_name,
+            "messages": [
+                {"role": "system", "content": system},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": user},
+                        {"type": "image_url", "image_url": {"url": data_url}},
+                    ],
+                },
+            ],
+            "max_completion_tokens": max_tokens,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "vision_json",
+                    "strict": True,
+                    "schema": schema,
+                },
+            },
+        }
+        body = _post_json(
+            OPENAI_CHAT_COMPLETIONS_URL,
+            payload,
+            headers,
+            timeout=DEFAULT_TIMEOUT_SECONDS,
+        )
+        content = _extract_message_text(body)
+        parsed = json.loads(content)
+        if not isinstance(parsed, dict):
+            raise ValueError("vision JSON was not an object")
+        return parsed
+
+    try:
+        return _with_model_fallback(_ask)
+    except Exception:
         return None
 
 
