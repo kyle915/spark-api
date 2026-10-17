@@ -44,6 +44,11 @@ urlpatterns = [
         name="recaps.public_recap_signoff",
     ),
     path(
+        "recap/<str:token>/comments",
+        share_views.public_recap_comment_view,
+        name="recaps.public_recap_comment",
+    ),
+    path(
         "recap/<str:token>",
         share_views.public_recap_view,
         name="recaps.public_recap",

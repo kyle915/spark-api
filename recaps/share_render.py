@@ -154,6 +154,16 @@ def _tenant_brand(recap) -> dict | None:
     }
 
 
+def _comments_payload(kind: str, recap) -> list[dict]:
+    # Fake objects in unit tests have no comments relation / pk table yet.
+    try:
+        from recaps.recap_comments import comments_payload
+
+        return comments_payload(kind, recap)
+    except Exception:
+        return []
+
+
 def _signoff_payload(recap) -> dict | None:
     status = (getattr(recap, "client_signoff_status", None) or "").strip()
     if not status:
@@ -347,6 +357,7 @@ def recap_to_public_dict(kind: str, recap) -> dict[str, Any]:
         "photos": photos,
         "brand": _tenant_brand(recap),
         "clientSignoff": _signoff_payload(recap),
+        "comments": _comments_payload(kind, recap),
         "sharedAt": (
             recap.shared_at.isoformat()
             if getattr(recap, "shared_at", None) and hasattr(recap.shared_at, "isoformat")

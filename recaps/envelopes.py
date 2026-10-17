@@ -868,6 +868,20 @@ class ClientWeeklyDigestMailer(Mailer):
             ],
             "upcoming_total": d.upcoming_total,
             "upcoming_overflow": d.upcoming_overflow,
+            "shared_recaps": [
+                {"name": s.name, "url": s.url, "retailer": s.retailer}
+                for s in (getattr(d, "shared_recaps", None) or [])
+            ],
+            "coverage": (
+                {
+                    "covered": d.coverage.covered,
+                    "never_visited": d.coverage.never_visited,
+                    "roster_total": d.coverage.roster_total,
+                    "never_names": list(d.coverage.never_names),
+                }
+                if getattr(d, "coverage", None)
+                else None
+            ),
             "links": {
                 "dashboard": f"{base}/" if base else "",
                 "tracker": f"{base}/requests/list" if base else "",

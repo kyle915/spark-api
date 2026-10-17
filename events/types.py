@@ -1568,3 +1568,17 @@ class AccountMapPin:
     retailer_name: str
     location_name: str
     state_code: str
+    coverage_class: str = "never_visited"
+    visit_count: int = 0
+    planned: bool = False
+
+
+@strawberry.type
+class AccountMapCoverage:
+    """Roster coverage counts: sampled (1 filed visit), repeat (>1), never (0)."""
+
+    roster_total: int
+    sampled: int
+    repeat: int
+    never_visited: int
+    planned: int
