@@ -26,6 +26,7 @@ What can break quietly, and is therefore what these tests pin:
 from __future__ import annotations
 
 import pytest
+from django.core.management.base import CommandError
 
 from ambassadors import checkin_web
 from ambassadors.tests.base import AmbassadorsGraphQLTestCase
@@ -424,6 +425,52 @@ class TestSetCheckinResourcesCommand(AmbassadorsGraphQLTestCase):
         for row in fvf.checkin_resources:
             assert "admin.igniteproductions.co" not in row["url"]
             assert "spark.igniteproductions.co" not in row["url"]
+
+    def test_apply_seeds_the_famus_preset_without_reminting_or_siblings(self):
+        famus = self.create_tenant(
+            name="FAMUS Energy",
+            slug="famus-energy",
+            checkin_code="FM-PAG4TX",
+        )
+        wook = self.create_tenant(
+            name="Wook Water",
+            slug="wook-water",
+            checkin_code="WW-36DJAJ",
+        )
+        armor = self.create_tenant(
+            name="Alcohol Armor",
+            slug="alcohol-armor",
+            checkin_code="AA-RPP85E",
+        )
+        self._run(tenant="famus-energy", apply=True)
+        famus.refresh_from_db()
+        wook.refresh_from_db()
+        armor.refresh_from_db()
+        assert [r["kind"] for r in famus.checkin_resources] == ["pdf"]
+        assert [r["label"] for r in famus.checkin_resources] == [
+            "Brand Guidelines",
+        ]
+        assert famus.checkin_resources[0]["url"] == (
+            "https://client.igniteproductions.co/training/famus-energy/"
+            "brand-guidelines.pdf"
+        )
+        assert famus.checkin_training_url == (
+            "https://client.igniteproductions.co/training/famus-energy/"
+            "brand-guidelines.pdf"
+        )
+        assert famus.checkin_code == "FM-PAG4TX"
+        assert wook.checkin_resources is None
+        assert wook.checkin_code == "WW-36DJAJ"
+        assert armor.checkin_resources is None
+        assert armor.checkin_code == "AA-RPP85E"
+        for row in famus.checkin_resources:
+            assert "admin.igniteproductions.co" not in row["url"]
+            assert "spark.igniteproductions.co" not in row["url"]
+
+        with pytest.raises(CommandError):
+            self._run(tenant="wook-water")
+        with pytest.raises(CommandError):
+            self._run(tenant="alcohol-armor")
 
     def test_re_running_is_idempotent(self):
         self._run(tenant="Feel Free Command", apply=True)

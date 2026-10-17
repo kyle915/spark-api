@@ -47,6 +47,8 @@ _NICKNAME_TO_SLUG = {
     "fresh vintage": "fresh-vintage-farms",
     "daou": "treasury-wine-estates",
     "treasury": "treasury-wine-estates",
+    "famus": "famus-energy",
+    "famus energy": "famus-energy",
 }
 
 # Where the assets are served from. They live in the FRONT-END repo under
@@ -235,6 +237,16 @@ def _presets() -> dict[str, list[dict]]:
                 "note": "Shift checklist and brand Q&A",
             },
         ],
+        # Famus Energy standing walk-up (FM-PAG4TX). Brand guidelines only.
+        # Do not attach this preset to Wook Water or Alcohol Armor.
+        "famus-energy": [
+            {
+                "label": "Brand Guidelines",
+                "kind": "pdf",
+                "url": f"{base}/training/famus-energy/brand-guidelines.pdf",
+                "note": "Logo, colors, and how to represent Famus",
+            },
+        ],
     }
 
 
@@ -369,6 +381,9 @@ class Command(BaseCommand):
             "daou": "daou",
             "treasury": "treasury",
             "treasury-wine-estates": "treasury",
+            "famus": "famus-energy",
+            "famus energy": "famus-energy",
+            "famus-energy": "famus-energy",
         }
         for cand in candidates:
             if not cand:
