@@ -37,6 +37,7 @@ from .mutations import (
 from .calendar import GoogleCalendarMutations, GoogleCalendarQueries
 from .preferences import MyPreferencesQueries, MyPreferencesMutations
 from .forms import TenantFormsQueries, TenantFormsMutations
+from .launch_graphql import TenantLaunchMutations, TenantLaunchQueries
 from .support import SupportTicketMutations, SupportTicketQueries
 from .dashboard.schema import DashboardQueries
 from utils.graphql.relay import (
@@ -354,7 +355,7 @@ def _build_system_health_sync() -> dict:
 
 # Spark Schema
 @strawberry.type()
-class QuerySpark(GoogleCalendarQueries, TenantThemingQuery):
+class QuerySpark(GoogleCalendarQueries, TenantThemingQuery, TenantLaunchQueries):
     @strawberry.field
     def healthcheck(self) -> str:
         return "ok"
@@ -599,6 +600,7 @@ class MutationSpark(
     SparkUserMutations,
     GoogleCalendarMutations,
     TenantThemeMutations,
+    TenantLaunchMutations,
 ):
     verify_token = mutations.VerifyToken.field
     token_auth = mutations.ObtainJSONWebToken.field
@@ -645,6 +647,8 @@ class QueryClients(
     TenantFormsQueries,
     # Admin read of captured Help-page support tickets (tenantSupportTickets).
     SupportTicketQueries,
+    # Tenant launch wizard donor picker (admin-gated inside the resolver).
+    TenantLaunchQueries,
 ):
     @strawberry.field
     def healthcheck(self) -> str:
@@ -920,6 +924,9 @@ class MutationClients(
     # Help-page support ticket capture + Ignite-team notify
     # (createSupportTicket). Web Help page talks to the clients endpoint.
     SupportTicketMutations,
+    # Tenant launch wizard (previewTenantLaunch / launchTenant). Admin-gated
+    # inside the resolvers; the admin frontend talks to this endpoint.
+    TenantLaunchMutations,
 ):
     verify_token = mutations.VerifyToken.field
     token_auth = mutations.ObtainJSONWebToken.field
