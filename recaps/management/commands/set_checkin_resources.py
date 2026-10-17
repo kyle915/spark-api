@@ -237,9 +237,17 @@ def _presets() -> dict[str, list[dict]]:
                 "note": "Shift checklist and brand Q&A",
             },
         ],
-        # Famus Energy standing walk-up (FM-PAG4TX). Brand guidelines only.
+        # Famus Energy standing walk-up (FM-PAG4TX). Both buttons show on
+        # the check-in page, including while the BA files the recap.
         # Do not attach this preset to Wook Water or Alcohol Armor.
+        # Do not remint FM-PAG4TX.
         "famus-energy": [
+            {
+                "label": "BA FAQ Guide",
+                "kind": "pdf",
+                "url": f"{base}/training/famus-energy/ba-faq-guide.pdf",
+                "note": "Sampling FAQ and shift talking points",
+            },
             {
                 "label": "Brand Guidelines",
                 "kind": "pdf",

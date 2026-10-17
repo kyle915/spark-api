@@ -446,17 +446,20 @@ class TestSetCheckinResourcesCommand(AmbassadorsGraphQLTestCase):
         famus.refresh_from_db()
         wook.refresh_from_db()
         armor.refresh_from_db()
-        assert [r["kind"] for r in famus.checkin_resources] == ["pdf"]
+        assert [r["kind"] for r in famus.checkin_resources] == ["pdf", "pdf"]
         assert [r["label"] for r in famus.checkin_resources] == [
+            "BA FAQ Guide",
             "Brand Guidelines",
         ]
-        assert famus.checkin_resources[0]["url"] == (
+        assert [r["url"] for r in famus.checkin_resources] == [
             "https://client.igniteproductions.co/training/famus-energy/"
-            "brand-guidelines.pdf"
-        )
+            "ba-faq-guide.pdf",
+            "https://client.igniteproductions.co/training/famus-energy/"
+            "brand-guidelines.pdf",
+        ]
         assert famus.checkin_training_url == (
             "https://client.igniteproductions.co/training/famus-energy/"
-            "brand-guidelines.pdf"
+            "ba-faq-guide.pdf"
         )
         assert famus.checkin_code == "FM-PAG4TX"
         assert wook.checkin_resources is None
