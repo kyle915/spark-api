@@ -1,0 +1,46 @@
+name: Walk-up draft reminders
+on:
+  schedule:
+    - cron: "20 * * * *"
+  workflow_dispatch:
+    inputs:
+      grace_hours:
+        description: "Hours after the draft last changed before reminding"
+        required: false
+        default: "3"
+      max_age_hours:
+        description: "Stop reminding once a draft is older than this"
+        required: false
+        default: "168"
+      dry_run:
+        description: "Log who would be reminded, but send nothing"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+jobs:
+  fire-walkup-draft-reminders:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire walk-up draft reminders cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/walkup-draft-reminders
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          GRACE_HOURS: ${{ github.event.inputs.grace_hours || '3' }}
+          MAX_AGE_HOURS: ${{ github.event.inputs.max_age_hours || '168' }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' -X POST "$CRON_URL?grace_hours=$GRACE_HOURS&max_age_hours=$MAX_AGE_HOURS&dry_run=$DRY_RUN" -H "X-Cron-Secret: $CRON_SECRET")
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS"
+            exit 1
+          fi

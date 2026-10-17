@@ -52,6 +52,7 @@ EXPECTED_MAX_HOURS: dict[str, float] = {
     "send-open-shift-alerts": 1,
     # hourly
     "recap-nudges": 3,
+    "walkup-draft-reminders": 3,
     "shift-confirmations": 3,
     # every 6h
     "activation-autopilot": 9,
