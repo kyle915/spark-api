@@ -43,6 +43,7 @@ from events.torch_portal import is_torch_tenant
 from tenants.models import normalize_checkin_resources
 from recaps import co_activation
 from recaps.field_conditions import apply_conditions
+from recaps.photo_reuse import normalize_content_sha256
 from recaps.fresh_vintage import inject_roadshow_calcs
 from utils.outbound import block_if_suppressed
 
@@ -1740,6 +1741,9 @@ def submit_checkin_recap(
                 file_recap_category=file_recap_category,
                 custom_recap=recap,
                 approved=False,
+                content_sha256=normalize_content_sha256(
+                    file_input.get("sha256") or file_input.get("contentSha256") or ""
+                ),
                 created_by=actor,
             )
             if heic_conversion.is_heic_blob(blob_name):

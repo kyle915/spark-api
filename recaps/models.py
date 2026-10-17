@@ -196,6 +196,9 @@ class RecapFile(models.Model):
     name = models.TextField(null=True)
     file = models.FileField(upload_to="recap_files/", max_length=1024, null=True)
     approved = models.BooleanField(default=False)
+    # SHA-256 of the stored bytes, when the uploader sent one. Empty for
+    # older files. Used only to flag the same photo on another recap.
+    content_sha256 = models.CharField(max_length=64, blank=True, default="", db_index=True)
 
     recap = models.ForeignKey(
         Recap,
@@ -866,6 +869,9 @@ class CustomRecapFile(models.Model):
     name = models.TextField(null=True)
     url = models.FileField(upload_to="recap_files/", max_length=1024, null=True)
     approved = models.BooleanField(default=False)
+    # SHA-256 of the stored bytes, when the uploader sent one. Empty for
+    # older files. Used only to flag the same photo on another recap.
+    content_sha256 = models.CharField(max_length=64, blank=True, default="", db_index=True)
 
     custom_recap = models.ForeignKey(
         CustomRecap,

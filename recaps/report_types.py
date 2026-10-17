@@ -29,6 +29,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from recaps import report_service
+from recaps.photo_reuse import photo_reuse_checks
 from recaps.recap_quality import recap_quality_flags
 from recaps.report_tokens import make_report_token
 from recaps.tenant_ba_leaderboard import tenant_ba_leaderboard
@@ -1578,6 +1579,68 @@ class RecapQualityResult:
     flags: list[RecapQualityFlag]
 
 
+@strawberry.type
+class RecapPhotoReuseMatch:
+    """Another recap that stores the same photo hash or file path."""
+
+    recap_id: str
+    event_date: str
+    file_url: str
+
+
+@strawberry.type
+class RecapPhotoReuseItem:
+    """One photo on the recap under review.
+
+    ``status`` is ``clear`` or ``reused``. There is no score. The check does
+    not approve or reject the recap.
+    """
+
+    file_id: str
+    file_url: str
+    status: str
+    label: str
+    matches: list[RecapPhotoReuseMatch]
+
+
+@strawberry.type
+class RecapPhotoReuseResult:
+    """Photo reuse checks for one recap. Not a score."""
+
+    items: list[RecapPhotoReuseItem]
+
+
+def _build_recap_photo_reuse(result: dict) -> RecapPhotoReuseResult:
+    items: list[RecapPhotoReuseItem] = []
+    for item in (result or {}).get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        status = item.get("status")
+        if status not in ("clear", "reused"):
+            status = "clear"
+        matches: list[RecapPhotoReuseMatch] = []
+        for match in item.get("matches") or []:
+            if not isinstance(match, dict):
+                continue
+            matches.append(
+                RecapPhotoReuseMatch(
+                    recap_id=str(match.get("recapId") or ""),
+                    event_date=str(match.get("eventDate") or ""),
+                    file_url=str(match.get("fileUrl") or ""),
+                )
+            )
+        items.append(
+            RecapPhotoReuseItem(
+                file_id=str(item.get("fileId") or ""),
+                file_url=str(item.get("fileUrl") or ""),
+                status=status,
+                label=str(item.get("label") or ""),
+                matches=matches,
+            )
+        )
+    return RecapPhotoReuseResult(items=items)
+
+
 def _build_recap_quality_type(result: dict) -> RecapQualityResult:
     """Map a :func:`recaps.recap_quality.recap_quality_flags` dict onto the type.
 
@@ -3123,6 +3186,55 @@ class CampaignReportQueries:
             return await sync_to_async(_build, thread_sensitive=True)()
         except Exception:
             return RecapQualityResult(score=100, flags=[])
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def recap_photo_reuse(
+        self,
+        info: strawberry.Info,
+        recap_id: strawberry.ID,
+        is_custom: bool = False,
+    ) -> RecapPhotoReuseResult:
+        """Flag photos whose stored hash or path also sits on another recap.
+
+        A check, not a score. Does not call a model. Does not approve, reject,
+        or edit the recap. Tenant scoping matches :meth:`recap_quality_flags`.
+        A missing or out-of-scope recap returns an empty item list.
+        """
+        service = _CampaignReportService()
+        scope_tenant_id = await service.resolve_scope_tenant_id(info)
+
+        try:
+            rid = resolve_id_to_int(str(recap_id).strip())
+        except Exception:
+            return RecapPhotoReuseResult(items=[])
+
+        def _build() -> RecapPhotoReuseResult:
+            from recaps.models import CustomRecap, Recap
+
+            if is_custom:
+                row_tenant_id = (
+                    CustomRecap.objects.filter(id=rid)
+                    .values_list("tenant_id", flat=True)
+                    .first()
+                )
+            else:
+                row_tenant_id = (
+                    Recap.objects.filter(id=rid)
+                    .values_list("event__tenant_id", flat=True)
+                    .first()
+                )
+            if row_tenant_id is None:
+                return RecapPhotoReuseResult(items=[])
+            if scope_tenant_id is not None and row_tenant_id != scope_tenant_id:
+                return RecapPhotoReuseResult(items=[])
+            return _build_recap_photo_reuse(
+                photo_reuse_checks(rid, is_custom=is_custom)
+            )
+
+        try:
+            return await sync_to_async(_build, thread_sensitive=True)()
+        except Exception:
+            return RecapPhotoReuseResult(items=[])
 
 
 # Maps each ``setTenantGoals`` mutation argument to its ``TenantGoal``

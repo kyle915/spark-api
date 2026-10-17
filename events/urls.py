@@ -67,6 +67,16 @@ urlpatterns = [
         name="events.public_checkin_upload_url",
     ),
     path(
+        "checkin/<str:code>/photo-check",
+        checkin_views.public_checkin_photo_check,
+        name="events.public_checkin_photo_check",
+    ),
+    path(
+        "checkin/<str:code>/voice-draft",
+        checkin_views.public_checkin_voice_draft,
+        name="events.public_checkin_voice_draft",
+    ),
+    path(
         "checkin/<str:code>/where",
         checkin_views.public_checkin_where,
         name="events.public_checkin_where",

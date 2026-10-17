@@ -15,11 +15,14 @@ Routes (mounted under ``/api/public/`` in ``events/urls.py``):
     POST checkin/<code>/clock          → {clock}
     POST checkin/<code>/clear-clock    → {cleared, clockedOut, clock}
     POST checkin/<code>/upload-url     → {uploadUrl, blobName}
+    POST checkin/<code>/photo-check    → advisory bucket classification
+    POST checkin/<code>/voice-draft    → notes/feedback/competitor draft
     POST checkin/<code>/recap          → {success}
     POST checkin/<code>/recap-draft    → {saved, filed: false}  (not a submit)
 """
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import re
@@ -40,7 +43,9 @@ from jobboard.checkin import (
     plan_gigs_on,
     public_gig,
 )
+from recaps.photo_check import classify_photo
 from recaps.spend_amount import SpendAmountNeedsCents
+from recaps.voice_draft import structure_transcript
 from events.checkin_tokens import (
     BadSignature,
     CHECKIN_SESSION_MAX_AGE_SECONDS,
@@ -966,6 +971,82 @@ def public_checkin_upload_url(request: HttpRequest, code: str) -> HttpResponse:
         logger.exception("checkin upload-url failed code=%s", code)
         return _err("Couldn't prepare the photo upload. Try again.", status=500, code="server")
     return JsonResponse({"uploadUrl": upload_url, "blobName": blob_name})
+
+
+def _image_bytes(raw: object) -> bytes:
+    if not isinstance(raw, str):
+        return b""
+    text = raw.strip()
+    if text.startswith("data:") and "," in text:
+        text = text.split(",", 1)[1]
+    if not text or len(text) > 6_000_000:
+        return b""
+    try:
+        return base64.b64decode(text, validate=False)
+    except Exception:  # noqa: BLE001 — bad payload degrades to "unavailable"
+        return b""
+
+
+# --------------------------------------------------------------------------
+# POST photo-check  (advisory classification; never rejects the upload)
+# --------------------------------------------------------------------------
+@csrf_exempt
+@require_http_methods(["POST"])
+def public_checkin_photo_check(request: HttpRequest, code: str) -> HttpResponse:
+    if _over_limit("photo-check-ip", _client_ip(request), limit=120, window=300):
+        return _rate_limited()
+    data = _body(request)
+    loaded, err = _load_session(code, data.get("session") or "")
+    if err is not None:
+        return err
+    event, _ambassador = loaded
+    content_type = str(data.get("contentType") or data.get("content_type") or "image/jpeg")
+    image = _image_bytes(data.get("imageBase64") or data.get("image") or "")
+    if len(image) > 4_000_000:
+        image = b""
+    buckets = checkin_web.serialize_photo_buckets(event) or []
+    chosen_id = str(data.get("category") or data.get("bucketId") or "").strip()
+    chosen_name = ""
+    names: list[str] = []
+    for bucket in buckets:
+        name = str(bucket.get("name") or "")
+        if name:
+            names.append(name)
+        if str(bucket.get("id") or "") == chosen_id:
+            chosen_name = name
+    return JsonResponse(
+        classify_photo(
+            image,
+            content_type=content_type,
+            bucket_names=names,
+            chosen_bucket_name=chosen_name,
+        )
+    )
+
+
+# --------------------------------------------------------------------------
+# POST voice-draft  (text fields only; does not file or approve)
+# --------------------------------------------------------------------------
+@csrf_exempt
+@require_http_methods(["POST"])
+def public_checkin_voice_draft(request: HttpRequest, code: str) -> HttpResponse:
+    if _over_limit("voice-draft-ip", _client_ip(request), limit=30, window=300):
+        return _rate_limited()
+    data = _body(request)
+    loaded, err = _load_session(code, data.get("session") or "")
+    if err is not None:
+        return err
+    event, _ambassador = loaded
+    template = checkin_web.serialize_template(event) or {}
+    fields: list[dict] = []
+    for section in template.get("sections") or []:
+        for field in section.get("fields") or []:
+            if isinstance(field, dict):
+                fields.append(field)
+    transcript = data.get("transcript") or ""
+    if not isinstance(transcript, str):
+        transcript = ""
+    return JsonResponse(structure_transcript(transcript, fields))
 
 
 # --------------------------------------------------------------------------
