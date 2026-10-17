@@ -14,6 +14,7 @@ from django.utils import timezone as django_timezone
 from django.conf import settings
 from django.utils.text import slugify
 
+from recaps.recap_ai import kick_recap_feedback_extract
 from recaps import co_activation
 from recaps import types
 from recaps import models
@@ -903,6 +904,9 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
         )
         await _notify_recap_ready_for_review_to_admins(recap, self.user)
         await _kick_torch_portal_recap_submit_notify(recap, "legacy")
+        await sync_to_async(kick_recap_feedback_extract, thread_sensitive=True)(
+            recap.id, False
+        )
         return recap
 
     async def update_recap(self) -> models.Recap:
@@ -1740,6 +1744,9 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
         await _guard_recap_data_quality(custom_recap)
         await _notify_recap_ready_for_review_to_admins(custom_recap, self.user)
         await _kick_torch_portal_recap_submit_notify(custom_recap, "custom")
+        await sync_to_async(kick_recap_feedback_extract, thread_sensitive=True)(
+            custom_recap.id, True
+        )
         return custom_recap
 
     async def update_custom_recap(self) -> models.CustomRecap:
