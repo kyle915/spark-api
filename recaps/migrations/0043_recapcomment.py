@@ -6,7 +6,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("recaps", "0041_customrecap_co_activation_key_and_more"),
+        ("recaps", "0042_recap_file_content_sha256"),
     ]
 
     operations = [
