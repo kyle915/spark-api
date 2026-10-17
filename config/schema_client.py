@@ -6,6 +6,7 @@ from strawberry_django.optimizer import DjangoOptimizerExtension
 from utils.graphql.monitored_schema import MonitoredJwtSchema as JwtSchema
 from events.schema import EventQueryClient, EventMutationsClient
 from recaps.schema import RecapQueryClient, RecapMutationsClient
+from recaps.recap_ai import RecapAiMutations, RecapAiQueries
 from recaps.report_types import (
     CampaignReportQueries,
     FieldSamplingReportMutations,
@@ -36,6 +37,7 @@ QueryClients = merge_types(
         EventQueryClient,
         RecapQueryClient,
         CampaignReportQueries,
+        RecapAiQueries,
         AmbassadorQueryClient,
         QueryClients,
         ClientJobQueries,
@@ -57,6 +59,7 @@ MutationClients = merge_types(
     (
         EventMutationsClient,
         RecapMutationsClient,
+        RecapAiMutations,
         TenantGoalsMutations,
         ScheduledReportMutations,
         FieldSamplingReportMutations,

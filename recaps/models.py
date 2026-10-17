@@ -953,6 +953,46 @@ class RecapQualitySnapshot(models.Model):
         )
 
 
+class RecapAiReview(models.Model):
+    """Per-recap AI notes for ops review. Never replaces the BA's text.
+
+    One row per ``(recap_id, is_custom)`` — the same discriminator as
+    :class:`RecapQualitySnapshot`, because legacy :class:`Recap` and
+    :class:`CustomRecap` do not share an id space.
+
+    ``feedback_extract`` is structured tags pulled from the verbatim
+    consumer-feedback / notes already on the recap (themes, competitor
+    products, objections, purchase intent, quotes). It stays null when
+    the notes are too short or nothing in them survived a verbatim check.
+    The original feedback fields are never rewritten.
+
+    ``summary`` caches the reviewer blurb (what happened + one follow-up
+    question) so reopening the recap does not call the model again.
+    ``looks_off`` is not stored here — rule checks are read live.
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    recap_id = models.BigIntegerField()
+    is_custom = models.BooleanField(default=False)
+    feedback_extract = models.JSONField(null=True, blank=True)
+    feedback_source_hash = models.CharField(max_length=64, blank=True, default="")
+    extracted_at = models.DateTimeField(null=True, blank=True)
+    summary = models.JSONField(null=True, blank=True)
+    summarized_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["recap_id", "is_custom"],
+                name="rc_recap_ai_review_uniq",
+            )
+        ]
+
+    def __str__(self) -> str:
+        shape = "custom" if self.is_custom else "legacy"
+        return f"AI review ({shape}) for recap {self.recap_id}"
+
+
 class PlanRecapLink(models.Model):
     """A filed recap counted toward one field-marketing plan.
 
