@@ -3166,18 +3166,17 @@ class CampaignReportQueries:
         info: strawberry.Info,
         tenant_id: strawberry.ID,
     ) -> TenantWeeklyNarration | None:
-        """Latest stored weekly narration for an admin. No model call.
+        """Latest stored weekly narration. No model call. Never emails.
 
-        Client-role users get null — the paragraph is an ops surface.
-        A tenant with no stored row also returns null.
+        Client-role users read only their own tenant (the requested id is
+        overridden). Admins may target any tenant. A tenant with no stored
+        row returns null.
         """
-        user = info.context.request.user
-        access = await resolve_request_user_access(user)
-        if not _is_admin_access(*access):
-            return None
-
         service = _CampaignReportService()
-        target_tenant_id = await service.resolve_target_tenant_id(info, tenant_id)
+        try:
+            target_tenant_id = await service.resolve_target_tenant_id(info, tenant_id)
+        except Exception:
+            return None
         if target_tenant_id is None:
             return None
 
