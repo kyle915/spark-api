@@ -159,6 +159,38 @@
             </tr>
             {% endif %}
 
+            {% if shared_recaps %}
+            <tr>
+              <td class="pad" style="padding:28px 40px 4px 40px;">
+                <p style="margin:0 0 8px 0;font-family:Georgia,'Times New Roman',serif;font-weight:700;font-size:18px;color:#0a0d09;">Shared recaps</p>
+                <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="border:1px solid #eeeae0;border-radius:12px;border-collapse:separate;border-spacing:0;overflow:hidden;">
+                  {% for r in shared_recaps %}
+                  <tr><td style="padding:12px 14px;{% if not forloop.last %}border-bottom:1px solid #eeeae0;{% endif %}">
+                    <p style="margin:0;font-size:14px;font-weight:700;color:#0a0d09;">{{ r.name }}{% if r.retailer %} · {{ r.retailer }}{% endif %}</p>
+                    <p style="margin:4px 0 0 0;"><a href="{{ r.url }}" style="color:#3f5c12;text-decoration:none;font-size:13px;font-weight:600;">View recap →</a></p>
+                  </td></tr>
+                  {% endfor %}
+                </table>
+              </td>
+            </tr>
+            {% endif %}
+
+            {% if coverage %}
+            <tr>
+              <td class="pad" style="padding:28px 40px 4px 40px;">
+                <p style="margin:0 0 8px 0;font-family:Georgia,'Times New Roman',serif;font-weight:700;font-size:18px;color:#0a0d09;">Store coverage</p>
+                <p style="margin:0;font-size:13px;line-height:20px;color:#3b4034;">
+                  {{ coverage.covered }} of {{ coverage.roster_total }} stores covered · {{ coverage.never_visited }} never visited
+                </p>
+                {% if coverage.never_names %}
+                <p style="margin:6px 0 0 0;font-size:12px;line-height:18px;color:#7a8074;">
+                  Never visited: {{ coverage.never_names|join:", " }}
+                </p>
+                {% endif %}
+              </td>
+            </tr>
+            {% endif %}
+
             <!-- ===================================================== -->
             <!-- SECTION 2 — Coming up (next 7 days)                    -->
             <!-- ===================================================== -->

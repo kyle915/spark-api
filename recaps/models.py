@@ -1050,6 +1050,43 @@ class PlanRecapLink(models.Model):
         ]
 
 
+class RecapComment(models.Model):
+    """Client comment/question thread on a shared recap (/r/:token).
+
+    Append-only; a comment never edits the recap. Exactly one of
+    ``recap`` / ``custom_recap`` is set.
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    recap = models.ForeignKey(
+        Recap, on_delete=models.CASCADE, null=True, blank=True, related_name="comments"
+    )
+    custom_recap = models.ForeignKey(
+        CustomRecap,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="comments",
+    )
+    author_name = models.CharField(max_length=120, blank=True, default="")
+    author_email = models.CharField(max_length=254, blank=True, default="")
+    body = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at", "id"]
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(recap__isnull=False, custom_recap__isnull=True)
+                    | models.Q(recap__isnull=True, custom_recap__isnull=False)
+                ),
+                name="recap_comment_one_recap",
+            ),
+        ]
+
+
 class RecapMetricEdit(models.Model):
     """One field-level correction Ignite staff made to a submitted recap.
 
