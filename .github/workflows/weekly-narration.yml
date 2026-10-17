@@ -1,0 +1,61 @@
+name: Weekly narration
+
+# Manual only. Dry-run is the default and stores nothing.
+# dry_run=false writes TenantWeeklyNarration for the admin dashboard.
+# This job does not email clients.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry-run prints facts and writes nothing"
+        required: true
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+      tenant_id:
+        description: "Optional single tenant id"
+        required: false
+        default: ""
+        type: string
+      week_start:
+        description: "Optional Monday YYYY-MM-DD"
+        required: false
+        default: ""
+        type: string
+
+jobs:
+  narrate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate weekly narration
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/generate-weekly-narration
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          TENANT_ID: ${{ inputs.tenant_id }}
+          WEEK_START: ${{ inputs.week_start }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set."
+            exit 1
+          fi
+          QUERY="dry_run=${DRY_RUN}"
+          if [ -n "$TENANT_ID" ]; then
+            QUERY="${QUERY}&tenant_id=${TENANT_ID}"
+          fi
+          if [ -n "$WEEK_START" ]; then
+            QUERY="${QUERY}&week_start=${WEEK_START}"
+          fi
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "${CRON_URL}?${QUERY}" \
+            -H "X-Cron-Secret: $CRON_SECRET")
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS"
+            exit 1
+          fi

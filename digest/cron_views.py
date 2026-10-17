@@ -1856,6 +1856,61 @@ class SendClientWeeklyDigestView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class GenerateWeeklyNarrationView(View):
+    """POST `/internal/cron/generate-weekly-narration`.
+
+    Writes the admin-only weekly narration from insight buckets. Dry-run
+    is the default (stores nothing, calls no model). ``dry_run=false``
+    passes ``--apply``. This endpoint never sends email.
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        raw = (request.GET.get("dry_run") or request.POST.get("dry_run") or "true").lower()
+        dry_run = raw not in ("0", "false", "no", "off")
+        tenant = (request.GET.get("tenant_id") or request.POST.get("tenant_id") or "").strip()
+        week_start = (request.GET.get("week_start") or request.POST.get("week_start") or "").strip()
+        if tenant:
+            try:
+                int(tenant)
+            except ValueError:
+                return JsonResponse(
+                    {"ok": False, "error": "tenant_id must be an integer"},
+                    status=400,
+                )
+
+        cmd_args: list[str] = []
+        if not dry_run:
+            cmd_args.append("--apply")
+        if tenant:
+            cmd_args.extend(["--tenant-id", tenant])
+        if week_start:
+            cmd_args.extend(["--week-start", week_start])
+
+        out = io.StringIO()
+        try:
+            call_command("generate_weekly_narration", *cmd_args, stdout=out)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("Weekly narration cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc)},
+                status=500,
+            )
+        return JsonResponse(
+            {
+                "ok": True,
+                "endpoint": "generate-weekly-narration",
+                "dry_run": dry_run,
+                "emails_sent": 0,
+                "output": out.getvalue(),
+            }
+        )
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class BackfillGirlBeerReceiptsView(View):
     """POST `/internal/cron/backfill-girlbeer-receipts`.
 
@@ -10884,6 +10939,7 @@ def _registered_views() -> dict[str, Any]:
         "send-document-expiry-reminders": SendDocumentExpiryRemindersView,
         "send-scheduled-client-reports": SendScheduledClientReportsView,
         "send-client-weekly-digest": SendClientWeeklyDigestView,
+        "generate-weekly-narration": GenerateWeeklyNarrationView,
         "repair-approved-event-status": RepairApprovedEventStatusView,
         "repair-missing-events-for-approved-requests": (
             RepairMissingEventsForApprovedRequestsView
