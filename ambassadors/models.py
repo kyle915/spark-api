@@ -1768,3 +1768,53 @@ class SamplingStop(models.Model):
 
     def __str__(self):
         return f"stop {self.ambassador_id}@{self.event_id} {self.recorded_at}"
+
+
+class WalkupRecapDraft(models.Model):
+    """Answers typed into a walk-up recap before Submit.
+
+    Not a recap. ``save_walkup_recap_draft`` writes only this row. It does
+    not set ``submitted_at`` or ``approved``, and it does not send mail.
+    ``custom_recap`` / ``legacy_recap`` point at an empty clock-out stub
+    when one exists; a filed recap is never linked and never updated.
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    event = models.ForeignKey(
+        Event,
+        on_delete=models.CASCADE,
+        related_name="walkup_recap_drafts",
+    )
+    ambassador = models.ForeignKey(
+        "ambassadors.Ambassador",
+        on_delete=models.CASCADE,
+        related_name="walkup_recap_drafts",
+    )
+    scope = models.CharField(max_length=16, default="shift")
+    payload = models.JSONField(default=dict, blank=True)
+    custom_recap = models.ForeignKey(
+        "recaps.CustomRecap",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="walkup_drafts",
+    )
+    legacy_recap = models.ForeignKey(
+        "recaps.Recap",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="walkup_drafts",
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["event", "ambassador", "scope"],
+                name="uniq_walkup_recap_draft_scope",
+            )
+        ]
+
+    def __str__(self):
+        return f"walkup-draft {self.ambassador_id}@{self.event_id} {self.scope}"

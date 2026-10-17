@@ -101,4 +101,10 @@ urlpatterns = [
         checkin_views.public_checkin_recap,
         name="events.public_checkin_recap",
     ),
+    # Draft only. Does not file, approve, or email.
+    path(
+        "checkin/<str:code>/recap-draft",
+        checkin_views.public_checkin_recap_draft,
+        name="events.public_checkin_recap_draft",
+    ),
 ]
