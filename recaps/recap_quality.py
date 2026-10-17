@@ -700,6 +700,30 @@ def _finalize(flags: list[dict]) -> dict:
     return {"score": _score_from_flags(ordered), "flags": ordered}
 
 
+def deterministic_quality_flags(recap_id, is_custom: bool = False) -> list[dict]:
+    """Rule-check flags only. No score and no model call.
+
+    Same codes and labels as :func:`recap_quality_flags`, minus the optional
+    thin-feedback AI flag. Callers that must not invent a score — the
+    reviewer summary — use this list directly.
+    """
+    try:
+        rid = int(recap_id)
+    except (TypeError, ValueError):
+        return []
+    try:
+        facts = _load_facts(rid, is_custom)
+    except Exception:
+        return []
+    if not facts.exists:
+        return []
+    try:
+        flags = _run_deterministic(facts)
+    except Exception:
+        return []
+    return _finalize(flags)["flags"]
+
+
 def recap_quality_flags(recap_id, is_custom: bool = False) -> dict:
     """Deterministic (+ optional cached-AI) quality read for one recap.
 
