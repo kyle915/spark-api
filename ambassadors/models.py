@@ -1807,6 +1807,9 @@ class WalkupRecapDraft(models.Model):
         related_name="walkup_drafts",
     )
     updated_at = models.DateTimeField(auto_now=True)
+    # Stamped by the draft-stuck reminder cron after its single email, so
+    # a draft is reminded once no matter how often the cron runs.
+    reminder_sent_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         constraints = [

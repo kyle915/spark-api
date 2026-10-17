@@ -1609,6 +1609,79 @@ class SendRecapNudgesView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class SendWalkupDraftRemindersView(View):
+    """POST `/internal/cron/walkup-draft-reminders`.
+
+    Fires `send_walkup_draft_reminders` — one email per unsubmitted
+    walk-up recap draft from a finished shift, deduped via
+    `WalkupRecapDraft.reminder_sent_at`. Hourly GHA cron.
+
+    Params: grace_hours (default 3), max_age_hours (default 168),
+    dry_run ("1"/"true"/"yes").
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _int(name: str, default: int) -> int | None:
+            raw = request.GET.get(name) or request.POST.get(name)
+            if raw is None or raw == "":
+                return default
+            try:
+                return int(raw)
+            except ValueError:
+                return None
+
+        grace_hours = _int("grace_hours", 3)
+        max_age_hours = _int("max_age_hours", 168)
+        if grace_hours is None or max_age_hours is None:
+            return JsonResponse(
+                {"ok": False, "error": "grace_hours/max_age_hours must be integers"},
+                status=400,
+            )
+        dry_run = (request.GET.get("dry_run") or request.POST.get("dry_run") or "").lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
+        cmd_args: list[str] = [
+            "--grace-hours",
+            str(grace_hours),
+            "--max-age-hours",
+            str(max_age_hours),
+        ]
+        if dry_run:
+            cmd_args.append("--dry-run")
+        out = io.StringIO()
+        try:
+            call_command("send_walkup_draft_reminders", *cmd_args, stdout=out)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Walk-up draft reminders cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc), "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse(
+            {
+                "ok": True,
+                "grace_hours": grace_hours,
+                "max_age_hours": max_age_hours,
+                "dry_run": dry_run,
+                "log": out.getvalue(),
+            }
+        )
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        return JsonResponse({"ok": True, "endpoint": "walkup-draft-reminders"})
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class SendOpenShiftAlertsView(View):
     """POST `/internal/cron/send-open-shift-alerts`.
 
@@ -10806,6 +10879,7 @@ def _registered_views() -> dict[str, Any]:
         "pre-shift-checklists": SendPreShiftChecklistsView,
         "ambassador-job-reminders": SendAmbassadorJobRemindersView,
         "recap-nudges": SendRecapNudgesView,
+        "walkup-draft-reminders": SendWalkupDraftRemindersView,
         "send-payment-notifications": SendPaymentNotificationsView,
         "send-document-expiry-reminders": SendDocumentExpiryRemindersView,
         "send-scheduled-client-reports": SendScheduledClientReportsView,
