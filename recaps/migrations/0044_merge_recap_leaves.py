@@ -7,6 +7,7 @@ class Migration(migrations.Migration):
     dependencies = [
         ("recaps", "0042_recap_file_content_sha256"),
         ("recaps", "0042_recapaireview"),
+        ("recaps", "0043_merge_recap_ai_and_photo_hash"),
         ("recaps", "0043_recapcomment"),
     ]
 
