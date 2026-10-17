@@ -1118,6 +1118,40 @@ class TenantSentimentSnapshot(models.Model):
         )
 
 
+class TenantWeeklyNarration(models.Model):
+    """Stored weekly ops paragraph for one tenant.
+
+    Written by the manual ``generate_weekly_narration`` job. Dashboard
+    reads this row and does not call the model. ``facts`` is the bucket
+    packet the sentences were checked against. ``source`` is ``model``
+    when every number in ``body`` was in that packet, otherwise
+    ``fallback`` (the bucket sentences themselves).
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    tenant = models.ForeignKey(
+        Tenant, on_delete=models.CASCADE, related_name="weekly_narrations"
+    )
+    week_start = models.DateField()
+    week_end = models.DateField()
+    body = models.TextField()
+    facts = models.JSONField(default=dict)
+    filed_recaps = models.IntegerField(default=0)
+    source = models.CharField(max_length=16, default="fallback")
+    generated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["tenant", "week_start"],
+                name="tenants_weekly_narration_tenant_week_uniq",
+            )
+        ]
+
+    def __str__(self) -> str:
+        return f"Weekly narration {self.week_start} for tenant {self.tenant_id}"
+
+
 class Goal(models.Model):
     """
     Per-user, per-tenant, per-year goals (target values only).

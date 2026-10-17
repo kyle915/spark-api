@@ -54,6 +54,9 @@ from datetime import date, datetime, timedelta
 from django.utils import timezone
 
 from recaps.tenant_overview import (
+    _inclusive_dates_to_window,
+    _tenant_event_recap_counts_window,
+    _tenant_kpi_totals_window,
     emails_collected_metrics,
     sales_program_metrics,
     tenant_event_recap_counts,
@@ -509,35 +512,8 @@ def build_insight_buckets_scoped(
     return _sales_buckets(tenant_id, start, end), label
 
 
-def build_insight_buckets(tenant_id: int) -> list[dict]:
-    """Deterministic proactive-insight buckets for one tenant (or ``[]``).
-
-    Pulls the headline counts, the nine summable KPIs, and the monthly trend
-    from the shared :mod:`recaps.tenant_overview` helpers (so every figure
-    matches the ``tenantKpis`` chart) and assembles the fixed buckets.
-
-    Returns ``[]`` when the tenant has NO activity at all (no events, no
-    recaps, and every KPI total zero). Otherwise returns the buckets in this
-    order — ``reach`` (consumers sampled), optional ``sampling`` only when
-    samples handed out is a DISTINCT count, ``sales``, ``new_audience``,
-    ``momentum`` — each a dict ``{key, title, detail, sentiment, metric}`` with
-    every number formatted with thousands separators. ``momentum`` is omitted
-    when the tenant has fewer than one active month (see
-    :func:`_momentum_bucket`), so the card count is three to five.
-
-    Synchronous Django ORM; callers wrap it as needed. Numbers are only ever
-    read from the aggregates — never fabricated.
-    """
-    from tenants.models import Tenant
-
-    if tenant_trend_program(tenant_id) == Tenant.TREND_SERIES_SALES:
-        return _sales_buckets(tenant_id, None, None)
-
-    event_count, recap_count = tenant_event_recap_counts(tenant_id)
-    k = tenant_kpi_totals(tenant_id)
-    trend = tenant_monthly_trend(tenant_id)
-
-    # No activity anywhere -> nothing to surface (avoids a wall of zero cards).
+def _activity_cards(event_count: int, recap_count: int, k, trend: list) -> list[dict]:
+    """Activity-program cards. ``trend=[]`` omits momentum (not a week figure)."""
     if (
         event_count == 0
         and recap_count == 0
@@ -602,7 +578,6 @@ def build_insight_buckets(tenant_id: int) -> list[dict]:
             }
         )
 
-    # 3) Sales.
     sales_detail = f"{k.products_sold:,} products sold"
     if k.cans_sold > 0 or k.packs_sold > 0:
         sales_detail += f" ({k.cans_sold:,} cans · {k.packs_sold:,} packs)"
@@ -617,7 +592,6 @@ def build_insight_buckets(tenant_id: int) -> list[dict]:
         }
     )
 
-    # 4) New audience.
     buckets.append(
         {
             "key": "new_audience",
@@ -632,12 +606,65 @@ def build_insight_buckets(tenant_id: int) -> list[dict]:
         }
     )
 
-    # 5) Momentum — only when there is at least one active month to describe.
     momentum = _momentum_bucket(trend)
     if momentum is not None:
         buckets.append(momentum)
 
     return buckets
+
+
+def build_insight_buckets_for_week(
+    tenant_id: int, start: date, end: date
+) -> list[dict]:
+    """The same cards as the dashboard, limited to one inclusive week.
+
+    Sales tenants use :func:`_sales_buckets` so conversion stays Retail +
+    On-Premise. Momentum compares calendar months, so it is dropped — a
+    week narration must not quote a month-over-month figure as the week.
+    """
+    from tenants.models import Tenant
+
+    if tenant_trend_program(tenant_id) == Tenant.TREND_SERIES_SALES:
+        return [
+            bucket
+            for bucket in _sales_buckets(tenant_id, start, end)
+            if bucket.get("key") != "momentum"
+        ]
+
+    window = _inclusive_dates_to_window(start, end)
+    event_count, recap_count = _tenant_event_recap_counts_window(tenant_id, window)
+    totals = _tenant_kpi_totals_window(tenant_id, window)
+    return _activity_cards(event_count, recap_count, totals, [])
+
+
+def build_insight_buckets(tenant_id: int) -> list[dict]:
+    """Deterministic proactive-insight buckets for one tenant (or ``[]``).
+
+    Pulls the headline counts, the nine summable KPIs, and the monthly trend
+    from the shared :mod:`recaps.tenant_overview` helpers (so every figure
+    matches the ``tenantKpis`` chart) and assembles the fixed buckets.
+
+    Returns ``[]`` when the tenant has NO activity at all (no events, no
+    recaps, and every KPI total zero). Otherwise returns the buckets in this
+    order — ``reach`` (consumers sampled), optional ``sampling`` only when
+    samples handed out is a DISTINCT count, ``sales``, ``new_audience``,
+    ``momentum`` — each a dict ``{key, title, detail, sentiment, metric}`` with
+    every number formatted with thousands separators. ``momentum`` is omitted
+    when the tenant has fewer than one active month (see
+    :func:`_momentum_bucket`), so the card count is three to five.
+
+    Synchronous Django ORM; callers wrap it as needed. Numbers are only ever
+    read from the aggregates — never fabricated.
+    """
+    from tenants.models import Tenant
+
+    if tenant_trend_program(tenant_id) == Tenant.TREND_SERIES_SALES:
+        return _sales_buckets(tenant_id, None, None)
+
+    event_count, recap_count = tenant_event_recap_counts(tenant_id)
+    totals = tenant_kpi_totals(tenant_id)
+    trend = tenant_monthly_trend(tenant_id)
+    return _activity_cards(event_count, recap_count, totals, trend)
 
 
 def build_tenant_insights(tenant_id: int) -> list[dict]:

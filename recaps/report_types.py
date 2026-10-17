@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date, datetime, timedelta
+from typing import Literal, assert_never
 
 import strawberry
 from asgiref.sync import sync_to_async
@@ -34,6 +35,7 @@ from recaps.recap_quality import recap_quality_flags
 from recaps.recap_review_checks import recap_review_checks
 from recaps.report_tokens import make_report_token
 from recaps.tenant_ba_leaderboard import tenant_ba_leaderboard
+from recaps.scoped_ai import build_event_scope, build_recap_scope
 from recaps.tenant_insights import build_insight_buckets_scoped
 from recaps.tenant_sentiment import get_or_refresh_tenant_sentiment
 from recaps.field_sampling_report import (
@@ -141,6 +143,37 @@ _AI_TENANT_ANSWER_SYSTEM_PROMPT = (
     "`answer` text must stand on its own and still state the numbers even "
     "when a chart is present. In every other case set `chart` to null."
 )
+
+# Recap- and event-scoped sibling of the tenant prompt. Same model stack;
+# the data block is one record, so the model must not reach for other stores.
+_AI_SCOPED_ANSWER_RULES = (
+    "Use ONLY the DATA block. Never invent or estimate a number. Never pull "
+    "in another store, another recap, or another event. If the question "
+    "cannot be answered from this data, say so plainly. Photo lines are "
+    "metadata only (filename and category) — you cannot see image pixels. "
+    "If asked what looks off in the photos, say you only have metadata and "
+    "comment only on what that metadata shows. Do not approve the recap and "
+    "do not propose edited metrics. Include a `chart` only from numbers in "
+    "the data; otherwise set `chart` to null. The answer text must still "
+    "state any numbers it relies on."
+)
+_AI_RECAP_ANSWER_SYSTEM_PROMPT = (
+    "You answer questions about ONE filed recap. " + _AI_SCOPED_ANSWER_RULES
+)
+_AI_EVENT_ANSWER_SYSTEM_PROMPT = (
+    "You answer questions about ONE event and the recaps filed on it. "
+    + _AI_SCOPED_ANSWER_RULES
+)
+
+
+def _answer_system_prompt(kind: Literal["tenant", "recap", "event"]) -> str:
+    if kind == "tenant":
+        return _AI_TENANT_ANSWER_SYSTEM_PROMPT
+    if kind == "recap":
+        return _AI_RECAP_ANSWER_SYSTEM_PROMPT
+    if kind == "event":
+        return _AI_EVENT_ANSWER_SYSTEM_PROMPT
+    assert_never(kind)
 
 
 @strawberry.type
@@ -1388,6 +1421,17 @@ def _empty_tenant_insights() -> TenantInsights:
     return TenantInsights(generated_at=None, items=[])
 
 
+@strawberry.type
+class TenantWeeklyNarration:
+    """Latest stored weekly narration. Reading this does not call the model."""
+
+    week_start: str
+    week_end: str
+    body: str
+    filed_recaps: int
+    generated_at: str
+
+
 def _build_tenant_insights_type(
     items: list[dict], generated_at, scope_label: str | None = None
 ) -> TenantInsights:
@@ -2217,25 +2261,20 @@ class CampaignReportQueries:
         info: strawberry.Info,
         tenant_id: strawberry.ID,
         question: str,
+        recap_id: strawberry.ID | None = None,
+        event_id: strawberry.ID | None = None,
     ) -> TenantAiAnswer:
-        """On-demand freeform Q&A over ONE client's aggregated activity.
+        """On-demand Q&A. Optional ``recap_id`` / ``event_id`` narrow the data.
 
-        The tenant-wide sibling of :meth:`campaign_report_ai_answer`:
-        instead of one Request, it builds a compact overview of the whole
-        tenant's program (every campaign, event, and recap via
-        :func:`recaps.tenant_overview.build_tenant_overview`), appends the
-        caller's ``question``, and calls OpenAI.
+        With neither id, this is the tenant-wide overview. With ``recap_id``,
+        the model sees only that recap (a passed ``event_id`` is ignored).
+        With only ``event_id``, it sees that event and the recaps filed on
+        it. The model call still happens only when this resolver runs — the
+        client fires it on submit, never on mount.
 
-        Tenant scoping (see :meth:`_CampaignReportService.resolve_target_tenant_id`):
-        client-role users may ONLY ask about their own tenant — the
-        ``tenant_id`` argument is ignored/overridden to their own; admins
-        (spark-admin / staff / superuser / ``@igniteproductions.co``) may
-        target any tenant via ``tenant_id``.
-
-        Never raises: an empty question, a missing/out-of-scope tenant, an
-        unconfigured ``OPENAI_API_KEY``, or any upstream failure all
-        resolve to ``ok=false`` + ``answer=""`` + a human-readable
-        ``reason``.
+        Tenant scoping matches the unscoped call: clients are pinned to
+        their own tenant; admins may target any tenant. A recap or event
+        outside that tenant is not found.
         """
         question = (question or "").strip()
         if not question:
@@ -2253,38 +2292,84 @@ class CampaignReportQueries:
                 reason="A valid tenant id is required.",
             )
 
+        recap_token = str(recap_id).strip() if recap_id else ""
+        event_token = str(event_id).strip() if event_id else ""
+
         def _build():
-            return build_tenant_overview(target_tenant_id)
+            if recap_token:
+                block = build_recap_scope(target_tenant_id, recap_token)
+                if block is None:
+                    return "missing-recap", None
+                return "recap", block
+            if event_token:
+                block = build_event_scope(target_tenant_id, event_token)
+                if block is None:
+                    return "missing-event", None
+                return "event", block
+            return "tenant", build_tenant_overview(target_tenant_id)
 
         try:
-            overview = await sync_to_async(_build, thread_sensitive=True)()
+            kind, payload = await sync_to_async(_build, thread_sensitive=True)()
         except Exception:
-            # Missing tenant (Tenant.DoesNotExist) or any aggregation error.
             return TenantAiAnswer(
                 ok=False,
                 answer="",
                 reason="Tenant not found or not accessible.",
             )
 
+        if kind == "missing-recap":
+            return TenantAiAnswer(
+                ok=False, answer="", reason="Recap not found or not accessible."
+            )
+        if kind == "missing-event":
+            return TenantAiAnswer(
+                ok=False, answer="", reason="Event not found or not accessible."
+            )
+        if kind == "recap" and payload is not None and not payload.has_filed_data:
+            return TenantAiAnswer(
+                ok=False,
+                answer="",
+                reason="This recap has no filed data to answer from.",
+            )
+        if kind == "event" and payload is not None and not payload.has_filed_data:
+            return TenantAiAnswer(
+                ok=False,
+                answer="",
+                reason="This event has no filed data to answer from.",
+            )
+
+        scope_kind: Literal["tenant", "recap", "event"]
+        if kind == "tenant":
+            scope_kind = "tenant"
+            overview = payload
+        elif kind == "recap":
+            scope_kind = "recap"
+            overview = payload.text
+        elif kind == "event":
+            scope_kind = "event"
+            overview = payload.text
+        else:
+            return TenantAiAnswer(
+                ok=False,
+                answer="",
+                reason="Tenant not found or not accessible.",
+            )
+
+        system = _answer_system_prompt(scope_kind)
         user_prompt = overview + "\n\nQuestion: " + question
         try:
             answer, chart = await sync_to_async(
                 generate_structured_answer, thread_sensitive=True
-            )(_AI_TENANT_ANSWER_SYSTEM_PROMPT, user_prompt, max_tokens=8000)
+            )(system, user_prompt, max_tokens=8000)
         except AiUnavailable as exc:
             return TenantAiAnswer(ok=False, answer="", reason=str(exc))
         except Exception:
-            # Belt-and-suspenders: generate_structured_answer already funnels
-            # every failure through AiUnavailable (or its text fallback), but
-            # never let an unexpected error escape the resolver.
             return TenantAiAnswer(
                 ok=False,
                 answer="",
                 reason="The answer could not be generated.",
             )
 
-        # A missing/garbled chart just yields chart=None — the text answer is
-        # always returned (see _build_ai_chart).
         return TenantAiAnswer(
             ok=True, answer=answer, reason=None, chart=_build_ai_chart(chart)
         )
@@ -3074,6 +3159,50 @@ class CampaignReportQueries:
 
         items, scope_label = built
         return _build_tenant_insights_type(items, generated_at, scope_label)
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def tenant_weekly_narration(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID,
+    ) -> TenantWeeklyNarration | None:
+        """Latest stored weekly narration for an admin. No model call.
+
+        Client-role users get null — the paragraph is an ops surface.
+        A tenant with no stored row also returns null.
+        """
+        user = info.context.request.user
+        access = await resolve_request_user_access(user)
+        if not _is_admin_access(*access):
+            return None
+
+        service = _CampaignReportService()
+        target_tenant_id = await service.resolve_target_tenant_id(info, tenant_id)
+        if target_tenant_id is None:
+            return None
+
+        def _load():
+            from tenants.models import TenantWeeklyNarration as NarrationRow
+
+            return (
+                NarrationRow.objects.filter(tenant_id=target_tenant_id)
+                .order_by("-week_start")
+                .first()
+            )
+
+        try:
+            row = await sync_to_async(_load, thread_sensitive=True)()
+        except Exception:
+            return None
+        if row is None:
+            return None
+        return TenantWeeklyNarration(
+            week_start=row.week_start.isoformat(),
+            week_end=row.week_end.isoformat(),
+            body=row.body,
+            filed_recaps=row.filed_recaps,
+            generated_at=row.generated_at.isoformat(),
+        )
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def tenant_sentiment(
