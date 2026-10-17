@@ -1794,6 +1794,14 @@ def submit_checkin_recap(
             )
 
     _finalize_recap_offthread(recap.id)
+    try:
+        from ambassadors.walkup_draft import clear_walkup_recap_draft
+
+        clear_walkup_recap_draft(
+            event=event, ambassador=ambassador, force_new=force_new
+        )
+    except Exception:  # noqa: BLE001 — a filed recap must not fail on draft cleanup
+        logger.exception("walkup draft clear failed recap=%s", recap.id)
     return recap
 
 
@@ -2080,6 +2088,13 @@ def build_public_context(event, ambassador=None) -> dict:
             # odometer above). Present when Tenant.checkin_storage_units is set.
             "payableMileage": _payable_mileage_session(ambassador=ambassador, event=event),
         }
+        from ambassadors.walkup_draft import drafts_for_session
+
+        drafts = drafts_for_session(event=event, ambassador=ambassador)
+        if drafts.get("shift"):
+            payload["session"]["recapDraft"] = drafts["shift"]
+        if drafts.get("additional"):
+            payload["session"]["additionalRecapDraft"] = drafts["additional"]
     return payload
 
 

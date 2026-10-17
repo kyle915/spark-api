@@ -16,6 +16,7 @@ Routes (mounted under ``/api/public/`` in ``events/urls.py``):
     POST checkin/<code>/clear-clock    → {cleared, clockedOut, clock}
     POST checkin/<code>/upload-url     → {uploadUrl, blobName}
     POST checkin/<code>/recap          → {success}
+    POST checkin/<code>/recap-draft    → {saved, filed: false}  (not a submit)
 """
 from __future__ import annotations
 
@@ -1088,6 +1089,48 @@ def public_checkin_recap(request: HttpRequest, code: str) -> HttpResponse:
             "pendingReview": not bool(getattr(ambassador, "is_active", False)),
         }
     )
+
+
+# --------------------------------------------------------------------------
+# POST recap draft  (autosave — not a submit)
+# --------------------------------------------------------------------------
+@csrf_exempt
+@require_http_methods(["POST"])
+def public_checkin_recap_draft(request: HttpRequest, code: str) -> HttpResponse:
+    """Store unsubmitted answers for this shift.
+
+    Never files the recap, never sets approved, never sends mail. A missing
+    recap row is fine: the draft lives on its own table. When an empty
+    clock-out stub exists it is linked and left unfiled.
+    """
+    if _over_limit("recap-draft-ip", _client_ip(request), limit=300, window=600):
+        return _rate_limited()
+    data = _body(request)
+    loaded, err = _load_session(code, data.get("session") or "")
+    if err is not None:
+        return err
+    event, ambassador = loaded
+    draft = data.get("draft")
+    if not isinstance(draft, dict):
+        return _err("Malformed draft.")
+    scope = data.get("scope") or "shift"
+    if not isinstance(scope, str):
+        scope = "shift"
+    try:
+        from ambassadors.walkup_draft import save_walkup_recap_draft
+
+        result = save_walkup_recap_draft(
+            event=event,
+            ambassador=ambassador,
+            scope=scope,
+            draft=draft,
+        )
+    except ValueError:
+        return _err("That draft is too large to save.", status=413, code="too_large")
+    except Exception:  # noqa: BLE001
+        logger.exception("checkin recap draft failed code=%s", code)
+        return _err("Couldn't save your draft. Try again.", status=500, code="server")
+    return JsonResponse(result)
 
 
 # --------------------------------------------------------------------------
