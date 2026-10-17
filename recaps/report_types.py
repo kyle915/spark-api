@@ -31,6 +31,7 @@ from django.utils import timezone
 from recaps import report_service
 from recaps.photo_reuse import photo_reuse_checks
 from recaps.recap_quality import recap_quality_flags
+from recaps.recap_review_checks import recap_review_checks
 from recaps.report_tokens import make_report_token
 from recaps.tenant_ba_leaderboard import tenant_ba_leaderboard
 from recaps.tenant_insights import build_insight_buckets_scoped
@@ -1641,6 +1642,41 @@ def _build_recap_photo_reuse(result: dict) -> RecapPhotoReuseResult:
     return RecapPhotoReuseResult(items=items)
 
 
+@strawberry.type
+class RecapReviewCheck:
+    """One plain rule-based review check beside Approve (roadmap #3).
+
+    ``status`` is ``"pass"`` / ``"flag"`` / ``"na"`` (not applicable —
+    the UI hides it). Advisory only: no score, never auto-approves.
+    """
+
+    code: str
+    label: str
+    status: str
+    detail: str
+
+
+def _build_recap_review_checks(result) -> list[RecapReviewCheck]:
+    checks: list[RecapReviewCheck] = []
+    for item in result or []:
+        if not isinstance(item, dict):
+            continue
+        code, label = item.get("code"), item.get("label")
+        if not (isinstance(code, str) and code and isinstance(label, str) and label):
+            continue
+        status = item.get("status")
+        if status not in ("pass", "flag", "na"):
+            status = "na"
+        detail = item.get("detail")
+        checks.append(
+            RecapReviewCheck(
+                code=code, label=label, status=status,
+                detail=detail if isinstance(detail, str) else "",
+            )
+        )
+    return checks
+
+
 def _build_recap_quality_type(result: dict) -> RecapQualityResult:
     """Map a :func:`recaps.recap_quality.recap_quality_flags` dict onto the type.
 
@@ -3235,6 +3271,55 @@ class CampaignReportQueries:
             return await sync_to_async(_build, thread_sensitive=True)()
         except Exception:
             return RecapPhotoReuseResult(items=[])
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def recap_review_checks(
+        self,
+        info: strawberry.Info,
+        recap_id: strawberry.ID,
+        is_custom: bool = False,
+    ) -> list[RecapReviewCheck]:
+        """Plain rule-based review checks beside Approve (roadmap #3).
+
+        Same tenant scoping and never-raise posture as
+        :meth:`recap_quality_flags`; out-of-scope / missing recaps return
+        the all-``na`` list (which the UI hides) rather than an error.
+        Advisory only — no score, no AI, never approves or rejects.
+        """
+        service = _CampaignReportService()
+        scope_tenant_id = await service.resolve_scope_tenant_id(info)
+        try:
+            rid = resolve_id_to_int(str(recap_id).strip())
+        except Exception:
+            return _build_recap_review_checks(recap_review_checks(0))
+
+        def _build() -> list[RecapReviewCheck]:
+            from recaps.models import CustomRecap, Recap
+
+            if is_custom:
+                row_tenant_id = (
+                    CustomRecap.objects.filter(id=rid)
+                    .values_list("tenant_id", flat=True)
+                    .first()
+                )
+            else:
+                row_tenant_id = (
+                    Recap.objects.filter(id=rid)
+                    .values_list("event__tenant_id", flat=True)
+                    .first()
+                )
+            if row_tenant_id is None:
+                return _build_recap_review_checks(recap_review_checks(0))
+            if scope_tenant_id is not None and row_tenant_id != scope_tenant_id:
+                return _build_recap_review_checks(recap_review_checks(0))
+            return _build_recap_review_checks(
+                recap_review_checks(rid, is_custom=is_custom)
+            )
+
+        try:
+            return await sync_to_async(_build, thread_sensitive=True)()
+        except Exception:
+            return _build_recap_review_checks(recap_review_checks(0))
 
 
 # Maps each ``setTenantGoals`` mutation argument to its ``TenantGoal``
