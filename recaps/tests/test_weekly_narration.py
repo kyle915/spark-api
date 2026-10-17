@@ -174,7 +174,31 @@ class TestWeeklyNarrationJob(AmbassadorsGraphQLTestCase):
         assert payload["filedRecaps"] == 1
         assert "1 filed recaps" in payload["body"]
         assert client.errors is None, client.errors
-        assert client.data["tenantWeeklyNarration"] is None
+        client_payload = client.data["tenantWeeklyNarration"]
+        assert client_payload["body"] == payload["body"]
+        assert client_payload["filedRecaps"] == 1
+
+        other = await sync_to_async(self.create_tenant)(name="Other Narration Brand")
+        await sync_to_async(TenantWeeklyNarration.objects.create)(
+            tenant=other,
+            week_start=WEEK_START,
+            week_end=WEEK_END,
+            body="Other brand narration that must stay private.",
+            facts={"filed_recaps": 9},
+            filed_recaps=9,
+            source="fallback",
+        )
+        other_read = await self._execute_query_authenticated(
+            QUERY,
+            {"tenantId": str(other.id)},
+            self.client_user,
+            self.endpoint_path,
+        )
+        assert other_read.errors is None, other_read.errors
+        pinned = other_read.data["tenantWeeklyNarration"]
+        assert pinned["body"] == payload["body"]
+        assert "Other brand" not in pinned["body"]
+        assert pinned["filedRecaps"] == 1
 
 
 @override_settings(INTERNAL_CRON_SECRET="test-cron-secret-value-only-for-tests")
