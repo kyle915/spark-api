@@ -51,6 +51,24 @@ class PendingApproval:
 
 
 @dataclass(frozen=True)
+class SharedRecapLink:
+    name: str
+    url: str
+    retailer: str
+    shared_at: datetime.datetime | None
+
+
+@dataclass(frozen=True)
+class StoreCoverage:
+    """Roster coverage as of digest end — same definition as Account Map."""
+
+    covered: int
+    never_visited: int
+    roster_total: int
+    never_names: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class WeeklyDigest:
     """The full payload for one tenant's weekly digest email."""
 
@@ -71,6 +89,11 @@ class WeeklyDigest:
     pending: list[PendingApproval] = field(default_factory=list)
     pending_total: int = 0
 
+    # Section 4 — recaps shared this week, each with its own /r/:token link
+    shared_recaps: list[SharedRecapLink] = field(default_factory=list)
+    # Section 5 — stores covered / never visited (roster, filed-recap based)
+    coverage: StoreCoverage | None = None
+
     @property
     def has_content(self) -> bool:
         """True when there's at least one thing worth emailing about.
@@ -84,6 +107,7 @@ class WeeklyDigest:
             or self.upcoming_total
             or self.kpis.total_engagements
             or self.kpis.samples_distributed
+            or self.shared_recaps
         )
 
     @property
@@ -160,6 +184,9 @@ def build_weekly_digest(
         for r in pending_qs[:_MAX_PENDING]
     ]
 
+    shared_recaps = _shared_recaps_window(tenant_id, window)
+    coverage = _store_coverage(tenant_id)
+
     return WeeklyDigest(
         tenant_id=tenant_id,
         start=start,
@@ -171,4 +198,135 @@ def build_weekly_digest(
         upcoming_total=upcoming_total,
         pending=pending,
         pending_total=pending_total,
+        shared_recaps=shared_recaps,
+        coverage=coverage,
     )
+
+
+_MAX_SHARED = 25
+_MAX_NEVER_NAMES = 12
+
+
+def _client_recap_base() -> str:
+    from urllib.parse import urlparse
+
+    from django.conf import settings
+
+    raw = str(getattr(settings, "CLIENT_FRONTEND_URL", "") or "").strip().rstrip("/")
+    host = (urlparse(raw).hostname or "").lower() if raw else ""
+    if not raw or host in {"spark.igniteproductions.co", "admin.igniteproductions.co"}:
+        return "https://client.igniteproductions.co"
+    return raw
+
+
+def _shared_recaps_window(tenant_id: int, window) -> list[SharedRecapLink]:
+    """Approved, non-archived recaps whose shared_at lands in the window.
+
+    Each gets its OWN signed /r/:token link — one digest email, many links
+    (mirrors bulk share). Unapproved recaps are never linked to clients.
+    """
+    from recaps import models as recap_models
+    from recaps.recap_tokens import make_recap_token
+
+    start, end = window
+    base = _client_recap_base()
+    out: list[SharedRecapLink] = []
+    legacy = (
+        recap_models.Recap.objects.filter(
+            event__tenant_id=tenant_id,
+            approved=True,
+            archived_at__isnull=True,
+            shared_at__gte=start,
+            shared_at__lt=end,
+        )
+        .select_related("event__retailer", "retailer")
+        .order_by("-shared_at")
+    )
+    custom = (
+        recap_models.CustomRecap.objects.filter(
+            event__tenant_id=tenant_id,
+            approved=True,
+            archived_at__isnull=True,
+            shared_at__gte=start,
+            shared_at__lt=end,
+        )
+        .select_related("event__retailer", "retailer")
+        .order_by("-shared_at")
+    )
+    rows = [(r.shared_at, "legacy", r) for r in legacy] + [
+        (r.shared_at, "custom", r) for r in custom
+    ]
+    rows.sort(key=lambda t: t[0] or start, reverse=True)
+    for shared_at, kind, recap in rows[:_MAX_SHARED]:
+        retailer = (
+            getattr(getattr(recap, "retailer", None), "name", None)
+            or getattr(getattr(getattr(recap, "event", None), "retailer", None), "name", None)
+            or ""
+        )
+        out.append(
+            SharedRecapLink(
+                name=(recap.name or "Recap"),
+                url=f"{base}/r/{make_recap_token(kind, recap.pk)}",
+                retailer=retailer,
+                shared_at=shared_at,
+            )
+        )
+    return out
+
+
+def _store_coverage(tenant_id: int) -> StoreCoverage:
+    from events.admin_payloads import compute_account_map_coverage
+
+    data = compute_account_map_coverage(tenant_id)
+    covered = data.sampled + data.repeat
+    never_names: list[str] = []
+    if data.never_visited:
+        from events.admin_payloads import retailer_visit_counts
+        from events.models import Retailer
+
+        visits = retailer_visit_counts(tenant_id)
+        never_names = list(
+            Retailer.objects.filter(tenant_id=tenant_id)
+            .exclude(id__in=[rid for rid, n in visits.items() if n > 0])
+            .order_by("name")
+            .values_list("name", flat=True)[:_MAX_NEVER_NAMES]
+        )
+    return StoreCoverage(
+        covered=covered,
+        never_visited=data.never_visited,
+        roster_total=data.roster_total,
+        never_names=never_names,
+    )
+
+
+def client_digest_recipients(tenant) -> list[str]:
+    """Digest recipients: recap recipients + client-role users, deduped.
+
+    Torch's Monday roll-up recipient override stays in the command — this
+    helper is the non-Torch path. Girl Beer keeps its per-recap approved-mail
+    exclusion in ``recaps.mutation_parts.notify``; the digest is opt-in only
+    (``client_weekly_digest_enabled``), so no tenant is added here silently.
+    """
+    from tenants.models import Role, TenantedUser
+
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def _push(email):
+        e = (email or "").strip()
+        if e and e.lower() not in seen:
+            seen.add(e.lower())
+            out.append(e)
+
+    for e in tenant.scheduled_report_recipients():
+        _push(e)
+    rows = (
+        TenantedUser.objects.filter(
+            tenant_id=tenant.id, is_active=True, user__role__slug=Role.CLIENT_SLUG
+        )
+        .exclude(user__email__in=["system@spark.local", "admin@spark.local"])
+        .values_list("user__email", flat=True)
+    )
+    for e in rows:
+        _push(e)
+    return out

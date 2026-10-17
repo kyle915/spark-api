@@ -16,7 +16,7 @@ from django.db.models.functions import Coalesce
 from django.utils import timezone
 from strawberry.relay import to_base64
 
-from events.models import Event, Request
+from events.models import Event, Request, Retailer
 from events.types import _serialize_dt
 from recaps.filed import custom_filed_q, legacy_filed_q
 from recaps.models import CustomRecap, Recap
@@ -179,6 +179,104 @@ def is_plottable_lat_lng(lat: float, lng: float) -> bool:
     )
 
 
+COVERAGE_SAMPLED = "sampled"
+COVERAGE_REPEAT = "repeat"
+COVERAGE_NEVER = "never_visited"
+
+
+def coverage_class_for(visit_count: int) -> str:
+    """Classify a roster account by distinct events with a filed recap."""
+    if visit_count > 1:
+        return COVERAGE_REPEAT
+    if visit_count == 1:
+        return COVERAGE_SAMPLED
+    return COVERAGE_NEVER
+
+
+@dataclass(frozen=True)
+class AccountMapCoverageData:
+    roster_total: int
+    sampled: int
+    repeat: int
+    never_visited: int
+    planned: int
+
+
+def _filed_event_retailer_rows(tenant_id: int | None):
+    """(retailer_id, event_id, request_id) for filed, non-archived recaps."""
+    legacy = Recap.objects.filter(legacy_filed_q(), archived_at__isnull=True)
+    custom = CustomRecap.objects.filter(custom_filed_q(), archived_at__isnull=True)
+    if tenant_id is not None:
+        legacy = legacy.filter(event__tenant_id=tenant_id)
+        custom = custom.filter(event__tenant_id=tenant_id)
+    fields = ("retailer_id", "event__retailer_id", "event__request__retailer_id", "event_id", "event__request_id")
+    for qs in (legacy, custom):
+        yield from qs.values_list(*fields)
+
+
+def retailer_visit_counts(tenant_id: int | None = None) -> dict[int, int]:
+    """Distinct filed-recap events per roster Retailer id. Nothing estimated."""
+    events_by_retailer: dict[int, set[int]] = {}
+    for retailer_id, event_retailer_id, request_retailer_id, event_id, _req in _filed_event_retailer_rows(tenant_id):
+        rid = retailer_id or event_retailer_id or request_retailer_id
+        if rid and event_id:
+            events_by_retailer.setdefault(int(rid), set()).add(int(event_id))
+    return {rid: len(ids) for rid, ids in events_by_retailer.items()}
+
+
+def request_visit_counts(tenant_id: int | None = None) -> dict[int, int]:
+    counts: dict[int, set[int]] = {}
+    for _r, _er, _rr, event_id, request_id in _filed_event_retailer_rows(tenant_id):
+        if request_id and event_id:
+            counts.setdefault(int(request_id), set()).add(int(event_id))
+    return {rid: len(ids) for rid, ids in counts.items()}
+
+
+def planned_retailer_ids(tenant_id: int | None = None, *, now=None) -> set[int]:
+    """Retailers with a future event/request — labelled Planned, never Sampled."""
+    now = now or timezone.now()
+    out: set[int] = set()
+    events = Event.objects.filter(start_time__gte=now)
+    requests = Request.objects.filter(deleted_at__isnull=True, date__gte=now).filter(
+        _status_q("approved", "scheduled")
+    )
+    if tenant_id is not None:
+        events = events.filter(tenant_id=tenant_id)
+        requests = requests.filter(tenant_id=tenant_id)
+    for rid in events.values_list("retailer_id", "request__retailer_id"):
+        out.update(int(v) for v in rid if v)
+    for rid in requests.values_list("retailer_id", flat=True):
+        if rid:
+            out.add(int(rid))
+    return out
+
+
+def compute_account_map_coverage(tenant_id: int | None = None) -> AccountMapCoverageData:
+    """Roster-wide coverage counts for one tenant (all tenants when None)."""
+    roster = Retailer.objects.all()
+    if tenant_id is not None:
+        roster = roster.filter(tenant_id=tenant_id)
+    roster_ids = list(roster.values_list("id", flat=True))
+    visits = retailer_visit_counts(tenant_id)
+    planned = planned_retailer_ids(tenant_id)
+    sampled = repeat = never = 0
+    for rid in roster_ids:
+        cls = coverage_class_for(visits.get(int(rid), 0))
+        if cls == COVERAGE_REPEAT:
+            repeat += 1
+        elif cls == COVERAGE_SAMPLED:
+            sampled += 1
+        else:
+            never += 1
+    return AccountMapCoverageData(
+        roster_total=len(roster_ids),
+        sampled=sampled,
+        repeat=repeat,
+        never_visited=never,
+        planned=sum(1 for rid in roster_ids if int(rid) in planned),
+    )
+
+
 @dataclass(frozen=True)
 class AccountMapPinData:
     id: str
@@ -191,6 +289,9 @@ class AccountMapPinData:
     retailer_name: str
     location_name: str
     state_code: str
+    coverage_class: str = COVERAGE_NEVER
+    visit_count: int = 0
+    planned: bool = False
 
 
 def list_account_map_pins(
@@ -211,6 +312,9 @@ def list_account_map_pins(
         )
         .order_by("-date")[:limit]
     )
+    visits_by_retailer = retailer_visit_counts()
+    visits_by_request = request_visit_counts()
+    planned_ids = planned_retailer_ids()
     pins: list[AccountMapPinData] = []
     for row in rows:
         coords = row.coordinates or []
@@ -241,6 +345,17 @@ def list_account_map_pins(
                 retailer_name=(retailer.name if retailer else None) or "",
                 location_name=(loc.name if loc else None) or "",
                 state_code=(state.code if state else None) or "",
+                coverage_class=coverage_class_for(
+                    visits_by_retailer.get(retailer.id, 0)
+                    if retailer
+                    else visits_by_request.get(row.pk, 0)
+                ),
+                visit_count=(
+                    visits_by_retailer.get(retailer.id, 0)
+                    if retailer
+                    else visits_by_request.get(row.pk, 0)
+                ),
+                planned=bool(retailer and retailer.id in planned_ids),
             )
         )
     return pins

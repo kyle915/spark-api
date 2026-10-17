@@ -115,6 +115,45 @@ def public_recap_pdf_view(request: HttpRequest, token: str) -> HttpResponse:
     return response
 
 
+def _is_client_visible(recap) -> bool:
+    """Clients only ever comment on approved, non-archived recaps."""
+    return bool(getattr(recap, "approved", False)) and getattr(recap, "archived_at", None) is None
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def public_recap_comment_view(request: HttpRequest, token: str) -> HttpResponse:
+    verified = _verify_or_4xx(token)
+    if isinstance(verified, HttpResponse):
+        return verified
+    kind, recap_id = verified
+    recap = load_shared_recap(kind, recap_id)
+    if recap is None or not _is_client_visible(recap):
+        return JsonResponse(
+            {"error": "not_found", "message": "Recap not found."}, status=404
+        )
+    try:
+        body = json.loads(request.body.decode("utf-8") or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse(
+            {"error": "invalid", "message": "Invalid JSON."}, status=400
+        )
+    from recaps.recap_comments import create_comment, notify_ops_comment
+
+    try:
+        comment = create_comment(
+            recap,
+            kind=kind,
+            author_name=body.get("authorName"),
+            author_email=body.get("authorEmail"),
+            body=body.get("body"),
+        )
+    except ValueError as e:
+        return JsonResponse({"error": "invalid", "message": str(e)}, status=400)
+    notify_ops_comment(recap, kind=kind, comment=comment)
+    return JsonResponse({"recap": recap_to_public_dict(kind, recap)}, status=201)
+
+
 @csrf_exempt
 @require_http_methods(["POST"])
 def public_recap_signoff_view(request: HttpRequest, token: str) -> HttpResponse:

@@ -1841,9 +1841,34 @@ class RequestQueries:
                     retailer_name=pin.retailer_name,
                     location_name=pin.location_name,
                     state_code=pin.state_code,
+                    coverage_class=pin.coverage_class,
+                    visit_count=pin.visit_count,
+                    planned=pin.planned,
                 )
                 for pin in admin_payloads.list_account_map_pins(qs, limit=limit)
             ]
+
+        return await sync_to_async(_go)()
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def account_map_coverage(
+        self, info: strawberry.Info, tenant_id: strawberry.ID | None = None
+    ) -> types.AccountMapCoverage:
+        """Roster coverage counts for the selected tenant. Skinny aggregates only."""
+        # Reuse request scoping for tenant/permission resolution, then count roster.
+        await _scoped_requests(info, tenant_id)
+        service = RequestQueriesService()
+        resolved = await service.resolve_tenant_id(info, tenant_id=tenant_id)
+
+        def _go():
+            data = admin_payloads.compute_account_map_coverage(resolved)
+            return types.AccountMapCoverage(
+                roster_total=data.roster_total,
+                sampled=data.sampled,
+                repeat=data.repeat,
+                never_visited=data.never_visited,
+                planned=data.planned,
+            )
 
         return await sync_to_async(_go)()
 
