@@ -63,7 +63,6 @@ from recaps.report_service import _format_date_range, _leading_int
 from recaps.types import (
     _consumers_sampled_from_fields,
     _is_dry_demo_from_fields,
-    _people_engaged_from_fields,
     _samples_given_from_fields,
     _sold_unit_lines,
     _sold_units_from_fields,
@@ -418,7 +417,7 @@ _CUSTOM_KPI_NAME_RE = re.compile(
     # Girl Beer vocabulary: demographics sampled totals + free-text
     # samples headline (see recaps.types._SAMPLED_TOTAL_RE/_SAMPLES_GIVEN_RE)
     r"|who sampled|samples? (given|distributed|handed)"
-    # Dry demos: flag + People engaged (their CONV base, nobody tasted).
+    # Dry demo flag. People engaged is a separate count, not the CONV base.
     r"|dry ?demo|people engaged",
     re.IGNORECASE,
 )
@@ -2252,11 +2251,11 @@ def custom_conversion_rows(
 ) -> list[dict]:
     """Per-recap CONV base + units for custom recaps (the Insights rule).
 
-    Live: samples given, else consumers sampled, else structured product
-    sample qty, else ``total_engagements``. Dry demo (no product tasted):
-    People engaged, else the consumers-sampled value; neither → unpaired
-    (kept out of the rate). ``counted`` is whether the recap lands in the
-    rate; units are reported either way.
+    Product retail and dry demos share one denominator: samples given, else
+    consumers sampled, else structured product sample qty, else
+    ``total_engagements``. People engaged is not the base. A dry demo with
+    no sampled base is unpaired (kept out of the rate). ``counted`` is
+    whether the recap lands in the rate; units are reported either way.
     """
     if not custom_ids:
         return []
@@ -2295,25 +2294,7 @@ def custom_conversion_rows(
         pairs = per_recap.get(rid, [])
         units_raw = _sold_units_from_fields(pairs)
         units = max(0, int(units_raw)) if units_raw is not None else 0
-        if _is_dry_demo_from_fields(pairs):
-            # Dry demo: nobody tasted, so the base is the shoppers pitched
-            # — People engaged, else the consumers-sampled value
-            # (historically the talked-to count). No base, no pairing:
-            # listed, kept out of the rate.
-            base = _people_engaged_from_fields(pairs) or _consumers_sampled_from_fields(pairs)
-            ok = bool(base) and base > 0
-            out.append(
-                {
-                    "id": int(rid),
-                    "dry": True,
-                    "base": int(base) if ok else None,
-                    "units": units,
-                    "units_blank": units_raw is None,
-                    "counted": ok,
-                    "reason": "" if ok else "unpaired_dry_demo",
-                }
-            )
-            continue
+        dry = _is_dry_demo_from_fields(pairs)
         base = _conversion_sample_base_from_fields(pairs)
         if base is None:
             structured = structured_by_recap.get(rid, 0)
@@ -2322,12 +2303,12 @@ def custom_conversion_rows(
         out.append(
             {
                 "id": int(rid),
-                "dry": False,
+                "dry": dry,
                 "base": int(base) if ok else None,
                 "units": units,
                 "units_blank": units_raw is None,
                 "counted": ok,
-                "reason": "" if ok else "no_base",
+                "reason": "" if ok else ("unpaired_dry_demo" if dry else "no_base"),
             }
         )
     return out
@@ -2403,7 +2384,7 @@ def sales_program_metrics(
     Every number comes from the recaps that land in the Conversion tile's
     rate (:func:`conversion_window_totals`: approved, non-archived,
     Retail / On-Premise, 3rd-party excluded, paired per recap; dry demos use
-    People engaged as their base). Program KPIs, the Insights cards and the
+    the same sampled base as other retail recaps). Program KPIs, the Insights cards and the
     Period comparison all read this, so they agree with Conversion and the
     Monthly trend for the same dates.
     """
@@ -2552,12 +2533,11 @@ def tenant_conversion_kpis(
     Sold (products purchased / cans+packs) ÷ samples given / consumers
     sampled on approved, non-archived recaps whose activation type (Request
     type, else Event type, else template name) classifies as Retail or
-    On-Premise (Event / Seeding / unclassified excluded). Sold and base are
+    On-Premise (Event / Seeding / unclassified excluded).     Sold and base are
     paired per recap: a recap with no sampled base adds neither. Dry demos
-    (no product tasted) count with People engaged as their base, else their
-    consumers-sampled value; ``dry_*`` keys break that share out, and dry
-    demos with neither are listed in ``unpaired_dry_recap_ids``. Matches
-    Recaps list CONV — never sold÷engagements. Returns current + previous
+    use that same sampled base (not People engaged); ``dry_*`` keys break
+    that share out, and dry demos with no base are listed in
+    ``unpaired_dry_recap_ids``. Returns current + previous
     equal-length windows so Insights can show a period delta without a
     second round-trip.
 

@@ -414,8 +414,7 @@ def _sales_buckets(
     if m["dry_demos"]:
         reach_detail += (
             f" · includes {m['dry_demos']:,} dry demo"
-            f"{'' if m['dry_demos'] == 1 else 's'} counted by People engaged "
-            f"({m['dry_people_engaged']:,})"
+            f"{'' if m['dry_demos'] == 1 else 's'}, same consumers-sampled conversion"
         )
     reach_detail += "."
 

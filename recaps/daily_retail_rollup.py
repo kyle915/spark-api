@@ -9,8 +9,8 @@ Every number comes from the canonical conversion set
 (:func:`recaps.tenant_overview.conversion_window_totals` /
 :func:`recaps.tenant_overview.sales_program_metrics` with
 ``approved_between``): approved, non-archived, Retail / On-Premise, 3rd-party
-and dashboard-excluded recaps dropped, sold and base paired per recap, dry
-demos based on People engaged. Month to date and program to date read the same
+and dashboard-excluded recaps dropped, sold and base paired per recap.
+Dry demos use the same consumers-sampled base. Month to date and program to date read the same
 helpers by EVENT date, so they match Insights. Recap values are shown exactly
 as submitted — nothing is rescaled.
 

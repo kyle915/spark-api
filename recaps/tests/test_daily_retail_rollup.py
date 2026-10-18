@@ -123,7 +123,7 @@ class TestDailyRetailRollup(AmbassadorsGraphQLTestCase):
             "Kroger #55", approved_at=_pt(DAY, 23), event_day=DAY - datetime.timedelta(days=3),
             fields=self._live("10", "0", "1"),
         )
-        # Dry demo: base is People engaged.
+        # Dry demo with no consumers sampled stays out of the rate.
         self._recap(
             "Binny's #7", approved_at=yesterday_noon,
             fields=(
@@ -159,12 +159,13 @@ class TestDailyRetailRollup(AmbassadorsGraphQLTestCase):
         assert [r.store for r in rollup.rows] == ["Kroger #55", "Binny's #7", "Total Wine #1234"]
         assert rollup.rows[0].event_date == DAY - datetime.timedelta(days=3)
         dry = rollup.rows[1]
-        assert dry.dry_demo and dry.consumers_sampled == 8 and dry.units_sold == 2
-        # (3 + 1 + 2) units ÷ (20 + 10 + 8) base — same rule as Insights.
-        assert rollup.day["units_sold"] == 6
-        assert rollup.day["consumers_sampled"] == 38
-        assert rollup.day["conversion_pct"] == round(6 / 38 * 100, 1)
-        assert rollup.day["dry_demos"] == 1
+        assert dry.dry_demo and dry.consumers_sampled is None and dry.units_sold == 2
+        assert dry.counted is False
+        # Product retail only: (3 + 1) units ÷ (20 + 10) sampled.
+        assert rollup.day["units_sold"] == 4
+        assert rollup.day["consumers_sampled"] == 30
+        assert rollup.day["conversion_pct"] == round(4 / 30 * 100, 1)
+        assert rollup.day["dry_demos"] == 0
         assert [r.store for r in rollup.third_party_rows] == ["Agency Store #9"]
         assert rollup.third_party_rows[0].units_sold == 3
         assert rollup.top_store.store == "Total Wine #1234"
@@ -188,8 +189,8 @@ class TestDailyRetailRollup(AmbassadorsGraphQLTestCase):
         assert "https://client.igniteproductions.co/r/" in html
         assert "admin.igniteproductions.co/recap" not in html
         assert "BA app" not in html
-        # Dry demos still use People engaged as the base, but the copy doesn't call them out.
-        assert "8 people engaged" in html
+        assert "8 people engaged" not in html
+        assert "No consumers-sampled count" in html
         assert "dry demo" not in html.lower()
         assert "counted by People engaged" not in html
         assert "No samples" in html
