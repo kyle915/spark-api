@@ -294,14 +294,30 @@ class AccountMapPinData:
     planned: bool = False
 
 
+def _account_map_pin_queryset(qs: QuerySet[Request]) -> QuerySet[Request]:
+    """Requests the map can draw. Empty coordinate arrays are not pins."""
+    return qs.exclude(coordinates=[])
+
+
+def count_account_map_pins(qs: QuerySet[Request]) -> int:
+    """How many pin rows exist before the 2,000-row page cap."""
+    return _account_map_pin_queryset(qs).count()
+
+
 def list_account_map_pins(
     qs: QuerySet[Request],
     *,
     limit: int = ACCOUNT_MAP_CAP,
+    offset: int = 0,
 ) -> list[AccountMapPinData]:
-    """Lat/lng + label fields for Account Map. No products / shifts / recaps."""
+    """Lat/lng + label fields for Account Map. No products / shifts / recaps.
+
+    ``limit`` stays at the 2,000 cap. ``offset`` is the next page so the
+    client can load the rest instead of pretending the first page is the map.
+    """
+    start = max(0, offset)
     rows = (
-        qs.exclude(coordinates=[])
+        _account_map_pin_queryset(qs)
         .select_related(
             "status",
             "retailer",
@@ -310,7 +326,7 @@ def list_account_map_pins(
             "location",
             "state",
         )
-        .order_by("-date")[:limit]
+        .order_by("-date", "-pk")[start : start + limit]
     )
     visits_by_retailer = retailer_visit_counts()
     visits_by_request = request_visit_counts()

@@ -1819,14 +1819,23 @@ class RequestQueries:
         info: strawberry.Info,
         tenant_id: strawberry.ID | None = None,
         first: int | None = None,
+        offset: int | None = None,
     ) -> List[types.AccountMapPin]:
-        """Account Map pins: lat/lng, retailer, status, name/address. Cap 2000."""
+        """Account Map pins: lat/lng, retailer, status, name/address.
+
+        Each page is capped at 2,000. Pass ``offset`` to load the next page.
+        ``accountMapPinTotal`` is the full count so the map can say
+        "Showing 2,000 of N" instead of looking finished.
+        """
         qs = await _scoped_requests(info, tenant_id)
         limit = admin_payloads.ACCOUNT_MAP_CAP
         if first is not None:
             if first <= 0:
                 raise GraphQLError("first must be greater than 0.")
             limit = min(first, admin_payloads.ACCOUNT_MAP_CAP)
+        start = 0 if offset is None else offset
+        if start < 0:
+            raise GraphQLError("offset must be 0 or greater.")
 
         def _go():
             return [
@@ -1845,10 +1854,22 @@ class RequestQueries:
                     visit_count=pin.visit_count,
                     planned=pin.planned,
                 )
-                for pin in admin_payloads.list_account_map_pins(qs, limit=limit)
+                for pin in admin_payloads.list_account_map_pins(
+                    qs, limit=limit, offset=start
+                )
             ]
 
         return await sync_to_async(_go)()
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def account_map_pin_total(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID | None = None,
+    ) -> int:
+        """Plottable-candidate pin rows for this tenant, before the page cap."""
+        qs = await _scoped_requests(info, tenant_id)
+        return await sync_to_async(admin_payloads.count_account_map_pins)(qs)
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def account_map_coverage(

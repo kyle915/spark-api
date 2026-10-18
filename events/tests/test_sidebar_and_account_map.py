@@ -15,6 +15,7 @@ from django.utils import timezone
 from events import models as em
 from events.admin_payloads import (
     compute_sidebar_request_counts,
+    count_account_map_pins,
     list_account_map_pins,
     scoped_requests,
 )
@@ -43,8 +44,9 @@ query Counts($tenantId: ID) {
 """
 
 MAP_Q = """
-query Map($tenantId: ID) {
-  accountMapPins(tenantId: $tenantId, first: 2000) {
+query Map($tenantId: ID, $offset: Int) {
+  accountMapPinTotal(tenantId: $tenantId)
+  accountMapPins(tenantId: $tenantId, first: 2000, offset: $offset) {
     id
     name
     address
@@ -221,6 +223,19 @@ class TestSidebarAndAccountMapPayloads(EventsGraphQLTestCase):
         assert binnys.location_name == "Chicago"
         assert "product" not in binnys.__dataclass_fields__
 
+    def test_account_map_offset_does_not_repeat_the_first_page(self):
+        qs = scoped_requests(self.tenant.id)
+        total = count_account_map_pins(qs)
+        assert total >= 2
+        seen: list[str] = []
+        for offset in range(total):
+            for pin in list_account_map_pins(qs, limit=1, offset=offset):
+                seen.append(pin.id)
+        assert len(set(seen)) >= 2
+        assert len(list_account_map_pins(qs, limit=1, offset=total)) == 0
+        # Pages must not hand the same pin back twice.
+        assert len(seen) == len(set(seen))
+
     def test_account_map_sql_skips_tracker_prefetches(self):
         qs = scoped_requests(self.tenant.id)
         with CaptureQueriesContext(connection) as ctx:
@@ -255,3 +270,13 @@ class TestSidebarAndAccountMapPayloads(EventsGraphQLTestCase):
         assert all(not (p["lat"] == 0 and p["lng"] == 0) for p in pins)
         assert "products" not in pins[0]
         assert "openShifts" not in pins[0]
+        assert mapped.data["accountMapPinTotal"] >= len(pins)
+
+        paged = await self._execute_mutation(
+            MAP_Q,
+            {"tenantId": str(self.tenant.id), "offset": 1},
+            user=self.admin,
+        )
+        assert paged.errors is None, paged.errors
+        assert paged.data["accountMapPinTotal"] == mapped.data["accountMapPinTotal"]
+        assert len(paged.data["accountMapPins"]) < len(pins)
