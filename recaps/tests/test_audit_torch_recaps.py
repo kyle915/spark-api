@@ -140,11 +140,12 @@ class TestAuditTorchRecaps(AmbassadorsGraphQLTestCase):
             }
         )
         log = self._run(no_csv=True)
-        assert "sold 13 ÷ base 100 = 13.0% (n=3)" in log
+        assert "sold 7 ÷ base 70 = 10.0% (n=2)" in log
         assert "live-sampled: 7/70 = 10.0% (n=2)" in log
-        assert "dry demos vs people engaged: 6/30 = 20.0% (n=1)" in log
+        assert "dry demos (same consumers-sampled base): 0/0 = — (n=0)" in log
         assert "notes say dry but untagged: n=1" in log
-        assert f"4 units on #{unpaired.id}" in log
+        assert f"#{unpaired.id}" in log
+        assert "vs people engaged" not in log.lower()
         assert "dry_demo_tagged" in log
         assert "dry_demo_notes_untagged" in log
 

@@ -417,8 +417,8 @@ def _is_dry_demo_from_fields(
     fields: Iterable[tuple[str | None, str | None]],
 ) -> bool:
     """True when a "Dry demo?" field on the recap is answered yes. A dry demo
-    is a shift where no product was tasted, so conversion pairs its
-    purchases with People engaged instead of consumers sampled."""
+    is a shift where no product was tasted. Conversion still uses consumers
+    sampled, the same denominator as other retail recaps."""
     for name, value in fields:
         if not name or not _DRY_DEMO_FIELD_RE.search(name):
             continue
@@ -1406,7 +1406,7 @@ class CustomRecap(Node):
     @strawberry.field
     async def is_dry_demo(self) -> bool:
         """True when the BA answered "Dry demo?" = Yes (no product tasted).
-        Conversion then uses People engaged as this recap's base."""
+        Conversion uses consumers sampled, the same base as other retail recaps."""
 
         def _compute(values):
             pairs = [
