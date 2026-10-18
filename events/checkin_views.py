@@ -816,19 +816,28 @@ def public_checkin_clock(request: HttpRequest, code: str) -> HttpResponse:
             or data.get("clocked_in_at")
             or data.get("occurredAt")
         )
-        try:
-            clock_time = checkin_web.parse_client_clock_time(raw_when)
-        except checkin_web.ClientClockTimeError as exc:
-            return _err(str(exc), status=400, code=exc.reason)
-        # 409 (not 400) so a queued offline clock-in is dropped instead of
-        # retried forever and shown as "on the clock".
-        if checkin_web.clock_in_is_for_a_past_day(event, when=clock_time):
-            return _err(
-                "That day is over, so there's no clock to start. File that "
-                "day's recap, or start today's shift to clock in for today.",
-                status=409,
-                code="past_day",
-            )
+    else:
+        raw_when = (
+            data.get("clockedOutAt")
+            or data.get("clocked_out_at")
+            or data.get("occurredAt")
+        )
+    try:
+        clock_time = checkin_web.parse_client_clock_time(raw_when)
+    except checkin_web.ClientClockTimeError as exc:
+        return _err(str(exc), status=400, code=exc.reason)
+    # 409 (not 400) so a queued offline clock-in is dropped instead of
+    # retried forever and shown as "on the clock". Clock-out still records
+    # on a past day — that punch is how the leftover shift closes.
+    if source_name == "clock_in" and checkin_web.clock_in_is_for_a_past_day(
+        event, when=clock_time
+    ):
+        return _err(
+            "That day is over, so there's no clock to start. File that "
+            "day's recap, or start today's shift to clock in for today.",
+            status=409,
+            code="past_day",
+        )
 
     # Already on the clock: a queued flush (or a double-tap) must not insert
     # a second clock_in. Same for an idempotency key the client retries.
@@ -842,6 +851,10 @@ def public_checkin_clock(request: HttpRequest, code: str) -> HttpResponse:
     )
     if source_name == "clock_in" and state.get("state") == "clocked_in":
         return JsonResponse({"clock": state, "alreadyIn": True})
+    # A queued clock-out whose first POST actually landed must not insert
+    # a second punch when the phone retries.
+    if source_name == "clock_out" and state.get("state") == "clocked_out":
+        return JsonResponse({"clock": state, "alreadyOut": True})
     # Idempotency only short-circuits a *retry of the same open shift*.
     # After clock-out (Feel Free second shift), the first shift's key can
     # still sit in cache for 24h — replaying it must NOT block a new punch.
