@@ -183,6 +183,55 @@ class TestCheckinClientClockedInAt(AmbassadorsGraphQLTestCase):
         assert second.json()["clock"]["state"] == "clocked_in"
         assert self._punches().count() == 2
 
+    def test_clock_out_uses_client_timestamp(self):
+        inn = dj_tz.now() - _dt.timedelta(hours=3)
+        assert self._clock(clockedInAt=inn.isoformat()).status_code == 200
+        out_at = dj_tz.now() - _dt.timedelta(hours=1)
+        res = self.http.post(
+            reverse(
+                "events.public_checkin_clock",
+                kwargs={"code": self.event.walkup_code},
+            ),
+            data={
+                "session": self.token,
+                "kind": "out",
+                "clockedOutAt": out_at.isoformat(),
+                "idempotencyKey": "sabeen-out",
+            },
+            content_type="application/json",
+        )
+        assert res.status_code == 200, res.content
+        assert res.json()["clock"]["state"] == "clocked_out"
+        punch = Attendance.objects.get(
+            ambassador=self.ambassador,
+            event=self.event,
+            source__name="clock_out",
+        )
+        assert abs((punch.clock_time - out_at).total_seconds()) < 2
+        replay = self.http.post(
+            reverse(
+                "events.public_checkin_clock",
+                kwargs={"code": self.event.walkup_code},
+            ),
+            data={
+                "session": self.token,
+                "kind": "out",
+                "clockedOutAt": out_at.isoformat(),
+                "idempotencyKey": "sabeen-out",
+            },
+            content_type="application/json",
+        )
+        assert replay.status_code == 200
+        assert replay.json().get("alreadyOut") is True
+        assert (
+            Attendance.objects.filter(
+                ambassador=self.ambassador,
+                event=self.event,
+                source__name="clock_out",
+            ).count()
+            == 1
+        )
+
     def test_omitting_clocked_in_at_still_uses_server_now(self):
         before = dj_tz.now()
         res = self._clock()
