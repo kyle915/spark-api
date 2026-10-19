@@ -321,7 +321,7 @@ class Command(BaseCommand):
                 "third_party": bool(r.get("third_party")),
                 "id": r["id"], "date": r.get("date") or "", "store": _store_label(r), "ba": r.get("ba") or "",
                 "status": r.get("status"), "dry_demo": bool(p["dry"]),
-                "base_label": "consumers sampled",
+                "base_label": "people engaged" if p["dry"] else "consumers sampled",
                 "base": base, "consumers_sampled": r.get("consumers_sampled"),
                 "people_engaged": r.get("people_engaged"), "units": units, "units_blank": p["units_blank"],
                 "conv_pct": conv, "counted_in_insights": bool(d and d["counted"]),
@@ -351,7 +351,7 @@ class Command(BaseCommand):
             return (f"{len(subset)}/{len(pool)} recaps; units {su}/{pu} ({_fmt_pct(_pct(su, pu))}); "
                     f"base {sb}/{pb} ({_fmt_pct(_pct(sb, pb))}); their pooled conv {_fmt_pct(_pct(su, sb))}")
 
-        w(f"\n## Recaps under {under:g}% conversion (per recap; units ÷ consumers sampled, including dry demos)")
+        w(f"\n## Recaps under {under:g}% conversion (per recap; units ÷ consumers sampled, dry demos ÷ people engaged)")
         if legacy_n:
             w(f"  note: {legacy_n} legacy Recap rows in scope are not listed (custom recaps only)")
         for st in ("approved", "needs_review"):
@@ -841,7 +841,10 @@ class Command(BaseCommand):
 
         # ---------------------------------------------------------- conversion
         def _base(r):
-            # Same denominator for product retail and dry demos.
+            # Dry demos: People engaged only. No fallback to consumers sampled.
+            if r.get("dry_demo"):
+                engaged = r.get("people_engaged") or 0
+                return engaged if engaged > 0 else 0
             return r.get("consumers_sampled") or 0
 
         def _pool(subset, require_sold=False):
@@ -883,7 +886,7 @@ class Command(BaseCommand):
             line = (
                 f"  {label:24} approved retail/on-prem: sold {s} ÷ base {b} = {_fmt_pct(_pct(s, b))} "
                 f"(n={n}) | live-sampled: {ls}/{lb} = {_fmt_pct(_pct(ls, lb))} (n={ln}) "
-                f"| dry demos (same consumers-sampled base): {ds}/{db} = {_fmt_pct(_pct(ds, db))} (n={dn}) "
+                f"| dry demos vs people engaged: {ds}/{db} = {_fmt_pct(_pct(ds, db))} (n={dn}) "
                 f"| notes say dry but untagged: n={un}"
                 f"\n  {'':24} 3rd-party excluded: {ts}/{tb} = {_fmt_pct(_pct(ts, tb))} (n={tn}, {len(tp)} recaps) "
                 f"| BEFORE (incl. 3rd-party): {xs}/{xb} = {_fmt_pct(_pct(xs, xb))} (n={xn}) "
@@ -892,13 +895,13 @@ class Command(BaseCommand):
             if unpaired:
                 units = sum(max(0, r.get("purchases") or 0) for r in unpaired)
                 line += (
-                    f"\n  {'':24} unpaired dry demos (consumers sampled is 0 or blank; "
+                    f"\n  {'':24} unpaired dry demos (people engaged is missing or 0; "
                     f"out of the rate): {units} units on "
                     + ", ".join(f"#{r['id']}" for r in unpaired)
                 )
             return line
 
-        w("\n## Conversion — audited basis (approved, non-archived, Retail + On-Premise by request→event→template type; purchases ÷ consumers sampled, dry demos included)")
+        w("\n## Conversion — audited basis (approved, non-archived, Retail + On-Premise by request→event→template type; product purchases ÷ consumers sampled, dry demos ÷ people engaged)")
         w(_conv_line("WINDOW", rows_w))
         if focus_since:
             w(_conv_line(f"FOCUS {focus_since}→{until}", [r for r in rows if _in(r, focus_since, until)]))
