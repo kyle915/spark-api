@@ -46,6 +46,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from events.models import EventConfirmation, EventConfirmationSend
+from tenants.models import Tenant
 from utils.mailer import Envelope, Mailer
 
 logger = logging.getLogger(__name__)
@@ -408,12 +409,80 @@ _STAGE_INTRO = {
 }
 
 
+def confirmation_tenants(confirmation: EventConfirmation) -> list:
+    """Brands this email may mention.
+
+    ``brand_slugs`` empty means the confirmation's own tenant (Torch, Liquid
+    Death, admin-tab sends). A non-empty list is the sheet Brand cell, in
+    order, and nothing else is loaded.
+    """
+    raw = getattr(confirmation, "brand_slugs", None) or []
+    if not isinstance(raw, (list, tuple)):
+        raw = []
+    slugs = [str(slug).strip() for slug in raw if str(slug).strip()]
+    if not slugs:
+        return [confirmation.tenant]
+
+    found: dict[str, Tenant] = {}
+    for tenant in Tenant.objects.filter(slug__in=slugs).order_by("id"):
+        found.setdefault(tenant.slug, tenant)
+    ordered = []
+    missing = []
+    for slug in slugs:
+        tenant = found.get(slug)
+        if tenant is None:
+            missing.append(slug)
+        else:
+            ordered.append(tenant)
+    if missing or not ordered:
+        raise ValueError(
+            "Confirmation brands not found: " + ", ".join(missing or slugs)
+        )
+    return ordered
+
+
+def brand_names(tenants) -> list[str]:
+    names: list[str] = []
+    for tenant in tenants:
+        name = (getattr(tenant, "name", "") or "").strip()
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
+def joined_brand_names(names: list[str]) -> str:
+    if not names:
+        return ""
+    if len(names) == 1:
+        return names[0]
+    if len(names) == 2:
+        return f"{names[0]} and {names[1]}"
+    return ", ".join(names[:-1]) + ", and " + names[-1]
+
+
+def _eyebrow_from_names(names: list[str], program: str) -> str:
+    parts = [name.upper() for name in names if name]
+    if program:
+        parts.append(program.upper())
+    return " • ".join(parts)
+
+
 def _what_label(confirmation: EventConfirmation) -> str:
     """``Liquid Death retail sampling`` — brand kept in title case, program
-    lowercased so it reads as prose mid-sentence."""
-    brand = (getattr(confirmation.tenant, "name", "") or "").strip()
+    lowercased so it reads as prose mid-sentence.
+
+    A multi-brand sheet row joins only the brands stored on the confirmation
+    (``FAMUS Energy and Wook Water retail sampling``).
+    """
+    phrase = joined_brand_names(brand_names(confirmation_tenants(confirmation)))
     program = (confirmation.event_type_label or "").strip().lower()
-    return " ".join(p for p in (brand, program) if p) or "shift"
+    return " ".join(p for p in (phrase, program) if p) or "shift"
+
+
+def _subject_lead(confirmation: EventConfirmation) -> str:
+    phrase = joined_brand_names(brand_names(confirmation_tenants(confirmation)))
+    program = (confirmation.event_type_label or "").strip()
+    return " ".join(p for p in (phrase, program) if p) or "Shift"
 
 
 def _event_title(confirmation: EventConfirmation, date_label, time_label) -> str:
@@ -434,17 +503,40 @@ def build_context(confirmation: EventConfirmation, stage: str) -> dict:
 
     date_label = format_event_date(local_start)
     time_label = format_time_range(local_start, local_end)
-    what = _what_label(confirmation)
-
-    brand = (getattr(confirmation.tenant, "name", "") or "").strip()
+    tenants = confirmation_tenants(confirmation)
+    names = brand_names(tenants)
     program = (confirmation.event_type_label or "").strip()
-    eyebrow = " • ".join(p.upper() for p in (brand, program) if p)
+    phrase = joined_brand_names(names)
+    what = " ".join(p for p in (phrase, program.lower()) if p) or "shift"
+    eyebrow = _eyebrow_from_names(names, program)
 
     address = (confirmation.address or "").strip()
     products = display_products(confirmation.products)
 
     intro = _STAGE_INTRO.get(stage, _STAGE_INTRO[EventConfirmation.STAGE_BOOKED])
-    training_resources = email_training_resources(confirmation.tenant)
+    # One brand uses the original single CTA block (Torch look, unchanged).
+    # Several brands repeat that same block once per brand named on the row.
+    if len(tenants) > 1:
+        brand_blocks = []
+        for tenant in tenants:
+            url = checkin_url_for(tenant)
+            brand_blocks.append(
+                {
+                    "name": (getattr(tenant, "name", "") or "").strip(),
+                    "checkin_url": url,
+                    "recap_url": url,
+                    "training_resources": email_training_resources(tenant),
+                }
+            )
+        training_resources: list[dict] = []
+        checkin_url = ""
+        recap_url = ""
+    else:
+        tenant = tenants[0]
+        brand_blocks = []
+        training_resources = email_training_resources(tenant)
+        checkin_url = checkin_url_for(tenant)
+        recap_url = checkin_url
 
     return {
         "eyebrow": eyebrow,
@@ -461,10 +553,13 @@ def build_context(confirmation: EventConfirmation, stage: str) -> dict:
             + quote_plus(address)
         ) if address else "",
         # Same standing /checkin/<code> URL for both CTAs — that page is how
-        # BAs clock in/out and file the recap (Torch: TH-2HRV3D).
-        "checkin_url": checkin_url_for(confirmation.tenant),
-        "recap_url": recap_url_for(confirmation.tenant),
+        # BAs clock in/out and file the recap (Torch: TH-2HRV3D). Multi-brand
+        # rows leave these blank and use brand_blocks so only column H's
+        # brands render, each through the same button partial.
+        "checkin_url": checkin_url,
+        "recap_url": recap_url,
         "training_resources": training_resources,
+        "brand_blocks": brand_blocks,
         # First pdf/link — GraphQL form options + older single-button callers.
         "training_url": (
             training_resources[0]["url"] if training_resources else ""
@@ -488,9 +583,7 @@ def build_subject(confirmation: EventConfirmation) -> str:
         format_event_date(local_start),
         format_time_range(local_start, confirmation.local_end()),
     )
-    brand = (getattr(confirmation.tenant, "name", "") or "").strip()
-    program = (confirmation.event_type_label or "").strip()
-    lead = " ".join(p for p in (brand, program) if p) or "Shift"
+    lead = _subject_lead(confirmation)
     return f"Your {lead} – {title}" if title else f"Your {lead}"
 
 
@@ -599,9 +692,9 @@ def build_cancellation_context(confirmation: EventConfirmation) -> dict:
     date_label = format_event_date(local_start)
     time_label = format_time_range(local_start, local_end)
     what = _what_label(confirmation)
-    brand = (getattr(confirmation.tenant, "name", "") or "").strip()
+    names = brand_names(confirmation_tenants(confirmation))
     program = (confirmation.event_type_label or "").strip()
-    eyebrow = " • ".join(p.upper() for p in (brand, program) if p)
+    eyebrow = _eyebrow_from_names(names, program)
     address = (confirmation.address or "").strip()
     return {
         "eyebrow": eyebrow,
@@ -628,9 +721,7 @@ def build_cancellation_subject(confirmation: EventConfirmation) -> str:
         format_event_date(local_start),
         format_time_range(local_start, confirmation.local_end()),
     )
-    brand = (getattr(confirmation.tenant, "name", "") or "").strip()
-    program = (confirmation.event_type_label or "").strip()
-    lead = " ".join(p for p in (brand, program) if p) or "Shift"
+    lead = _subject_lead(confirmation)
     return (
         f"Cancelled: Your {lead} – {title}"
         if title

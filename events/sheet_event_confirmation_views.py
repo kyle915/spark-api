@@ -1,12 +1,14 @@
 """HTTP entry for retail-schedule Sheet → confirmation / cancel.
 
-POST ``/internal/torch-sheet-event-confirmation`` or
-``/internal/liquid-death-sheet-event-confirmation`` with ``X-Cron-Secret``.
+POST ``/internal/torch-sheet-event-confirmation``,
+``/internal/liquid-death-sheet-event-confirmation``, or
+``/internal/brand-group-sheet-event-confirmation`` with ``X-Cron-Secret``.
 Mounted outside ``/internal/cron/`` so the Apps Script URL stays short, but
 uses the same secret gate as cron jobs.
 
-Sheet id is allowlisted (Torch + Liquid Death). Passing the wrong id returns
-400 even if the path is the Torch or LD endpoint.
+Sheet id is allowlisted (Torch, Liquid Death, and the Famus / Alcohol Armor /
+Wook Water workbook). Passing the wrong id returns 400 even if the path is
+one of those endpoints.
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ from django.utils.decorators import method_decorator
 from django.views import View
 from django.views.decorators.csrf import csrf_exempt
 
+from events.brand_group_sheet import BRAND_GROUP_SHEET_ID
 from events.sheet_event_confirmations import (
     LIQUID_DEATH_SHEET_ID,
     TORCH_PUBLIC_FORM_SHEET_ID,
@@ -191,3 +194,7 @@ class TorchSheetEventConfirmationView(SheetEventConfirmationView):
 
 class LiquidDeathSheetEventConfirmationView(SheetEventConfirmationView):
     default_sheet_id = LIQUID_DEATH_SHEET_ID
+
+
+class BrandGroupSheetEventConfirmationView(SheetEventConfirmationView):
+    default_sheet_id = BRAND_GROUP_SHEET_ID

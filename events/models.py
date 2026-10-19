@@ -1512,6 +1512,10 @@ class EventConfirmation(models.Model):
     # chosen so the email reproduces the admin's selection even if the SKU
     # list changes.
     products = models.JSONField(default=list, blank=True)
+    # Sheet column H, in order. Empty for Torch, Liquid Death, and admin-tab
+    # sends, which use `tenant` alone. When set, the email includes only
+    # these brands — never the other brands on a shared workbook.
+    brand_slugs = models.JSONField(default=list, blank=True)
 
     # Whether the sweep may fire t24/t3 for this row. Opt-in per send (the tab
     # defaults it ON): a confirmation an admin never sent stays silent, so a
