@@ -8,6 +8,7 @@ from .schema_client import schema_clients
 from .schema_spark import schema_spark
 from .schema_mobile import schema_mobile
 from events.sheet_event_confirmation_views import (
+    BrandGroupSheetEventConfirmationView,
     LiquidDeathSheetEventConfirmationView,
     TorchSheetEventConfirmationView,
 )
@@ -109,7 +110,8 @@ urlpatterns = [
     # `tasks/views.py`.
     path("api/tasks/", include("tasks.urls")),
     # Retail-schedule Sheet → Event Confirmation / cancel (Apps Script).
-    # X-Cron-Secret gated; sheet id allowlisted (Torch + Liquid Death).
+    # X-Cron-Secret gated; sheet id allowlisted (Torch, Liquid Death, and
+    # the Famus / Alcohol Armor / Wook Water workbook).
     # See events/sheet_event_confirmation_views.py.
     path(
         "internal/torch-sheet-event-confirmation",
@@ -118,6 +120,10 @@ urlpatterns = [
     path(
         "internal/liquid-death-sheet-event-confirmation",
         csrf_exempt(LiquidDeathSheetEventConfirmationView.as_view()),
+    ),
+    path(
+        "internal/brand-group-sheet-event-confirmation",
+        csrf_exempt(BrandGroupSheetEventConfirmationView.as_view()),
     ),
 ]
 

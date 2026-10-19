@@ -7,6 +7,7 @@ this module maps the row onto Spark's existing Event Confirmation mailer
 Supported sheets (allowlist by spreadsheet id):
   - Torch retail schedule
   - Liquid Death retail market schedules (Retail Sampling only)
+  - Famus Energy / Alcohol Armor / Wook Water (column H picks the brands)
 
 Trigger columns are separate checkboxes so unchecking Send is a no-op.
 """
@@ -22,7 +23,15 @@ from zoneinfo import ZoneInfo
 
 from django.utils import timezone as dj_tz
 
-from events.event_confirmations import is_liquid_death_tenant
+from events.brand_group_sheet import (
+    BRAND_GROUP_SHEET_ID,
+    assert_standing_checkin,
+    catalogs_for_tenants,
+    match_sku_tokens,
+    parse_brand_slugs,
+    tenants_for_slugs,
+)
+from events.event_confirmations import checkin_url_for, is_liquid_death_tenant
 from events.routing import extract_state_code
 from events.torch_portal import is_torch_tenant
 from events.us_states import US_STATE_NAME_TO_CODE
@@ -84,6 +93,9 @@ class SheetConfirmationConfig:
     # Headers ensureConfirmationColumns / _ensure_confirmation_headers append.
     extra_headers: tuple[str, ...] = tuple(CONFIRMATION_EXTRA_HEADERS)
     tenant_checker: Callable[[Any], bool] | None = None
+    # When set, column H names one or more tenants. The row never inherits
+    # the other brands on the workbook.
+    routes_by_brand: bool = False
 
 
 TORCH_CONFIG = SheetConfirmationConfig(
@@ -129,9 +141,29 @@ LIQUID_DEATH_CONFIG = SheetConfirmationConfig(
     tenant_checker=is_liquid_death_tenant,
 )
 
+# External // Wook Water, Famus Energy, Alcohol Armor. gid 0, read 2026-10-19.
+# Brand is column H. Confirmation stamps are the FIRST status block (W–Z).
+# AA–AD repeat those headers and are ignored (Apps Script keeps the first).
+BRAND_GROUP_CONFIG = SheetConfirmationConfig(
+    key="brand-group",
+    sheet_id=BRAND_GROUP_SHEET_ID,
+    tenant_slug="",
+    tab_title="Sheet1",
+    tab_gid=0,
+    known_status_cols={
+        "Confirmation Status": "W",
+        "Confirmation Sent At": "X",
+        "Confirmation Error": "Y",
+        "Spark Confirmation UUID": "Z",
+    },
+    extra_headers=tuple(CONFIRMATION_EXTRA_HEADERS),
+    routes_by_brand=True,
+)
+
 SHEET_CONFIGS: tuple[SheetConfirmationConfig, ...] = (
     TORCH_CONFIG,
     LIQUID_DEATH_CONFIG,
+    BRAND_GROUP_CONFIG,
 )
 SHEET_CONFIG_BY_ID: dict[str, SheetConfirmationConfig] = {
     c.sheet_id: c for c in SHEET_CONFIGS
@@ -167,6 +199,7 @@ class SheetRowPayload:
     store_name: str = ""
     address: str = ""
     state: str = ""
+    brand: str = ""
     skus: str = ""
     ba_name: str = ""
     ba_email: str = ""
@@ -233,9 +266,60 @@ def parse_sheet_clock(raw: str | None) -> time:
     return time(hour, minute)
 
 
+_MONTHS = {
+    "jan": 1, "january": 1,
+    "feb": 2, "february": 2,
+    "mar": 3, "march": 3,
+    "apr": 4, "april": 4,
+    "may": 5,
+    "jun": 6, "june": 6,
+    "jul": 7, "july": 7,
+    "aug": 8, "august": 8,
+    "sep": 9, "sept": 9, "september": 9,
+    "oct": 10, "october": 10,
+    "nov": 11, "november": 11,
+    "dec": 12, "december": 12,
+}
+_YEARLESS_DATE = re.compile(r"^([A-Za-z]+)\s+(\d{1,2})$")
+
+
+def _parse_yearless_sheet_date(
+    raw: str | None, *, today: date | None = None
+) -> date | None:
+    """``Oct 21`` → that month/day. Year is this year, or next year when the
+    day is already more than 45 days behind (a January row read in December).
+    """
+    text = re.sub(r"\s+", " ", (raw or "").strip())
+    match = _YEARLESS_DATE.match(text)
+    if match is None:
+        return None
+    month = _MONTHS.get(match.group(1).lower().rstrip("."))
+    if month is None:
+        return None
+    day_num = int(match.group(2))
+    if today is None:
+        today = dj_tz.now().astimezone(ZoneInfo(DEFAULT_TIMEZONE_NAME)).date()
+    try:
+        candidate = date(today.year, month, day_num)
+    except ValueError:
+        return None
+    if candidate < today - timedelta(days=45):
+        try:
+            candidate = date(today.year + 1, month, day_num)
+        except ValueError:
+            return None
+    return candidate
+
+
 def parse_sheet_date_iso(raw: str | None) -> date:
-    """Parse Date cell → ``date``. Accepts the same formats as sheet ordering."""
+    """Parse Date cell → ``date``. Accepts the same formats as sheet ordering.
+
+    Also accepts a yearless ``Oct 21`` (the brand-group sheet's display
+    format). Torch ordering still uses ``_parse_sheet_date`` and ignores those.
+    """
     parsed = _parse_sheet_date(raw or "")
+    if parsed is None:
+        parsed = _parse_yearless_sheet_date(raw)
     if parsed is None:
         raise ValueError(f"Unrecognized date {raw!r}")
     return parsed
@@ -422,8 +506,7 @@ def _find_mailed_confirmation(payload: SheetRowPayload):
     """
     from events.models import EventConfirmation
 
-    config = config_for_sheet_id(payload.sheet_id)
-    tenant = _tenant_for(config)
+    tenant = _row_tenants(payload)[0]
     qs = EventConfirmation.objects.filter(
         tenant=tenant,
         cancelled_at__isnull=True,
@@ -580,6 +663,26 @@ def _torch_tenant():
     return _tenant_for(TORCH_CONFIG)
 
 
+def _row_tenants(payload: SheetRowPayload) -> list:
+    """Tenants this row may email. Brand-group rows use column H only."""
+    config = config_for_sheet_id(payload.sheet_id)
+    if not config.routes_by_brand:
+        return [_tenant_for(config)]
+    slugs = parse_brand_slugs(payload.brand)
+    tenants = tenants_for_slugs(slugs)
+    for tenant in tenants:
+        assert_standing_checkin(tenant)
+    return tenants
+
+
+def _products_for_row(payload: SheetRowPayload, tenants: list) -> list[str]:
+    tokens = products_from_skus_cell(payload.skus)
+    config = config_for_sheet_id(payload.sheet_id)
+    if not config.routes_by_brand:
+        return tokens
+    return match_sku_tokens(tokens, catalogs_for_tenants(tenants))
+
+
 def _cell(values: dict[str, Any], *names: str) -> str:
     lower_map = {(k or "").strip().lower(): v for k, v in values.items()}
     for name in names:
@@ -616,8 +719,9 @@ def payload_from_mapping(
         store_name=_cell(values, "Store Name"),
         address=_cell(values, "Address"),
         state=_cell(values, "State"),
+        brand=_cell(values, "Brand"),
         skus=_cell(values, "SKUs to sample", "SKUs"),
-        ba_name=_cell(values, "BA Name"),
+        ba_name=_cell(values, "BA Name", "Confirmed BA Name"),
         ba_email=_cell(values, "Email"),
         spark_request_uuid=_cell(values, "Spark Request UUID"),
         confirmation_uuid=_cell(values, "Spark Confirmation UUID"),
@@ -871,7 +975,10 @@ def _create_and_send(
     from events.models import EventConfirmation, TimeZone
 
     config = config_for_sheet_id(payload.sheet_id)
-    tenant = _tenant_for(config)
+    tenants = _row_tenants(payload)
+    tenant = tenants[0]
+    products = _products_for_row(payload, tenants)
+    brand_slugs = [item.slug for item in tenants] if config.routes_by_brand else []
     day = parse_sheet_date_iso(payload.date)
     start_clock = parse_sheet_clock(payload.start_time)
     starts_at = _parse_local_instant(day, start_clock, tz_name)
@@ -906,7 +1013,9 @@ def _create_and_send(
                 "ba_email": ba_email,
                 "starts_at": starts_at.isoformat(),
                 "ends_at": ends_at.isoformat() if ends_at else None,
-                "products": products_from_skus_cell(payload.skus),
+                "products": products,
+                "brand_slugs": brand_slugs,
+                "checkin_urls": [checkin_url_for(item) for item in tenants],
             },
         )
 
@@ -922,7 +1031,8 @@ def _create_and_send(
         ends_at=ends_at,
         timezone_name=tz_name,
         timezone=tz_row,
-        products=products_from_skus_cell(payload.skus),
+        products=products,
+        brand_slugs=brand_slugs,
         send_reminders=True,
         created_by=None,
     )
@@ -1129,7 +1239,8 @@ def cancel_from_sheet_row(payload: SheetRowPayload) -> ActionResult:
             # BA still gets a cancel when the UUID cell is missing.
             try:
                 config = config_for_sheet_id(payload.sheet_id)
-                tenant = _tenant_for(config)
+                tenants = _row_tenants(payload)
+                tenant = tenants[0]
                 tz_name, _note = resolve_timezone_for_row(
                     payload.address, payload.state
                 )
@@ -1145,7 +1256,12 @@ def cancel_from_sheet_row(payload: SheetRowPayload) -> ActionResult:
                     event_type_label=config.event_type_label,
                     starts_at=starts_at,
                     timezone_name=tz_name,
-                    products=products_from_skus_cell(payload.skus),
+                    products=_products_for_row(payload, tenants),
+                    brand_slugs=(
+                        [item.slug for item in tenants]
+                        if config.routes_by_brand
+                        else []
+                    ),
                     send_reminders=False,
                 )
             except Exception as exc:  # noqa: BLE001
