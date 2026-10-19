@@ -39,6 +39,7 @@ from django.db import transaction
 from django.utils import timezone as dj_tz
 from django.utils.dateparse import parse_datetime
 
+from events.routing import merge_always_include_internal
 from events.torch_portal import is_torch_tenant
 from tenants.models import normalize_checkin_resources
 from recaps import co_activation
@@ -3025,6 +3026,9 @@ def notify_checkin_recap_submitted(recap) -> None:
     ]
     if is_torch_tenant(tenant):
         to = suppress_torch_emails(to, tenant=tenant)
+    # Env can replace CHECKIN_RECAP_NOTIFY_EMAILS; these three still go out
+    # for every brand, retail and activation alike.
+    to = merge_always_include_internal(to)
     if not to:
         return
 

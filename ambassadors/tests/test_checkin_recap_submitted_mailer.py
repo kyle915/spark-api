@@ -19,6 +19,7 @@ from ambassadors.checkin_web import (
     checkin_recap_open_url,
     notify_checkin_recap_submitted,
 )
+from events.routing import ALWAYS_INCLUDE_INTERNAL_EMAILS
 from ambassadors.tests.base import AmbassadorsGraphQLTestCase
 from recaps.models import CustomRecap, CustomRecapTemplate, Recap
 
@@ -130,7 +131,10 @@ class TestCheckinRecapSubmittedMailer(AmbassadorsGraphQLTestCase):
 
         env = captured["envelope"]
         href = f"{CLIENT_HOST}/recap/view-custom/{recap.uuid}"
-        assert env.to_emails == ["ops@igniteproductions.co"]
+        assert env.to_emails == [
+            "ops@igniteproductions.co",
+            *ALWAYS_INCLUDE_INTERNAL_EMAILS,
+        ]
         assert "Recap submitted — Francisco Calva Villalta @" in env.subject
         assert f"href='{href}'" in env.html
         assert "Open recaps" in env.html
@@ -139,8 +143,63 @@ class TestCheckinRecapSubmittedMailer(AmbassadorsGraphQLTestCase):
         assert "spark.igniteproductions.co" not in env.html
 
     @override_settings(CHECKIN_RECAP_NOTIFY_EMAILS=[])
-    def test_no_recipients_skips_send(self):
+    def test_empty_env_list_still_sends_to_standing_internal(self):
         recap = self._custom_recap()
-        with patch("utils.mailer.Mailer.send_now") as send:
+        captured = {}
+
+        def capture(self):
+            captured["envelope"] = self.envelope()
+
+        with patch("utils.mailer.Mailer.send_now", capture):
             notify_checkin_recap_submitted(recap)
-        send.assert_not_called()
+        assert captured["envelope"].to_emails == list(ALWAYS_INCLUDE_INTERNAL_EMAILS)
+
+    @override_settings(
+        CHECKIN_RECAP_NOTIFY_EMAILS=[
+            "nevena@igniteproductions.co",
+            "keis@igniteproductions.co",
+            "myriant@igniteproductions.co",
+            "kyle@igniteproductions.co",
+        ],
+        PUBLIC_CHECKIN_BASE_URL="https://client.igniteproductions.co",
+    )
+    def test_retail_and_activation_keep_existing_recipients(self):
+        activation_type = self.create_event_type("Event Activation", self.tenant)
+        activation_event = self.create_event(
+            name="10/16/2026 - 1178 Wantagh Ave, Wantagh, NY 11793, USA (CVS)",
+            tenant=self.tenant,
+            address="1178 Wantagh Ave, Wantagh, NY 11793, USA",
+            event_type=activation_type,
+            date=timezone.now(),
+        )
+        retail = self._custom_recap()
+        activation = CustomRecap.objects.create(
+            name=activation_event.name,
+            submitted_at=timezone.now(),
+            event=activation_event,
+            ambassador=self.ba,
+            tenant=self.tenant,
+            custom_recap_template=self.template,
+            created_by=self.ba.user,
+        )
+        existing = [
+            "nevena@igniteproductions.co",
+            "keis@igniteproductions.co",
+            "myriant@igniteproductions.co",
+            "kyle@igniteproductions.co",
+        ]
+        for recap in (retail, activation):
+            captured = {}
+
+            def capture(self):
+                captured["envelope"] = self.envelope()
+
+            with patch("utils.mailer.Mailer.send_now", capture):
+                notify_checkin_recap_submitted(recap)
+            env = captured["envelope"]
+            assert env.to_emails == [*existing, *ALWAYS_INCLUDE_INTERNAL_EMAILS]
+            assert env.subject.startswith("Recap submitted —")
+            assert "Open recaps" in env.html
+            assert "Approving it logs their hours." in env.html
+            assert f"{CLIENT_HOST}/recap/view-custom/{recap.uuid}" in env.html
+            assert "admin.igniteproductions.co" not in env.html

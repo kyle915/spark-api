@@ -7,6 +7,8 @@ other public spark-form stay pending until a human approves.
 
 from __future__ import annotations
 
+from events.routing import merge_always_include_internal
+
 TORCH_PUBLIC_FORM_SLUGS = frozenset({"keee-torch-thc"})
 TORCH_TENANT_SLUGS = frozenset({"torch", "torch-thc", "keee-torch-thc"})
 TORCH_TENANT_NAMES = frozenset({"torch", "torch thc", "torch-thc", "torch thc"})
@@ -105,7 +107,9 @@ def torch_request_approved_lists(
 ) -> tuple[list[str], list[str]]:
     """To: requestor (or first CC). CC: Liberty + Ignite Torch list."""
     requestor = (requestor_email or "").strip()
-    cc = suppress_torch_emails(_dedupe_emails(TORCH_REQUEST_APPROVED_CC))
+    cc = merge_always_include_internal(
+        suppress_torch_emails(_dedupe_emails(TORCH_REQUEST_APPROVED_CC))
+    )
     if requestor:
         requestor_key = requestor.lower()
         cc = [e for e in cc if e.lower() != requestor_key]

@@ -6,11 +6,13 @@ import pytest
 from asgiref.sync import async_to_sync
 
 from events import models as em
+from events.routing import ALWAYS_INCLUDE_INTERNAL_EMAILS
 from events.tests.base import EventsGraphQLTestCase
 from recaps import models as recap_models
 from recaps.mutation_parts.notify import (
     _collect_recap_approved_recipients,
     _kick_torch_portal_recap_submit_notify,
+    _notify_recap_approved_to_rmm_or_clients,
     is_torch_portal_recap,
 )
 
@@ -120,6 +122,46 @@ class TestTorchPortalRecapNotify(EventsGraphQLTestCase):
         recipients, reply_to = _collect_recap_approved_recipients(recap)
         assert "t.reed@liquiddeath.com" not in [e.lower() for e, _ in recipients]
         assert reply_to == "events@igniteproductions.co"
+        for standing in ALWAYS_INCLUDE_INTERNAL_EMAILS:
+            assert standing not in [e.lower() for e, _ in recipients]
+
+    def test_client_approved_mail_does_not_add_standing_internal(self):
+        client = self.create_user(
+            username="brand@liquiddeath.com",
+            email="brand@liquiddeath.com",
+            role=self.roles["client"],
+            first_name="Brand",
+        )
+        self.create_tenanted_user(user=client, tenant=self.ld)
+        self.ld.recap_recipient_emails = "reports@liquiddeath.com"
+        self.ld.save(update_fields=["recap_recipient_emails"])
+        event = self.create_event(name="LD demo", tenant=self.ld, address="NY")
+        recap = self._make_recap(tenant=self.ld, event=event, name="LD")
+        sent: list[str] = []
+
+        def _record_send(self, *args, **kwargs):
+            sent.extend(self.to_emails)
+
+        with patch(
+            "recaps.mutation_parts.notify.RecapApprovedNotificationMailer.send",
+            new=_record_send,
+        ):
+            async_to_sync(_notify_recap_approved_to_rmm_or_clients)(
+                recap, html_only=True
+            )
+        lowered = {email.lower() for email in sent}
+        assert "brand@liquiddeath.com" in lowered
+        assert "reports@liquiddeath.com" in lowered
+        for standing in ALWAYS_INCLUDE_INTERNAL_EMAILS:
+            assert standing not in lowered
+
+        gb_event = self.create_event(name="GB", tenant=self.girl, address="TX")
+        gb_recap = self._make_recap(tenant=self.girl, event=gb_event, name="GB")
+        with patch(
+            "recaps.mutation_parts.notify.RecapApprovedNotificationMailer.send"
+        ) as mock_send:
+            async_to_sync(_notify_recap_approved_to_rmm_or_clients)(gb_recap)
+        mock_send.assert_not_called()
 
     def test_girl_beer_recap_is_not_torch_portal(self):
         event = self.create_event(
