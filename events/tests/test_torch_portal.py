@@ -2,6 +2,7 @@
 
 from types import SimpleNamespace
 
+from events.routing import ALWAYS_INCLUDE_INTERNAL_EMAILS
 from events.torch_portal import (
     TORCH_RECAP_SUBMIT_CC,
     TORCH_REQUEST_APPROVED_CC,
@@ -61,6 +62,8 @@ def test_request_approved_lists_include_requestor_and_ops():
     lowered = {e.lower() for e in cc_emails}
     for expected in TORCH_REQUEST_APPROVED_CC:
         assert expected.lower() in lowered
+    for standing in ALWAYS_INCLUDE_INTERNAL_EMAILS:
+        assert standing in lowered
     assert "girlbeer" not in " ".join(lowered)
 
 

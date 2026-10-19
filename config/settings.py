@@ -383,6 +383,9 @@ RECAP_REVIEW_COPY_EMAILS = env.list("RECAP_REVIEW_COPY_EMAILS", default=[])
 # recipients without a deploy.
 
 # "<BA> submitted a recap" — goes to people, by name.
+# events.routing.ALWAYS_INCLUDE_INTERNAL_EMAILS is merged again at send time,
+# so Amiel, Julie, and Agatha stay on this mail even when Cloud Run overrides
+# the list below. Clock-in mail is a different list and does not get them.
 CHECKIN_RECAP_NOTIFY_EMAILS = env.list(
     "CHECKIN_RECAP_NOTIFY_EMAILS",
     default=[
@@ -391,6 +394,9 @@ CHECKIN_RECAP_NOTIFY_EMAILS = env.list(
         "myriant@igniteproductions.co",
         "kyle@igniteproductions.co",
         "harris@igniteproductions.co",
+        "amiel@igniteproductions.co",
+        "julie@igniteproductions.co",
+        "agatha@igniteproductions.co",
     ],
 )
 

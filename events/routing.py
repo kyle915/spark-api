@@ -98,6 +98,44 @@ def suppress_cc(emails: list[str]) -> list[str]:
         if (e or "").strip().lower() not in CC_SUPPRESS_EMAILS
     ]
 
+
+# Standing internal copies on request mail (retail and activation, every
+# tenant) and the check-in "Recap submitted" mailer. Merged in code so a
+# per-tenant CC column or a Cloud Run env override cannot drop them, and a
+# new client picks them up without a data backfill. Not part of the client
+# recap-approved recipient set.
+ALWAYS_INCLUDE_INTERNAL_EMAILS: tuple[str, ...] = (
+    "amiel@igniteproductions.co",
+    "julie@igniteproductions.co",
+    "agatha@igniteproductions.co",
+)
+
+
+def merge_always_include_internal(
+    emails: list[str] | tuple[str, ...],
+    *,
+    exclude_email: str | None = None,
+) -> list[str]:
+    """Append ``ALWAYS_INCLUDE_INTERNAL_EMAILS``, preserving earlier order.
+
+    ``exclude_email`` (usually the To: recipient) is left off so someone
+    who already receives the message is not copied a second time.
+    Case-insensitive. Existing addresses are not removed or reordered.
+    """
+    skip = (exclude_email or "").strip().lower()
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in (*emails, *ALWAYS_INCLUDE_INTERNAL_EMAILS):
+        email = (raw or "").strip()
+        if not email:
+            continue
+        key = email.lower()
+        if key in seen or key == skip:
+            continue
+        seen.add(key)
+        out.append(email)
+    return out
+
 # Tenants where we apply the territory map. The slug is what the BA
 # types in the public form URL: /spark-form/ighn-liquid-death.
 ROUTED_TENANT_SLUGS = {"ighn-liquid-death"}

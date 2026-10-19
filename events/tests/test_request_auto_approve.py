@@ -15,6 +15,7 @@ from django.core.management import call_command
 
 from events import models as em
 from events.request_auto_approve import auto_approved_request_lists
+from events.routing import ALWAYS_INCLUDE_INTERNAL_EMAILS, IGNITE_REVIEW_CC
 from events.tests.base import EventsGraphQLTestCase
 from tenants.models import Tenant, TenantTheme
 
@@ -83,6 +84,13 @@ def _public_extra():
     }
 
 
+def _cc_with_standing(emails: list[str]) -> list[str]:
+    seen = {email.lower() for email in emails}
+    return list(emails) + [
+        email for email in ALWAYS_INCLUDE_INTERNAL_EMAILS if email.lower() not in seen
+    ]
+
+
 def test_lists_dedupe_requestor_and_require_flag():
     tenant = Tenant(
         auto_approve_requests=True,
@@ -90,17 +98,40 @@ def test_lists_dedupe_requestor_and_require_flag():
     )
     assert auto_approved_request_lists(tenant, "Kyle@igniteproductions.co") == (
         ["Kyle@igniteproductions.co"],
-        ["keis@igniteproductions.co"],
+        _cc_with_standing(["keis@igniteproductions.co"]),
     )
     assert auto_approved_request_lists(tenant, "") == (
         ["kyle@igniteproductions.co"],
-        ["keis@igniteproductions.co"],
+        _cc_with_standing(["keis@igniteproductions.co"]),
     )
     tenant.auto_approve_requests = False
     assert auto_approved_request_lists(tenant, "buyer@store.com") == (
         ["buyer@store.com"],
         [],
     )
+
+
+def test_empty_brand_cc_still_copies_standing_internal():
+    tenant = Tenant(auto_approve_requests=True, request_approved_cc_emails="")
+    to_emails, cc_emails = auto_approved_request_lists(tenant, "buyer@store.com")
+    assert to_emails == ["buyer@store.com"]
+    assert cc_emails == list(ALWAYS_INCLUDE_INTERNAL_EMAILS)
+
+
+def test_standing_copy_who_is_the_requestor_is_not_also_cc():
+    tenant = Tenant(
+        auto_approve_requests=True,
+        request_approved_cc_emails="keis@igniteproductions.co",
+    )
+    to_emails, cc_emails = auto_approved_request_lists(
+        tenant, "Amiel@igniteproductions.co"
+    )
+    assert to_emails == ["Amiel@igniteproductions.co"]
+    lowered = {email.lower() for email in cc_emails}
+    assert "amiel@igniteproductions.co" not in lowered
+    assert "julie@igniteproductions.co" in lowered
+    assert "agatha@igniteproductions.co" in lowered
+    assert "keis@igniteproductions.co" in lowered
 
 
 @pytest.mark.django_db(transaction=True)
@@ -251,7 +282,7 @@ class TestRequestAutoApprove(EventsGraphQLTestCase):
         approved_cls.assert_called_once()
         kwargs = approved_cls.call_args.kwargs
         assert kwargs["to_emails"] == ["buyer@store.com"]
-        assert kwargs["cc_emails"] == BRAND_CC
+        assert kwargs["cc_emails"] == _cc_with_standing(BRAND_CC)
         assert kwargs["auto_approved"] is True
         assert kwargs["brand_color"] == "#C8A058"
         assert kwargs["request_again_url"].endswith("/spark-form/famus-energy")
@@ -259,6 +290,46 @@ class TestRequestAutoApprove(EventsGraphQLTestCase):
         mailer.send.assert_called_once()
         for cls in (created_cls, group_cls, rmm_cls, alert_cls):
             cls.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_public_activation_request_copies_standing_internal(self):
+        from asgiref.sync import sync_to_async
+
+        activation = await sync_to_async(self.create_request_type)(
+            name="Event Activation", tenant=self.famus
+        )
+        mailer = MagicMock()
+        with (
+            patch(
+                "events.mutations.RequestorRequestApprovedMailer", return_value=mailer
+            ) as approved_cls,
+            patch("events.mutations.append_torch_public_form_row", return_value=False),
+        ):
+            result = await self._public(
+                self.famus, extra={"requestTypeId": str(activation.id)}
+            )
+        payload = self._payload(result, "createRequestByUrl")
+        request = await em.Request.objects.select_related("request_type").aget(
+            uuid=payload["request"]["uuid"]
+        )
+        assert request.request_type.name == "Event Activation"
+        kwargs = approved_cls.call_args.kwargs
+        assert kwargs["to_emails"] == ["buyer@store.com"]
+        assert kwargs["cc_emails"] == _cc_with_standing(BRAND_CC)
+        for standing in ALWAYS_INCLUDE_INTERNAL_EMAILS:
+            assert standing in kwargs["cc_emails"]
+        for existing in BRAND_CC:
+            assert existing in kwargs["cc_emails"]
+        mailer.send.assert_called_once()
+
+    def test_request_cc_roll_up_includes_standing_internal_for_any_tenant(self):
+        from events.mutations import _get_request_cc_emails
+
+        emails = {e.lower() for e in _get_request_cc_emails(tenant=self.other)}
+        for standing in ALWAYS_INCLUDE_INTERNAL_EMAILS:
+            assert standing in emails
+        for existing in IGNITE_REVIEW_CC:
+            assert existing.lower() in emails
 
     @pytest.mark.asyncio
     async def test_public_multi_brand_request_approves_host_once(self):
@@ -319,9 +390,10 @@ class TestRequestAutoApprove(EventsGraphQLTestCase):
 
         kwargs = approved_cls.call_args.kwargs
         assert kwargs["to_emails"] == ["buyer@famus.com"]
-        assert kwargs["cc_emails"] == BRAND_CC
+        assert kwargs["cc_emails"] == _cc_with_standing(BRAND_CC)
         alert_to = {e.lower() for e in alert_cls.call_args.kwargs["to_emails"]}
         assert not alert_to & set(BRAND_CC)
+        assert not alert_to & set(ALWAYS_INCLUDE_INTERNAL_EMAILS)
         assert "events@igniteproductions.co" in alert_to
 
     @pytest.mark.asyncio
@@ -335,7 +407,10 @@ class TestRequestAutoApprove(EventsGraphQLTestCase):
         self._payload(result, "createRequest")
         kwargs = approved_cls.call_args.kwargs
         assert kwargs["to_emails"] == ["buyer@other.com"]
-        assert "events@igniteproductions.co" in {e.lower() for e in kwargs["cc_emails"]}
+        cc_lower = {e.lower() for e in kwargs["cc_emails"]}
+        assert "events@igniteproductions.co" in cc_lower
+        for standing in ALWAYS_INCLUDE_INTERNAL_EMAILS:
+            assert standing in cc_lower
         assert "brand_color" not in kwargs
         alert_to = {e.lower() for e in alert_cls.call_args.kwargs["to_emails"]}
         assert "kyle@igniteproductions.co" in alert_to
@@ -377,7 +452,7 @@ class TestRequestAutoApprove(EventsGraphQLTestCase):
         approved_cls.assert_called_once()
         kwargs = approved_cls.call_args.kwargs
         assert kwargs["to_emails"] == ["ops@igniteproductions.co"]
-        assert kwargs["cc_emails"] == BRAND_CC
+        assert kwargs["cc_emails"] == _cc_with_standing(BRAND_CC)
 
         req_row = await em.Request.objects.aget(uuid=payload["request"]["uuid"])
         assert req_row.retailer_name == "american fuel"

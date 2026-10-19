@@ -10,7 +10,7 @@ of the whole-Ignite roll-up. Torch keeps its own public-form gate
 from __future__ import annotations
 
 from events.event_confirmations import public_page_base
-from events.routing import suppress_cc
+from events.routing import merge_always_include_internal, suppress_cc
 from tenants.models import parse_recipient_emails
 
 
@@ -19,11 +19,17 @@ def tenant_auto_approves_requests(tenant) -> bool:
 
 
 def tenant_request_cc_emails(tenant) -> list[str]:
-    """The brand's auto-approval CC list; empty when auto-approve is off."""
+    """The brand's auto-approval CC list; empty when auto-approve is off.
+
+    Standing internal addresses are appended whenever the flag is on, including
+    when the brand column is blank, so a new client cannot omit them.
+    """
     if not tenant_auto_approves_requests(tenant):
         return []
-    return suppress_cc(
-        parse_recipient_emails(getattr(tenant, "request_approved_cc_emails", ""))
+    return merge_always_include_internal(
+        suppress_cc(
+            parse_recipient_emails(getattr(tenant, "request_approved_cc_emails", ""))
+        )
     )
 
 

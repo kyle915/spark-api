@@ -42,6 +42,7 @@ from .routing import (
     extract_state_code,
     IGNITE_REVIEW_CC,
     ROUTED_TENANT_SLUGS,
+    merge_always_include_internal,
     suppress_cc,
 )
 from .co_brands import replace_request_co_brands
@@ -3337,7 +3338,9 @@ def _get_request_cc_emails(
 
     Single source of truth so the whole Ignite team is looped in on every
     request that comes in and every approval/decline that goes out — instead
-    of each flow assembling its own narrower list."""
+    of each flow assembling its own narrower list. Standing internal addresses
+    (``merge_always_include_internal``) are appended last so a tenant or an
+    env list cannot drop them."""
     normalized_exclude = (exclude_email or "").strip().lower()
     combined = (
         list(_get_request_review_copy_emails(exclude_email=exclude_email))
@@ -3359,7 +3362,7 @@ def _get_request_cc_emails(
     out = suppress_cc(deduped)
     if tenant is not None:
         out = suppress_torch_emails(out, tenant=tenant)
-    return out
+    return merge_always_include_internal(out, exclude_email=exclude_email)
 
 
 async def _get_request_cc_emails_async(
