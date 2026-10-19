@@ -2,8 +2,8 @@
 
 A dry demo is a shift where no product was tasted (no non-dosed cans on
 hand, store won't allow sampling). Their purchases still count toward
-conversion on the same consumers-sampled denominator as other retail
-recaps. People engaged is a separate count of shoppers pitched.
+conversion, paired with "People engaged" (shoppers pitched) instead of
+"Total number of consumers sampled".
 
 Adds both fields to Consumer Engagement on ``Torch THC-Retail Sampling``,
 right around the consumers-sampled question:

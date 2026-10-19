@@ -974,11 +974,18 @@ class DailyRetailRollupMailer(Mailer):
 
     def _row(self, row, public_base: str) -> dict:
         token = make_recap_token(row.kind, int(row.recap_id))
-        base_label = (
-            f"{_fmt_int(row.consumers_sampled)} consumers sampled"
-            if row.consumers_sampled
-            else "No consumers-sampled count"
-        )
+        if row.dry_demo:
+            base_label = (
+                f"{_fmt_int(row.consumers_sampled)} people engaged"
+                if row.consumers_sampled
+                else "No people-engaged count"
+            )
+        else:
+            base_label = (
+                f"{_fmt_int(row.consumers_sampled)} consumers sampled"
+                if row.consumers_sampled
+                else "No consumers-sampled count"
+            )
         products = row.products[:3]
         more = len(row.products) - len(products)
         return {

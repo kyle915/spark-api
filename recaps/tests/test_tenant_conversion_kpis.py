@@ -271,33 +271,38 @@ class TestTenantConversionSampledBase(AmbassadorsGraphQLTestCase):
         assert data["engagements"] == 50
         assert data["pct"] == 20.0
 
-    def test_dry_demo_uses_consumers_sampled_not_people_engaged(self):
+    def test_dry_demo_uses_people_engaged_not_consumers_sampled(self):
+        # 4 sold / 22 engaged = 18%. Consumers sampled is empty and ignored.
         self._walkup_recap(
             fields=[
-                ("Total number of consumers sampled", "18"),
                 ("How many packs did consumers purchase?", "4"),
                 ("Dry demo? (no product tasted)", "Yes"),
-                ("People engaged", "40"),
+                ("People engaged", "22"),
             ]
         )
+        # Product retail: 4 sold / 18 sampled = 22.2%. Higher people engaged ignored.
         self._walkup_recap(
             fields=[
                 ("Total number of consumers sampled", "18"),
                 ("How many packs did consumers purchase?", "4"),
                 ("Dry demo? (no product tasted)", "No"),
+                ("People engaged", "40"),
             ]
         )
         data = tenant_conversion_kpis(self.tenant.id, start=self.start, end=self.end)
         assert data["sold"] == 8
-        assert data["engagements"] == 36
-        assert data["pct"] == round(8 / 36 * 100, 1)
+        assert data["engagements"] == 40  # 22 engaged + 18 sampled
+        assert data["pct"] == round(8 / 40 * 100, 1)
         assert data["dry_sold"] == 4
-        assert data["dry_engagements"] == 18
+        assert data["dry_engagements"] == 22
         assert data["dry_recaps"] == 1
         assert data["unpaired_dry_recap_ids"] == []
+        metrics = sales_program_metrics(self.tenant.id, self.start, self.end)
+        assert metrics["dry_people_engaged"] == 22
+        assert metrics["dry_people_engaged"] != 0
 
-    def test_dry_demo_with_zero_sampled_is_not_paired_from_people_engaged(self):
-        dry = self._walkup_recap(
+    def test_dry_demo_with_people_engaged_counts_when_sampled_is_zero(self):
+        self._walkup_recap(
             fields=[
                 ("Total number of consumers sampled", "0"),
                 ("How many packs did consumers purchase?", "6"),
@@ -312,12 +317,13 @@ class TestTenantConversionSampledBase(AmbassadorsGraphQLTestCase):
             ]
         )
         data = tenant_conversion_kpis(self.tenant.id, start=self.start, end=self.end)
-        assert (data["sold"], data["engagements"], data["pct"]) == (10, 50, 20.0)
-        assert data["dry_recaps"] == 0
-        assert data["unpaired_dry_recap_ids"] == [dry.id]
+        assert (data["sold"], data["engagements"], data["pct"]) == (16, 80, 20.0)
+        assert data["dry_recaps"] == 1
+        assert data["dry_engagements"] == 30
+        assert data["unpaired_dry_recap_ids"] == []
 
-    def test_dry_demo_without_people_engaged_falls_back_to_sampled(self):
-        self._walkup_recap(
+    def test_dry_demo_without_people_engaged_does_not_fall_back_to_sampled(self):
+        recap = self._walkup_recap(
             fields=[
                 ("Total number of consumers sampled", "25"),
                 ("How many packs did consumers purchase?", "5"),
@@ -325,8 +331,22 @@ class TestTenantConversionSampledBase(AmbassadorsGraphQLTestCase):
             ]
         )
         data = tenant_conversion_kpis(self.tenant.id, start=self.start, end=self.end)
-        assert (data["sold"], data["engagements"]) == (5, 25)
-        assert data["dry_engagements"] == 25
+        assert (data["sold"], data["engagements"], data["pct"]) == (0, 0, None)
+        assert data["dry_engagements"] == 0
+        assert data["unpaired_dry_recap_ids"] == [recap.id]
+
+    def test_dry_demo_with_zero_people_engaged_does_not_fall_back_to_sampled(self):
+        recap = self._walkup_recap(
+            fields=[
+                ("Total number of consumers sampled", "18"),
+                ("How many packs did consumers purchase?", "4"),
+                ("Dry demo? (no product tasted)", "Yes"),
+                ("People engaged", "0"),
+            ]
+        )
+        data = tenant_conversion_kpis(self.tenant.id, start=self.start, end=self.end)
+        assert (data["sold"], data["engagements"], data["pct"]) == (0, 0, None)
+        assert data["unpaired_dry_recap_ids"] == [recap.id]
 
     def test_dry_demo_with_no_base_is_listed_not_paired(self):
         recap = self._walkup_recap(
@@ -411,12 +431,13 @@ class TestTenantConversionSampledBase(AmbassadorsGraphQLTestCase):
         last_key = f"{last_month.year:04d}-{last_month.month:02d}"
         this_key = f"{this_month.year:04d}-{this_month.month:02d}"
         assert (by_month[last_key].consumers_sampled, by_month[last_key].units_sold) == (40, 8)
-        this = by_month.get(this_key)
-        assert this is None or (this.consumers_sampled, this.units_sold) == (0, 0)
+        this = by_month[this_key]
+        # Dry demo this month: 3 sold ÷ 25 people engaged.
+        assert (this.consumers_sampled, this.units_sold) == (25, 3)
 
         totals = conversion_window_totals(self.tenant.id, None, None)
-        assert sum(m.consumers_sampled for m in trend) == totals["base"] == 40
-        assert sum(m.units_sold for m in trend) == totals["sold"] == 8
+        assert sum(m.consumers_sampled for m in trend) == totals["base"] == 65
+        assert sum(m.units_sold for m in trend) == totals["sold"] == 11
 
         activity = tenant_monthly_trend(self.tenant.id)
         assert all(m.consumers_sampled == 0 and m.units_sold == 0 for m in activity)
@@ -445,7 +466,7 @@ class TestTenantConversionSampledBase(AmbassadorsGraphQLTestCase):
             fields=[("Dry demo? (no product tasted)", "No")],
         )
         kpis = _build_tenant_kpis(self.tenant.id)
-        assert "same consumers-sampled conversion" in kpis.trend_note
+        assert "people engaged as the conversion base" in kpis.trend_note
 
     def test_first_time_base_skips_recaps_that_never_asked(self):
         self._make_sales_tenant()
@@ -693,14 +714,14 @@ class TestTenantConversionSampledBase(AmbassadorsGraphQLTestCase):
         self._seed_sales_program()
         m = sales_program_metrics(self.tenant.id, self.start, self.end)
         conv = tenant_conversion_kpis(self.tenant.id, start=self.start, end=self.end)
-        assert (m["consumers_sampled"], m["units_sold"]) == (40, 8)
-        assert (conv["engagements"], conv["sold"]) == (40, 8)
-        assert (m["cans_sold"], m["packs_sold"]) == (6, 2)
-        assert (m["recaps"], m["demos"], m["dry_demos"]) == (1, 1, 0)
-        assert m["dry_people_engaged"] == 0
-        assert m["unpaired_dry_demos"] == 1
-        assert m["conversion_pct"] == 20.0
-        assert m["first_time_consumers"] == 10
+        assert (m["consumers_sampled"], m["units_sold"]) == (65, 11)
+        assert (conv["engagements"], conv["sold"]) == (65, 11)
+        assert (m["cans_sold"], m["packs_sold"]) == (6, 5)
+        assert (m["recaps"], m["demos"], m["dry_demos"]) == (2, 2, 1)
+        assert m["dry_people_engaged"] == 25
+        assert m["unpaired_dry_demos"] == 0
+        assert m["conversion_pct"] == round(11 / 65 * 100, 1)
+        assert m["first_time_consumers"] == 14
         assert m["brand_aware_consumers"] == 5
         assert m["willing_to_purchase"] == 20
 
@@ -713,14 +734,14 @@ class TestTenantConversionSampledBase(AmbassadorsGraphQLTestCase):
             self.tenant.id, self.start, self.end
         )
         by = {b["key"]: b for b in items}
-        assert by["reach"]["metric"] == "40"
-        assert "across 1 demo" in by["reach"]["detail"]
-        assert "People engaged" not in by["reach"]["detail"]
+        assert by["reach"]["metric"] == "65"
+        assert "across 2 demos" in by["reach"]["detail"]
+        assert "counted by people engaged (25)" in by["reach"]["detail"]
         assert by["sales"]["title"] == "Units sold"
-        assert by["sales"]["metric"] == "8"
-        assert "6 single cans · 2 packs" in by["sales"]["detail"]
-        assert "20.0% conversion" in by["sales"]["detail"]
-        assert by["new_audience"]["metric"] == "10"
+        assert by["sales"]["metric"] == "11"
+        assert "6 single cans · 5 packs" in by["sales"]["detail"]
+        assert "16.9% conversion" in by["sales"]["detail"]
+        assert by["new_audience"]["metric"] == "14"
         blob = " ".join(f"{b['title']} {b['metric']} {b['detail']}" for b in items)
         assert "engagement" not in blob.lower()
         assert label == f"{self.start} → {self.end}"
@@ -748,10 +769,10 @@ class TestTenantConversionSampledBase(AmbassadorsGraphQLTestCase):
         )
         kpis = _build_tenant_kpis(self.tenant.id)
         assert kpis.program is not None
-        assert (kpis.program.consumers_sampled, kpis.program.units_sold) == (40, 8)
+        assert (kpis.program.consumers_sampled, kpis.program.units_sold) == (65, 11)
 
         data = tenant_kpi_comparison(self.tenant.id, "month")
-        assert data["current"]["program"]["consumers_sampled"] == 40
+        assert data["current"]["program"]["consumers_sampled"] == 65
         assert data["previous"]["program"]["recaps"] == 0
         assert data["sparse_note"] == f"{data['previous_label']} had only 0 recaps — % changes hidden."
 
