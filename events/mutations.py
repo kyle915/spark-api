@@ -50,6 +50,7 @@ from .demo_cancel import DemoCancelError, request_demo_cancellation
 from .plan_event_types import event_type_for_request
 from .request_auto_approve import (
     auto_approved_request_lists,
+    omit_famus_event_submission_skips,
     request_form_url,
     tenant_auto_approves_requests,
     tenant_request_cc_emails,
@@ -3150,6 +3151,7 @@ async def _notify_spark_admins_for_client_request(
             )()
         }
         ignite_team = [e for e in ignite_team if e.lower() not in already_copied]
+        ignite_team = omit_famus_event_submission_skips(ignite_team, tenant)
         if not ignite_team:
             return
         status_slug = await sync_to_async(

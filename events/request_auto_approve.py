@@ -13,6 +13,31 @@ from events.event_confirmations import public_page_base
 from events.routing import merge_always_include_internal, suppress_cc
 from tenants.models import parse_recipient_emails
 
+FAMUS_ENERGY_SLUG = "famus-energy"
+# Still on shared Ignite lists (Torch plan mail, the active-domain roll-up).
+# Famus event-submission mail skips this address.
+FAMUS_EVENT_SUBMISSION_SKIP_EMAILS = frozenset({"junior@igniteproductions.co"})
+
+
+def is_famus_energy_tenant(tenant) -> bool:
+    slug = (getattr(tenant, "slug", None) or "").strip().lower()
+    url_name = (getattr(tenant, "request_url_name", None) or "").strip().lower()
+    return slug == FAMUS_ENERGY_SLUG or url_name == FAMUS_ENERGY_SLUG
+
+
+def omit_famus_event_submission_skips(
+    emails: list[str] | tuple[str, ...],
+    tenant,
+) -> list[str]:
+    """Drop Famus event-submission skips when the tenant is famus-energy."""
+    if not is_famus_energy_tenant(tenant):
+        return list(emails)
+    return [
+        email
+        for email in emails
+        if (email or "").strip().lower() not in FAMUS_EVENT_SUBMISSION_SKIP_EMAILS
+    ]
+
 
 def tenant_auto_approves_requests(tenant) -> bool:
     return bool(getattr(tenant, "auto_approve_requests", False))
@@ -37,7 +62,7 @@ def auto_approved_request_lists(
     tenant, requestor_email: str | None
 ) -> tuple[list[str], list[str]]:
     """To: requestor (or the first CC when there is none). CC: the brand list."""
-    cc = tenant_request_cc_emails(tenant)
+    cc = omit_famus_event_submission_skips(tenant_request_cc_emails(tenant), tenant)
     requestor = (requestor_email or "").strip()
     if requestor:
         key = requestor.lower()
