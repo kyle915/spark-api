@@ -11,13 +11,22 @@ import io
 
 import pytest
 from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.utils import timezone
 
 from ambassadors.tests.base import AmbassadorsGraphQLTestCase
 from events.models import EventType, Product, ProductType, Request, RequestProduct, RequestType
-from recaps.models import CustomField, CustomFieldValue, CustomRecap, CustomRecapTemplate
+from recaps.co_activation import CO_BRAND_SECTIONS_KEY
+from recaps.models import (
+    CustomField,
+    CustomFieldValue,
+    CustomRecap,
+    CustomRecapTemplate,
+    RecapSection,
+)
 from recaps.products_sampled import PRODUCTS_SAMPLED_FIELD
 from tenants.brand_group_demo import DEMO_DOMAIN
+from tenants.management.commands.setup_brand_group import NEXT_DEMO_QUESTION
 from tenants.models import Tenant
 
 PACKS = "How many packs did consumers purchase?"
@@ -155,3 +164,82 @@ class TestBrandGroupCatalog(AmbassadorsGraphQLTestCase):
         log = _run()
         assert f"kept dropped field {PACKS!r} (1 submitted answer(s))" in log
         assert CustomFieldValue.objects.filter(custom_recap=real, custom_field=field).exists()
+
+    def test_next_demo_question_is_optional_closer_on_these_three_only(self):
+        label = (
+            "Please ask the store if they would like to schedule another demo. "
+            "If so - provide the requested date(s) and time(s)."
+        )
+        assert NEXT_DEMO_QUESTION == label
+
+        for tenant in (self.famus, self.aa, self.ww):
+            for program in ("Retail Sampling", "Event Activation"):
+                template = CustomRecapTemplate.objects.get(
+                    tenant=tenant, event_type__name=program
+                )
+                fields = list(
+                    CustomField.objects.filter(custom_recap_template=template)
+                    .select_related("recap_section", "custom_field_type")
+                    .order_by("recap_section__order", "order", "id")
+                )
+                closer = fields[-1]
+                assert closer.name == label
+                assert closer.required is False
+                assert closer.placeholder == ""
+                assert closer.recap_section.name == "Follow-up"
+                kind = (closer.custom_field_type.name or "").lower()
+                assert "long" in kind or "textarea" in kind or "paragraph" in kind
+                notes = next(f for f in fields if f.name == "Quotes from Consumers")
+                assert notes.required is False
+                assert closer.recap_section.order > notes.recap_section.order
+                co_brand = (template.layout or {}).get(CO_BRAND_SECTIONS_KEY) or []
+                assert "Follow-up" not in co_brand
+                assert "Brand Feedback" in co_brand
+
+        other = self.create_tenant(name="Liquid Death", slug="liquid-death")
+        event_type = EventType.objects.create(
+            name="Retail Sampling",
+            slug="retail-sampling",
+            tenant=other,
+            created_by=self.sys,
+        )
+        other_template = CustomRecapTemplate.objects.create(
+            name="Liquid Death · Retail Sampling Recap",
+            tenant=other,
+            event_type=event_type,
+            created_by=self.sys,
+        )
+        notes_section = RecapSection.objects.create(
+            name="Notes", tenant=other, order=0, created_by=self.sys
+        )
+        sample = CustomField.objects.filter(name="Quotes from Consumers").first()
+        CustomField.objects.create(
+            custom_recap_template=other_template,
+            recap_section=notes_section,
+            custom_field_type=sample.custom_field_type,
+            name="Notes",
+            required=False,
+            order=0,
+            created_by=self.sys,
+        )
+        _run()
+        assert not CustomField.objects.filter(name=label).exclude(
+            custom_recap_template__tenant__slug__in=(
+                "famus-energy",
+                "alcohol-armor",
+                "wook-water",
+            )
+        ).exists()
+        assert CustomField.objects.filter(
+            custom_recap_template=other_template, name="Notes"
+        ).exists()
+
+        for loose in ("famus", "liquid-death", "torch", "wook"):
+            with pytest.raises(CommandError):
+                call_command(
+                    "setup_brand_group",
+                    tenant=loose,
+                    apply=False,
+                    skip_images=True,
+                    stdout=io.StringIO(),
+                )
