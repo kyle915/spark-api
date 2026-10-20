@@ -14,7 +14,10 @@ import pytest
 from django.core.management import call_command
 
 from events import models as em
-from events.request_auto_approve import auto_approved_request_lists
+from events.request_auto_approve import (
+    auto_approved_request_lists,
+    omit_famus_event_submission_skips,
+)
 from events.routing import ALWAYS_INCLUDE_INTERNAL_EMAILS, IGNITE_REVIEW_CC
 from events.tests.base import EventsGraphQLTestCase
 from tenants.models import Tenant, TenantTheme
@@ -116,6 +119,58 @@ def test_empty_brand_cc_still_copies_standing_internal():
     to_emails, cc_emails = auto_approved_request_lists(tenant, "buyer@store.com")
     assert to_emails == ["buyer@store.com"]
     assert cc_emails == list(ALWAYS_INCLUDE_INTERNAL_EMAILS)
+
+
+def test_famus_event_submission_drops_junior_only():
+    cc = (
+        "kyle@igniteproductions.co, Junior@igniteproductions.co, "
+        "keis@igniteproductions.co"
+    )
+    famus = Tenant(
+        slug="famus-energy",
+        request_url_name="famus-energy",
+        auto_approve_requests=True,
+        request_approved_cc_emails=cc,
+    )
+    to_emails, cc_emails = auto_approved_request_lists(famus, "buyer@store.com")
+    lowered = {email.lower() for email in cc_emails}
+    assert to_emails == ["buyer@store.com"]
+    assert "junior@igniteproductions.co" not in lowered
+    assert "kyle@igniteproductions.co" in lowered
+    assert "keis@igniteproductions.co" in lowered
+    assert "amiel@igniteproductions.co" in lowered
+    assert "julie@igniteproductions.co" in lowered
+    assert "agatha@igniteproductions.co" in lowered
+
+    wook = Tenant(
+        slug="wook-water",
+        request_url_name="wook-water",
+        auto_approve_requests=True,
+        request_approved_cc_emails=cc,
+    )
+    _, wook_cc = auto_approved_request_lists(wook, "buyer@store.com")
+    assert "junior@igniteproductions.co" in {email.lower() for email in wook_cc}
+    assert "amiel@igniteproductions.co" in {email.lower() for email in wook_cc}
+
+    rollup = [
+        "events@igniteproductions.co",
+        "Junior@igniteproductions.co",
+        "kyle@igniteproductions.co",
+    ]
+    famus_alert = {
+        email.lower() for email in omit_famus_event_submission_skips(rollup, famus)
+    }
+    assert "junior@igniteproductions.co" not in famus_alert
+    assert famus_alert == {
+        "events@igniteproductions.co",
+        "kyle@igniteproductions.co",
+    }
+    wook_alert = omit_famus_event_submission_skips(rollup, wook)
+    assert [email.lower() for email in wook_alert] == [
+        "events@igniteproductions.co",
+        "junior@igniteproductions.co",
+        "kyle@igniteproductions.co",
+    ]
 
 
 def test_standing_copy_who_is_the_requestor_is_not_also_cc():
