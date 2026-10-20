@@ -189,6 +189,15 @@ BRANDS: tuple[Brand, ...] = (
 FieldSpec = tuple[str, str, bool, list[str]]
 SectionSpec = tuple[str, list[FieldSpec]]
 
+# Shared closer on both programs (not a co-brand section): one optional
+# textarea, same shape as the other optional notes. Empty is a valid submit.
+FOLLOW_UP = "Follow-up"
+NEXT_DEMO_QUESTION = (
+    "Please ask the store if they would like to schedule another demo. "
+    "If so - provide the requested date(s) and time(s)."
+)
+NEXT_DEMO_FIELD: FieldSpec = (NEXT_DEMO_QUESTION, "longtext", False, [])
+
 
 def retail_spec(brand: Brand) -> list[SectionSpec]:
     brand_name = brand.name
@@ -247,6 +256,7 @@ def retail_spec(brand: Brand) -> list[SectionSpec]:
                 ("Reasons to decline to purchase?", "longtext", False, []),
             ],
         ),
+        (FOLLOW_UP, [NEXT_DEMO_FIELD]),
     ]
 
 
@@ -287,6 +297,7 @@ def event_spec(brand_name: str) -> list[SectionSpec]:
                 ("Quotes from Consumers", "longtext", False, []),
             ],
         ),
+        (FOLLOW_UP, [NEXT_DEMO_FIELD]),
     ]
 
 
@@ -295,6 +306,7 @@ SECTION_ORDER = {
     "Event Details": 0,
     "Brand Results": 1,
     "Brand Feedback": 2,
+    FOLLOW_UP: 3,
 }
 
 PHOTO_BUCKETS_BY_PROGRAM: dict[str, list[dict]] = {
@@ -694,6 +706,9 @@ class Command(BaseCommand):
                     name=section_name,
                     defaults={"order": SECTION_ORDER[section_name], "created_by": self.creator},
                 )
+                if section.order != SECTION_ORDER[section_name]:
+                    section.order = SECTION_ORDER[section_name]
+                    section.save(update_fields=["order"])
                 for f_idx, (fname, kind, required, options) in enumerate(fields):
                     ft = self._field_type(kind)
                     row, created = CustomField.objects.get_or_create(
