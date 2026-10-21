@@ -296,7 +296,21 @@ class TestPivotEnergySetupCommand(BaseGraphQLTestCase):
         tenant.refresh_from_db()
         assert tenant.slug == TENANT_SLUG
         assert tenant.checkin_code == STANDING_CODE
-        assert tenant.checkin_resources[0]["label"] == "BA Guide"
+        assert [row["label"] for row in tenant.checkin_resources] == [
+            "BA Guide",
+            "Retail Sampling FAQ",
+        ]
+        assert tenant.checkin_resources[1]["kind"] == "pdf"
+        assert tenant.checkin_resources[1]["url"] == (
+            "https://client.igniteproductions.co/training/"
+            "pivot-energy-drink/retail-sampling-faq.pdf"
+        )
+        assert "hideOnRecapOnly" not in tenant.checkin_resources[1]
+        assert tenant.checkin_training_url.endswith(
+            "/training/pivot-energy-drink/ba-guide.pdf"
+        )
+        famus.refresh_from_db()
+        assert famus.checkin_resources is None
         assert tenant.checkin_event_type.name == PROGRAM_NAME
         assert set(tenant.checkin_event_types.values_list("name", flat=True)) == {
             PROGRAM_NAME,

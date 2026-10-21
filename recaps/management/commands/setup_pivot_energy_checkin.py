@@ -27,6 +27,7 @@ from __future__ import annotations
 import secrets
 
 from django.conf import settings
+from django.core.management import call_command
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 from django.utils.text import slugify
@@ -377,6 +378,7 @@ class Command(BaseCommand):
             )
         self._location_mode(tenant, apply)
         self._checkin_code(tenant, apply, opts.get("prefix"))
+        self._checkin_resources(apply)
 
     def _print_spec(self) -> None:
         self.stdout.write(f"\nEvent Activation template {TEMPLATE_NAME!r}")
@@ -1102,3 +1104,11 @@ class Command(BaseCommand):
                 f"Check-in code set: {code}\n  Link: {base}/checkin/{code}"
             )
         )
+
+    def _checkin_resources(self, apply: bool) -> None:
+        """Keep the BA Guide and add Retail Sampling FAQ on this tenant only."""
+        self.stdout.write("\nWalk-up materials:")
+        kwargs = {"tenant": TENANT_SLUG}
+        if apply:
+            kwargs["apply"] = True
+        call_command("set_checkin_resources", stdout=self.stdout, **kwargs)
