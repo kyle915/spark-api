@@ -11,6 +11,9 @@ from django.test import Client, override_settings
 
 from events.event_confirmations import catalog_product_options
 from events.models import EventType, Product, ProductType
+from recaps.management.commands.setup_ld_retail_checkin import (
+    PROGRAMS as LD_PROGRAMS,
+)
 from recaps.management.commands.setup_pivot_energy_checkin import (
     CODE_PREFIX,
     NEXT_DEMO_QUESTION,
@@ -126,6 +129,25 @@ class TestPivotEnergySpec:
         assert RETAIL_SPEC == expected
         assert RETAIL_PHOTO_BUCKETS == FAMUS_PHOTO_BUCKETS["Retail Sampling"]
         assert NEXT_DEMO_QUESTION == FAMUS_NEXT_DEMO_QUESTION
+        ld_retail = next(
+            program for program in LD_PROGRAMS if program["event_type"] == "retail sampling"
+        )
+        famus_buckets = [bucket["name"] for bucket in FAMUS_PHOTO_BUCKETS["Retail Sampling"]]
+        ld_only = [
+            bucket["name"]
+            for bucket in ld_retail["photos"]
+            if bucket["name"] not in famus_buckets
+        ]
+        assert ld_only == []
+        assert [bucket["name"] for bucket in RETAIL_PHOTO_BUCKETS] == famus_buckets
+        retail_names = [name.lower() for _, fields in RETAIL_SPEC for name, *_ in fields]
+        assert not any("mileage" in name for name in retail_names)
+        assert not any("total spend" in name for name in retail_names)
+        assert not any("event location" in name for name in retail_names)
+        assert "expense receipt" not in " ".join(
+            bucket["name"].lower() for bucket in RETAIL_PHOTO_BUCKETS
+        )
+        assert "Mileage" in FIELD_NAMES
 
         famus_names = [name for _, fields in retail_spec(famus) for name, *_ in fields]
         pivot_names = [name for _, fields in RETAIL_SPEC for name, *_ in fields]
@@ -408,6 +430,90 @@ class TestPivotEnergySetupCommand(BaseGraphQLTestCase):
             custom_recap_template__tenant=famus,
             name__icontains="Pivot",
         ).exists()
+
+    def test_apply_strips_mileage_from_the_live_retail_template(self):
+        tenant = self.create_tenant(
+            name=TENANT_NAME,
+            slug=TENANT_SLUG,
+            request_url_name=TENANT_SLUG,
+            checkin_code=STANDING_CODE,
+        )
+        event_type = self._event_type(tenant, PROGRAM_NAME)
+        event_template = self._template(tenant, event_type, TEMPLATE_NAME)
+        event_mileage = self._field(event_template, "Expenses", "Mileage")
+        retail_type = self._event_type(tenant, RETAIL_PROGRAM)
+        legacy = self._template(tenant, retail_type, "Pivot · Retail Sampling Recap")
+        self._field(legacy, "Card & Mileage", "Mileage")
+        self._field(legacy, "Card & Mileage", "Total spend on the card")
+        self._field(legacy, "Store Details", "Where are you working (store)?")
+        product_type = ProductType.objects.create(
+            name="Pivot", tenant=tenant, created_by=self.user
+        )
+        for sku in SKU_NAMES:
+            Product.objects.create(
+                name=sku,
+                product_type=product_type,
+                tenant=tenant,
+                created_by=self.user,
+            )
+
+        famus = self.create_tenant(name="FAMUS Energy", slug="famus-energy")
+        famus_type = self._event_type(famus, "Retail Sampling")
+        famus_template = self._template(
+            famus, famus_type, "FAMUS Energy · Retail Sampling Recap"
+        )
+        famus_label = (
+            "How many consumers that were engaged with knew about FAMUS Energy?"
+        )
+        famus_field = self._field(famus_template, "Brand Results", famus_label)
+
+        ld = self.create_tenant(name="Liquid Death", slug="liquid-death")
+        ld_type = self._event_type(ld, "Retail Sampling")
+        ld_template = self._template(ld, ld_type, "Liquid Death-Retail Sampling")
+        ld_field = self._field(ld_template, "Additional Insights", "Account Spend Amount")
+
+        log = self._run(tenant="pivot-energy-drink", apply=True)
+        assert "dropped 'Mileage'" in log
+        assert "PE-Y7VPYC" in log
+
+        retail = CustomRecapTemplate.objects.get(
+            tenant=tenant, name=RETAIL_TEMPLATE_NAME
+        )
+        retail_names = list(
+            CustomField.objects.filter(custom_recap_template=retail)
+            .order_by("recap_section__order", "order", "id")
+            .values_list("name", flat=True)
+        )
+        assert retail_names == [name for _, fields in RETAIL_SPEC for name, *_ in fields]
+        assert not any("mileage" in name.lower() for name in retail_names)
+        assert CustomRecapTemplate.objects.filter(
+            tenant=tenant, name="Pivot · Retail Sampling Recap"
+        ).count() == 0
+        assert (
+            CustomRecapTemplate.objects.filter(
+                tenant=tenant, event_type=retail_type
+            ).count()
+            == 1
+        )
+
+        event_mileage.refresh_from_db()
+        assert event_mileage.name == "Mileage"
+        assert event_mileage.custom_recap_template_id == event_template.id
+        tenant.refresh_from_db()
+        assert tenant.checkin_code == STANDING_CODE
+        assert set(
+            Product.objects.filter(tenant=tenant).values_list("name", flat=True)
+        ) == set(SKU_NAMES)
+
+        famus_field.refresh_from_db()
+        famus_template.refresh_from_db()
+        assert famus_field.name == famus_label
+        assert famus_template.name == "FAMUS Energy · Retail Sampling Recap"
+        ld_field.refresh_from_db()
+        ld_template.refresh_from_db()
+        assert ld_field.name == "Account Spend Amount"
+        assert ld_template.name == "Liquid Death-Retail Sampling"
+        assert ld_template.tenant_id == ld.id
 
     def _event_type(self, tenant, name):
         return EventType.objects.create(

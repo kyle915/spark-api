@@ -9,11 +9,15 @@ Event Activation stays the festival form already live on this brand:
 - Pinned default program on the standing link
 
 Retail Sampling is added beside it so a BA can choose either program.
-The retail form matches FAMUS Energy's Retail Sampling recap (same sections,
-field types, required flags, and photo buckets). The one brand-specific
-question is rephrased to Pivot Energy Drink. SKU choices are this tenant's
-Product catalog (Blue Razz, Pink Lemonade, Melon Rush, Going Grape, plus any
-products already on the tenant). No SKU images are downloaded.
+Questions follow FAMUS Energy's Retail Sampling recap (same sections, field
+types, required flags, and order). Photo buckets follow that recap too:
+Liquid Death retail uses the same four shots, so nothing extra is added.
+The one brand-specific question is rephrased to Pivot Energy Drink.
+Mileage, card spend, expense receipts, and event location are not on either
+retail recap and are removed from this form. SKU choices are this tenant's
+Product catalog (Blue Razz, Pink Lemonade, Melon Rush, Going Grape, stored
+as Pivot — {name}). No SKU images are downloaded. Existing products are
+left in place.
 
 Standing walk-up code is left alone. ``PE-Y7VPYC`` is never reminted.
 Recaps stay human-reviewed (approved=False until admin approve).
@@ -41,12 +45,16 @@ TENANT_NAME = "Pivot Energy Drink"
 TENANT_SLUG = "pivot-energy-drink"
 TEMPLATE_NAME = "Pivot Energy Drink · Event Activation Recap"
 RETAIL_TEMPLATE_NAME = "Pivot Energy Drink · Retail Sampling Recap"
+# First retail seed. Renamed in place so apply edits that row instead of
+# leaving a second form that still asks for mileage.
+LEGACY_RETAIL_TEMPLATE_NAME = "Pivot · Retail Sampling Recap"
 CODE_PREFIX = "PE-"
 # Already shared with the field team. Never mint a replacement.
 STANDING_CODE = "PE-Y7VPYC"
 PROGRAM_NAME = "Event Activation"
 RETAIL_PROGRAM = "Retail Sampling"
-PRODUCT_TYPE_NAME = "Energy Drink"
+# Live catalog type. Options read "Pivot — Blue Razz".
+PRODUCT_TYPE_NAME = "Pivot"
 # Exact catalog names. No sizes and no images.
 SKU_NAMES = (
     "Blue Razz",
@@ -331,6 +339,7 @@ class Command(BaseCommand):
 
         if apply:
             with transaction.atomic():
+                self._adopt_legacy_retail_template(tenant, True)
                 self._upsert_template(
                     tenant, template_name, event_type, SPEC, creator, apply, ft_cache
                 )
@@ -345,7 +354,9 @@ class Command(BaseCommand):
                 )
                 self._ensure_skus(tenant, creator, apply)
                 self._sync_products_sampled(tenant, apply)
+                self._drop_empty_retired_sections(tenant)
         else:
+            self._adopt_legacy_retail_template(tenant, False)
             self._upsert_template(
                 tenant, template_name, event_type, SPEC, creator, apply, ft_cache
             )
@@ -776,6 +787,10 @@ class Command(BaseCommand):
                     field.save(update_fields=changed)
                     updated["fields"] += 1
 
+        self._drop_fields_outside_spec(
+            tenant, template_name, spec, apply, template
+        )
+
         self.stdout.write("\n" + "=" * 68)
         if apply:
             self.stdout.write(
@@ -793,6 +808,109 @@ class Command(BaseCommand):
                     f"{total_fields} fields on {template_name!r}."
                 )
             )
+
+    def _adopt_legacy_retail_template(self, tenant, apply: bool) -> None:
+        """Point the already-live retail form at the Famus-style name.
+
+        Prod already has ``Pivot · Retail Sampling Recap``. Creating a second
+        template would leave walk-up on the lower-id row, which still asks
+        for mileage.
+        """
+        from recaps.models import CustomRecapTemplate
+
+        if CustomRecapTemplate.objects.filter(
+            tenant_id=tenant.id, name=RETAIL_TEMPLATE_NAME
+        ).exists():
+            return
+        legacy = CustomRecapTemplate.objects.filter(
+            tenant_id=tenant.id, name=LEGACY_RETAIL_TEMPLATE_NAME
+        ).first()
+        if legacy is None:
+            return
+        if not apply:
+            self.stdout.write(
+                self.style.WARNING(
+                    f"DRY-RUN — would rename {legacy.name!r} → "
+                    f"{RETAIL_TEMPLATE_NAME!r}"
+                )
+            )
+            return
+        legacy.name = RETAIL_TEMPLATE_NAME
+        legacy.save(update_fields=["name", "updated_at"])
+        self.stdout.write(
+            self.style.SUCCESS(
+                f"Renamed {LEGACY_RETAIL_TEMPLATE_NAME!r} → "
+                f"{RETAIL_TEMPLATE_NAME!r}"
+            )
+        )
+
+    def _drop_fields_outside_spec(
+        self, tenant, template_name: str, spec, apply: bool, template
+    ) -> None:
+        """Delete questions this program no longer asks.
+
+        A reused row (the live retail form) keeps Mileage until the extra
+        fields are removed. Event Activation's spec still includes Mileage,
+        so that field stays on the activation template.
+        """
+        from recaps.models import CustomField, CustomFieldValue, CustomRecapTemplate
+
+        target = template if getattr(template, "id", None) else None
+        if target is None:
+            target = CustomRecapTemplate.objects.filter(
+                tenant_id=tenant.id, name=template_name
+            ).first()
+            if target is None and template_name == RETAIL_TEMPLATE_NAME:
+                target = CustomRecapTemplate.objects.filter(
+                    tenant_id=tenant.id, name=LEGACY_RETAIL_TEMPLATE_NAME
+                ).first()
+        if target is None:
+            return
+        wanted = {
+            (section_name, fname)
+            for section_name, fields in spec
+            for fname, *_ in fields
+        }
+        stale = []
+        for field in (
+            CustomField.objects.filter(custom_recap_template=target)
+            .select_related("recap_section")
+            .order_by("id")
+        ):
+            section_name = field.recap_section.name if field.recap_section_id else ""
+            if (section_name, field.name) not in wanted:
+                stale.append(field)
+        for field in stale:
+            if not apply:
+                self.stdout.write(
+                    self.style.WARNING(
+                        f"    - would drop {field.name!r} (not on this recap)"
+                    )
+                )
+                continue
+            n = CustomFieldValue.objects.filter(custom_field=field).count()
+            CustomFieldValue.objects.filter(custom_field=field).delete()
+            field.delete()
+            note = f" ({n} answer(s))" if n else ""
+            self.stdout.write(f"    - dropped {field.name!r}{note}")
+
+    def _drop_empty_retired_sections(self, tenant) -> None:
+        """Remove sections the retail rebuild no longer uses."""
+        from recaps.models import CustomField, RecapSection
+
+        keep = set(SECTION_ORDER)
+        for section in RecapSection.objects.filter(tenant_id=tenant.id).exclude(
+            name__in=keep
+        ):
+            if CustomField.objects.filter(recap_section=section).exists():
+                self.stdout.write(
+                    self.style.WARNING(
+                        f"  kept section {section.name!r} (still has fields)"
+                    )
+                )
+                continue
+            section.delete()
+            self.stdout.write(f"  - dropped empty section {section.name!r}")
 
     def _photo_buckets(self, tenant, creator, apply: bool) -> None:
         from recaps.models import FileRecapCategory
