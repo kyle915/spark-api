@@ -299,13 +299,20 @@ class TestPivotEnergySetupCommand(BaseGraphQLTestCase):
         assert [row["label"] for row in tenant.checkin_resources] == [
             "BA Guide",
             "Retail Sampling FAQ",
+            "Product Comparison",
         ]
         assert tenant.checkin_resources[1]["kind"] == "pdf"
         assert tenant.checkin_resources[1]["url"] == (
             "https://client.igniteproductions.co/training/"
             "pivot-energy-drink/retail-sampling-faq.pdf"
         )
+        assert tenant.checkin_resources[2]["label"] == "Product Comparison"
+        assert tenant.checkin_resources[2]["url"] == (
+            "https://client.igniteproductions.co/training/"
+            "pivot-energy-drink/product-comparison.pdf"
+        )
         assert "hideOnRecapOnly" not in tenant.checkin_resources[1]
+        assert "hideOnRecapOnly" not in tenant.checkin_resources[2]
         assert tenant.checkin_training_url.endswith(
             "/training/pivot-energy-drink/ba-guide.pdf"
         )

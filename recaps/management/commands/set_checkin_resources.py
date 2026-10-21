@@ -67,7 +67,11 @@ def _asset_base() -> str:
 
 
 def _pivot_resources(base: str) -> list[dict]:
-    """Walk-up buttons for Pivot only. BA Guide stays the email training link."""
+    """Walk-up buttons for Pivot only. BA Guide stays the email training link.
+
+    Confirmation emails list every pdf here, so Product Comparison is included
+    for Pivot and not for Famus, Wook, or Alcohol Armor.
+    """
     return [
         {
             "label": "BA Guide",
@@ -80,6 +84,12 @@ def _pivot_resources(base: str) -> list[dict]:
             "kind": "pdf",
             "url": f"{base}/training/pivot-energy-drink/retail-sampling-faq.pdf",
             "note": "Total Wine retail sampling guide",
+        },
+        {
+            "label": "Product Comparison",
+            "kind": "pdf",
+            "url": f"{base}/training/pivot-energy-drink/product-comparison.pdf",
+            "note": "How Pivot compares with other energy drinks",
         },
     ]
 
@@ -241,9 +251,10 @@ def _presets() -> dict[str, list[dict]]:
             },
         ],
         # Pivot Energy Drink (standing PE-Y7VPYC). BA Guide stays first so
-        # confirmation emails keep that deck. Retail Sampling FAQ is the
-        # second check-in button. Do not attach this preset to Famus, Wook,
-        # or Alcohol Armor. Do not remint PE-Y7VPYC.
+        # confirmation emails keep that deck. Retail Sampling FAQ and
+        # Product Comparison follow it on the check-in page and in Pivot
+        # confirmation mail. Do not attach this preset to Famus, Wook, or
+        # Alcohol Armor. Do not remint PE-Y7VPYC.
         "pivot": _pivot_resources(base),
         "pivot-energy-drink": _pivot_resources(base),
         # Famus Energy standing walk-up (FM-PAG4TX). Both buttons show on
