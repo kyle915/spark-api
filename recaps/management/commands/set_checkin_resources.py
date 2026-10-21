@@ -49,6 +49,9 @@ _NICKNAME_TO_SLUG = {
     "treasury": "treasury-wine-estates",
     "famus": "famus-energy",
     "famus energy": "famus-energy",
+    "pivot": "pivot-energy-drink",
+    "pivot energy": "pivot-energy-drink",
+    "pivot energy drink": "pivot-energy-drink",
 }
 
 # Where the assets are served from. They live in the FRONT-END repo under
@@ -61,6 +64,24 @@ def _asset_base() -> str:
     from events.event_confirmations import public_page_base
 
     return public_page_base()
+
+
+def _pivot_resources(base: str) -> list[dict]:
+    """Walk-up buttons for Pivot only. BA Guide stays the email training link."""
+    return [
+        {
+            "label": "BA Guide",
+            "kind": "pdf",
+            "url": f"{base}/training/pivot-energy-drink/ba-guide.pdf",
+            "note": "Shift checklist and brand Q&A",
+        },
+        {
+            "label": "Retail Sampling FAQ",
+            "kind": "pdf",
+            "url": f"{base}/training/pivot-energy-drink/retail-sampling-faq.pdf",
+            "note": "Total Wine retail sampling guide",
+        },
+    ]
 
 
 # Per-brand defaults, keyed by the same loose tenant needle the other setup
@@ -219,24 +240,12 @@ def _presets() -> dict[str, list[dict]]:
                 "note": "Tasting note",
             },
         ],
-        # Pivot Energy Drink Event Activation (standing PE- link).
-        # Keys "pivot" and "pivot-energy-drink" both resolve.
-        "pivot": [
-            {
-                "label": "BA Guide",
-                "kind": "pdf",
-                "url": f"{base}/training/pivot-energy-drink/ba-guide.pdf",
-                "note": "Shift checklist and brand Q&A",
-            },
-        ],
-        "pivot-energy-drink": [
-            {
-                "label": "BA Guide",
-                "kind": "pdf",
-                "url": f"{base}/training/pivot-energy-drink/ba-guide.pdf",
-                "note": "Shift checklist and brand Q&A",
-            },
-        ],
+        # Pivot Energy Drink (standing PE-Y7VPYC). BA Guide stays first so
+        # confirmation emails keep that deck. Retail Sampling FAQ is the
+        # second check-in button. Do not attach this preset to Famus, Wook,
+        # or Alcohol Armor. Do not remint PE-Y7VPYC.
+        "pivot": _pivot_resources(base),
+        "pivot-energy-drink": _pivot_resources(base),
         # Famus Energy standing walk-up (FM-PAG4TX). Both buttons show on
         # the check-in page, including while the BA files the recap.
         # Do not attach this preset to Wook Water or Alcohol Armor.
@@ -392,6 +401,10 @@ class Command(BaseCommand):
             "famus": "famus-energy",
             "famus energy": "famus-energy",
             "famus-energy": "famus-energy",
+            "pivot": "pivot-energy-drink",
+            "pivot energy": "pivot-energy-drink",
+            "pivot energy drink": "pivot-energy-drink",
+            "pivot-energy-drink": "pivot-energy-drink",
         }
         for cand in candidates:
             if not cand:
