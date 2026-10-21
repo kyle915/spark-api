@@ -6,9 +6,12 @@ POST ``/internal/torch-sheet-event-confirmation``,
 Mounted outside ``/internal/cron/`` so the Apps Script URL stays short, but
 uses the same secret gate as cron jobs.
 
-Sheet id is allowlisted (Torch, Liquid Death, and the Famus / Alcohol Armor /
-Wook Water workbook). Passing the wrong id returns 400 even if the path is
-one of those endpoints.
+Sheet id is allowlisted (Torch, Liquid Death, the Famus / Alcohol Armor /
+Wook Water workbook, and the Pivot Energy workbook). Passing an unknown id
+returns 400 even if the path is one of those endpoints. The brand-group
+endpoint accepts both the Famus workbook and the Pivot workbook; ``sheetId``
+selects which one. Omitting ``sheetId`` on that endpoint stays the Famus
+workbook.
 """
 
 from __future__ import annotations

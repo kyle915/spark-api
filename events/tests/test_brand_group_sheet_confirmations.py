@@ -5,7 +5,7 @@ Column H picks the brands. The email is the Torch confirmation template.
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
@@ -13,14 +13,19 @@ import pytest
 
 from events.brand_group_sheet import (
     BRAND_GROUP_SHEET_ID,
+    PIVOT_CHECKIN_CODE,
+    PIVOT_SHEET_ID,
     match_sku_tokens,
     parse_brand_slugs,
 )
 from events.event_confirmations import (
     EventConfirmationMailer,
+    SendResult,
     build_subject,
+    due_reminders,
 )
 from events.models import EventConfirmation, Product, ProductType, TimeZone
+from events.sheet_event_confirmation_views import BrandGroupSheetEventConfirmationView
 from events.sheet_event_confirmations import (
     STATUS_SENT,
     SheetRowPayload,
@@ -86,6 +91,8 @@ def test_column_h_routes_one_brand_and_refuses_unknown():
         parse_brand_slugs("")
     with pytest.raises(ValueError, match="Unknown brand"):
         parse_brand_slugs("Torch")
+    with pytest.raises(ValueError, match="Unknown brand"):
+        parse_brand_slugs("Pivot Energy Drink")
 
 
 def test_skus_stay_on_the_named_catalog():
@@ -319,6 +326,7 @@ class TestBrandGroupSheetSend:
         ]
         assert "WW-36DJAJ" not in "".join(result.details["checkin_urls"])
         assert "AA-RPP85E" not in "".join(result.details["checkin_urls"])
+        assert "PE-Y7VPYC" not in "".join(result.details["checkin_urls"])
 
     def test_wook_only_link(self):
         result = self._send(
@@ -390,21 +398,35 @@ class TestBrandGroupEmailUsesTorchTemplate:
                 ["famus-energy"],
                 "Your FAMUS Energy Retail Sampling – marathon | 10/21/2026 | 7a - 10a",
                 ["FM-PAG4TX", "brand-guidelines.pdf", "ba-faq-guide.pdf"],
-                ["WW-36DJAJ", "AA-RPP85E"],
+                ["WW-36DJAJ", "AA-RPP85E", "retail-sampling-faq.pdf", "product-comparison.pdf"],
             ),
             (
                 self.wook,
                 ["wook-water"],
                 "Your Wook Water Retail Sampling – marathon | 10/21/2026 | 7a - 10a",
                 ["WW-36DJAJ"],
-                ["FM-PAG4TX", "AA-RPP85E", "brand-guidelines.pdf", "ba-faq-guide.pdf"],
+                [
+                    "FM-PAG4TX",
+                    "AA-RPP85E",
+                    "brand-guidelines.pdf",
+                    "ba-faq-guide.pdf",
+                    "retail-sampling-faq.pdf",
+                    "product-comparison.pdf",
+                ],
             ),
             (
                 self.armor,
                 ["alcohol-armor"],
                 "Your Alcohol Armor Retail Sampling – marathon | 10/21/2026 | 7a - 10a",
                 ["AA-RPP85E"],
-                ["FM-PAG4TX", "WW-36DJAJ", "brand-guidelines.pdf", "ba-faq-guide.pdf"],
+                [
+                    "FM-PAG4TX",
+                    "WW-36DJAJ",
+                    "brand-guidelines.pdf",
+                    "ba-faq-guide.pdf",
+                    "retail-sampling-faq.pdf",
+                    "product-comparison.pdf",
+                ],
             ),
         ]
         for tenant, slugs, subject, present, absent in cases:
@@ -445,4 +467,258 @@ class TestBrandGroupEmailUsesTorchTemplate:
         assert "OG Luxe (Tropical Ice) 16oz" in html
         assert "Pineapple Peak 12oz Can" in html
         assert "Slayberry" not in html
+        assert "retail-sampling-faq.pdf" not in html
+        assert "product-comparison.pdf" not in html
         assert "spark.igniteproductions.co" not in html
+
+
+PIVOT_CATALOG = [
+    "Blue Razz",
+    "Pink Lemonade",
+    "Melon Rush",
+    "Going Grape",
+]
+PIVOT_RESOURCES = [
+    {
+        "label": "BA Guide",
+        "kind": "pdf",
+        "url": "/training/pivot-energy-drink/ba-guide.pdf",
+    },
+]
+PIVOT_FAQ_URL = (
+    "https://client.igniteproductions.co/training/pivot-energy-drink/"
+    "retail-sampling-faq.pdf"
+)
+PIVOT_COMPARISON_URL = (
+    "https://client.igniteproductions.co/training/pivot-energy-drink/"
+    "product-comparison.pdf"
+)
+
+
+def test_pivot_sheet_id_is_allowlisted_and_famus_stays_the_default():
+    assert validate_sheet_id(PIVOT_SHEET_ID) == PIVOT_SHEET_ID
+    assert validate_sheet_id(BRAND_GROUP_SHEET_ID) == BRAND_GROUP_SHEET_ID
+    assert (
+        BrandGroupSheetEventConfirmationView.default_sheet_id == BRAND_GROUP_SHEET_ID
+    )
+    with pytest.raises(ValueError, match="unknown sheet"):
+        validate_sheet_id("not-a-sheet")
+
+
+@pytest.mark.django_db
+class TestPivotSheetSend:
+    def setup_method(self):
+        self.pivot, product_type, user = _brand(
+            "pivot-energy-drink",
+            "Pivot Energy Drink",
+            PIVOT_CHECKIN_CODE,
+            PIVOT_RESOURCES,
+        )
+        _products(self.pivot, product_type, user, PIVOT_CATALOG)
+        self.famus, famus_type, user = _brand(
+            "famus-energy",
+            "FAMUS Energy",
+            "FM-PAG4TX",
+            FAMUS_RESOURCES,
+        )
+        _products(self.famus, famus_type, user, FAMUS_CATALOG)
+
+    def _row(self, **values):
+        body = {
+            "Date": "Oct 30, 2026",
+            "Start Time": "2p",
+            "End Time": "5p",
+            "Store Name": "Total Wine (Fort Myers)",
+            "Address": "13711 S Tamiami Trail, Fort Myers, FL 33912",
+            "State": "FL",
+            "SKUs to sample": "Blue Razz\nPink Lemonade\nMelon Rush\nGoing Grape",
+            "BA Name": "Pat BA",
+            "Email": "pivot-ba@example.com",
+        }
+        body.update(values)
+        return body
+
+    def _send(self, **values):
+        payload = payload_from_mapping(
+            self._row(**values),
+            row_number=2,
+            sheet_id=PIVOT_SHEET_ID,
+            dry_run=True,
+        )
+        with patch(
+            "events.sheet_event_confirmations.resolve_timezone_for_row",
+            return_value=("America/New_York", ""),
+        ):
+            return send_from_sheet_row(payload)
+
+    def test_every_row_is_pivot_even_if_a_brand_cell_is_present(self):
+        result = self._send(Brand="Famus Energy")
+        assert result.ok is True
+        assert result.details["brand_slugs"] == []
+        assert result.details["checkin_urls"] == [
+            "https://client.igniteproductions.co/checkin/PE-Y7VPYC"
+        ]
+        assert result.details["products"] == PIVOT_CATALOG
+        assert result.details["send_reminders"] is True
+        joined = " ".join(result.details["checkin_urls"])
+        assert "FM-PAG4TX" not in joined
+        assert "WW-36DJAJ" not in joined
+        assert "AA-RPP85E" not in joined
+
+    def test_famus_sku_on_the_pivot_sheet_is_refused(self):
+        result = self._send(**{"SKUs to sample": "OG Luxe"})
+        assert result.ok is False
+        assert "not in the catalog" in result.message
+        assert "pivot-energy-drink" in result.message
+
+    def test_blank_skus_send_with_no_product_lines(self):
+        result = self._send(**{"SKUs to sample": ""})
+        assert result.ok is True
+        assert result.details["products"] == []
+
+    def test_sent_row_is_not_emailed_again(self):
+        payload = SheetRowPayload(
+            row_number=2,
+            sheet_id=PIVOT_SHEET_ID,
+            confirmation_status=STATUS_SENT,
+            ba_name="Pat BA",
+            ba_email="pivot-ba@example.com",
+            date="Oct 30, 2026",
+            start_time="2p",
+        )
+        result = send_from_sheet_row(payload)
+        assert result.ok is False
+        assert result.details.get("already_sent") is True
+        assert EventConfirmation.objects.count() == 0
+
+    def test_standing_code_is_not_reminted(self):
+        self.pivot.checkin_code = "PE-OTHER1"
+        self.pivot.save(update_fields=["checkin_code"])
+        result = self._send()
+        assert result.ok is False
+        assert PIVOT_CHECKIN_CODE in result.message
+        self.pivot.refresh_from_db()
+        assert self.pivot.checkin_code == "PE-OTHER1"
+
+    def test_reminders_are_scheduled_on_the_torch_sweep(self):
+        from django.utils import timezone as dj_tz
+
+        when = dj_tz.now().astimezone(EASTERN) + timedelta(days=10)
+        date_label = f"{when.strftime('%b')} {when.day}, {when.year}"
+        payload = payload_from_mapping(
+            self._row(Date=date_label),
+            row_number=2,
+            sheet_id=PIVOT_SHEET_ID,
+            dry_run=False,
+        )
+        with (
+            patch(
+                "events.sheet_event_confirmations.resolve_timezone_for_row",
+                return_value=("America/New_York", ""),
+            ),
+            patch("events.sheet_event_confirmations.write_row_status"),
+            patch(
+                "events.event_confirmations.send_confirmation_stage",
+                return_value=SendResult(stage="booked", sent=True),
+            ),
+        ):
+            result = send_from_sheet_row(payload)
+        assert result.ok is True
+        confirmation = EventConfirmation.objects.get(ba_email="pivot-ba@example.com")
+        assert confirmation.send_reminders is True
+        assert confirmation.tenant.slug == "pivot-energy-drink"
+        assert confirmation.tenant.checkin_code == PIVOT_CHECKIN_CODE
+        assert confirmation.event_type_label == "Retail Sampling"
+        starts = confirmation.starts_at
+        t24 = due_reminders(now=starts - timedelta(hours=24))
+        t3 = due_reminders(now=starts - timedelta(hours=3))
+        assert any(
+            row.id == confirmation.id and stage == EventConfirmation.STAGE_T24
+            for row, stage in t24
+        )
+        assert any(
+            row.id == confirmation.id and stage == EventConfirmation.STAGE_T3
+            for row, stage in t3
+        )
+        t3_html = (
+            EventConfirmationMailer(confirmation, EventConfirmation.STAGE_T3)
+            .envelope()
+            .render_template()
+        )
+        assert (
+            "Just a friendly reminder that you're scheduled for a" in t3_html
+        )
+        assert "Pivot Energy Drink retail sampling" in t3_html
+        assert "in a few hours" in t3_html
+
+
+@pytest.mark.django_db
+class TestPivotEmailUsesTorchTemplate:
+    def setup_method(self):
+        self.pivot, _, _ = _brand(
+            "pivot-energy-drink",
+            "Pivot Energy Drink",
+            PIVOT_CHECKIN_CODE,
+            PIVOT_RESOURCES,
+        )
+
+    def test_faq_clock_and_recap_stay_on_the_pivot_checkin(self):
+        confirmation = _confirmation(
+            self.pivot,
+            products=PIVOT_CATALOG,
+            brand_slugs=[],
+            store_name="Total Wine (Fort Myers)",
+        )
+        html, subject = _html(confirmation)
+        assert subject == (
+            "Your Pivot Energy Drink Retail Sampling – "
+            "Total Wine (Fort Myers) | 10/21/2026 | 7a - 10a"
+        )
+        for marker in TORCH_CHROME:
+            assert marker in html
+        assert html.count("Clock in / Clock out") == 1
+        assert html.count("Open Recap Form") == 1
+        assert "PE-Y7VPYC" in html
+        assert "BA Guide" in html
+        assert "Retail Sampling FAQ" in html
+        assert "Product Comparison" in html
+        assert html.count("Retail Sampling FAQ") == 1
+        assert html.count("Product Comparison") == 1
+        assert html.count("retail-sampling-faq.pdf") == 3
+        assert html.count("product-comparison.pdf") == 3
+        assert PIVOT_FAQ_URL in html
+        assert PIVOT_COMPARISON_URL in html
+        assert "client.igniteproductions.co" in html
+        for absent in (
+            "FM-PAG4TX",
+            "WW-36DJAJ",
+            "AA-RPP85E",
+            "spark.igniteproductions.co",
+            "ba-faq-guide.pdf",
+            "brand-guidelines.pdf",
+        ):
+            assert absent not in html
+
+    def test_walkup_buttons_are_not_duplicated(self):
+        self.pivot.checkin_resources = [
+            *PIVOT_RESOURCES,
+            {
+                "label": "Retail Sampling FAQ",
+                "kind": "pdf",
+                "url": PIVOT_FAQ_URL,
+            },
+            {
+                "label": "Product Comparison",
+                "kind": "pdf",
+                "url": PIVOT_COMPARISON_URL,
+            },
+        ]
+        self.pivot.save(update_fields=["checkin_resources"])
+        confirmation = _confirmation(self.pivot, products=["Blue Razz"])
+        html, _subject = _html(confirmation)
+        assert html.count("BA Guide") == 1
+        assert html.count("Retail Sampling FAQ") == 1
+        assert html.count("Product Comparison") == 1
+        assert html.count("retail-sampling-faq.pdf") == 3
+        assert html.count("product-comparison.pdf") == 3
+

@@ -1,20 +1,27 @@
-# Famus / Alcohol Armor / Wook Water Sheet → Event Confirmation
+# Famus / Alcohol Armor / Wook Water and Pivot Energy Sheet → Event Confirmation
 
-Automates BA event confirmations (and cancellations) from the shared
-brand-group retail sheet. Same mailer as Torch: `events/templates/emails/event_confirmation.html`
+Automates BA event confirmations (and cancellations) from two retail
+workbooks on one endpoint. Same mailer as Torch: `events/templates/emails/event_confirmation.html`
 plus `emails/_confirmation_shift_actions.html` (the Torch clock, recap, and
-BA-material buttons). Email only — no Event or roster create.
+BA-material buttons). Email only — no Event or roster create. Reminders
+stay on (`send_reminders`): the day-before note and the few-hours note
+("…scheduled for a {brand} retail sampling in a few hours").
+
+**Endpoint:** `POST https://spark-api-new-490085168610.us-central1.run.app/internal/brand-group-sheet-event-confirmation`
+**Auth:** `X-Cron-Secret: <INTERNAL_CRON_SECRET>`
+
+`sheetId` picks the workbook. Omitting it stays the Famus group sheet.
+
+## Famus / Alcohol Armor / Wook Water
 
 **Sheet:** [External // Wook Water, Famus Energy, Alcohol Armor](https://docs.google.com/spreadsheets/d/1xnnzFb3s0mAV-6abyzmPzEX3wjtObD8Bv4qQsr8VB6A/edit)
 **ID:** `1xnnzFb3s0mAV-6abyzmPzEX3wjtObD8Bv4qQsr8VB6A` (gid **0**, tab `Sheet1`)
-**Endpoint:** `POST https://spark-api-new-490085168610.us-central1.run.app/internal/brand-group-sheet-event-confirmation`
-**Auth:** `X-Cron-Secret: <INTERNAL_CRON_SECRET>`
 
 Column **H (Brand)** chooses the tenant. The email includes only that brand's
 standing check-in link, BA materials, and catalog SKUs. Several brands in H
 (comma, slash, `&`, `+`, or `and`) repeat the same Torch button block once
 per brand. A brand that is not named is not mentioned. An empty Brand cell
-does not attach all three.
+does not attach all three. Pivot is not a column H brand.
 
 | Brand in H | Slug | Standing check-in (do not remint) |
 |---|---|---|
@@ -28,7 +35,56 @@ those PDFs. SKU text is matched to the named tenants' Product catalog (for
 example `OG Luxe` → `OG Luxe (Tropical Ice) 16oz`). A SKU that is not in
 those catalogs is refused. Event type is always **Retail Sampling**.
 
-## Columns (gid 0, read 2026-10-19)
+## Pivot Energy Drink
+
+**Sheet:** [External // Pivot Energy Retail Demos](https://docs.google.com/spreadsheets/d/1kMuUWZtaEJ0rbvsDzE-uI3FkBTIJdX_LbnEqYaAHG4I/edit)
+**ID:** `1kMuUWZtaEJ0rbvsDzE-uI3FkBTIJdX_LbnEqYaAHG4I` (gid **0**, tab `Retail Schedule`)
+
+There is no Brand column. Every confirmation is Pivot Energy Drink
+(`pivot-energy-drink`). Standing check-in, do not remint:
+`https://client.igniteproductions.co/checkin/PE-Y7VPYC`.
+
+Clock in / Clock out and Open Recap Form use that URL on
+`client.igniteproductions.co`. The email keeps the walk-up **BA Guide** when
+that tenant has it, and always includes:
+
+- **Retail Sampling FAQ** — `https://client.igniteproductions.co/training/pivot-energy-drink/retail-sampling-faq.pdf`
+- **Product Comparison** — `https://client.igniteproductions.co/training/pivot-energy-drink/product-comparison.pdf`
+
+Famus, Wook, and Alcohol Armor links are not attached, and those brands do
+not get the Pivot PDFs.
+
+SKU text is matched to the Pivot Product catalog only (`Blue Razz`,
+`Pink Lemonade`, `Melon Rush`, `Going Grape`, plus whatever else is on that
+tenant). A Famus, Wook, or Alcohol Armor SKU is refused. A blank SKU cell
+sends with no product lines.
+
+### Columns (gid 0, read 2026-10-20)
+
+Headers are resolved by name. Letters below are where they sat when the
+status block was appended after column AT.
+
+| Col | Header | Use |
+|---|---|---|
+| A | State | TZ fallback |
+| C | Date | Local store date |
+| E | Store Name | Email |
+| F / G | Start / End Time | `2p` / `5p` style |
+| H | Address | Geocode → IANA TZ |
+| O | SKUs to sample | Pivot catalog only |
+| **P** | **Event Confirmation Sent?** | Status stamp (already on the sheet) |
+| T | BA Name | Required |
+| W | Email | BA recipient |
+| AU | Send Confirmation | Checkbox trigger (appended) |
+| AV | Cancel Confirmation | Checkbox trigger |
+| AW | Force Resend | Sticky. Prefer Resend Confirmation |
+| **AX** | **Confirmation Status** | `Queued` → `Sent` → `Cancelled` / `Error` |
+| AY | Confirmation Sent At | |
+| AZ | Confirmation Error | |
+| BA | Spark Confirmation UUID | |
+| BB | Resend Confirmation | One-shot |
+
+## Famus group columns (gid 0, read 2026-10-19)
 
 | Col | Header | Use |
 |---|---|---|

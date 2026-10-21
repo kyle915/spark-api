@@ -323,6 +323,11 @@ def email_training_resources(
     True, falls back to a single "Review Training Site" row from
     ``checkin_training_url`` / TrainingHub so tenants without the JSON list
     still get one button.
+
+    Pivot Energy Drink keeps every pdf already on the walk-up (including BA
+    Guide) and always gets Retail Sampling FAQ and Product Comparison. Those
+    two are the live training PDFs. Famus, Wook, and Alcohol Armor are left
+    alone.
     """
     from tenants.models import normalize_checkin_resources
 
@@ -345,24 +350,53 @@ def email_training_resources(
             }
         )
     if out or not include_legacy:
-        return out
+        return _with_pivot_training(tenant, out)
 
     # Avoid recursion through training_url_for → this helper.
     stored = absolute_public_url(
         getattr(tenant, "checkin_training_url", "") or ""
     )
     if stored:
-        return [{"label": "Review Training Site", "url": stored, "note": ""}]
+        return _with_pivot_training(
+            tenant, [{"label": "Review Training Site", "url": stored, "note": ""}]
+        )
     code = _training_hub_code(tenant)
     if code:
-        return [
-            {
-                "label": "Review Training Site",
-                "url": f"{public_page_base()}/training/{code}",
-                "note": "",
-            }
-        ]
-    return []
+        return _with_pivot_training(
+            tenant,
+            [
+                {
+                    "label": "Review Training Site",
+                    "url": f"{public_page_base()}/training/{code}",
+                    "note": "",
+                }
+            ],
+        )
+    return _with_pivot_training(tenant, [])
+
+
+def _with_pivot_training(tenant, resources: list[dict]) -> list[dict]:
+    """Append Pivot's FAQ and product comparison when the walk-up lacks them.
+
+    Existing buttons, including BA Guide, stay in their current order. A URL
+    already on the tenant is not added again.
+    """
+    from events.brand_group_sheet import PIVOT_EMAIL_BUTTONS, PIVOT_TENANT_SLUG
+
+    slug = (getattr(tenant, "slug", "") or "").strip()
+    if slug != PIVOT_TENANT_SLUG:
+        return resources
+    have = {(row.get("url") or "") for row in resources}
+    extra: list[dict] = []
+    for label, path, note in PIVOT_EMAIL_BUTTONS:
+        url = absolute_public_url(path)
+        if not url or url in have:
+            continue
+        have.add(url)
+        extra.append({"label": label, "url": url, "note": note})
+    if not extra:
+        return resources
+    return [*resources, *extra]
 
 
 def _training_hub_code(tenant) -> str:
