@@ -6009,18 +6009,17 @@ class SetupPivotEnergyCheckinView(View):
     """GET/POST `/internal/cron/setup-pivot-energy-checkin`.
 
     Creates the Pivot Energy Drink tenant if missing (createTenant-style seeds),
-    seeds the Event Activation recap template
-    ("Pivot Energy Drink · Event Activation Recap") mirroring Breakaway WCS
-    structure with Pivot field renames, mints the standing ``PE-`` check-in
-    code, pins Event Activation, and labels Consumer Sampling Pictures +
-    Expense Receipts.
+    keeps the Event Activation recap, and adds Retail Sampling
+    ("Pivot · Retail Sampling Recap") plus the four Pivot catalog SKUs.
+    The standing check-in code is left alone (``PE-Y7VPYC`` is never reminted).
+    Walk-up offers Event Activation and Retail Sampling. Event Activation stays
+    the pinned default. Photo buckets stay per program (library + camera).
 
-    Idempotent: get_or_create for the template, and an existing checkin_code
-    is left alone (rotating it breaks every copy already shared). Recaps stay
-    human-reviewed (walk-up leaves approved=False).
+    Idempotent: get_or_create for templates and SKUs, and an existing
+    checkin_code is left alone. Recaps stay human-reviewed.
 
-    Params: tenant (default "pivot-energy-drink"), template_name, event_type,
-    prefix, apply (default DRY RUN).
+    Params: tenant (exact slug "pivot-energy-drink"), template_name, event_type,
+    prefix, apply (default DRY RUN). A substring like "pivot" is rejected.
     """
 
     def _run(self, request: HttpRequest) -> HttpResponse:

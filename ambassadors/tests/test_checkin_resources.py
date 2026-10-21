@@ -475,6 +475,48 @@ class TestSetCheckinResourcesCommand(AmbassadorsGraphQLTestCase):
         with pytest.raises(CommandError):
             self._run(tenant="alcohol-armor")
 
+    def test_apply_adds_pivot_retail_faq_without_touching_famus(self):
+        pivot = self.create_tenant(
+            name="Pivot Energy Drink",
+            slug="pivot-energy-drink",
+            checkin_code="PE-Y7VPYC",
+        )
+        famus = self.create_tenant(
+            name="FAMUS Energy",
+            slug="famus-energy",
+            checkin_code="FM-PAG4TX",
+        )
+        wook = self.create_tenant(
+            name="Wook Water",
+            slug="wook-water",
+            checkin_code="WW-36DJAJ",
+        )
+        self._run(tenant="pivot-energy-drink", apply=True)
+        pivot.refresh_from_db()
+        famus.refresh_from_db()
+        wook.refresh_from_db()
+        assert [row["label"] for row in pivot.checkin_resources] == [
+            "BA Guide",
+            "Retail Sampling FAQ",
+            "Product Comparison",
+        ]
+        assert [row["url"] for row in pivot.checkin_resources] == [
+            "https://client.igniteproductions.co/training/pivot-energy-drink/"
+            "ba-guide.pdf",
+            "https://client.igniteproductions.co/training/pivot-energy-drink/"
+            "retail-sampling-faq.pdf",
+            "https://client.igniteproductions.co/training/pivot-energy-drink/"
+            "product-comparison.pdf",
+        ]
+        assert pivot.checkin_code == "PE-Y7VPYC"
+        assert pivot.checkin_training_url.endswith("ba-guide.pdf")
+        assert "hideOnRecapOnly" not in pivot.checkin_resources[1]
+        assert "hideOnRecapOnly" not in pivot.checkin_resources[2]
+        assert famus.checkin_resources is None
+        assert famus.checkin_code == "FM-PAG4TX"
+        assert wook.checkin_resources is None
+        assert wook.checkin_code == "WW-36DJAJ"
+
     def test_re_running_is_idempotent(self):
         self._run(tenant="Feel Free Command", apply=True)
         out = self._run(tenant="Feel Free Command", apply=True)
