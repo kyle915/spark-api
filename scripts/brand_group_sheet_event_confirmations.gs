@@ -30,9 +30,10 @@
  *      Checkbox validation is Send / Cancel / Force Resend /
  *      Resend Confirmation only.
  *
- * Famus live tab (gid 0, "Sheet1"), read 2026-10-19. Do not hardcode letters
- * in onEdit; _postRow_ resolves them with _colIndex_, keeping the FIRST
- * header when Confirmation Status is duplicated at AA–AD.
+ * Famus live tab (gid 0, "Schedule"; was "Sheet1"), read 2026-10-21.
+ * Do not hardcode letters in onEdit; _postRow_ resolves them with
+ * _colIndex_, keeping the FIRST header when Confirmation Status is
+ * duplicated at AA–AD.
  *
  * Pivot live tab (gid 0, "Retail Schedule"), read 2026-10-20. There is no
  * Brand column. Event Confirmation Sent? is already column P. The status

@@ -15,7 +15,7 @@ stay on (`send_reminders`): the day-before note and the few-hours note
 ## Famus / Alcohol Armor / Wook Water
 
 **Sheet:** [External // Wook Water, Famus Energy, Alcohol Armor](https://docs.google.com/spreadsheets/d/1xnnzFb3s0mAV-6abyzmPzEX3wjtObD8Bv4qQsr8VB6A/edit)
-**ID:** `1xnnzFb3s0mAV-6abyzmPzEX3wjtObD8Bv4qQsr8VB6A` (gid **0**, tab `Sheet1`)
+**ID:** `1xnnzFb3s0mAV-6abyzmPzEX3wjtObD8Bv4qQsr8VB6A` (gid **0**, tab `Schedule`)
 
 Column **H (Brand)** chooses the tenant. The email includes only that brand's
 standing check-in link, BA materials, and catalog SKUs. Several brands in H

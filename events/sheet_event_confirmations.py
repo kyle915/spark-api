@@ -146,14 +146,16 @@ LIQUID_DEATH_CONFIG = SheetConfirmationConfig(
     tenant_checker=is_liquid_death_tenant,
 )
 
-# External // Wook Water, Famus Energy, Alcohol Armor. gid 0, read 2026-10-19.
-# Brand is column H. Confirmation stamps are the FIRST status block (W–Z).
-# AA–AD repeat those headers and are ignored (Apps Script keeps the first).
+# External // Wook Water, Famus Energy, Alcohol Armor. gid 0.
+# The tab was renamed Sheet1 → Schedule (2026-10-21). Resolve the title
+# from gid 0 on each process so a rename cannot point stamps at a missing
+# tab. Brand is column H. Confirmation stamps are the FIRST status block
+# (W–Z). AA–AD repeat those headers and are ignored.
 BRAND_GROUP_CONFIG = SheetConfirmationConfig(
     key="brand-group",
     sheet_id=BRAND_GROUP_SHEET_ID,
     tenant_slug="",
-    tab_title="Sheet1",
+    tab_title=None,  # resolved by gid; do not hardcode Schedule or Sheet1
     tab_gid=0,
     known_status_cols={
         "Confirmation Status": "W",
@@ -526,11 +528,22 @@ def _booked_send_succeeded(confirmation) -> bool:
     ).exists()
 
 
-def _find_mailed_confirmation(payload: SheetRowPayload):
+def _store_key(name: str | None) -> str:
+    return re.sub(r"[^a-z0-9]+", "", (name or "").lower())
+
+
+def _find_mailed_confirmation(
+    payload: SheetRowPayload, *, exact_only: bool = False
+):
     """Locate an EventConfirmation whose booked email already left.
 
-    Used to finalize stuck **Queued** rows (Sent stamp failed after a real
-    send) without Force Resend / double-emailing the BA.
+    Used to finalize stuck rows (Sent stamp failed after a real send)
+    without Force Resend / double-emailing the BA.
+
+    ``exact_only`` requires the same local start (and store, when the row
+    has one). The Queued recovery path leaves it false so a same-day match
+    can still close a row whose clock failed to parse. Blank-status retries
+    must use ``exact_only`` so a second shift that day is not swallowed.
     """
     from events.models import EventConfirmation
 
@@ -579,7 +592,19 @@ def _find_mailed_confirmation(payload: SheetRowPayload):
         else:
             same_day.append(conf)
 
-    for conf in exact + same_day:
+    if exact_only:
+        want_store = _store_key(payload.store_name)
+        pool = exact
+        if want_store:
+            pool = [
+                conf
+                for conf in exact
+                if _store_key(getattr(conf, "store_name", "")) == want_store
+            ]
+    else:
+        pool = exact + same_day
+
+    for conf in pool:
         if _booked_send_succeeded(conf):
             return conf
     return None
@@ -1184,6 +1209,20 @@ def send_from_sheet_row(payload: SheetRowPayload) -> ActionResult:
             details={"already_sent": False, "blocked": "queued"},
         )
 
+    if not payload.force_resend:
+        # Queued stamp can fail before any status is written (the Famus tab
+        # was renamed off the hardcoded title). Status stays blank, so the
+        # next Send looks new and would email the BA again.
+        # A row that cannot be routed (blank brand, wrong check-in code)
+        # raises here; leave that to the send path so the sheet gets the
+        # original error instead of a lookup failure.
+        try:
+            existing = _find_mailed_confirmation(payload, exact_only=True)
+        except ValueError:
+            existing = None
+        if existing is not None:
+            return _finalize_queued_sent(payload, existing)
+
     if not payload.dry_run:
         try:
             write_row_status(
@@ -1209,14 +1248,19 @@ def send_from_sheet_row(payload: SheetRowPayload) -> ActionResult:
             "sheet confirmation send failed row=%s", payload.row_number
         )
         if not payload.dry_run:
-            write_row_status(
-                sheet_id=payload.sheet_id,
-                row_number=payload.row_number,
-                status=STATUS_ERROR,
-                error=str(exc)[:500],
-                confirmation_uuid=payload.confirmation_uuid,
-                sent_column_value=f"Error: {exc}"[:200],
-            )
+            try:
+                write_row_status(
+                    sheet_id=payload.sheet_id,
+                    row_number=payload.row_number,
+                    status=STATUS_ERROR,
+                    error=str(exc)[:500],
+                    confirmation_uuid=payload.confirmation_uuid,
+                    sent_column_value=f"Error: {exc}"[:200],
+                )
+            except Exception:  # noqa: BLE001 — keep the original send error
+                logger.exception(
+                    "sheet error stamp failed row=%s", payload.row_number
+                )
         return ActionResult(
             ok=False,
             action="send",
