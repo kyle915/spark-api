@@ -130,6 +130,15 @@ def test_yearless_sheet_date_uses_the_upcoming_year():
     )
 
 
+def test_brand_group_status_tab_follows_gid():
+    """A renamed worksheet must not leave stamps aimed at Sheet1."""
+    from events.sheet_event_confirmations import BRAND_GROUP_CONFIG
+
+    assert BRAND_GROUP_CONFIG.tab_title is None
+    assert BRAND_GROUP_CONFIG.tab_gid == 0
+    assert BRAND_GROUP_CONFIG.known_status_cols["Confirmation Status"] == "W"
+
+
 def test_payload_reads_brand_column_and_confirmed_ba_name():
     payload = payload_from_mapping(
         {

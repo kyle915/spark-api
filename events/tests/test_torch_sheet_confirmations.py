@@ -164,6 +164,9 @@ def test_send_after_cancelled_does_not_require_force_resend():
     ), patch(
         "events.sheet_event_confirmations._tenant_for",
         return_value=fake_tenant,
+    ), patch(
+        "events.sheet_event_confirmations._find_mailed_confirmation",
+        return_value=None,
     ):
         result = send_from_sheet_row(payload)
     assert result.ok is True
@@ -197,6 +200,9 @@ def test_send_when_ba_email_changed_bypasses_sent_guard():
     ), patch(
         "events.sheet_event_confirmations._tenant_for",
         return_value=fake_tenant,
+    ), patch(
+        "events.sheet_event_confirmations._find_mailed_confirmation",
+        return_value=None,
     ):
         filt.return_value.only.return_value.first.return_value = prior
         result = send_from_sheet_row(payload)
@@ -244,6 +250,88 @@ def test_send_queued_finalizes_when_confirmation_already_mailed():
     assert result.details.get("already_sent") is True
     assert "no new email" in result.message.lower()
     assert result.confirmation_uuid == str(fake.uuid)
+
+
+def test_blank_status_stamps_exact_mailed_shift_without_another_email():
+    """A failed Queued stamp leaves status blank. Retry must not re-email."""
+    payload = SheetRowPayload(
+        row_number=5,
+        confirmation_status="",
+        ba_name="Jason Bailey",
+        ba_email="jbailey3709@gmail.com",
+        store_name="Smiley's",
+        date="Oct 22, 2026",
+        start_time="7a",
+        address="1125 Campbellsville Rd, Columbia, KY 42728, USA",
+        state="KY",
+    )
+    fake = type(
+        "C",
+        (),
+        {
+            "uuid": "22222222-2222-2222-2222-222222222222",
+            "ba_email": "jbailey3709@gmail.com",
+            "timezone_name": "America/New_York",
+            "pk": 1143,
+            "store_name": "Smiley's",
+        },
+    )()
+    with patch(
+        "events.sheet_event_confirmations._find_mailed_confirmation",
+        return_value=fake,
+    ) as find, patch(
+        "events.sheet_event_confirmations.write_row_status"
+    ) as write, patch(
+        "events.sheet_event_confirmations._create_and_send"
+    ) as create:
+        result = send_from_sheet_row(payload)
+    find.assert_called_once_with(payload, exact_only=True)
+    create.assert_not_called()
+    assert write.called
+    assert result.ok is True
+    assert result.status == STATUS_SENT
+    assert result.details.get("already_sent") is True
+    assert "no new email" in result.message.lower()
+
+
+def test_force_resend_still_sends_when_a_mailed_confirmation_exists():
+    payload = SheetRowPayload(
+        row_number=5,
+        confirmation_status="",
+        force_resend=True,
+        ba_name="Jason Bailey",
+        ba_email="jbailey3709@gmail.com",
+        store_name="Smiley's",
+        date="Oct 22, 2026",
+        start_time="7a",
+        address="1125 Campbellsville Rd, Columbia, KY",
+        state="KY",
+    )
+    with patch(
+        "events.sheet_event_confirmations._find_mailed_confirmation",
+    ) as find, patch(
+        "events.sheet_event_confirmations.write_row_status"
+    ), patch(
+        "events.sheet_event_confirmations._create_and_send",
+        return_value=type("R", (), {
+            "ok": True,
+            "action": "send",
+            "status": STATUS_SENT,
+            "message": "sent",
+            "confirmation_uuid": "",
+            "timezone_name": "",
+            "timezone_note": "",
+            "dry_run": False,
+            "details": {},
+        })(),
+    ) as create, patch(
+        "events.sheet_event_confirmations.resolve_timezone_for_row",
+        return_value=("America/New_York", ""),
+    ):
+        result = send_from_sheet_row(payload)
+    find.assert_not_called()
+    create.assert_called_once()
+    assert result.ok is True
 
 
 def test_send_queued_refuses_without_mailed_confirmation():
