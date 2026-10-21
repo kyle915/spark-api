@@ -498,16 +498,20 @@ class TestSetCheckinResourcesCommand(AmbassadorsGraphQLTestCase):
         assert [row["label"] for row in pivot.checkin_resources] == [
             "BA Guide",
             "Retail Sampling FAQ",
+            "Product Comparison",
         ]
         assert [row["url"] for row in pivot.checkin_resources] == [
             "https://client.igniteproductions.co/training/pivot-energy-drink/"
             "ba-guide.pdf",
             "https://client.igniteproductions.co/training/pivot-energy-drink/"
             "retail-sampling-faq.pdf",
+            "https://client.igniteproductions.co/training/pivot-energy-drink/"
+            "product-comparison.pdf",
         ]
         assert pivot.checkin_code == "PE-Y7VPYC"
         assert pivot.checkin_training_url.endswith("ba-guide.pdf")
         assert "hideOnRecapOnly" not in pivot.checkin_resources[1]
+        assert "hideOnRecapOnly" not in pivot.checkin_resources[2]
         assert famus.checkin_resources is None
         assert famus.checkin_code == "FM-PAG4TX"
         assert wook.checkin_resources is None
