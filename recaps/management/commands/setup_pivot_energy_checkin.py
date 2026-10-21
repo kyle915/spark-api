@@ -8,12 +8,10 @@ Event Activation stays the festival form already live on this brand:
 - Photo buckets: Consumer Sampling Pictures, Expense Receipts
 - Pinned default program on the standing link
 
-Retail Sampling is added beside it so a BA can choose either program.
-The retail form matches FAMUS Energy's Retail Sampling recap (same sections,
-field types, required flags, and photo buckets). The one brand-specific
-question is rephrased to Pivot Energy Drink. SKU choices are this tenant's
-Product catalog (Blue Razz, Pink Lemonade, Melon Rush, Going Grape, plus any
-products already on the tenant). No SKU images are downloaded.
+Retail Sampling is added beside it for a store demo. It keeps that same
+field shape (samples, mileage, card spend, expense receipts) with store
+wording, plus the tenant Product catalog as the only SKU list. Retail
+copy says Pivot. No SKU images are downloaded.
 
 Standing walk-up code is left alone. ``PE-Y7VPYC`` is never reminted.
 Recaps stay human-reviewed (approved=False until admin approve).
@@ -27,7 +25,6 @@ from __future__ import annotations
 import secrets
 
 from django.conf import settings
-from django.core.management import call_command
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 from django.utils.text import slugify
@@ -40,28 +37,23 @@ from recaps.products_sampled import PRODUCTS_SAMPLED_FIELD
 TENANT_NAME = "Pivot Energy Drink"
 TENANT_SLUG = "pivot-energy-drink"
 TEMPLATE_NAME = "Pivot Energy Drink · Event Activation Recap"
-RETAIL_TEMPLATE_NAME = "Pivot Energy Drink · Retail Sampling Recap"
+RETAIL_TEMPLATE_NAME = "Pivot · Retail Sampling Recap"
 CODE_PREFIX = "PE-"
 # Already shared with the field team. Never mint a replacement.
 STANDING_CODE = "PE-Y7VPYC"
 PROGRAM_NAME = "Event Activation"
 RETAIL_PROGRAM = "Retail Sampling"
-PRODUCT_TYPE_NAME = "Energy Drink"
-# Exact catalog names. No sizes and no images.
+PRODUCT_TYPE_NAME = "Pivot"
+# The only SKU list. Recap options are read back from these Product rows.
 SKU_NAMES = (
     "Blue Razz",
     "Pink Lemonade",
     "Melon Rush",
     "Going Grape",
 )
-# Verbatim FAMUS closer. Not brand-specific, so it is not rephrased.
-NEXT_DEMO_QUESTION = (
-    "Please ask the store if they would like to schedule another demo. "
-    "If so - provide the requested date(s) and time(s)."
-)
 
-# White Claw Surge festival form with Pivot renames + mileage/receipts —
-# no White Claw / Hiyo / Surge / Jimmy Johns copy on this path.
+# White Claw Surge festival form with Pivot renames + mileage/receipts.
+# No other-brand copy on this path.
 SPEC: list[tuple[str, list[tuple[str, str, bool, list[str]]]]] = [
     (
         "Event Details",
@@ -108,74 +100,58 @@ SPEC: list[tuple[str, list[tuple[str, str, bool, list[str]]]]] = [
     ),
 ]
 
-# FAMUS Energy retail structure. The only renamed BA-facing label is
-# "knew about FAMUS Energy" → "knew about Pivot Energy Drink".
+# Store-demo twin of SPEC. Event location becomes the store, foot traffic
+# drops the impressions wording, and the awareness question says Pivot.
+# Mileage, card spend, and sample counts stay. Products Sampled options stay
+# empty here — apply fills them from Product rows.
 RETAIL_SPEC: list[tuple[str, list[tuple[str, str, bool, list[str]]]]] = [
     (
-        "Shift Overview",
+        "Store Details",
         [
-            ("Estimated store foot traffic", "number", True, []),
-            (
-                "Sample format",
-                "select",
-                True,
-                ["Full can / bottle", "Sample cup / pour"],
-            ),
-            ("Account Feedback", "longtext", True, []),
-            ("Anything you'd change or do differently?", "longtext", False, []),
-            (
-                "Demographics (general age, sex, ethnicities of consumers)",
-                "longtext",
-                True,
-                [],
-            ),
+            ("Where are you working (store)?", "text", True, []),
         ],
     ),
     (
-        "Brand Results",
+        "Demo Counts",
         [
-            ("Total number of consumers sampled", "number", True, []),
-            ("First Time consumers?", "number", True, []),
-            (
-                "How many consumers that were engaged with knew about Pivot Energy Drink?",
-                "number",
-                True,
-                [],
-            ),
-            (
-                "How many consumers would be willing to purchase the product after tasting it?",
-                "number",
-                True,
-                [],
-            ),
-            (
-                "How many consumers would NOT be willing to purchase the product after tasting it?",
-                "number",
-                True,
-                [],
-            ),
-            (
-                "How many single cans / bottles / shots did consumers purchase?",
-                "number",
-                True,
-                [],
-            ),
-            ("How many packs did consumers purchase?", "number", True, []),
+            ("Total samples distributed", "number", True, []),
+            ("Estimated store foot traffic", "number", True, []),
+        ],
+    ),
+    (
+        "Products",
+        [
             (PRODUCTS_SAMPLED_FIELD, "multiselect", True, []),
         ],
     ),
     (
-        "Brand Feedback",
+        "Card & Mileage",
         [
-            ("Consumer Feedback", "longtext", True, []),
-            ("Quotes from Consumers", "longtext", False, []),
-            ("Reasons to decline to purchase?", "longtext", False, []),
+            ("Mileage", "number", True, []),
+            ("Total spend on the card", "number", False, []),
         ],
     ),
     (
-        "Follow-up",
+        "Demo Feedback",
         [
-            (NEXT_DEMO_QUESTION, "longtext", False, []),
+            (
+                "Key highlight (1–2 sentences) / What worked well & What didn't?",
+                "longtext",
+                True,
+                [],
+            ),
+            (
+                "What were some consumer comments that you heard?",
+                "longtext",
+                True,
+                [],
+            ),
+            (
+                "What percent of consumers had heard of or tried Pivot before?",
+                "text",
+                True,
+                [],
+            ),
         ],
     ),
 ]
@@ -185,10 +161,11 @@ SECTION_ORDER = {
     "Sampling Counts": 1,
     "Expenses": 2,
     "Feedback": 3,
-    "Shift Overview": 0,
-    "Brand Results": 1,
-    "Brand Feedback": 2,
-    "Follow-up": 3,
+    "Store Details": 0,
+    "Demo Counts": 1,
+    "Products": 2,
+    "Card & Mileage": 3,
+    "Demo Feedback": 4,
 }
 
 PHOTO_BUCKETS: list[dict] = [
@@ -196,27 +173,13 @@ PHOTO_BUCKETS: list[dict] = [
     {"name": "Expense Receipts"},
 ]
 
-# Same dropzones as FAMUS retail: library + camera multi-upload buckets,
-# not camera-only image fields.
-RETAIL_PHOTO_BUCKETS: list[dict] = [
-    {"name": "Table Set Up"},
-    {"name": "Product Display"},
-    {"name": "Consumer Sampling Pictures"},
-    {"name": "Product Receipt"},
-]
-
+# Same multi-upload buckets as Event Activation (library and camera).
 PHOTO_BUCKETS_BY_PROGRAM: dict[str, list[dict]] = {
     PROGRAM_NAME: list(PHOTO_BUCKETS),
-    RETAIL_PROGRAM: list(RETAIL_PHOTO_BUCKETS),
+    RETAIL_PROGRAM: list(PHOTO_BUCKETS),
 }
 
-ALL_BUCKETS: list[dict] = [
-    {"name": "Consumer Sampling Pictures"},
-    {"name": "Expense Receipts"},
-    {"name": "Table Set Up"},
-    {"name": "Product Display"},
-    {"name": "Product Receipt"},
-]
+ALL_BUCKETS: list[dict] = list(PHOTO_BUCKETS)
 
 KEEP_PROGRAMS = {PROGRAM_NAME.lower(), RETAIL_PROGRAM.lower()}
 
@@ -378,7 +341,6 @@ class Command(BaseCommand):
             )
         self._location_mode(tenant, apply)
         self._checkin_code(tenant, apply, opts.get("prefix"))
-        self._checkin_resources(apply)
 
     def _print_spec(self) -> None:
         self.stdout.write(f"\nEvent Activation template {TEMPLATE_NAME!r}")
@@ -586,13 +548,13 @@ class Command(BaseCommand):
         return et
 
     def _ensure_skus(self, tenant, creator, apply: bool) -> None:
-        """Add the four Pivot flavors. Leave every other product on the tenant."""
+        """Seed exactly the four Pivot flavors. Drop unused extras."""
         from events.models import Product, ProductType
 
         self.stdout.write(f"\nCatalog ({PRODUCT_TYPE_NAME}):")
         if not apply:
             existing = {
-                name.lower()
+                (name or "").strip().lower()
                 for name in Product.objects.filter(tenant_id=tenant.id).values_list(
                     "name", flat=True
                 )
@@ -600,6 +562,9 @@ class Command(BaseCommand):
             for name in SKU_NAMES:
                 mark = "=" if name.lower() in existing else "+"
                 self.stdout.write(f"  {mark} SKU {name!r} (no image)")
+            extras = existing - {name.lower() for name in SKU_NAMES}
+            for name in sorted(extras):
+                self.stdout.write(f"  - would retire extra SKU {name!r}")
             return
 
         product_type, _ = ProductType.objects.get_or_create(
@@ -607,6 +572,7 @@ class Command(BaseCommand):
             name=PRODUCT_TYPE_NAME,
             defaults={"created_by": creator},
         )
+        keep = {name.lower() for name in SKU_NAMES}
         for name in SKU_NAMES:
             product = Product.objects.filter(
                 tenant_id=tenant.id, name__iexact=name
@@ -620,24 +586,84 @@ class Command(BaseCommand):
                 )
                 self.stdout.write(f"  + SKU {name!r}")
                 continue
-            self.stdout.write(f"  = SKU [{product.id}] {product.name!r} (left as-is)")
+            if product.product_type_id != product_type.id:
+                product.product_type = product_type
+                product.save(update_fields=["product_type", "updated_at"])
+            self.stdout.write(f"  = SKU [{product.id}] {product.name!r}")
+        for extra in Product.objects.filter(tenant_id=tenant.id).order_by("id"):
+            if (extra.name or "").strip().lower() in keep:
+                continue
+            if self._product_in_use(extra):
+                self.stdout.write(
+                    self.style.WARNING(
+                        f"  kept extra SKU {extra.name!r} (referenced by recaps or requests)"
+                    )
+                )
+                continue
+            label = extra.name
+            extra.delete()
+            self.stdout.write(f"  - retired extra SKU {label!r}")
+
+    def _product_in_use(self, product) -> bool:
+        from events.models import RequestProduct
+        from recaps.models import (
+            CustomRecapProductSample,
+            CustomRecapSalePerformance,
+            ProductSamples,
+            SalesPerformance,
+        )
+
+        return bool(
+            RequestProduct.objects.filter(product=product).exists()
+            or product.co_brand_requests.exists()
+            or ProductSamples.objects.filter(product=product).exists()
+            or CustomRecapProductSample.objects.filter(product=product).exists()
+            or SalesPerformance.objects.filter(product=product).exists()
+            or CustomRecapSalePerformance.objects.filter(product=product).exists()
+        )
+
+    def _sku_option_labels(self, tenant) -> list[str]:
+        """Catalog labels for the four SKUs, in Kyle's order.
+
+        Built from Product rows (same ``Type — Name`` shape as the live
+        catalog picker). The spec does not carry a second copy of the names.
+        """
+        from events.event_confirmations import PRODUCT_CATEGORY_SEPARATOR
+        from events.models import Product
+
+        products = {
+            (row.name or "").strip().lower(): row
+            for row in Product.objects.filter(tenant_id=tenant.id).select_related(
+                "product_type"
+            )
+        }
+        labels: list[str] = []
+        for name in SKU_NAMES:
+            product = products.get(name.lower())
+            if product is None:
+                continue
+            sku = (product.name or "").strip()
+            cat = (getattr(product.product_type, "name", "") or "").strip()
+            labels.append(f"{cat}{PRODUCT_CATEGORY_SEPARATOR}{sku}" if cat else sku)
+        return labels
 
     def _sync_products_sampled(self, tenant, apply: bool) -> None:
-        """Point Products Sampled at the live Pivot catalog, not a copied SKU list."""
-        if not apply:
+        """Point the retail Products Sampled field at the live catalog."""
+        options = self._sku_option_labels(tenant)
+        self.stdout.write(
+            "  Products Sampled ← "
+            + (", ".join(options) if options else "(catalog empty)")
+        )
+        if not apply or not options:
             return
-        from events.event_confirmations import catalog_product_options
         from recaps.models import CustomField
 
-        options = catalog_product_options(tenant)
         updated = CustomField.objects.filter(
             custom_recap_template__tenant_id=tenant.id,
+            custom_recap_template__name=RETAIL_TEMPLATE_NAME,
             name__iexact=PRODUCTS_SAMPLED_FIELD,
         ).update(options=list(options))
-        self.stdout.write(
-            f"  Products Sampled options ← {len(options)} catalog row(s) "
-            f"on {updated} field(s)"
-        )
+        self.stdout.write(f"  wrote catalog options onto {updated} field(s)")
 
     def _resolve_field_type(self, kind: str, creator, apply: bool, cache: dict):
         if kind in cache:
@@ -768,7 +794,10 @@ class Command(BaseCommand):
                 if field.order != f_idx:
                     field.order = f_idx
                     changed.append("order")
-                if list(field.options or []) != list(options):
+                if (
+                    fname != PRODUCTS_SAMPLED_FIELD
+                    and list(field.options or []) != list(options)
+                ):
                     field.options = list(options)
                     changed.append("options")
                 if changed:
@@ -1104,11 +1133,3 @@ class Command(BaseCommand):
                 f"Check-in code set: {code}\n  Link: {base}/checkin/{code}"
             )
         )
-
-    def _checkin_resources(self, apply: bool) -> None:
-        """Keep the BA Guide and add Retail Sampling FAQ on this tenant only."""
-        self.stdout.write("\nWalk-up materials:")
-        kwargs = {"tenant": TENANT_SLUG}
-        if apply:
-            kwargs["apply"] = True
-        call_command("set_checkin_resources", stdout=self.stdout, **kwargs)

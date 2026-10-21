@@ -6010,7 +6010,7 @@ class SetupPivotEnergyCheckinView(View):
 
     Creates the Pivot Energy Drink tenant if missing (createTenant-style seeds),
     keeps the Event Activation recap, and adds Retail Sampling
-    ("Pivot Energy Drink · Retail Sampling Recap") plus the Pivot catalog SKUs.
+    ("Pivot · Retail Sampling Recap") plus the four Pivot catalog SKUs.
     The standing check-in code is left alone (``PE-Y7VPYC`` is never reminted).
     Walk-up offers Event Activation and Retail Sampling. Event Activation stays
     the pinned default. Photo buckets stay per program (library + camera).
