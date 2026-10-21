@@ -6,16 +6,42 @@ import io
 
 import pytest
 from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.test import Client, override_settings
 
+from events.event_confirmations import catalog_product_options
+from events.models import EventType, Product, ProductType
 from recaps.management.commands.setup_pivot_energy_checkin import (
     CODE_PREFIX,
+    NEXT_DEMO_QUESTION,
     PHOTO_BUCKETS,
+    PRODUCT_TYPE_NAME,
     PROGRAM_NAME,
+    RETAIL_PHOTO_BUCKETS,
+    RETAIL_PROGRAM,
+    RETAIL_SPEC,
+    RETAIL_TEMPLATE_NAME,
+    SKU_NAMES,
     SPEC,
+    STANDING_CODE,
     TEMPLATE_NAME,
     TENANT_NAME,
     TENANT_SLUG,
+)
+from recaps.models import (
+    CustomField,
+    CustomRecapFieldType,
+    CustomRecapTemplate,
+    FileRecapCategory,
+    RecapSection,
+)
+from recaps.products_sampled import PRODUCTS_SAMPLED_FIELD
+from tenants.models import Tenant
+from tenants.management.commands.setup_brand_group import (
+    BRANDS,
+    NEXT_DEMO_QUESTION as FAMUS_NEXT_DEMO_QUESTION,
+    PHOTO_BUCKETS_BY_PROGRAM as FAMUS_PHOTO_BUCKETS,
+    retail_spec,
 )
 from tenants.tests.base import BaseGraphQLTestCase
 
@@ -61,10 +87,87 @@ class TestPivotEnergySpec:
 
     def test_brand_constants(self):
         assert CODE_PREFIX == "PE-"
+        assert STANDING_CODE == "PE-Y7VPYC"
         assert TEMPLATE_NAME == "Pivot Energy Drink · Event Activation Recap"
+        assert RETAIL_TEMPLATE_NAME == "Pivot Energy Drink · Retail Sampling Recap"
         assert PROGRAM_NAME == "Event Activation"
+        assert RETAIL_PROGRAM == "Retail Sampling"
         assert TENANT_SLUG == "pivot-energy-drink"
         assert TENANT_NAME == "Pivot Energy Drink"
+        assert SKU_NAMES == (
+            "Blue Razz",
+            "Pink Lemonade",
+            "Melon Rush",
+            "Going Grape",
+        )
+
+    def test_retail_spec_matches_famus_except_the_brand_question(self):
+        famus = next(brand for brand in BRANDS if brand.slug == "famus-energy")
+        assert famus.sells_packs is True
+        expected = []
+        for section, fields in retail_spec(famus):
+            expected.append(
+                (
+                    section,
+                    [
+                        (
+                            name.replace(
+                                "FAMUS Energy",
+                                "Pivot Energy Drink",
+                            ),
+                            kind,
+                            required,
+                            options,
+                        )
+                        for name, kind, required, options in fields
+                    ],
+                )
+            )
+        assert RETAIL_SPEC == expected
+        assert RETAIL_PHOTO_BUCKETS == FAMUS_PHOTO_BUCKETS["Retail Sampling"]
+        assert NEXT_DEMO_QUESTION == FAMUS_NEXT_DEMO_QUESTION
+
+        famus_names = [name for _, fields in retail_spec(famus) for name, *_ in fields]
+        pivot_names = [name for _, fields in RETAIL_SPEC for name, *_ in fields]
+        changed = [
+            (before, after)
+            for before, after in zip(famus_names, pivot_names)
+            if before != after
+        ]
+        assert changed == [
+            (
+                "How many consumers that were engaged with knew about FAMUS Energy?",
+                "How many consumers that were engaged with knew about Pivot Energy Drink?",
+            )
+        ]
+
+    def test_retail_copy_has_no_other_brand_names(self):
+        blob = " ".join(
+            [
+                RETAIL_TEMPLATE_NAME,
+                str(RETAIL_SPEC),
+                str(RETAIL_PHOTO_BUCKETS),
+                " ".join(SKU_NAMES),
+            ]
+        ).lower()
+        for forbidden in (
+            "famus",
+            "wook",
+            "alcohol armor",
+            "white claw",
+            "surge",
+            "og luxe",
+            "havana",
+        ):
+            assert forbidden not in blob
+        closer = RETAIL_SPEC[-1]
+        assert closer[0] == "Follow-up"
+        assert closer[1] == [(NEXT_DEMO_QUESTION, "longtext", False, [])]
+        kinds = {field[1] for _, fields in RETAIL_SPEC for field in fields}
+        assert "image" not in kinds
+        assert PRODUCTS_SAMPLED_FIELD in {
+            field[0] for _, fields in RETAIL_SPEC for field in fields
+        }
 
     def test_kinds_are_canonical_and_not_image(self):
         kinds = {f[1] for _, fields in SPEC for f in fields}
@@ -95,6 +198,15 @@ class TestPivotEnergySetupCommand(BaseGraphQLTestCase):
         assert TENANT_NAME in log
         assert not Tenant.objects.filter(slug=TENANT_SLUG).exists()
         assert not CustomRecapTemplate.objects.filter(name=TEMPLATE_NAME).exists()
+        assert not CustomRecapTemplate.objects.filter(
+            name=RETAIL_TEMPLATE_NAME
+        ).exists()
+
+    def test_substring_slug_is_rejected(self):
+        with pytest.raises(CommandError, match="exact slug"):
+            self._run(tenant="pivot")
+        assert not Tenant.objects.filter(slug="pivot").exists()
+        assert not Tenant.objects.filter(slug=TENANT_SLUG).exists()
 
     def test_apply_creates_tenant_template_code_and_buckets(self):
         from recaps.models import CustomField, CustomRecapTemplate, FileRecapCategory
@@ -104,14 +216,18 @@ class TestPivotEnergySetupCommand(BaseGraphQLTestCase):
         assert "APPLIED" in log
         tenant = Tenant.objects.get(slug=TENANT_SLUG)
         assert tenant.name == TENANT_NAME
-        assert tenant.checkin_code and tenant.checkin_code.startswith("PE-")
+        assert tenant.checkin_code == STANDING_CODE
         assert tenant.checkin_location_mode == Tenant.CHECKIN_LOCATION_ADDRESS
-        assert tenant.checkin_photo_buckets == {PROGRAM_NAME: PHOTO_BUCKETS}
+        assert tenant.checkin_photo_buckets == {
+            PROGRAM_NAME: PHOTO_BUCKETS,
+            RETAIL_PROGRAM: RETAIL_PHOTO_BUCKETS,
+        }
         assert tenant.checkin_event_type is not None
         assert tenant.checkin_event_type.name == PROGRAM_NAME
-        assert list(
-            tenant.checkin_event_types.values_list("name", flat=True)
-        ) == [PROGRAM_NAME]
+        assert set(tenant.checkin_event_types.values_list("name", flat=True)) == {
+            PROGRAM_NAME,
+            RETAIL_PROGRAM,
+        }
         assert FileRecapCategory.objects.filter(
             tenant=tenant, name="Consumer Sampling Pictures"
         ).exists()
@@ -132,8 +248,181 @@ class TestPivotEnergySetupCommand(BaseGraphQLTestCase):
         code = tenant.checkin_code
         log2 = self._run(tenant="pivot-energy-drink", apply=True)
         tenant.refresh_from_db()
-        assert tenant.checkin_code == code
+        assert tenant.checkin_code == code == STANDING_CODE
         assert "already set" in log2
+
+    def test_apply_adds_retail_recap_skus_and_keeps_event_activation(self):
+        tenant = self.create_tenant(
+            name=TENANT_NAME,
+            slug=TENANT_SLUG,
+            request_url_name=TENANT_SLUG,
+            checkin_code=STANDING_CODE,
+            checkin_resources=[
+                {
+                    "label": "BA Guide",
+                    "kind": "pdf",
+                    "url": (
+                        "https://client.igniteproductions.co/training/"
+                        "pivot-energy-drink/ba-guide.pdf"
+                    ),
+                }
+            ],
+        )
+        legacy_type = ProductType.objects.create(
+            name="Legacy", tenant=tenant, created_by=self.user
+        )
+        Product.objects.create(
+            name="House Blend",
+            product_type=legacy_type,
+            tenant=tenant,
+            created_by=self.user,
+        )
+
+        famus = self.create_tenant(name="FAMUS Energy", slug="famus-energy")
+        famus_type = self._event_type(famus, "Retail Sampling")
+        famus_template = self._template(
+            famus,
+            famus_type,
+            "FAMUS Energy · Retail Sampling Recap",
+        )
+        famus_label = (
+            "How many consumers that were engaged with knew about FAMUS Energy?"
+        )
+        famus_field = self._field(famus_template, "Brand Results", famus_label)
+
+        log = self._run(tenant="pivot-energy-drink", apply=True)
+        assert "APPLIED" in log
+
+        tenant.refresh_from_db()
+        assert tenant.slug == TENANT_SLUG
+        assert tenant.checkin_code == STANDING_CODE
+        assert tenant.checkin_resources[0]["label"] == "BA Guide"
+        assert tenant.checkin_event_type.name == PROGRAM_NAME
+        assert set(tenant.checkin_event_types.values_list("name", flat=True)) == {
+            PROGRAM_NAME,
+            RETAIL_PROGRAM,
+        }
+
+        event = CustomRecapTemplate.objects.get(tenant=tenant, name=TEMPLATE_NAME)
+        event_names = list(
+            CustomField.objects.filter(custom_recap_template=event)
+            .order_by("recap_section__order", "order", "id")
+            .values_list("name", flat=True)
+        )
+        assert event_names == FIELD_NAMES
+        assert event.event_type.name == PROGRAM_NAME
+
+        retail = CustomRecapTemplate.objects.get(
+            tenant=tenant, name=RETAIL_TEMPLATE_NAME
+        )
+        retail_fields = list(
+            CustomField.objects.filter(custom_recap_template=retail)
+            .select_related("recap_section", "custom_field_type")
+            .order_by("recap_section__order", "order", "id")
+        )
+        assert [field.name for field in retail_fields] == [
+            name for _, fields in RETAIL_SPEC for name, *_ in fields
+        ]
+        assert retail.event_type.name == RETAIL_PROGRAM
+        blob = " ".join(
+            f"{field.name} {field.placeholder or ''} {field.options}"
+            for field in retail_fields
+        ).lower()
+        for forbidden in (
+            "famus",
+            "wook",
+            "alcohol armor",
+            "white claw",
+            "surge",
+            "og luxe",
+            "havana",
+        ):
+            assert forbidden not in blob
+        closer = retail_fields[-1]
+        assert closer.name == NEXT_DEMO_QUESTION
+        assert closer.required is False
+        assert closer.recap_section.name == "Follow-up"
+        assert "long" in (closer.custom_field_type.name or "").lower()
+        feedback = next(
+            field.recap_section
+            for field in retail_fields
+            if field.recap_section.name == "Brand Feedback"
+        )
+        assert closer.recap_section.order > feedback.order
+        assert not any(
+            "image" in (field.custom_field_type.name or "").lower()
+            or "photo" in (field.custom_field_type.name or "").lower()
+            for field in retail_fields
+        )
+
+        names = set(
+            Product.objects.filter(tenant=tenant).values_list("name", flat=True)
+        )
+        assert set(SKU_NAMES) <= names
+        assert "House Blend" in names
+        assert "OG Luxe (Tropical Ice) 16oz" not in names
+        catalog = catalog_product_options(tenant)
+        for sku in SKU_NAMES:
+            assert f"{PRODUCT_TYPE_NAME} — {sku}" in catalog
+        assert "Legacy — House Blend" in catalog
+        sampled = next(
+            field for field in retail_fields if field.name == PRODUCTS_SAMPLED_FIELD
+        )
+        assert list(sampled.options) == catalog
+
+        for bucket in (
+            "Table Set Up",
+            "Product Display",
+            "Product Receipt",
+            "Expense Receipts",
+        ):
+            assert FileRecapCategory.objects.filter(tenant=tenant, name=bucket).exists()
+
+        famus_field.refresh_from_db()
+        famus_template.refresh_from_db()
+        assert famus_field.name == famus_label
+        assert famus_template.name == "FAMUS Energy · Retail Sampling Recap"
+        assert famus_template.tenant_id == famus.id
+        assert not CustomField.objects.filter(
+            custom_recap_template__tenant=famus,
+            name__icontains="Pivot",
+        ).exists()
+
+    def _event_type(self, tenant, name):
+        return EventType.objects.create(
+            name=name,
+            slug=name.lower().replace(" ", "-"),
+            tenant=tenant,
+            created_by=self.user,
+        )
+
+    def _template(self, tenant, event_type, name):
+        return CustomRecapTemplate.objects.create(
+            name=name,
+            tenant=tenant,
+            event_type=event_type,
+            created_by=self.user,
+        )
+
+    def _field(self, template, section_name, name):
+        section = RecapSection.objects.create(
+            name=section_name,
+            tenant=template.tenant,
+            order=1,
+            created_by=self.user,
+        )
+        field_type = CustomRecapFieldType.objects.create(
+            name="number", created_by=self.user
+        )
+        return CustomField.objects.create(
+            custom_recap_template=template,
+            recap_section=section,
+            custom_field_type=field_type,
+            name=name,
+            required=True,
+            order=0,
+            created_by=self.user,
+        )
 
 
 @pytest.mark.django_db

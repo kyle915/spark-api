@@ -1,21 +1,25 @@
-"""Set up Pivot Energy Drink: tenant + Event Activation recap + standing check-in.
+"""Set up Pivot Energy Drink: tenant + walk-up recaps + standing check-in.
 
-Mirrors the Breakaway White Claw Surge (WCS_SPEC) festival recap structure,
-re-branded for Pivot Energy Drink (slug: pivot-energy-drink):
+Slug is the existing ``pivot-energy-drink`` tenant (exact slug only).
+
+Event Activation stays the festival form already live on this brand:
 - Template: "Pivot Energy Drink · Event Activation Recap"
 - Sections: Event Details, Sampling Counts, Expenses, Feedback
-- Metrics: Event Location (was Festival Location), Total samples distributed,
-  estimated foot traffic / impressions, Mileage, brand awareness percent
-  ("What percent of consumer had heard of or tried Pivot Energy Drink before?")
 - Photo buckets: Consumer Sampling Pictures, Expense Receipts
-- Standing walk-up check-in code: durable PE-XXXXXX link pinned to Event
-  Activation only.
+- Pinned default program on the standing link
 
+Retail Sampling is added beside it so a BA can choose either program.
+The retail form matches FAMUS Energy's Retail Sampling recap (same sections,
+field types, required flags, and photo buckets). The one brand-specific
+question is rephrased to Pivot Energy Drink. SKU choices are this tenant's
+Product catalog (Blue Razz, Pink Lemonade, Melon Rush, Going Grape, plus any
+products already on the tenant). No SKU images are downloaded.
+
+Standing walk-up code is left alone. ``PE-Y7VPYC`` is never reminted.
 Recaps stay human-reviewed (approved=False until admin approve).
-Idempotent: an existing checkin_code is never rotated.
 
 DRY-RUN by default. Run via ``/internal/cron/setup-pivot-energy-checkin`` (or
-the "Setup Pivot Energy check-in" GitHub Action) against prod.
+the "Setup Pivot Energy check-in" GitHub Action) against prod with apply=true.
 """
 
 from __future__ import annotations
@@ -25,18 +29,35 @@ import secrets
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
-from django.db.models import Q
 from django.utils.text import slugify
 
 from recaps.management.commands.setup_total_wireless_checkin import (
     _match_field_type,
 )
+from recaps.products_sampled import PRODUCTS_SAMPLED_FIELD
 
 TENANT_NAME = "Pivot Energy Drink"
 TENANT_SLUG = "pivot-energy-drink"
 TEMPLATE_NAME = "Pivot Energy Drink · Event Activation Recap"
+RETAIL_TEMPLATE_NAME = "Pivot Energy Drink · Retail Sampling Recap"
 CODE_PREFIX = "PE-"
+# Already shared with the field team. Never mint a replacement.
+STANDING_CODE = "PE-Y7VPYC"
 PROGRAM_NAME = "Event Activation"
+RETAIL_PROGRAM = "Retail Sampling"
+PRODUCT_TYPE_NAME = "Energy Drink"
+# Exact catalog names. No sizes and no images.
+SKU_NAMES = (
+    "Blue Razz",
+    "Pink Lemonade",
+    "Melon Rush",
+    "Going Grape",
+)
+# Verbatim FAMUS closer. Not brand-specific, so it is not rephrased.
+NEXT_DEMO_QUESTION = (
+    "Please ask the store if they would like to schedule another demo. "
+    "If so - provide the requested date(s) and time(s)."
+)
 
 # White Claw Surge festival form with Pivot renames + mileage/receipts —
 # no White Claw / Hiyo / Surge / Jimmy Johns copy on this path.
@@ -86,11 +107,87 @@ SPEC: list[tuple[str, list[tuple[str, str, bool, list[str]]]]] = [
     ),
 ]
 
+# FAMUS Energy retail structure. The only renamed BA-facing label is
+# "knew about FAMUS Energy" → "knew about Pivot Energy Drink".
+RETAIL_SPEC: list[tuple[str, list[tuple[str, str, bool, list[str]]]]] = [
+    (
+        "Shift Overview",
+        [
+            ("Estimated store foot traffic", "number", True, []),
+            (
+                "Sample format",
+                "select",
+                True,
+                ["Full can / bottle", "Sample cup / pour"],
+            ),
+            ("Account Feedback", "longtext", True, []),
+            ("Anything you'd change or do differently?", "longtext", False, []),
+            (
+                "Demographics (general age, sex, ethnicities of consumers)",
+                "longtext",
+                True,
+                [],
+            ),
+        ],
+    ),
+    (
+        "Brand Results",
+        [
+            ("Total number of consumers sampled", "number", True, []),
+            ("First Time consumers?", "number", True, []),
+            (
+                "How many consumers that were engaged with knew about Pivot Energy Drink?",
+                "number",
+                True,
+                [],
+            ),
+            (
+                "How many consumers would be willing to purchase the product after tasting it?",
+                "number",
+                True,
+                [],
+            ),
+            (
+                "How many consumers would NOT be willing to purchase the product after tasting it?",
+                "number",
+                True,
+                [],
+            ),
+            (
+                "How many single cans / bottles / shots did consumers purchase?",
+                "number",
+                True,
+                [],
+            ),
+            ("How many packs did consumers purchase?", "number", True, []),
+            (PRODUCTS_SAMPLED_FIELD, "multiselect", True, []),
+        ],
+    ),
+    (
+        "Brand Feedback",
+        [
+            ("Consumer Feedback", "longtext", True, []),
+            ("Quotes from Consumers", "longtext", False, []),
+            ("Reasons to decline to purchase?", "longtext", False, []),
+        ],
+    ),
+    (
+        "Follow-up",
+        [
+            (NEXT_DEMO_QUESTION, "longtext", False, []),
+        ],
+    ),
+]
+
 SECTION_ORDER = {
     "Event Details": 0,
     "Sampling Counts": 1,
     "Expenses": 2,
     "Feedback": 3,
+    "Shift Overview": 0,
+    "Brand Results": 1,
+    "Brand Feedback": 2,
+    "Follow-up": 3,
 }
 
 PHOTO_BUCKETS: list[dict] = [
@@ -98,18 +195,36 @@ PHOTO_BUCKETS: list[dict] = [
     {"name": "Expense Receipts"},
 ]
 
+# Same dropzones as FAMUS retail: library + camera multi-upload buckets,
+# not camera-only image fields.
+RETAIL_PHOTO_BUCKETS: list[dict] = [
+    {"name": "Table Set Up"},
+    {"name": "Product Display"},
+    {"name": "Consumer Sampling Pictures"},
+    {"name": "Product Receipt"},
+]
+
 PHOTO_BUCKETS_BY_PROGRAM: dict[str, list[dict]] = {
     PROGRAM_NAME: list(PHOTO_BUCKETS),
+    RETAIL_PROGRAM: list(RETAIL_PHOTO_BUCKETS),
 }
 
-ALL_BUCKETS: list[dict] = list(PHOTO_BUCKETS)
+ALL_BUCKETS: list[dict] = [
+    {"name": "Consumer Sampling Pictures"},
+    {"name": "Expense Receipts"},
+    {"name": "Table Set Up"},
+    {"name": "Product Display"},
+    {"name": "Product Receipt"},
+]
+
+KEEP_PROGRAMS = {PROGRAM_NAME.lower(), RETAIL_PROGRAM.lower()}
 
 
 class Command(BaseCommand):
     help = (
-        "Set up Pivot Energy Drink: tenant (if missing), Event Activation recap template, "
-        "Consumer Sampling Pictures + Expense Receipts buckets, and standing check-in link "
-        "(dry-run by default; --apply to write)."
+        "Set up Pivot Energy Drink: tenant (if missing), Event Activation and "
+        "Retail Sampling recap templates, photo buckets, catalog SKUs, and the "
+        "standing check-in link (dry-run by default; --apply to write)."
     )
 
     def add_arguments(self, parser):
@@ -117,8 +232,8 @@ class Command(BaseCommand):
             "--tenant",
             default="pivot-energy-drink",
             help=(
-                "tenant name/slug (exact slug preferred). "
-                "Default: 'pivot-energy-drink'."
+                "Exact tenant slug. Must be 'pivot-energy-drink'. "
+                "A substring such as 'pivot' is rejected."
             ),
         )
         parser.add_argument(
@@ -161,10 +276,13 @@ class Command(BaseCommand):
             )
         else:
             self.stdout.write(
-                f"Tenant     : [{tenant.id}] {tenant.name!r} "
-                f"(slug {tenant.slug!r})"
+                f"Tenant     : [{tenant.id}] {tenant.name!r} (slug {tenant.slug!r})"
             )
         self.stdout.write(f"Template   : {template_name!r}")
+        self.stdout.write(f"Retail     : {RETAIL_TEMPLATE_NAME!r}")
+        self.stdout.write(
+            "SKUs       : " + ", ".join(SKU_NAMES) + " (no image download)"
+        )
         self.stdout.write(f"Created by : {getattr(creator, 'email', creator)!r}")
         self.stdout.write(
             f"Mode       : {'APPLY (writing)' if apply else 'DRY-RUN (no writes)'}"
@@ -177,10 +295,10 @@ class Command(BaseCommand):
             self.stdout.write(
                 self.style.WARNING(
                     f"DRY-RUN — would create tenant {TENANT_NAME!r}, "
-                    f"{len(SPEC)} sections + "
-                    f"{sum(len(f) for _, f in SPEC)} fields, "
-                    f"photo buckets, and a {CODE_PREFIX} standing link. "
-                    "Re-run with --apply to write."
+                    f"Event Activation ({len(SPEC)} sections) and "
+                    f"Retail Sampling ({len(RETAIL_SPEC)} sections), "
+                    f"{len(SKU_NAMES)} SKUs, photo buckets, and a {CODE_PREFIX} "
+                    "standing link. Re-run with --apply to write."
                 )
             )
             return
@@ -188,51 +306,98 @@ class Command(BaseCommand):
         event_type = self._resolve_event_type(
             tenant, opts.get("event_type"), creator, apply
         )
+        retail_type = self._resolve_retail_type(tenant, creator, apply)
         self.stdout.write(
             f"Event type : {getattr(event_type, 'name', None)!r} "
             f"(id {getattr(event_type, 'id', None)})"
         )
-        if event_type is None:
+        self.stdout.write(
+            f"Retail type: {getattr(retail_type, 'name', None)!r} "
+            f"(id {getattr(retail_type, 'id', None)})"
+        )
+        if event_type is None or retail_type is None:
             raise CommandError(
-                f"Tenant {tenant.slug!r} has no event types — seed failed."
+                f"Tenant {tenant.slug!r} is missing a walk-up program — seed failed."
             )
 
         self._report_existing_templates(tenant, template_name)
 
         ft_cache: dict = {}
-        for _, fields in SPEC:
-            for _, kind, _, _ in fields:
-                self._resolve_field_type(kind, creator, apply, ft_cache)
+        for spec in (SPEC, RETAIL_SPEC):
+            for _, fields in spec:
+                for _, kind, _, _ in fields:
+                    self._resolve_field_type(kind, creator, apply, ft_cache)
 
         if apply:
             with transaction.atomic():
                 self._upsert_template(
                     tenant, template_name, event_type, SPEC, creator, apply, ft_cache
                 )
+                self._upsert_template(
+                    tenant,
+                    RETAIL_TEMPLATE_NAME,
+                    retail_type,
+                    RETAIL_SPEC,
+                    creator,
+                    apply,
+                    ft_cache,
+                )
+                self._ensure_skus(tenant, creator, apply)
+                self._sync_products_sampled(tenant, apply)
         else:
             self._upsert_template(
                 tenant, template_name, event_type, SPEC, creator, apply, ft_cache
             )
+            self._upsert_template(
+                tenant,
+                RETAIL_TEMPLATE_NAME,
+                retail_type,
+                RETAIL_SPEC,
+                creator,
+                apply,
+                ft_cache,
+            )
+            self._ensure_skus(tenant, creator, apply)
 
         self._photo_buckets(tenant, creator, apply)
-        self._pin_event_type(tenant, event_type, apply)
-        self._retire_other_programs(tenant, event_type, apply)
+        self._pin_programs(tenant, event_type, retail_type, apply)
+        self._retire_other_programs(tenant, event_type, retail_type, apply)
         self._fold_extra_templates(
             tenant, event_type, template_name, SPEC, creator, apply, ft_cache
         )
+        if getattr(retail_type, "id", None):
+            self._fold_extra_templates(
+                tenant,
+                retail_type,
+                RETAIL_TEMPLATE_NAME,
+                RETAIL_SPEC,
+                creator,
+                apply,
+                ft_cache,
+            )
         self._location_mode(tenant, apply)
         self._checkin_code(tenant, apply, opts.get("prefix"))
 
     def _print_spec(self) -> None:
-        for s_idx, (section_name, fields) in enumerate(SPEC):
+        self.stdout.write(f"\nEvent Activation template {TEMPLATE_NAME!r}")
+        self._print_fields(SPEC)
+        self.stdout.write(f"\nRetail Sampling template {RETAIL_TEMPLATE_NAME!r}")
+        self._print_fields(RETAIL_SPEC)
+        self.stdout.write("\nPhoto buckets:")
+        for program, buckets in PHOTO_BUCKETS_BY_PROGRAM.items():
+            names = ", ".join(bucket["name"] for bucket in buckets)
+            self.stdout.write(f"    {program}: {names}")
+        self.stdout.write("\nSKUs (catalog only, no images):")
+        for name in SKU_NAMES:
+            self.stdout.write(f"    - {PRODUCT_TYPE_NAME} — {name}")
+
+    def _print_fields(self, spec) -> None:
+        for s_idx, (section_name, fields) in enumerate(spec):
             self.stdout.write(f"\n[{s_idx}] SECTION {section_name!r}")
             for fname, kind, required, options in fields:
                 req = "REQUIRED" if required else "optional"
                 extra = f" options={options!r}" if options else ""
                 self.stdout.write(f"    - {fname!r}  [{kind}] {req}{extra}")
-        self.stdout.write("\nPhoto buckets:")
-        for bucket in PHOTO_BUCKETS:
-            self.stdout.write(f"    - {bucket['name']!r}")
 
     def _resolve_creator(self):
         from django.contrib.auth import get_user_model
@@ -249,44 +414,20 @@ class Command(BaseCommand):
     def _resolve_or_create_tenant(self, needle: str, creator, apply: bool):
         from tenants.models import Tenant
 
-        # Exact slug only — AGENTS: tenant seed/setup resolves by exact slug.
-        exact = list(
-            Tenant.objects.filter(slug__iexact=TENANT_SLUG).order_by("id")
-        )
+        # Exact slug only. "pivot" must not select or create another tenant.
+        needle_slug = slugify((needle or "").strip()) or TENANT_SLUG
+        if needle_slug != TENANT_SLUG:
+            raise CommandError(
+                f"--tenant must be the exact slug {TENANT_SLUG!r} (got {needle!r})."
+            )
+
+        exact = list(Tenant.objects.filter(slug__iexact=TENANT_SLUG).order_by("id"))
+        if len(exact) > 1:
+            for t in exact:
+                self.stdout.write(f"  [{t.id}] name={t.name!r} slug={t.slug!r}")
+            raise CommandError(f"slug {TENANT_SLUG!r} matched {len(exact)} tenants.")
         if len(exact) == 1:
             return exact[0]
-
-        needle_slug = slugify((needle or "").strip()) or TENANT_SLUG
-        if needle_slug.lower() != TENANT_SLUG:
-            exact_needle = list(
-                Tenant.objects.filter(slug__iexact=needle_slug).order_by("id")
-            )
-            if len(exact_needle) == 1:
-                return exact_needle[0]
-
-        matches = list(
-            Tenant.objects.filter(
-                Q(name__iexact=TENANT_NAME) | Q(slug__iexact=TENANT_SLUG)
-            )
-            .distinct()
-            .order_by("id")
-        )
-        if len(matches) == 1:
-            return matches[0]
-        if len(matches) > 1:
-            prefer = [
-                t
-                for t in matches
-                if (t.slug or "").lower() == TENANT_SLUG
-                or (t.name or "").lower() == TENANT_NAME.lower()
-            ]
-            if len(prefer) == 1:
-                return prefer[0]
-            for t in matches:
-                self.stdout.write(f"  [{t.id}] name={t.name!r} slug={t.slug!r}")
-            raise CommandError(
-                f"{needle!r} matched {len(matches)} tenants — narrow --tenant."
-            )
 
         self.stdout.write(
             self.style.WARNING(
@@ -356,9 +497,7 @@ class Command(BaseCommand):
                 name=request_type, tenant=tenant, created_by=creator
             )
         for rate_type in DEFAULT_RATE_TYPES:
-            RateType.objects.create(
-                name=rate_type, tenant=tenant, created_by=creator
-            )
+            RateType.objects.create(name=rate_type, tenant=tenant, created_by=creator)
         for recap_category in DEFAULT_FILE_RECAP_CATEGORIES:
             FileRecapCategory.objects.create(
                 name=recap_category, tenant_id=tenant.id, created_by=creator
@@ -418,6 +557,85 @@ class Command(BaseCommand):
         )
         self.stdout.write(f"  + event type {PROGRAM_NAME!r} [{et.id}]")
         return et
+
+    def _resolve_retail_type(self, tenant, creator, apply: bool):
+        """Find Retail Sampling by exact name, or create it. Never remint Event."""
+        from events.models import EventType
+
+        match = (
+            EventType.objects.filter(tenant_id=tenant.id, name__iexact=RETAIL_PROGRAM)
+            .order_by("id")
+            .first()
+        )
+        if match:
+            return match
+        if not apply:
+            self.stdout.write(f"  would create event type {RETAIL_PROGRAM!r}")
+            return EventType(name=RETAIL_PROGRAM, tenant=tenant, id=0)
+
+        et = EventType.objects.create(
+            name=RETAIL_PROGRAM,
+            slug=slugify(RETAIL_PROGRAM),
+            tenant=tenant,
+            created_by=creator,
+            is_default=False,
+        )
+        self.stdout.write(f"  + event type {RETAIL_PROGRAM!r} [{et.id}]")
+        return et
+
+    def _ensure_skus(self, tenant, creator, apply: bool) -> None:
+        """Add the four Pivot flavors. Leave every other product on the tenant."""
+        from events.models import Product, ProductType
+
+        self.stdout.write(f"\nCatalog ({PRODUCT_TYPE_NAME}):")
+        if not apply:
+            existing = {
+                name.lower()
+                for name in Product.objects.filter(tenant_id=tenant.id).values_list(
+                    "name", flat=True
+                )
+            }
+            for name in SKU_NAMES:
+                mark = "=" if name.lower() in existing else "+"
+                self.stdout.write(f"  {mark} SKU {name!r} (no image)")
+            return
+
+        product_type, _ = ProductType.objects.get_or_create(
+            tenant=tenant,
+            name=PRODUCT_TYPE_NAME,
+            defaults={"created_by": creator},
+        )
+        for name in SKU_NAMES:
+            product = Product.objects.filter(
+                tenant_id=tenant.id, name__iexact=name
+            ).first()
+            if product is None:
+                Product.objects.create(
+                    tenant=tenant,
+                    name=name,
+                    product_type=product_type,
+                    created_by=creator,
+                )
+                self.stdout.write(f"  + SKU {name!r}")
+                continue
+            self.stdout.write(f"  = SKU [{product.id}] {product.name!r} (left as-is)")
+
+    def _sync_products_sampled(self, tenant, apply: bool) -> None:
+        """Point Products Sampled at the live Pivot catalog, not a copied SKU list."""
+        if not apply:
+            return
+        from events.event_confirmations import catalog_product_options
+        from recaps.models import CustomField
+
+        options = catalog_product_options(tenant)
+        updated = CustomField.objects.filter(
+            custom_recap_template__tenant_id=tenant.id,
+            name__iexact=PRODUCTS_SAMPLED_FIELD,
+        ).update(options=list(options))
+        self.stdout.write(
+            f"  Products Sampled options ← {len(options)} catalog row(s) "
+            f"on {updated} field(s)"
+        )
 
     def _resolve_field_type(self, kind: str, creator, apply: bool, cache: dict):
         if kind in cache:
@@ -607,7 +825,10 @@ class Command(BaseCommand):
         tenant.save(update_fields=["checkin_photo_buckets"])
         self.stdout.write(self.style.SUCCESS("  checkin_photo_buckets set."))
 
-    def _pin_event_type(self, tenant, event_type, apply: bool) -> None:
+    def _pin_programs(self, tenant, event_type, retail_type, apply: bool) -> None:
+        """Keep Event Activation as the pinned default and offer both programs."""
+        from events.models import EventType
+
         if event_type is None or not getattr(event_type, "id", None):
             return
         current = getattr(tenant, "checkin_event_type_id", None)
@@ -632,16 +853,33 @@ class Command(BaseCommand):
                     f"(id {event_type.id})"
                 )
             )
-        if apply:
-            tenant.checkin_event_types.set([event_type])
-            if not event_type.is_default:
-                from events.models import EventType
 
-                EventType.objects.filter(tenant_id=tenant.id, is_default=True).exclude(
-                    pk=event_type.pk
-                ).update(is_default=False)
-                event_type.is_default = True
-                event_type.save(update_fields=["is_default"])
+        selectable = [event_type]
+        if retail_type is not None and getattr(retail_type, "id", None):
+            selectable.append(retail_type)
+        offered = ", ".join(
+            name
+            for name in (
+                getattr(event_type, "name", None),
+                getattr(retail_type, "name", None) or RETAIL_PROGRAM,
+            )
+            if name
+        )
+        if not apply or len(selectable) < 2:
+            self.stdout.write(
+                self.style.WARNING(f"  DRY-RUN — would make selectable: {offered}")
+            )
+            return
+        tenant.checkin_event_types.set(selectable)
+        EventType.objects.filter(tenant_id=tenant.id, is_default=True).exclude(
+            pk=event_type.pk
+        ).update(is_default=False)
+        if not event_type.is_default:
+            event_type.is_default = True
+            event_type.save(update_fields=["is_default"])
+        self.stdout.write(
+            "  selectable = " + ", ".join(f"[{t.id}] {t.name}" for t in selectable)
+        )
 
     def _delete_template(self, template) -> None:
         from recaps.models import CustomField
@@ -730,21 +968,27 @@ class Command(BaseCommand):
                 tenant, keep_name, event_type, spec, creator, apply, ft_cache
             )
 
-
-    def _retire_other_programs(self, tenant, event_type, apply: bool) -> None:
+    def _retire_other_programs(
+        self, tenant, event_type, retail_type, apply: bool
+    ) -> None:
+        """Keep Event Activation and Retail Sampling. Retire the createTenant extras."""
         from events.models import Event, EventType
         from recaps.models import CustomRecapTemplate
 
         if event_type is None or not getattr(event_type, "id", None):
             return
+        keep_ids = {event_type.id}
+        if retail_type is not None and getattr(retail_type, "id", None):
+            keep_ids.add(retail_type.id)
         others = list(
             EventType.objects.filter(tenant_id=tenant.id)
-            .exclude(pk=event_type.pk)
+            .exclude(pk__in=keep_ids)
             .order_by("id")
         )
         if not others:
             self.stdout.write(
-                "\nNo other event types — Event Activation is the only program."
+                "\nNo other event types — Event Activation and Retail Sampling "
+                "are the walk-up programs."
             )
             return
         self.stdout.write("\nOther event types (will not be selectable):")
@@ -757,11 +1001,12 @@ class Command(BaseCommand):
             if n_tpl:
                 refs.append(f"{n_tpl} template(s)→{event_type.name}")
             ref_txt = f"  [{', '.join(refs)}]" if refs else "  [unused]"
+            if (extra.name or "").lower() in KEEP_PROGRAMS:
+                self.stdout.write(f"    keeping {extra.name!r}{ref_txt}")
+                continue
             if not apply:
                 self.stdout.write(
-                    self.style.WARNING(
-                        f"    would retire {extra.name!r}{ref_txt}"
-                    )
+                    self.style.WARNING(f"    would retire {extra.name!r}{ref_txt}")
                 )
                 continue
             Event.objects.filter(event_type=extra).update(event_type=event_type)
@@ -815,16 +1060,31 @@ class Command(BaseCommand):
             )
             return
 
-        code = None
-        for _ in range(12):
-            candidate = code_prefix + "".join(
-                secrets.choice(ALPHABET) for _ in range(6)
+        # Default new link is the standing code the field team already has.
+        # An explicit --prefix still mints a fresh code; the default never does.
+        if not cleaned:
+            taken = (
+                Tenant.objects.filter(checkin_code__iexact=STANDING_CODE)
+                .exclude(pk=tenant.pk)
+                .first()
             )
-            if not Tenant.objects.filter(checkin_code__iexact=candidate).exists():
-                code = candidate
-                break
-        if code is None:
-            raise CommandError("Couldn't mint a unique check-in code — try again.")
+            if taken is not None:
+                raise CommandError(
+                    f"{STANDING_CODE} belongs to {taken.slug!r}. "
+                    "Refusing to mint a different Pivot code."
+                )
+            code = STANDING_CODE
+        else:
+            code = None
+            for _ in range(12):
+                candidate = code_prefix + "".join(
+                    secrets.choice(ALPHABET) for _ in range(6)
+                )
+                if not Tenant.objects.filter(checkin_code__iexact=candidate).exists():
+                    code = candidate
+                    break
+            if code is None:
+                raise CommandError("Couldn't mint a unique check-in code — try again.")
 
         if not apply:
             self.stdout.write(
