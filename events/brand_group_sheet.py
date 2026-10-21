@@ -32,10 +32,21 @@ ALCOHOL_ARMOR_CHECKIN_CODE = "AA-RPP85E"
 WOOK_WATER_CHECKIN_CODE = "WW-36DJAJ"
 PIVOT_CHECKIN_CODE = "PE-Y7VPYC"
 
-# Same path the Pivot walk-up setup writes into checkin_resources, and the
-# file the front-end serves from public/training/pivot-energy-drink/.
-PIVOT_FAQ_LABEL = "Retail Sampling FAQ"
-PIVOT_FAQ_PATH = "/training/pivot-energy-drink/retail-sampling-faq.pdf"
+# Extra confirmation-email buttons for Pivot only. BA Guide stays whatever
+# the walk-up already stored. These two match the live training PDFs and are
+# appended only when that tenant's checkin_resources does not already list them.
+PIVOT_EMAIL_BUTTONS: tuple[tuple[str, str, str], ...] = (
+    (
+        "Retail Sampling FAQ",
+        "/training/pivot-energy-drink/retail-sampling-faq.pdf",
+        "Total Wine retail sampling guide",
+    ),
+    (
+        "Product Comparison",
+        "/training/pivot-energy-drink/product-comparison.pdf",
+        "How Pivot compares with other energy drinks",
+    ),
+)
 
 
 @dataclass(frozen=True)

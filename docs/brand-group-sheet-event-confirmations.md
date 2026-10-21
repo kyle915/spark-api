@@ -45,10 +45,14 @@ There is no Brand column. Every confirmation is Pivot Energy Drink
 `https://client.igniteproductions.co/checkin/PE-Y7VPYC`.
 
 Clock in / Clock out and Open Recap Form use that URL on
-`client.igniteproductions.co`. The email also includes **Retail Sampling FAQ**
-at `https://client.igniteproductions.co/training/pivot-energy-drink/retail-sampling-faq.pdf`
-(the same path the walk-up materials use). Famus, Wook, and Alcohol Armor
-links are not attached.
+`client.igniteproductions.co`. The email keeps the walk-up **BA Guide** when
+that tenant has it, and always includes:
+
+- **Retail Sampling FAQ** — `https://client.igniteproductions.co/training/pivot-energy-drink/retail-sampling-faq.pdf`
+- **Product Comparison** — `https://client.igniteproductions.co/training/pivot-energy-drink/product-comparison.pdf`
+
+Famus, Wook, and Alcohol Armor links are not attached, and those brands do
+not get the Pivot PDFs.
 
 SKU text is matched to the Pivot Product catalog only (`Blue Razz`,
 `Pink Lemonade`, `Melon Rush`, `Going Grape`, plus whatever else is on that

@@ -398,21 +398,35 @@ class TestBrandGroupEmailUsesTorchTemplate:
                 ["famus-energy"],
                 "Your FAMUS Energy Retail Sampling – marathon | 10/21/2026 | 7a - 10a",
                 ["FM-PAG4TX", "brand-guidelines.pdf", "ba-faq-guide.pdf"],
-                ["WW-36DJAJ", "AA-RPP85E"],
+                ["WW-36DJAJ", "AA-RPP85E", "retail-sampling-faq.pdf", "product-comparison.pdf"],
             ),
             (
                 self.wook,
                 ["wook-water"],
                 "Your Wook Water Retail Sampling – marathon | 10/21/2026 | 7a - 10a",
                 ["WW-36DJAJ"],
-                ["FM-PAG4TX", "AA-RPP85E", "brand-guidelines.pdf", "ba-faq-guide.pdf"],
+                [
+                    "FM-PAG4TX",
+                    "AA-RPP85E",
+                    "brand-guidelines.pdf",
+                    "ba-faq-guide.pdf",
+                    "retail-sampling-faq.pdf",
+                    "product-comparison.pdf",
+                ],
             ),
             (
                 self.armor,
                 ["alcohol-armor"],
                 "Your Alcohol Armor Retail Sampling – marathon | 10/21/2026 | 7a - 10a",
                 ["AA-RPP85E"],
-                ["FM-PAG4TX", "WW-36DJAJ", "brand-guidelines.pdf", "ba-faq-guide.pdf"],
+                [
+                    "FM-PAG4TX",
+                    "WW-36DJAJ",
+                    "brand-guidelines.pdf",
+                    "ba-faq-guide.pdf",
+                    "retail-sampling-faq.pdf",
+                    "product-comparison.pdf",
+                ],
             ),
         ]
         for tenant, slugs, subject, present, absent in cases:
@@ -453,6 +467,8 @@ class TestBrandGroupEmailUsesTorchTemplate:
         assert "OG Luxe (Tropical Ice) 16oz" in html
         assert "Pineapple Peak 12oz Can" in html
         assert "Slayberry" not in html
+        assert "retail-sampling-faq.pdf" not in html
+        assert "product-comparison.pdf" not in html
         assert "spark.igniteproductions.co" not in html
 
 
@@ -472,6 +488,10 @@ PIVOT_RESOURCES = [
 PIVOT_FAQ_URL = (
     "https://client.igniteproductions.co/training/pivot-energy-drink/"
     "retail-sampling-faq.pdf"
+)
+PIVOT_COMPARISON_URL = (
+    "https://client.igniteproductions.co/training/pivot-energy-drink/"
+    "product-comparison.pdf"
 )
 
 
@@ -659,10 +679,15 @@ class TestPivotEmailUsesTorchTemplate:
         assert html.count("Clock in / Clock out") == 1
         assert html.count("Open Recap Form") == 1
         assert "PE-Y7VPYC" in html
+        assert "BA Guide" in html
         assert "Retail Sampling FAQ" in html
+        assert "Product Comparison" in html
         assert html.count("Retail Sampling FAQ") == 1
+        assert html.count("Product Comparison") == 1
         assert html.count("retail-sampling-faq.pdf") == 3
+        assert html.count("product-comparison.pdf") == 3
         assert PIVOT_FAQ_URL in html
+        assert PIVOT_COMPARISON_URL in html
         assert "client.igniteproductions.co" in html
         for absent in (
             "FM-PAG4TX",
@@ -674,7 +699,7 @@ class TestPivotEmailUsesTorchTemplate:
         ):
             assert absent not in html
 
-    def test_faq_already_on_the_tenant_is_not_duplicated(self):
+    def test_walkup_buttons_are_not_duplicated(self):
         self.pivot.checkin_resources = [
             *PIVOT_RESOURCES,
             {
@@ -682,10 +707,18 @@ class TestPivotEmailUsesTorchTemplate:
                 "kind": "pdf",
                 "url": PIVOT_FAQ_URL,
             },
+            {
+                "label": "Product Comparison",
+                "kind": "pdf",
+                "url": PIVOT_COMPARISON_URL,
+            },
         ]
         self.pivot.save(update_fields=["checkin_resources"])
         confirmation = _confirmation(self.pivot, products=["Blue Razz"])
         html, _subject = _html(confirmation)
+        assert html.count("BA Guide") == 1
         assert html.count("Retail Sampling FAQ") == 1
+        assert html.count("Product Comparison") == 1
         assert html.count("retail-sampling-faq.pdf") == 3
+        assert html.count("product-comparison.pdf") == 3
 
