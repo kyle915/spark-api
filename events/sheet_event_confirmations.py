@@ -8,6 +8,7 @@ Supported sheets (allowlist by spreadsheet id):
   - Torch retail schedule
   - Liquid Death retail market schedules (Retail Sampling only)
   - Famus Energy / Alcohol Armor / Wook Water (column H picks the brands)
+  - Pivot Energy Drink (its own workbook; every row is Pivot)
 
 Trigger columns are separate checkboxes so unchecking Send is a no-op.
 """
@@ -25,6 +26,8 @@ from django.utils import timezone as dj_tz
 
 from events.brand_group_sheet import (
     BRAND_GROUP_SHEET_ID,
+    PIVOT_SHEET_ID,
+    PIVOT_TENANT_SLUG,
     assert_standing_checkin,
     catalogs_for_tenants,
     match_sku_tokens,
@@ -96,6 +99,8 @@ class SheetConfirmationConfig:
     # When set, column H names one or more tenants. The row never inherits
     # the other brands on the workbook.
     routes_by_brand: bool = False
+    # Single-tenant workbooks (Pivot) still refuse SKUs outside that catalog.
+    match_catalog_skus: bool = False
 
 
 TORCH_CONFIG = SheetConfirmationConfig(
@@ -160,10 +165,33 @@ BRAND_GROUP_CONFIG = SheetConfirmationConfig(
     routes_by_brand=True,
 )
 
+# External // Pivot Energy Retail Demos. gid 0, read 2026-10-20.
+# No Brand column. Headers A–AT already exist (Event Confirmation Sent? is P).
+# ensureConfirmationColumns appends the trigger/status block at AU–BB.
+# Status stamps use the letters below and do not re-read the header row.
+PIVOT_CONFIG = SheetConfirmationConfig(
+    key="pivot",
+    sheet_id=PIVOT_SHEET_ID,
+    tenant_slug=PIVOT_TENANT_SLUG,
+    tab_title="Retail Schedule",
+    tab_gid=0,
+    known_status_cols={
+        SENT_STATUS_HEADER: "P",
+        "Event Confirmation Sent?": "P",
+        "Confirmation Status": "AX",
+        "Confirmation Sent At": "AY",
+        "Confirmation Error": "AZ",
+        "Spark Confirmation UUID": "BA",
+    },
+    extra_headers=tuple(CONFIRMATION_EXTRA_HEADERS),
+    match_catalog_skus=True,
+)
+
 SHEET_CONFIGS: tuple[SheetConfirmationConfig, ...] = (
     TORCH_CONFIG,
     LIQUID_DEATH_CONFIG,
     BRAND_GROUP_CONFIG,
+    PIVOT_CONFIG,
 )
 SHEET_CONFIG_BY_ID: dict[str, SheetConfirmationConfig] = {
     c.sheet_id: c for c in SHEET_CONFIGS
@@ -664,12 +692,18 @@ def _torch_tenant():
 
 
 def _row_tenants(payload: SheetRowPayload) -> list:
-    """Tenants this row may email. Brand-group rows use column H only."""
+    """Tenants this row may email.
+
+    Brand-group rows use column H only. Pivot has no Brand column: every
+    row is that sheet's tenant. Standing walk-up codes are checked either way
+    and are never rewritten.
+    """
     config = config_for_sheet_id(payload.sheet_id)
-    if not config.routes_by_brand:
-        return [_tenant_for(config)]
-    slugs = parse_brand_slugs(payload.brand)
-    tenants = tenants_for_slugs(slugs)
+    if config.routes_by_brand:
+        slugs = parse_brand_slugs(payload.brand)
+        tenants = tenants_for_slugs(slugs)
+    else:
+        tenants = [_tenant_for(config)]
     for tenant in tenants:
         assert_standing_checkin(tenant)
     return tenants
@@ -678,9 +712,9 @@ def _row_tenants(payload: SheetRowPayload) -> list:
 def _products_for_row(payload: SheetRowPayload, tenants: list) -> list[str]:
     tokens = products_from_skus_cell(payload.skus)
     config = config_for_sheet_id(payload.sheet_id)
-    if not config.routes_by_brand:
-        return tokens
-    return match_sku_tokens(tokens, catalogs_for_tenants(tenants))
+    if config.routes_by_brand or config.match_catalog_skus:
+        return match_sku_tokens(tokens, catalogs_for_tenants(tenants))
+    return tokens
 
 
 def _cell(values: dict[str, Any], *names: str) -> str:
@@ -1016,6 +1050,7 @@ def _create_and_send(
                 "products": products,
                 "brand_slugs": brand_slugs,
                 "checkin_urls": [checkin_url_for(item) for item in tenants],
+                "send_reminders": True,
             },
         )
 

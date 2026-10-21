@@ -323,6 +323,10 @@ def email_training_resources(
     True, falls back to a single "Review Training Site" row from
     ``checkin_training_url`` / TrainingHub so tenants without the JSON list
     still get one button.
+
+    Pivot Energy Drink always gets a Retail Sampling FAQ button. The walk-up
+    setup writes that same URL into ``checkin_resources``; until that row
+    exists the email still points at the public training path.
     """
     from tenants.models import normalize_checkin_resources
 
@@ -345,24 +349,53 @@ def email_training_resources(
             }
         )
     if out or not include_legacy:
-        return out
+        return _with_pivot_faq(tenant, out)
 
     # Avoid recursion through training_url_for → this helper.
     stored = absolute_public_url(
         getattr(tenant, "checkin_training_url", "") or ""
     )
     if stored:
-        return [{"label": "Review Training Site", "url": stored, "note": ""}]
+        return _with_pivot_faq(
+            tenant, [{"label": "Review Training Site", "url": stored, "note": ""}]
+        )
     code = _training_hub_code(tenant)
     if code:
-        return [
-            {
-                "label": "Review Training Site",
-                "url": f"{public_page_base()}/training/{code}",
-                "note": "",
-            }
-        ]
-    return []
+        return _with_pivot_faq(
+            tenant,
+            [
+                {
+                    "label": "Review Training Site",
+                    "url": f"{public_page_base()}/training/{code}",
+                    "note": "",
+                }
+            ],
+        )
+    return _with_pivot_faq(tenant, [])
+
+
+def _with_pivot_faq(tenant, resources: list[dict]) -> list[dict]:
+    """Append Pivot's Retail Sampling FAQ when this tenant does not have it yet."""
+    from events.brand_group_sheet import (
+        PIVOT_FAQ_LABEL,
+        PIVOT_FAQ_PATH,
+        PIVOT_TENANT_SLUG,
+    )
+
+    slug = (getattr(tenant, "slug", "") or "").strip()
+    if slug != PIVOT_TENANT_SLUG:
+        return resources
+    url = absolute_public_url(PIVOT_FAQ_PATH)
+    if not url or any((row.get("url") or "") == url for row in resources):
+        return resources
+    return [
+        *resources,
+        {
+            "label": PIVOT_FAQ_LABEL,
+            "url": url,
+            "note": "Total Wine retail sampling guide",
+        },
+    ]
 
 
 def _training_hub_code(tenant) -> str:

@@ -1,8 +1,13 @@
-"""Column H brand routing for the Famus / Alcohol Armor / Wook Water sheet.
+"""Brand routing for retail-sheet confirmations.
 
-One spreadsheet, three tenants. The Brand cell decides which standing
-check-in links, BA materials, and catalog SKUs a row may use. A brand that
-is not named in that cell is not attached.
+The Famus / Alcohol Armor / Wook Water workbook is one spreadsheet and three
+tenants. Column H decides which standing check-in links, BA materials, and
+catalog SKUs a row may use. A brand that is not named in that cell is not
+attached.
+
+The Pivot Energy workbook is a separate spreadsheet with no Brand column.
+Every row on that sheet is Pivot Energy Drink. It is not a fourth choice
+in column H.
 """
 
 from __future__ import annotations
@@ -15,11 +20,22 @@ from tenants.models import Tenant
 
 BRAND_GROUP_SHEET_ID = "1xnnzFb3s0mAV-6abyzmPzEX3wjtObD8Bv4qQsr8VB6A"
 
+# External // Pivot Energy Retail Demos. gid 0, tab "Retail Schedule".
+# No Brand column — registering the id is what selects Pivot.
+PIVOT_SHEET_ID = "1kMuUWZtaEJ0rbvsDzE-uI3FkBTIJdX_LbnEqYaAHG4I"
+PIVOT_TENANT_SLUG = "pivot-energy-drink"
+
 # Standing walk-up codes. Do not remint. The email still builds the URL from
 # Tenant.checkin_code; a mismatch with these codes refuses the send.
 FAMUS_CHECKIN_CODE = "FM-PAG4TX"
 ALCOHOL_ARMOR_CHECKIN_CODE = "AA-RPP85E"
 WOOK_WATER_CHECKIN_CODE = "WW-36DJAJ"
+PIVOT_CHECKIN_CODE = "PE-Y7VPYC"
+
+# Same path the Pivot walk-up setup writes into checkin_resources, and the
+# file the front-end serves from public/training/pivot-energy-drink/.
+PIVOT_FAQ_LABEL = "Retail Sampling FAQ"
+PIVOT_FAQ_PATH = "/training/pivot-energy-drink/retail-sampling-faq.pdf"
 
 
 @dataclass(frozen=True)
@@ -50,7 +66,10 @@ BRAND_ROUTES: tuple[BrandRoute, ...] = (
 _ROUTE_BY_LABEL: dict[str, BrandRoute] = {
     label: route for route in BRAND_ROUTES for label in route.labels
 }
-_ROUTE_BY_SLUG: dict[str, BrandRoute] = {route.slug: route for route in BRAND_ROUTES}
+_STANDING_BY_SLUG: dict[str, str] = {
+    route.slug: route.standing_checkin_code for route in BRAND_ROUTES
+}
+_STANDING_BY_SLUG[PIVOT_TENANT_SLUG] = PIVOT_CHECKIN_CODE
 
 _BRAND_SPLIT = re.compile(r"\s*(?:,|;|/|&|\+|\n|\band\b)\s*", re.IGNORECASE)
 _SKU_SPACE = re.compile(r"\s+")
@@ -97,8 +116,7 @@ def parse_brand_slugs(raw: str | None) -> list[str]:
 
 
 def standing_checkin_code(slug: str) -> str:
-    route = _ROUTE_BY_SLUG.get(slug)
-    return route.standing_checkin_code if route else ""
+    return _STANDING_BY_SLUG.get((slug or "").strip(), "")
 
 
 def assert_standing_checkin(tenant) -> None:

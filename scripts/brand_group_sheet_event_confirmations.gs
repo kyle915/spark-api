@@ -1,13 +1,20 @@
 /**
- * Famus Energy / Alcohol Armor / Wook Water → Spark Event Confirmation / Cancel
+ * Famus / Alcohol Armor / Wook Water and Pivot Energy Drink
+ * → Spark Event Confirmation / Cancel
  *
- * Install on:
- *   https://docs.google.com/spreadsheets/d/1xnnzFb3s0mAV-6abyzmPzEX3wjtObD8Bv4qQsr8VB6A
+ * Bind this file on either workbook. The active spreadsheet id is what the
+ * API uses. Column H (Brand) matters only on the Famus group sheet. The
+ * Pivot sheet has no Brand column; every row is Pivot Energy Drink.
  *
- * Same Apps Script pattern as the Torch retail schedule. Column H (Brand)
- * chooses which brand's check-in link, BA materials, and catalog SKUs the
- * Torch confirmation email includes. One brand or several. A brand not named
- * in H is left out.
+ *   Famus group:
+ *     https://docs.google.com/spreadsheets/d/1xnnzFb3s0mAV-6abyzmPzEX3wjtObD8Bv4qQsr8VB6A
+ *   Pivot Energy:
+ *     https://docs.google.com/spreadsheets/d/1kMuUWZtaEJ0rbvsDzE-uI3FkBTIJdX_LbnEqYaAHG4I
+ *
+ * Same Apps Script pattern as the Torch retail schedule. The Torch
+ * confirmation email includes that row's standing check-in link, BA
+ * materials, and catalog SKUs. On the Famus sheet a brand not named in H
+ * is left out.
  *
  * Setup (one-time, Kyle or an Ignite sheet editor):
  *   1. Extensions → Apps Script → paste this file.
@@ -23,21 +30,14 @@
  *      Checkbox validation is Send / Cancel / Force Resend /
  *      Resend Confirmation only.
  *
- * Live tab (gid 0, "Sheet1"), read 2026-10-19. Do not hardcode letters in
- * onEdit; _postRow_ resolves them with _colIndex_, keeping the FIRST header
- * when Confirmation Status is duplicated at AA–AD:
- *   H  Brand
- *   J  SKUs
- *   M  Confirmed BA Name
- *   Q  Email
- *   T  Send Confirmation
- *   U  Cancel Confirmation
- *   V  Force Resend
- *   W  Confirmation Status          (canonical; AA is a duplicate)
- *   X  Confirmation Sent At
- *   Y  Confirmation Error
- *   Z  Spark Confirmation UUID
- *   Resend Confirmation is appended after the last real header.
+ * Famus live tab (gid 0, "Sheet1"), read 2026-10-19. Do not hardcode letters
+ * in onEdit; _postRow_ resolves them with _colIndex_, keeping the FIRST
+ * header when Confirmation Status is duplicated at AA–AD.
+ *
+ * Pivot live tab (gid 0, "Retail Schedule"), read 2026-10-20. There is no
+ * Brand column. Event Confirmation Sent? is already column P. The status
+ * block is appended after the last header (Conflict detail, column AT):
+ * Send AU, Cancel AV, Force AW, Status AX, Sent At AY, Error AZ, UUID BA.
  *
  * Usage matches Torch:
  *   - Check **Send Confirmation** → staffing@ confirmation email (Retail Sampling).
@@ -47,7 +47,11 @@
  *   - Menu Spark Confirmations → Send confirmations for tomorrow (bulk).
  */
 
-var BRAND_GROUP_SHEET_ID = '1xnnzFb3s0mAV-6abyzmPzEX3wjtObD8Bv4qQsr8VB6A';
+var FAMUS_GROUP_SHEET_ID = '1xnnzFb3s0mAV-6abyzmPzEX3wjtObD8Bv4qQsr8VB6A';
+var PIVOT_SHEET_ID = '1kMuUWZtaEJ0rbvsDzE-uI3FkBTIJdX_LbnEqYaAHG4I';
+var ALLOWED_SHEET_IDS = {};
+ALLOWED_SHEET_IDS[FAMUS_GROUP_SHEET_ID] = true;
+ALLOWED_SHEET_IDS[PIVOT_SHEET_ID] = true;
 var DEFAULT_API_BASE =
   'https://spark-api-new-490085168610.us-central1.run.app';
 var ENDPOINT_PATH = '/internal/brand-group-sheet-event-confirmation';
@@ -148,7 +152,7 @@ function ensureConfirmationColumns() {
 function onConfirmationEdit(e) {
   if (!e || !e.range) return;
   var sheet = e.range.getSheet();
-  if (sheet.getParent().getId() !== BRAND_GROUP_SHEET_ID) return;
+  if (!ALLOWED_SHEET_IDS[sheet.getParent().getId()]) return;
   if (e.range.getRow() < 2 || e.range.getNumRows() !== 1 || e.range.getNumColumns() !== 1) {
     return;
   }
@@ -244,7 +248,7 @@ function _postRow_(sheet, rowNumber, action, dryRun, resend) {
   var payload = {
     action: action,
     rowNumber: rowNumber,
-    sheetId: BRAND_GROUP_SHEET_ID,
+    sheetId: sheet.getParent().getId(),
     dryRun: !!dryRun,
     // One-shot flag. Not the Force Resend column, and not the checkbox
     // cell (that is cleared before this POST).
@@ -297,8 +301,17 @@ function _postRow_(sheet, rowNumber, action, dryRun, resend) {
 }
 
 function _retailScheduleSheet_() {
-  var ss = SpreadsheetApp.openById(BRAND_GROUP_SHEET_ID);
-  return ss.getSheets()[0];
+  var ss = SpreadsheetApp.getActive();
+  if (!ss || !ALLOWED_SHEET_IDS[ss.getId()]) {
+    throw new Error(
+      'This script only runs on the Famus group sheet or the Pivot Energy sheet.'
+    );
+  }
+  var sheets = ss.getSheets();
+  for (var i = 0; i < sheets.length; i++) {
+    if (sheets[i].getName() === 'Retail Schedule') return sheets[i];
+  }
+  return sheets[0];
 }
 
 function _headerRow_(sheet) {
