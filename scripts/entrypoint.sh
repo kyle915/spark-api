@@ -22,6 +22,9 @@ if [ "${1:-}" = "migrate-only" ]; then
   echo ">>> entrypoint: repairing Girl Beer recap template (idempotent)"
   uv run python manage.py repair_girl_beer_template --tenant-slug girl-beer || true
   echo ">>> entrypoint: Girl Beer template repair done"
+  echo ">>> entrypoint: pivot retail row 2 confirmation repair (no email)"
+  uv run python manage.py repair_pivot_retail_row || true
+  echo ">>> entrypoint: pivot retail row 2 repair done"
   exit 0
 fi
 

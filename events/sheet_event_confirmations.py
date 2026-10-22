@@ -167,10 +167,13 @@ BRAND_GROUP_CONFIG = SheetConfirmationConfig(
     routes_by_brand=True,
 )
 
-# External // Pivot Energy Retail Demos. gid 0, read 2026-10-20.
-# No Brand column. Headers A–AT already exist (Event Confirmation Sent? is P).
-# ensureConfirmationColumns appends the trigger/status block at AU–BB.
-# Status stamps use the letters below and do not re-read the header row.
+# External // Pivot Energy Retail Demos. gid 0, tab "Retail Schedule",
+# read 2026-10-22. The grid is 41 columns (A–AO). There is no
+# "Event Confirmation Sent?" column — P is BA Name, and writing a stamp
+# there would wipe the name. Confirmation columns already sit on the grid:
+# Send V, Cancel W, Force X, Status Y, Sent At Z, Error AA, UUID AB,
+# Resend AC. Do not hardcode AX (column 50); that range 400s and the
+# blank status makes the next Send look new.
 PIVOT_CONFIG = SheetConfirmationConfig(
     key="pivot",
     sheet_id=PIVOT_SHEET_ID,
@@ -178,12 +181,10 @@ PIVOT_CONFIG = SheetConfirmationConfig(
     tab_title="Retail Schedule",
     tab_gid=0,
     known_status_cols={
-        SENT_STATUS_HEADER: "P",
-        "Event Confirmation Sent?": "P",
-        "Confirmation Status": "AX",
-        "Confirmation Sent At": "AY",
-        "Confirmation Error": "AZ",
-        "Spark Confirmation UUID": "BA",
+        "Confirmation Status": "Y",
+        "Confirmation Sent At": "Z",
+        "Confirmation Error": "AA",
+        "Spark Confirmation UUID": "AB",
     },
     extra_headers=tuple(CONFIRMATION_EXTRA_HEADERS),
     match_catalog_skus=True,
@@ -939,6 +940,167 @@ def _ensure_grid_covers_row(svc, sheet_id: str, tab: str | None, row_number: int
     )
 
 
+def _col_index(letter: str) -> int:
+    """1-based column index for an A1 letter. 0 when the letter is blank."""
+    n = 0
+    for ch in (letter or "").strip().upper():
+        if not ("A" <= ch <= "Z"):
+            return 0
+        n = n * 26 + (ord(ch) - 64)
+    return n
+
+
+def _updates_exceed_column(updates: list[dict[str, Any]], limit: int) -> bool:
+    for item in updates:
+        cell = str(item.get("range") or "").split("!")[-1]
+        match = re.match(r"([A-Za-z]+)", cell)
+        if match and _col_index(match.group(1)) > limit:
+            return True
+    return False
+
+
+def _overflow_column_limit(body: str, updates: list[dict[str, Any]]) -> int | None:
+    """Max columns when this 400 is a column overflow, else None.
+
+    Sheets names both limits on every grid 400 (``Max rows`` and
+    ``max columns``). A row that is merely too far down must not be
+    treated as a column miss.
+    """
+    match = re.search(r"max columns:\s*(\d+)", body, re.IGNORECASE)
+    if not match:
+        return None
+    limit = int(match.group(1))
+    if _updates_exceed_column(updates, limit):
+        return limit
+    return None
+
+
+def _grid_for_tab(svc, sheet_id: str, tab: str | None) -> dict[str, Any]:
+    meta = _sheets_execute(
+        svc.spreadsheets().get(
+            spreadsheetId=sheet_id,
+            fields=(
+                "sheets.properties(sheetId,title,"
+                "gridProperties(rowCount,columnCount))"
+            ),
+        ),
+        label="grid-meta",
+    )
+    sheets = meta.get("sheets") or []
+    for sheet in sheets:
+        props = sheet.get("properties") or {}
+        if tab and props.get("title") == tab:
+            return props
+    if sheets:
+        return sheets[0].get("properties") or {}
+    return {}
+
+
+def _read_headers_within_grid(
+    svc, sheet_id: str, tab: str | None, column_count: int
+) -> list[str]:
+    """Header cells that exist. Never requests a column past the grid."""
+    if column_count < 1:
+        return []
+    resp = _sheets_execute(
+        svc.spreadsheets().values().get(
+            spreadsheetId=sheet_id,
+            range=_qualify(tab, f"A1:{_col_letter(column_count)}1"),
+        ),
+        label="status-header",
+    )
+    header = list((resp.get("values") or [[]])[0])
+    while header and not str(header[-1] or "").strip():
+        header.pop()
+    return header
+
+
+def _expand_column_count(svc, sheet_id: str, sheet_gid: int, column_count: int) -> None:
+    _sheets_execute(
+        svc.spreadsheets().batchUpdate(
+            spreadsheetId=sheet_id,
+            body={
+                "requests": [
+                    {
+                        "updateSheetProperties": {
+                            "properties": {
+                                "sheetId": sheet_gid,
+                                "gridProperties": {"columnCount": column_count},
+                            },
+                            "fields": "gridProperties.columnCount",
+                        }
+                    }
+                ]
+            },
+        ),
+        label="grid-grow-cols",
+    )
+
+
+def _resolve_stamp_columns(
+    svc,
+    *,
+    sheet_id: str,
+    tab: str | None,
+    config: SheetConfirmationConfig,
+    wanted: list[str],
+) -> dict[str, str]:
+    """Map stamp fields onto headers inside the tab's real column count.
+
+    A header that is already on the grid wins, wherever it sits. A header
+    this workbook is supposed to own (``extra_headers``) is appended after
+    the last real header, and the grid is widened before that write when
+    the new column would pass ``columnCount``. A letter past the grid is
+    never returned, and a field this sheet does not own (Pivot has no
+    "Event Confirmation Sent?" column — P is BA Name) is skipped rather
+    than written onto some other header.
+    """
+    props = _grid_for_tab(svc, sheet_id, tab)
+    grid = props.get("gridProperties") or {}
+    column_count = int(grid.get("columnCount") or 0)
+    if column_count < 1:
+        raise ValueError(f"sheet {sheet_id} has no columns on {tab!r}")
+    header = _read_headers_within_grid(svc, sheet_id, tab, column_count)
+    allowed_append = {h.strip().lower() for h in config.extra_headers}
+    found: dict[str, str] = {}
+    missing: list[str] = []
+    for name in wanted:
+        idx = _header_index(header, name)
+        if idx is not None and (idx + 1) <= column_count:
+            found[name] = _col_letter(idx + 1)
+            continue
+        if name.strip().lower() in allowed_append:
+            missing.append(name)
+    if missing:
+        start = len(header) + 1
+        end = start + len(missing) - 1
+        gid = props.get("sheetId")
+        if end > column_count:
+            if gid is None:
+                raise ValueError(f"cannot widen columns on {tab!r}")
+            _expand_column_count(svc, sheet_id, int(gid), end)
+            column_count = end
+        _sheets_execute(
+            svc.spreadsheets().values().update(
+                spreadsheetId=sheet_id,
+                range=_qualify(
+                    tab, f"{_col_letter(start)}1:{_col_letter(end)}1"
+                ),
+                valueInputOption="RAW",
+                body={"values": [missing]},
+            ),
+            label="status-header-append",
+        )
+        for offset, name in enumerate(missing):
+            found[name] = _col_letter(start + offset)
+    for letter in found.values():
+        if _col_index(letter) > column_count:
+            raise ValueError(
+                f"status column {letter} is past {tab!r} ({column_count} columns)"
+            )
+    return found
+
+
 def write_row_status(
     *,
     sheet_id: str,
@@ -953,8 +1115,11 @@ def write_row_status(
 
     Does **not** call ``_read_header`` / ``_ensure_confirmation_headers`` on
     the hot path — those reads were the bulk-Send 429 failure mode. One cell
-    write per field; retries 429; grows the grid only if Sheets says the row
-    is past the current limit.
+    write per field; retries 429. A 400 that is only a short row grid grows
+    the row count and retries the same letters. A 400 whose range is past
+    ``max columns`` re-resolves the stamp headers on the real grid (and
+    widens that grid before appending a missing header) so the retry cannot
+    target AX or any other column the tab does not have.
 
     Bypasses ``TORCH_SHEET_WRITES_ENABLED`` — that kill switch only gates
     Torch public-form appends, not confirmation status write-back.
@@ -975,53 +1140,80 @@ def write_row_status(
         )
 
     tab = _resolve_tab_title(config, svc)
-    updates: list[dict[str, Any]] = []
-
-    def _put(col_name: str, value: str) -> None:
-        col = known.get(col_name) or known.get(col_name.strip())
-        if not col:
-            return
-        updates.append(
-            {
-                "range": _qualify(tab, f"{col}{row_number}"),
-                "values": [[value]],
-            }
-        )
-
-    _put("Confirmation Status", status)
+    fields: list[tuple[str, str]] = [("Confirmation Status", status)]
     if sent_at is not None:
-        _put("Confirmation Sent At", sent_at)
-    _put("Confirmation Error", error)
+        fields.append(("Confirmation Sent At", sent_at))
+    fields.append(("Confirmation Error", error))
     if confirmation_uuid:
-        _put("Spark Confirmation UUID", confirmation_uuid)
+        fields.append(("Spark Confirmation UUID", confirmation_uuid))
     if sent_column_value is not None:
-        _put(SENT_STATUS_HEADER, sent_column_value)
+        fields.append((SENT_STATUS_HEADER, sent_column_value))
 
+    def _build(colmap: dict[str, str]) -> list[dict[str, Any]]:
+        built: list[dict[str, Any]] = []
+        for name, value in fields:
+            col = colmap.get(name) or colmap.get(name.strip())
+            if not col:
+                continue
+            built.append(
+                {
+                    "range": _qualify(tab, f"{col}{row_number}"),
+                    "values": [[value]],
+                }
+            )
+        return built
+
+    updates = _build(known)
     if not updates:
         return
 
-    def _batch() -> None:
+    def _http_body(exc: HttpError) -> str:
+        try:
+            return (exc.content or b"").decode("utf-8", errors="replace")
+        except Exception:  # noqa: BLE001
+            return str(exc)
+
+    def _is_grid_400(exc: HttpError, body: str) -> bool:
+        status_code = int(getattr(exc.resp, "status", 0) or 0)
+        return status_code == 400 and "exceeds grid" in body
+
+    def _batch(batch_updates: list[dict[str, Any]]) -> None:
         _sheets_execute(
             svc.spreadsheets().values().batchUpdate(
                 spreadsheetId=sheet_id,
-                body={"valueInputOption": "RAW", "data": updates},
+                body={"valueInputOption": "RAW", "data": batch_updates},
             ),
             label=f"status-row-{row_number}",
         )
 
     try:
-        _batch()
+        _batch(updates)
     except HttpError as exc:
-        body = ""
-        try:
-            body = (exc.content or b"").decode("utf-8", errors="replace")
-        except Exception:  # noqa: BLE001
-            body = str(exc)
-        if int(getattr(exc.resp, "status", 0) or 0) == 400 and "exceeds grid" in body:
-            _ensure_grid_covers_row(svc, sheet_id, tab, row_number)
-            _batch()
-            return
-        raise
+        body = _http_body(exc)
+        if not _is_grid_400(exc, body):
+            raise
+        if _overflow_column_limit(body, updates) is not None:
+            resolved = _resolve_stamp_columns(
+                svc,
+                sheet_id=sheet_id,
+                tab=tab,
+                config=config,
+                wanted=[name for name, _value in fields],
+            )
+            updates = _build(resolved)
+            if not updates:
+                raise
+            try:
+                _batch(updates)
+                return
+            except HttpError as exc2:
+                body = _http_body(exc2)
+                if not _is_grid_400(exc2, body):
+                    raise
+                if _overflow_column_limit(body, updates) is not None:
+                    raise
+        _ensure_grid_covers_row(svc, sheet_id, tab, row_number)
+        _batch(updates)
 
 
 def _create_and_send(
@@ -1425,3 +1617,119 @@ def handle_action(
     if normalized in {"cancel", "cancelled", "cancellation"}:
         return cancel_from_sheet_row(payload)
     raise ValueError(f"Unknown action {action!r}; use send or cancel")
+
+
+# Retail Schedule row 2 (2026-10-22). Send was checked and the email left,
+# but the status stamp targeted column AX, past the 41-column grid, so Y
+# stayed blank. This repair stamps Sent on the real columns and turns
+# reminders off on older duplicates of that same shift. It does not email.
+PIVOT_ROW2_EMAIL = "boxinglatina@gmail.com"
+PIVOT_ROW2_STORE = "Total Wine (Fort Myers)"
+PIVOT_ROW2_DAY = date(2026, 10, 23)
+PIVOT_ROW2_NUMBER = 2
+
+
+def pivot_row2_confirmations() -> list:
+    """Non-cancelled Pivot confirmations for Retail Schedule row 2's shift."""
+    from events.models import EventConfirmation
+    from tenants.models import Tenant
+
+    tenant = Tenant.objects.filter(slug=PIVOT_TENANT_SLUG).order_by("id").first()
+    if tenant is None:
+        return []
+    want_store = _store_key(PIVOT_ROW2_STORE)
+    matched = []
+    rows = EventConfirmation.objects.filter(
+        tenant=tenant,
+        ba_email__iexact=PIVOT_ROW2_EMAIL,
+        cancelled_at__isnull=True,
+    ).order_by("id")
+    for conf in rows:
+        local = conf.local_start()
+        if local is None or local.date() != PIVOT_ROW2_DAY:
+            continue
+        if local.hour != 14 or local.minute != 0:
+            continue
+        if _store_key(conf.store_name) != want_store:
+            continue
+        matched.append(conf)
+    return matched
+
+
+def silence_older_duplicate_reminders(rows: list) -> int:
+    """Leave reminders on the newest row. Turn them off on older duplicates."""
+    if len(rows) < 2:
+        return 0
+    changed = 0
+    newest = rows[-1]
+    if not newest.send_reminders:
+        newest.send_reminders = True
+        newest.save(update_fields=["send_reminders", "updated_at"])
+        changed += 1
+    for older in rows[:-1]:
+        if older.send_reminders:
+            older.send_reminders = False
+            older.save(update_fields=["send_reminders", "updated_at"])
+            changed += 1
+    return changed
+
+
+def repair_pivot_retail_row2() -> dict[str, Any]:
+    """Stamp row 2 Sent and silence older reminder duplicates. Never emails."""
+    from events.models import EventConfirmation, EventConfirmationSend
+
+    rows = pivot_row2_confirmations()
+    updated = silence_older_duplicate_reminders(rows)
+    ids = [row.pk for row in rows]
+    mailed = 0
+    if ids:
+        mailed = EventConfirmationSend.objects.filter(
+            confirmation_id__in=ids,
+            stage=EventConfirmation.STAGE_BOOKED,
+            sent_at__isnull=False,
+        ).count()
+    newest = rows[-1] if rows else None
+    uuid_str = str(newest.uuid) if newest is not None else ""
+    tz_name = DEFAULT_TIMEZONE_NAME
+    when = dj_tz.now()
+    if newest is not None:
+        tz_name = (newest.timezone_name or "").strip() or DEFAULT_TIMEZONE_NAME
+        booked = (
+            EventConfirmationSend.objects.filter(
+                confirmation_id=newest.pk,
+                stage=EventConfirmation.STAGE_BOOKED,
+                sent_at__isnull=False,
+            )
+            .order_by("-sent_at")
+            .first()
+        )
+        if booked is not None and booked.sent_at is not None:
+            when = booked.sent_at
+    try:
+        ZoneInfo(tz_name)
+    except Exception:  # noqa: BLE001
+        tz_name = DEFAULT_TIMEZONE_NAME
+    label = when.astimezone(ZoneInfo(tz_name)).strftime("%Y-%m-%d %H:%M %Z")
+    stamp = "stamped"
+    try:
+        write_row_status(
+            sheet_id=PIVOT_SHEET_ID,
+            row_number=PIVOT_ROW2_NUMBER,
+            status=STATUS_SENT,
+            error="",
+            confirmation_uuid=uuid_str,
+            sent_at=label,
+            sent_column_value=f"Sent {label}",
+        )
+    except Exception as exc:  # noqa: BLE001 — a failed stamp must not email
+        logger.exception("pivot row 2 Sent backfill failed")
+        stamp = f"stamp-failed: {exc}"
+    return {
+        "matches": len(rows),
+        "mailed": mailed,
+        "reminders_updated": updated,
+        "newest_uuid": uuid_str,
+        "confirmation_ids": ids,
+        "stamp": stamp,
+    }
+

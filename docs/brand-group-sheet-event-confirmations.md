@@ -59,10 +59,14 @@ SKU text is matched to the Pivot Product catalog only (`Blue Razz`,
 tenant). A Famus, Wook, or Alcohol Armor SKU is refused. A blank SKU cell
 sends with no product lines.
 
-### Columns (gid 0, read 2026-10-20)
+### Columns (gid 0, read 2026-10-22)
 
-Headers are resolved by name. Letters below are where they sat when the
-status block was appended after column AT.
+The Retail Schedule grid is **41 columns (A–AO)**. There is no column AX
+and no "Event Confirmation Sent?" header. Column **P is BA Name** — a
+status stamp must never land there. Apps Script finds triggers by header
+name. Python stamps the letters below, which already sit on the grid. If
+a status range is past `columnCount`, the write re-reads these headers
+and widens the grid before appending a missing one.
 
 | Col | Header | Use |
 |---|---|---|
@@ -72,17 +76,16 @@ status block was appended after column AT.
 | F / G | Start / End Time | `2p` / `5p` style |
 | H | Address | Geocode → IANA TZ |
 | O | SKUs to sample | Pivot catalog only |
-| **P** | **Event Confirmation Sent?** | Status stamp (already on the sheet) |
-| T | BA Name | Required |
-| W | Email | BA recipient |
-| AU | Send Confirmation | Checkbox trigger (appended) |
-| AV | Cancel Confirmation | Checkbox trigger |
-| AW | Force Resend | Sticky. Prefer Resend Confirmation |
-| **AX** | **Confirmation Status** | `Queued` → `Sent` → `Cancelled` / `Error` |
-| AY | Confirmation Sent At | |
-| AZ | Confirmation Error | |
-| BA | Spark Confirmation UUID | |
-| BB | Resend Confirmation | One-shot |
+| **P** | **BA Name** | Required. Not a status column |
+| S | Email | BA recipient |
+| V | Send Confirmation | Checkbox trigger |
+| W | Cancel Confirmation | Checkbox trigger |
+| X | Force Resend | Sticky. Prefer Resend Confirmation |
+| **Y** | **Confirmation Status** | `Queued` → `Sent` → `Cancelled` / `Error` |
+| Z | Confirmation Sent At | |
+| AA | Confirmation Error | |
+| AB | Spark Confirmation UUID | |
+| AC | Resend Confirmation | One-shot |
 
 ## Famus group columns (gid 0, read 2026-10-19)
 
