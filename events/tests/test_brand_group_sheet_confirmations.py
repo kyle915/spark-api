@@ -1099,15 +1099,17 @@ def test_pivot_blank_status_stamps_sent_without_another_email():
 
 
 @pytest.mark.django_db
-def test_pivot_row2_repair_silences_older_reminders_and_stamps_sent():
-    """Duplicates of the already-mailed Fort Myers shift: newest keeps reminders."""
+def test_blank_mailed_rows_stamp_sent_and_skip_unmailed_rows():
+    """Row 2 and row 10 already mailed. A blank row with no send stays blank."""
+    from datetime import time as clock_time
+
     from django.utils import timezone as dj_tz
 
     from events.brand_group_sheet import PIVOT_TENANT_SLUG
     from events.models import EventConfirmation, EventConfirmationSend
     from events.sheet_event_confirmations import (
         STATUS_SENT,
-        repair_pivot_retail_row2,
+        repair_pivot_blank_status_rows,
     )
 
     tenant, _product_type, _user = _brand(
@@ -1115,14 +1117,15 @@ def test_pivot_row2_repair_silences_older_reminders_and_stamps_sent():
         "Pivot Energy Drink",
         PIVOT_CHECKIN_CODE,
     )
-    starts = datetime(2026, 10, 23, 14, 0, tzinfo=EASTERN)
+    fort_myers = datetime(2026, 10, 23, 14, 0, tzinfo=EASTERN)
+    aventura = datetime(2026, 10, 24, 11, 0, tzinfo=EASTERN)
     older = _confirmation(
         tenant,
         ba_name="Dalia E",
         ba_email="boxinglatina@gmail.com",
         store_name="Total Wine (Fort Myers)",
         address="13711 S Tamiami Trail, Fort Myers, FL 33912",
-        starts_at=starts,
+        starts_at=fort_myers,
         send_reminders=True,
     )
     newer = _confirmation(
@@ -1131,18 +1134,27 @@ def test_pivot_row2_repair_silences_older_reminders_and_stamps_sent():
         ba_email="boxinglatina@gmail.com",
         store_name="Total Wine (Fort Myers)",
         address="13711 S Tamiami Trail, Fort Myers, FL 33912",
-        starts_at=starts,
+        starts_at=fort_myers,
         send_reminders=True,
     )
-    other = _confirmation(
+    row10 = _confirmation(
+        tenant,
+        ba_name="Melissa Lima",
+        ba_email="limam2260@gmail.com",
+        store_name="Total Wine (Aventura)",
+        address="19925 Biscayne Blvd, Aventura, FL 33180",
+        starts_at=aventura,
+        send_reminders=True,
+    )
+    unmailed = _confirmation(
         tenant,
         ba_name="Sofia Vallejo",
         ba_email="soso_vallejo@hotmail.com",
         store_name="Total Wine (Palm Beach Gardens)",
-        starts_at=starts,
+        starts_at=fort_myers,
         send_reminders=True,
     )
-    for conf in (older, newer):
+    for conf in (older, newer, row10):
         EventConfirmationSend.objects.create(
             confirmation=conf,
             stage=EventConfirmation.STAGE_BOOKED,
@@ -1151,28 +1163,110 @@ def test_pivot_row2_repair_silences_older_reminders_and_stamps_sent():
             attempts=1,
         )
 
+    candidates = [
+        {
+            "row_number": 2,
+            "email": "boxinglatina@gmail.com",
+            "store_name": "Total Wine (Fort Myers)",
+            "day": fort_myers.date(),
+            "clock": clock_time(14, 0),
+        },
+        {
+            "row_number": 3,
+            "email": "soso_vallejo@hotmail.com",
+            "store_name": "Total Wine (Palm Beach Gardens)",
+            "day": fort_myers.date(),
+            "clock": clock_time(14, 0),
+        },
+        {
+            "row_number": 10,
+            "email": "limam2260@gmail.com",
+            "store_name": "Total Wine (Aventura)",
+            "day": aventura.date(),
+            "clock": clock_time(11, 0),
+        },
+    ]
     with patch(
         "events.sheet_event_confirmations.write_row_status"
     ) as write, patch(
         "events.event_confirmations.send_confirmation_stage"
     ) as mail:
-        result = repair_pivot_retail_row2()
+        result = repair_pivot_blank_status_rows(candidates)
 
     mail.assert_not_called()
     older.refresh_from_db()
     newer.refresh_from_db()
-    other.refresh_from_db()
+    row10.refresh_from_db()
+    unmailed.refresh_from_db()
     assert older.send_reminders is False
     assert newer.send_reminders is True
-    assert other.send_reminders is True
-    assert result["matches"] == 2
-    assert result["mailed"] == 2
-    assert result["reminders_updated"] == 1
-    assert result["newest_uuid"] == str(newer.uuid)
-    write.assert_called_once()
-    stamped = write.call_args.kwargs
-    assert stamped["sheet_id"] == PIVOT_SHEET_ID
-    assert stamped["row_number"] == 2
-    assert stamped["status"] == STATUS_SENT
-    assert stamped["confirmation_uuid"] == str(newer.uuid)
+    assert row10.send_reminders is True
+    assert unmailed.send_reminders is True
+    assert result["scanned"] == 3
+    assert [item["row_number"] for item in result["repaired"]] == [2, 10]
+    assert write.call_count == 2
+    stamped = {
+        call.kwargs["row_number"]: call.kwargs for call in write.call_args_list
+    }
+    assert stamped[2]["status"] == STATUS_SENT
+    assert stamped[2]["sheet_id"] == PIVOT_SHEET_ID
+    assert stamped[2]["confirmation_uuid"] == str(newer.uuid)
+    assert stamped[10]["status"] == STATUS_SENT
+    assert stamped[10]["confirmation_uuid"] == str(row10.uuid)
+    assert 3 not in stamped
+
+
+def test_blank_status_scan_stays_inside_the_pivot_grid():
+    """The scan reads A–AO and skips a row that is already Sent."""
+    from events.sheet_event_confirmations import read_pivot_blank_status_rows
+
+    sheets = _PivotSheets()
+    body = []
+    width = len(PIVOT_HEADERS)
+
+    def blank_row():
+        return [""] * width
+
+    fort = blank_row()
+    fort[2] = "Oct 23, 2026"
+    fort[4] = "Total Wine (Fort Myers)"
+    fort[5] = "2p"
+    fort[15] = "Dalia E"
+    fort[18] = "boxinglatina@gmail.com"
+    sent = blank_row()
+    sent[2] = "Oct 23, 2026"
+    sent[4] = "Total Wine (Somewhere)"
+    sent[5] = "2p"
+    sent[18] = "already@example.com"
+    sent[24] = "Sent"
+    aventura = blank_row()
+    aventura[2] = "Oct 24, 2026"
+    aventura[4] = "Total Wine (Aventura)"
+    aventura[5] = "11a"
+    aventura[15] = "Melissa Lima"
+    aventura[18] = "limam2260@gmail.com"
+    body = [fort, sent]
+    body.extend(blank_row() for _ in range(6))
+    body.append(aventura)
+
+    class _Values:
+        def get(self, **kwargs):
+            sheets.header_gets.append(kwargs["range"])
+
+            def _run():
+                if kwargs["range"].startswith("'Retail Schedule'!A1:"):
+                    return {"values": [list(PIVOT_HEADERS)]}
+                return {"values": body}
+
+            return _SheetReq(_run)
+
+    sheets.values = lambda: _Values()
+
+    rows = read_pivot_blank_status_rows(sheets)
+    assert any(item.startswith("'Retail Schedule'!A1:AO") for item in sheets.header_gets)
+    assert any("A2:" in item and item.endswith("AO400") for item in sheets.header_gets)
+    assert not any("AX" in item for item in sheets.header_gets)
+    assert [item["row_number"] for item in rows] == [2, 10]
+    assert rows[1]["email"] == "limam2260@gmail.com"
+    assert rows[1]["store_name"] == "Total Wine (Aventura)"
 

@@ -1619,38 +1619,44 @@ def handle_action(
     raise ValueError(f"Unknown action {action!r}; use send or cancel")
 
 
-# Retail Schedule row 2 (2026-10-22). Send was checked and the email left,
-# but the status stamp targeted column AX, past the 41-column grid, so Y
-# stayed blank. This repair stamps Sent on the real columns and turns
-# reminders off on older duplicates of that same shift. It does not email.
-PIVOT_ROW2_EMAIL = "boxinglatina@gmail.com"
-PIVOT_ROW2_STORE = "Total Wine (Fort Myers)"
-PIVOT_ROW2_DAY = date(2026, 10, 23)
-PIVOT_ROW2_NUMBER = 2
+# AX stamps have been failing since 2026-10-21, so a mailed row can still
+# show a blank Confirmation Status. The deploy repair reads Retail Schedule,
+# and for each blank row whose booked email already left, stamps Sent on the
+# real columns and turns reminders off on older duplicates. It never emails.
+_PIVOT_BLANK_SCAN_ROWS = 400
+_CLOSED_STATUS_PREFIXES = ("sent", "queued", "cancelled", "canceled", "error")
 
 
-def pivot_row2_confirmations() -> list:
-    """Non-cancelled Pivot confirmations for Retail Schedule row 2's shift."""
+def confirmations_for_pivot_shift(
+    *,
+    email: str,
+    store_name: str,
+    day: date,
+    clock: time,
+) -> list:
+    """Non-cancelled Pivot confirmations for one Retail Schedule shift."""
     from events.models import EventConfirmation
     from tenants.models import Tenant
 
+    if "@" not in (email or ""):
+        return []
     tenant = Tenant.objects.filter(slug=PIVOT_TENANT_SLUG).order_by("id").first()
     if tenant is None:
         return []
-    want_store = _store_key(PIVOT_ROW2_STORE)
+    want_store = _store_key(store_name)
     matched = []
     rows = EventConfirmation.objects.filter(
         tenant=tenant,
-        ba_email__iexact=PIVOT_ROW2_EMAIL,
+        ba_email__iexact=email.strip(),
         cancelled_at__isnull=True,
     ).order_by("id")
     for conf in rows:
         local = conf.local_start()
-        if local is None or local.date() != PIVOT_ROW2_DAY:
+        if local is None or local.date() != day:
             continue
-        if local.hour != 14 or local.minute != 0:
+        if local.hour != clock.hour or local.minute != clock.minute:
             continue
-        if _store_key(conf.store_name) != want_store:
+        if want_store and _store_key(conf.store_name) != want_store:
             continue
         matched.append(conf)
     return matched
@@ -1674,47 +1680,130 @@ def silence_older_duplicate_reminders(rows: list) -> int:
     return changed
 
 
-def repair_pivot_retail_row2() -> dict[str, Any]:
-    """Stamp row 2 Sent and silence older reminder duplicates. Never emails."""
+def _sheet_cell(raw: list, idx: int | None) -> str:
+    if idx is None or idx >= len(raw):
+        return ""
+    return str(raw[idx] or "").strip()
+
+
+def read_pivot_blank_status_rows(svc=None) -> list[dict[str, Any]]:
+    """Blank-status Retail Schedule rows, read inside the real column count.
+
+    A row whose status already says Sent / Queued / Cancelled / Error is
+    skipped. Rows with no BA email are skipped. This does not decide
+    whether the email went out — the caller checks EventConfirmation.
+    """
+    if svc is None:
+        svc = _service()
+    if svc is None:
+        logger.warning("pivot blank-status repair: no Sheets credentials")
+        return []
+    tab = _resolve_tab_title(PIVOT_CONFIG, svc)
+    props = _grid_for_tab(svc, PIVOT_SHEET_ID, tab)
+    grid = props.get("gridProperties") or {}
+    column_count = int(grid.get("columnCount") or 0)
+    row_count = int(grid.get("rowCount") or 0)
+    if column_count < 1:
+        return []
+    header = _read_headers_within_grid(svc, PIVOT_SHEET_ID, tab, column_count)
+    status_idx = _header_index(header, "Confirmation Status")
+    email_idx = _header_index(header, "Email")
+    date_idx = _header_index(header, "Date")
+    start_idx = _header_index(header, "Start Time")
+    store_idx = _header_index(header, "Store Name")
+    if None in (status_idx, email_idx, date_idx, start_idx):
+        logger.error("pivot blank-status repair: Retail Schedule is missing a header")
+        return []
+    last = min(_PIVOT_BLANK_SCAN_ROWS, row_count or _PIVOT_BLANK_SCAN_ROWS)
+    if last < 2:
+        return []
+    resp = _sheets_execute(
+        svc.spreadsheets().values().get(
+            spreadsheetId=PIVOT_SHEET_ID,
+            range=_qualify(tab, f"A2:{_col_letter(column_count)}{last}"),
+        ),
+        label="pivot-blank-scan",
+    )
+    found: list[dict[str, Any]] = []
+    for offset, raw in enumerate(resp.get("values") or []):
+        status = _sheet_cell(raw, status_idx).lower()
+        if status.startswith(_CLOSED_STATUS_PREFIXES) or status:
+            continue
+        email = _sheet_cell(raw, email_idx)
+        if "@" not in email:
+            continue
+        try:
+            day = parse_sheet_date_iso(_sheet_cell(raw, date_idx))
+            clock = parse_sheet_clock(_sheet_cell(raw, start_idx))
+        except ValueError:
+            continue
+        found.append(
+            {
+                "row_number": offset + 2,
+                "email": email,
+                "store_name": _sheet_cell(raw, store_idx),
+                "day": day,
+                "clock": clock,
+            }
+        )
+    return found
+
+
+def _stamp_mailed_pivot_row(candidate: dict[str, Any]) -> dict[str, Any] | None:
+    """Stamp one blank row when its booked email already left. Never emails."""
     from events.models import EventConfirmation, EventConfirmationSend
 
-    rows = pivot_row2_confirmations()
-    updated = silence_older_duplicate_reminders(rows)
-    ids = [row.pk for row in rows]
-    mailed = 0
+    matches = confirmations_for_pivot_shift(
+        email=candidate["email"],
+        store_name=candidate.get("store_name") or "",
+        day=candidate["day"],
+        clock=candidate["clock"],
+    )
+    ids = [row.pk for row in matches]
+    mailed_ids: set[int] = set()
     if ids:
-        mailed = EventConfirmationSend.objects.filter(
-            confirmation_id__in=ids,
-            stage=EventConfirmation.STAGE_BOOKED,
-            sent_at__isnull=False,
-        ).count()
-    newest = rows[-1] if rows else None
-    uuid_str = str(newest.uuid) if newest is not None else ""
-    tz_name = DEFAULT_TIMEZONE_NAME
-    when = dj_tz.now()
-    if newest is not None:
-        tz_name = (newest.timezone_name or "").strip() or DEFAULT_TIMEZONE_NAME
-        booked = (
+        mailed_ids = set(
             EventConfirmationSend.objects.filter(
-                confirmation_id=newest.pk,
+                confirmation_id__in=ids,
                 stage=EventConfirmation.STAGE_BOOKED,
                 sent_at__isnull=False,
-            )
-            .order_by("-sent_at")
-            .first()
+            ).values_list("confirmation_id", flat=True)
         )
-        if booked is not None and booked.sent_at is not None:
-            when = booked.sent_at
+    mailed = [row for row in matches if row.pk in mailed_ids]
+    if not mailed:
+        return None
+    updated = silence_older_duplicate_reminders(mailed)
+    newest = mailed[-1]
+    keep = {newest.pk}
+    for extra in matches:
+        if extra.pk in keep or extra.pk in mailed_ids:
+            continue
+        if extra.send_reminders:
+            extra.send_reminders = False
+            extra.save(update_fields=["send_reminders", "updated_at"])
+            updated += 1
+    tz_name = (newest.timezone_name or "").strip() or DEFAULT_TIMEZONE_NAME
+    booked = (
+        EventConfirmationSend.objects.filter(
+            confirmation_id=newest.pk,
+            stage=EventConfirmation.STAGE_BOOKED,
+            sent_at__isnull=False,
+        )
+        .order_by("-sent_at")
+        .first()
+    )
+    when = booked.sent_at if booked is not None and booked.sent_at else dj_tz.now()
     try:
         ZoneInfo(tz_name)
     except Exception:  # noqa: BLE001
         tz_name = DEFAULT_TIMEZONE_NAME
     label = when.astimezone(ZoneInfo(tz_name)).strftime("%Y-%m-%d %H:%M %Z")
+    uuid_str = str(newest.uuid)
     stamp = "stamped"
     try:
         write_row_status(
             sheet_id=PIVOT_SHEET_ID,
-            row_number=PIVOT_ROW2_NUMBER,
+            row_number=int(candidate["row_number"]),
             status=STATUS_SENT,
             error="",
             confirmation_uuid=uuid_str,
@@ -1722,14 +1811,37 @@ def repair_pivot_retail_row2() -> dict[str, Any]:
             sent_column_value=f"Sent {label}",
         )
     except Exception as exc:  # noqa: BLE001 — a failed stamp must not email
-        logger.exception("pivot row 2 Sent backfill failed")
+        logger.exception(
+            "pivot blank-status stamp failed row=%s", candidate.get("row_number")
+        )
         stamp = f"stamp-failed: {exc}"
     return {
-        "matches": len(rows),
-        "mailed": mailed,
+        "row_number": int(candidate["row_number"]),
+        "store_name": candidate.get("store_name") or "",
+        "email": candidate.get("email") or "",
+        "matches": len(matches),
+        "mailed": len(mailed),
         "reminders_updated": updated,
         "newest_uuid": uuid_str,
         "confirmation_ids": ids,
         "stamp": stamp,
     }
+
+
+def repair_pivot_blank_status_rows(
+    candidates: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Stamp every mailed Pivot row whose status cell is still blank.
+
+    Does not email. A blank row with no booked send is left alone so a
+    later Send can still mail that BA.
+    """
+    if candidates is None:
+        candidates = read_pivot_blank_status_rows()
+    repaired: list[dict[str, Any]] = []
+    for candidate in candidates:
+        item = _stamp_mailed_pivot_row(candidate)
+        if item is not None:
+            repaired.append(item)
+    return {"scanned": len(candidates), "repaired": repaired}
 
