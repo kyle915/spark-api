@@ -731,3 +731,448 @@ class TestPivotEmailUsesTorchTemplate:
         assert html.count("retail-sampling-faq.pdf") == 3
         assert html.count("product-comparison.pdf") == 3
 
+
+# Retail Schedule grid on 2026-10-22. AX is column 50 and is not on it.
+PIVOT_GRID_COLUMNS = 41
+PIVOT_HEADERS = [
+    "State",
+    "Day of Week",
+    "Date",
+    "Store Number",
+    "Store Name",
+    "Start Time",
+    "End Time",
+    "Address",
+    "Requested?",
+    "Pre-Billed Demo Cost?",
+    "Product Spend",
+    "Billed Product Cost?",
+    "One-Off Kit Cost",
+    "Notes",
+    "SKUs to sample",
+    "BA Name",
+    "BA Address",
+    "Rate",
+    "Email",
+    "Cell Phone #",
+    "Shipped?",
+    "Send Confirmation",
+    "Cancel Confirmation",
+    "Force Resend",
+    "Confirmation Status",
+    "Confirmation Sent At",
+    "Confirmation Error",
+    "Spark Confirmation UUID",
+    "Resend Confirmation",
+]
+
+
+class _SheetResp:
+    status = 400
+    reason = "Bad Request"
+
+
+class _SheetReq:
+    def __init__(self, fn):
+        self._fn = fn
+
+    def execute(self):
+        return self._fn()
+
+
+class _PivotSheets:
+    """Minimal Sheets client. ``column_count`` is the live grid width."""
+
+    def __init__(self, *, headers=None, column_count=PIVOT_GRID_COLUMNS, reject_past=False):
+        self.headers = list(PIVOT_HEADERS if headers is None else headers)
+        self.column_count = column_count
+        self.reject_past = reject_past
+        self._rejected = False
+        self.batches: list[list] = []
+        self.header_writes: list[dict] = []
+        self.expands: list[int] = []
+        self.meta_gets = 0
+        self.header_gets: list[str] = []
+        self.log: list[tuple] = []
+
+    def spreadsheets(self):
+        return self
+
+    def values(self):
+        return self
+
+    def get(self, **kwargs):
+        if "range" in kwargs:
+            self.header_gets.append(kwargs["range"])
+
+            def _header():
+                return {"values": [list(self.headers)]}
+
+            return _SheetReq(_header)
+
+        self.meta_gets += 1
+
+        def _meta():
+            return {
+                "sheets": [
+                    {
+                        "properties": {
+                            "title": "Retail Schedule",
+                            "sheetId": 0,
+                            "gridProperties": {
+                                "rowCount": 3569,
+                                "columnCount": self.column_count,
+                            },
+                        }
+                    }
+                ]
+            }
+
+        return _SheetReq(_meta)
+
+    def update(self, **kwargs):
+        def _write():
+            self.log.append(("header", kwargs.get("range")))
+            self.header_writes.append(kwargs)
+            values = (kwargs.get("body") or {}).get("values") or [[]]
+            self.headers.extend(values[0])
+            return {}
+
+        return _SheetReq(_write)
+
+    def batchUpdate(self, **kwargs):
+        body = kwargs.get("body") or {}
+        if "requests" in body:
+
+            def _expand():
+                for req in body["requests"]:
+                    props = (req.get("updateSheetProperties") or {}).get("properties") or {}
+                    cols = (props.get("gridProperties") or {}).get("columnCount")
+                    if cols:
+                        self.log.append(("expand", cols))
+                        self.expands.append(cols)
+                        self.column_count = cols
+                return {}
+
+            return _SheetReq(_expand)
+
+        data = list(body.get("data") or [])
+
+        def _values():
+            self.batches.append(data)
+            if (
+                self.reject_past
+                and not self._rejected
+                and _ranges_past(data, self.column_count)
+            ):
+                self._rejected = True
+                raise _grid_http_error(data[0]["range"], self.column_count)
+            return {}
+
+        return _SheetReq(_values)
+
+
+def _ranges_past(data: list, limit: int) -> bool:
+    from events.sheet_event_confirmations import _col_index
+
+    for item in data:
+        cell = str(item.get("range") or "").split("!")[-1]
+        letters = ""
+        for ch in cell:
+            if ch.isalpha():
+                letters += ch
+            else:
+                break
+        if letters and _col_index(letters) > limit:
+            return True
+    return False
+
+
+def _grid_http_error(a1: str, max_columns: int):
+    import json
+
+    from googleapiclient.errors import HttpError
+
+    message = (
+        "Invalid data[0]: Range ('"
+        + a1
+        + "') exceeds grid limits. Max rows: 3569, max columns: "
+        + str(max_columns)
+        + "."
+    )
+    content = ('{"error":{"code":400,"message":' + json.dumps(message) + "}}").encode()
+    return HttpError(_SheetResp(), content)
+
+
+def _assert_ranges_inside(ranges: list[str], limit: int = PIVOT_GRID_COLUMNS) -> None:
+    from events.sheet_event_confirmations import _col_index
+
+    assert ranges, "expected a status write"
+    for a1 in ranges:
+        cell = a1.split("!")[-1]
+        letters = ""
+        for ch in cell:
+            if ch.isalpha():
+                letters += ch
+            else:
+                break
+        assert _col_index(letters) <= limit, a1
+
+
+def test_pivot_status_columns_fit_the_retail_grid():
+    """AX is column 50. The live Retail Schedule grid stops at AO (41)."""
+    from events.sheet_event_confirmations import (
+        BRAND_GROUP_CONFIG,
+        PIVOT_CONFIG,
+        SENT_STATUS_HEADER,
+        _col_index,
+    )
+
+    cols = PIVOT_CONFIG.known_status_cols
+    assert cols["Confirmation Status"] == "Y"
+    assert cols["Confirmation Sent At"] == "Z"
+    assert cols["Confirmation Error"] == "AA"
+    assert cols["Spark Confirmation UUID"] == "AB"
+    assert SENT_STATUS_HEADER not in cols
+    assert "P" not in cols.values()
+    assert "AX" not in cols.values()
+    for letter in cols.values():
+        assert _col_index(letter) <= PIVOT_GRID_COLUMNS
+    assert BRAND_GROUP_CONFIG.tab_title is None
+    assert BRAND_GROUP_CONFIG.known_status_cols["Confirmation Status"] == "W"
+
+
+def test_write_row_status_stays_inside_the_pivot_grid():
+    from events.sheet_event_confirmations import (
+        PIVOT_SHEET_ID,
+        STATUS_SENT,
+        write_row_status,
+    )
+
+    sheets = _PivotSheets()
+    with patch(
+        "events.sheet_event_confirmations._service", return_value=sheets
+    ):
+        write_row_status(
+            sheet_id=PIVOT_SHEET_ID,
+            row_number=2,
+            status=STATUS_SENT,
+            error="",
+            confirmation_uuid="11111111-1111-1111-1111-111111111111",
+            sent_at="2026-10-22 11:30 EDT",
+            sent_column_value="Sent 2026-10-22 11:30 EDT",
+        )
+    assert sheets.meta_gets == 0
+    assert sheets.header_gets == []
+    ranges = [item["range"] for item in sheets.batches[-1]]
+    _assert_ranges_inside(ranges)
+    assert "'Retail Schedule'!Y2" in ranges
+    assert "'Retail Schedule'!Z2" in ranges
+    assert "'Retail Schedule'!AA2" in ranges
+    assert "'Retail Schedule'!AB2" in ranges
+    assert not any("!P2" in a1 or "!AX" in a1 for a1 in ranges)
+
+
+def test_column_overflow_stamps_the_real_header():
+    """A stale AX letter must be rewritten onto column Y, not retried."""
+    from events.sheet_event_confirmations import (
+        PIVOT_CONFIG,
+        PIVOT_SHEET_ID,
+        STATUS_SENT,
+        write_row_status,
+    )
+
+    saved = dict(PIVOT_CONFIG.known_status_cols)
+    sheets = _PivotSheets(reject_past=True)
+    try:
+        PIVOT_CONFIG.known_status_cols.clear()
+        PIVOT_CONFIG.known_status_cols.update(
+            {
+                "Event Confirmation Sent?": "P",
+                "Confirmation Status": "AX",
+                "Confirmation Sent At": "AY",
+                "Confirmation Error": "AZ",
+                "Spark Confirmation UUID": "BA",
+            }
+        )
+        with patch(
+            "events.sheet_event_confirmations._service", return_value=sheets
+        ):
+            write_row_status(
+                sheet_id=PIVOT_SHEET_ID,
+                row_number=2,
+                status=STATUS_SENT,
+                error="",
+                confirmation_uuid="22222222-2222-2222-2222-222222222222",
+                sent_at="2026-10-22 11:30 EDT",
+                sent_column_value="Sent 2026-10-22 11:30 EDT",
+            )
+    finally:
+        PIVOT_CONFIG.known_status_cols.clear()
+        PIVOT_CONFIG.known_status_cols.update(saved)
+
+    assert len(sheets.batches) == 2
+    recovered = [item["range"] for item in sheets.batches[-1]]
+    _assert_ranges_inside(recovered)
+    assert "'Retail Schedule'!Y2" in recovered
+    assert not any("!AX" in a1 or "!P2" in a1 for a1 in recovered)
+    assert sheets.header_gets == ["'Retail Schedule'!A1:AO1"]
+    assert sheets.expands == []
+    values = {item["range"]: item["values"][0][0] for item in sheets.batches[-1]}
+    assert values["'Retail Schedule'!Y2"] == STATUS_SENT
+
+
+def test_missing_status_header_expands_the_grid_before_append():
+    from events.sheet_event_confirmations import (
+        PIVOT_CONFIG,
+        PIVOT_SHEET_ID,
+        _col_index,
+        _resolve_stamp_columns,
+    )
+
+    sheets = _PivotSheets(headers=["Taken"] * PIVOT_GRID_COLUMNS)
+    found = _resolve_stamp_columns(
+        sheets,
+        sheet_id=PIVOT_SHEET_ID,
+        tab="Retail Schedule",
+        config=PIVOT_CONFIG,
+        wanted=["Confirmation Status"],
+    )
+    assert sheets.log[0] == ("expand", PIVOT_GRID_COLUMNS + 1)
+    assert sheets.log[1][0] == "header"
+    assert sheets.header_writes[0]["range"] == "'Retail Schedule'!AP1:AP1"
+    assert sheets.header_writes[0]["body"]["values"] == [["Confirmation Status"]]
+    assert found["Confirmation Status"] == "AP"
+    assert _col_index(found["Confirmation Status"]) == sheets.column_count
+
+
+def test_pivot_blank_status_stamps_sent_without_another_email():
+    """Row 2 already mailed and the status cell is blank. Do not email again."""
+    from events.sheet_event_confirmations import PIVOT_SHEET_ID, STATUS_SENT
+
+    payload = SheetRowPayload(
+        row_number=2,
+        sheet_id=PIVOT_SHEET_ID,
+        confirmation_status="",
+        ba_name="Dalia E",
+        ba_email="boxinglatina@gmail.com",
+        store_name="Total Wine (Fort Myers)",
+        date="Oct 23, 2026",
+        start_time="2p",
+        end_time="5p",
+        address="13711 S Tamiami Trail, Fort Myers, FL 33912",
+        state="FL",
+        skus="Blue Razz",
+    )
+    mailed = type(
+        "C",
+        (),
+        {
+            "uuid": "33333333-3333-3333-3333-333333333333",
+            "ba_email": "boxinglatina@gmail.com",
+            "timezone_name": "America/New_York",
+            "pk": 2,
+            "store_name": "Total Wine (Fort Myers)",
+        },
+    )()
+    sheets = _PivotSheets()
+    with patch(
+        "events.sheet_event_confirmations._find_mailed_confirmation",
+        return_value=mailed,
+    ) as find, patch(
+        "events.sheet_event_confirmations._service", return_value=sheets
+    ), patch(
+        "events.sheet_event_confirmations._create_and_send",
+        side_effect=AssertionError("must not email a shift that already went out"),
+    ):
+        result = send_from_sheet_row(payload)
+    find.assert_called_once_with(payload, exact_only=True)
+    assert result.ok is True
+    assert result.status == STATUS_SENT
+    assert result.details.get("already_sent") is True
+    assert "no new email" in result.message.lower()
+    ranges = [item["range"] for item in sheets.batches[-1]]
+    _assert_ranges_inside(ranges)
+    values = {item["range"]: item["values"][0][0] for item in sheets.batches[-1]}
+    assert values["'Retail Schedule'!Y2"] == STATUS_SENT
+    assert "'Retail Schedule'!P2" not in values
+
+
+@pytest.mark.django_db
+def test_pivot_row2_repair_silences_older_reminders_and_stamps_sent():
+    """Duplicates of the already-mailed Fort Myers shift: newest keeps reminders."""
+    from django.utils import timezone as dj_tz
+
+    from events.brand_group_sheet import PIVOT_TENANT_SLUG
+    from events.models import EventConfirmation, EventConfirmationSend
+    from events.sheet_event_confirmations import (
+        STATUS_SENT,
+        repair_pivot_retail_row2,
+    )
+
+    tenant, _product_type, _user = _brand(
+        PIVOT_TENANT_SLUG,
+        "Pivot Energy Drink",
+        PIVOT_CHECKIN_CODE,
+    )
+    starts = datetime(2026, 10, 23, 14, 0, tzinfo=EASTERN)
+    older = _confirmation(
+        tenant,
+        ba_name="Dalia E",
+        ba_email="boxinglatina@gmail.com",
+        store_name="Total Wine (Fort Myers)",
+        address="13711 S Tamiami Trail, Fort Myers, FL 33912",
+        starts_at=starts,
+        send_reminders=True,
+    )
+    newer = _confirmation(
+        tenant,
+        ba_name="Dalia E",
+        ba_email="boxinglatina@gmail.com",
+        store_name="Total Wine (Fort Myers)",
+        address="13711 S Tamiami Trail, Fort Myers, FL 33912",
+        starts_at=starts,
+        send_reminders=True,
+    )
+    other = _confirmation(
+        tenant,
+        ba_name="Sofia Vallejo",
+        ba_email="soso_vallejo@hotmail.com",
+        store_name="Total Wine (Palm Beach Gardens)",
+        starts_at=starts,
+        send_reminders=True,
+    )
+    for conf in (older, newer):
+        EventConfirmationSend.objects.create(
+            confirmation=conf,
+            stage=EventConfirmation.STAGE_BOOKED,
+            to_email=conf.ba_email,
+            sent_at=dj_tz.now(),
+            attempts=1,
+        )
+
+    with patch(
+        "events.sheet_event_confirmations.write_row_status"
+    ) as write, patch(
+        "events.event_confirmations.send_confirmation_stage"
+    ) as mail:
+        result = repair_pivot_retail_row2()
+
+    mail.assert_not_called()
+    older.refresh_from_db()
+    newer.refresh_from_db()
+    other.refresh_from_db()
+    assert older.send_reminders is False
+    assert newer.send_reminders is True
+    assert other.send_reminders is True
+    assert result["matches"] == 2
+    assert result["mailed"] == 2
+    assert result["reminders_updated"] == 1
+    assert result["newest_uuid"] == str(newer.uuid)
+    write.assert_called_once()
+    stamped = write.call_args.kwargs
+    assert stamped["sheet_id"] == PIVOT_SHEET_ID
+    assert stamped["row_number"] == 2
+    assert stamped["status"] == STATUS_SENT
+    assert stamped["confirmation_uuid"] == str(newer.uuid)
+

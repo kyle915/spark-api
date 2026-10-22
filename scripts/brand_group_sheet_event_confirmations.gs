@@ -35,10 +35,11 @@
  * _colIndex_, keeping the FIRST header when Confirmation Status is
  * duplicated at AA–AD.
  *
- * Pivot live tab (gid 0, "Retail Schedule"), read 2026-10-20. There is no
- * Brand column. Event Confirmation Sent? is already column P. The status
- * block is appended after the last header (Conflict detail, column AT):
- * Send AU, Cancel AV, Force AW, Status AX, Sent At AY, Error AZ, UUID BA.
+ * Pivot live tab (gid 0, "Retail Schedule"), read 2026-10-22. The grid
+ * is 41 columns (A–AO). There is no Brand column and no
+ * "Event Confirmation Sent?" column — P is BA Name. Do not hardcode AX.
+ * Headers already on the grid: Send V, Cancel W, Force X, Status Y,
+ * Sent At Z, Error AA, UUID AB, Resend AC. onEdit resolves them by name.
  *
  * Usage matches Torch:
  *   - Check **Send Confirmation** → staffing@ confirmation email (Retail Sampling).
