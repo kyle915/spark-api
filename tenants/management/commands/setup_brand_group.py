@@ -16,6 +16,11 @@ createTenant-style seeds when missing):
 
 Then the three tenants join one :class:`BrandGroup`.
 
+``--tenant martinellis`` is separate: Martinelli's event check-in only
+(Liquid Death Event Activation questions, storefront SKUs, one standing
+code). It does not get a Retail Sampling recap and it does not join the
+FAMUS group. A blank ``--tenant`` still sets up only the three group brands.
+
 Recaps stay admin-approved (approved=False until review) like every tenant.
 DRY-RUN by default; ``--apply`` writes. Prod: ``/internal/cron/setup-brand-group``
 or the "Setup brand group" GitHub Action.
@@ -103,7 +108,9 @@ REQUEST_TIMEOUT = 30.0
 @dataclass(frozen=True)
 class Sku:
     name: str
-    image_url: str
+    image_url: str = ""
+    # Empty uses Brand.product_type. Martinelli's SKUs carry the site category.
+    product_type: str = ""
 
 
 @dataclass(frozen=True)
@@ -118,6 +125,9 @@ class Brand:
     # Discontinued SKUs: removed from the catalog when nothing references them.
     retired_skus: tuple[str, ...] = ()
     sells_packs: bool = True
+    # Blank --tenant runs brands with in_group. Martinelli's is event-only.
+    programs: tuple[str, ...] = PROGRAMS
+    in_group: bool = True
 
 
 BRANDS: tuple[Brand, ...] = (
@@ -182,6 +192,62 @@ BRANDS: tuple[Brand, ...] = (
         ),
         retired_skus=("Berry Groovy 4-Pack", "Laser Lime 4-Pack", "Pineapple Peak 4-Pack"),
         sells_packs=False,
+    ),
+    Brand(
+        name="Martinelli's",
+        slug="martinellis",
+        code_prefix="MN",
+        product_type="Martinelli's",
+        primary_color="",
+        logo_url="",
+        programs=(EVENT,),
+        in_group=False,
+        # https://www.martinellis.com/products/ — one card per SKU. Duplicate
+        # cards (Most Popular repeating All Products) are collapsed by URL.
+        # Product.name is 50 characters; three rows drop "fl." so the ounce
+        # size still fits. The two 10 fl. oz. Apple Juice bottles are
+        # distinguished the way their product pages are (glass vs labeled).
+        skus=(
+            Sku("Sparkling Cider 25.4 fl. oz.", product_type="Sparkling"),
+            Sku("Sparkling Apple-Grape 25.4 fl. oz.", product_type="Sparkling"),
+            Sku("Apple Juice PET 10 fl. oz.", product_type="Still Juices"),
+            Sku("Sparkling Apple Juice 10 fl. oz.", product_type="Sparkling"),
+            Sku("Sparkling Apple-Cranberry 25.4 fl. oz.", product_type="Sparkling"),
+            Sku("Apple Juice 33.8 fl. oz.", product_type="Still Juices"),
+            Sku("Unfiltered Apple Juice 33.8 fl. oz.", product_type="Still Juices"),
+            Sku("Cider 33.8 fl. oz.", product_type="Still Juices"),
+            Sku("Organic Apple Juice 33.8 fl. oz.", product_type="Still Juices"),
+            Sku("Organic Unfiltered Honeycrisp Apple Cider 33.8oz", product_type="Still Juices"),
+            Sku("Apple Juice 64 fl. oz.", product_type="Still Juices"),
+            Sku("Organic Apple Juice 64 fl. oz.", product_type="Still Juices"),
+            Sku("Apple Juice 128 fl. oz.", product_type="Still Juices"),
+            Sku("Apple Juice 10 fl. oz. Glass Bottle With Label", product_type="Still Juices"),
+            Sku("Apple Juice 10 fl. oz. Glass Bottle", product_type="Still Juices"),
+            Sku("Organic Apple Juice 10 fl. oz.", product_type="Still Juices"),
+            Sku("Organic Sparkling Apple Juice 10 fl. oz.", product_type="Sparkling"),
+            Sku("Sparkling Apple-Grape 10 fl. oz.", product_type="Sparkling"),
+            Sku("Sparkling Apple-Mango 10 fl. oz.", product_type="Sparkling"),
+            Sku("Sparkling Rose 10 fl. oz.", product_type="Sparkling"),
+            Sku("Sparkling Cider 8.4 fl. oz.", product_type="Sparkling"),
+            Sku("Sparkling Pear Cider 8.4 fl. oz.", product_type="Sparkling"),
+            Sku("Sparkling Apple-Cranberry 8.4 fl. oz.", product_type="Sparkling"),
+            Sku("Sparkling Apple-Mango 8.4 fl. oz.", product_type="Sparkling"),
+            Sku("Sparkling Apple-Grape 8.4 fl. oz.", product_type="Sparkling"),
+            Sku("Sparkling Cider Northwest Blend 25.4 fl. oz.", product_type="Sparkling"),
+            Sku("Classic Heritage Label Sparkling Cider 25.4oz", product_type="Sparkling"),
+            Sku("Heritage Label Sparkling Cider 25.4 fl. oz.", product_type="Sparkling"),
+            Sku("Sparkling Blush 25.4 fl. oz.", product_type="Sparkling"),
+            Sku("Sparkling Apple-Mango 25.4 fl. oz.", product_type="Sparkling"),
+            Sku("Sparkling Apple-Pomegranate 25.4 fl. oz.", product_type="Sparkling"),
+            Sku("Sparkling Peach Cider 25.4 fl. oz.", product_type="Sparkling"),
+            Sku("Sparkling Pear Cider 25.4 fl. oz.", product_type="Sparkling"),
+            Sku("Organic Sparkling Cider 25.4 fl. oz.", product_type="Sparkling"),
+            Sku("Organic Heritage Label Sparkling Cider 25.4oz", product_type="Sparkling"),
+            Sku("Organic Sparkling Apple-Pomegranate 25.4 fl. oz.", product_type="Sparkling"),
+            Sku("Sparkling Apple 8.4 fl. oz. / 250 mL", product_type="Cans"),
+            Sku("Sparkling Apple Mango 8.4 fl. oz. / 250 mL", product_type="Cans"),
+            Sku("Sparkling Apple Cranberry 8.4 fl. oz. / 250 mL", product_type="Cans"),
+        ),
     ),
 )
 
@@ -301,12 +367,82 @@ def event_spec(brand_name: str) -> list[SectionSpec]:
     ]
 
 
+def martinellis_event_spec() -> list[SectionSpec]:
+    """Liquid Death Event Activation, with Martinelli's wording.
+
+    Same sections, kinds, and required flags as the LD event form (the
+    Brew Dr / LYT mirror of template id 3). "tasting" corrects LD's
+    "tasing". No mileage — that field is not on the LD event recap.
+    """
+    return [
+        (
+            "Consumer Engagement",
+            [
+                (
+                    "How many consumers would be willing to purchase the product "
+                    "after tasting it?",
+                    "number",
+                    True,
+                    [],
+                ),
+                (
+                    "How many consumers that were engaged with knew about "
+                    "Martinelli's product/brand?",
+                    "number",
+                    True,
+                    [],
+                ),
+                (
+                    "How many consumers had tried a Martinelli's flavor before?",
+                    "number",
+                    True,
+                    [],
+                ),
+                ("How many TOTAL consumers did you sample?", "number", True, []),
+            ],
+        ),
+        (
+            "Feedback & Account Notes",
+            [
+                ("Demographics", "longtext", True, []),
+                (
+                    "What were the top 5 frequently asked questions you received "
+                    "from consumers?",
+                    "longtext",
+                    True,
+                    [],
+                ),
+                ("Helpful feedback", "longtext", True, []),
+            ],
+        ),
+        (
+            "Products Sampled",
+            [
+                (PRODUCTS_SAMPLED_FIELD, "multiselect", True, []),
+            ],
+        ),
+    ]
+
+
+def sections_for(brand: Brand) -> list[tuple[str, list[SectionSpec]]]:
+    specs: list[tuple[str, list[SectionSpec]]] = []
+    if RETAIL in brand.programs:
+        specs.append((RETAIL, retail_spec(brand)))
+    if EVENT in brand.programs:
+        event = martinellis_event_spec() if brand.slug == "martinellis" else event_spec(brand.name)
+        specs.append((EVENT, event))
+    return specs
+
+
 SECTION_ORDER = {
     "Shift Overview": 0,
     "Event Details": 0,
     "Brand Results": 1,
     "Brand Feedback": 2,
     FOLLOW_UP: 3,
+    "Consumer Engagement": 0,
+    "Feedback & Account Notes": 1,
+    "Products Sampled": 2,
 }
 
 PHOTO_BUCKETS_BY_PROGRAM: dict[str, list[dict]] = {
@@ -322,6 +458,23 @@ PHOTO_BUCKETS_BY_PROGRAM: dict[str, list[dict]] = {
         {"name": "Expense Receipts"},
     ],
 }
+
+# Liquid Death Event Activation dropzones. Not the FAMUS retail shot list.
+MARTINELLIS_EVENT_BUCKETS: list[dict] = [
+    {"name": "Activation Set Up"},
+    {
+        "name": "Consumer Sampling Pictures",
+        "helper": "please try to upload 8+",
+        "min": 8,
+    },
+    {"name": "Expense Receipts (Parking)"},
+]
+
+
+def photo_buckets_for(brand: Brand) -> dict[str, list[dict]]:
+    if brand.slug == "martinellis":
+        return {EVENT: list(MARTINELLIS_EVENT_BUCKETS)}
+    return PHOTO_BUCKETS_BY_PROGRAM
 
 CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 
@@ -341,8 +494,8 @@ def template_name(brand: Brand, program: str) -> str:
 
 class Command(BaseCommand):
     help = (
-        "Set up FAMUS Energy, Alcohol Armor and Wook Water as one brand group "
-        "(dry-run by default; --apply to write)."
+        "Set up the FAMUS brand group, or Martinelli's event check-in with "
+        "--tenant martinellis (dry-run by default; --apply to write)."
     )
 
     def add_arguments(self, parser):
@@ -366,21 +519,25 @@ class Command(BaseCommand):
         self.apply = bool(opts["apply"])
         self.skip_images = bool(opts["skip_images"])
         only = (opts.get("tenant") or "").strip().lower()
-        brands = [b for b in BRANDS if not only or b.slug == only]
-        if not brands:
-            raise CommandError(f"--tenant {only!r} isn't one of {[b.slug for b in BRANDS]}.")
+        if only:
+            brands = [b for b in BRANDS if b.slug == only]
+            if not brands:
+                raise CommandError(f"--tenant {only!r} isn't one of {[b.slug for b in BRANDS]}.")
+        else:
+            brands = [b for b in BRANDS if b.in_group]
         self.creator = self._resolve_creator()
         self.ft_cache: dict = {}
         self.stdout.write("=" * 68)
         self.stdout.write(f"Mode : {'APPLY (writing)' if self.apply else 'DRY-RUN (no writes)'}")
         self.stdout.write("=" * 68)
 
-        tenants: list[Tenant] = []
+        paired: list[tuple[Brand, Tenant]] = []
         for brand in brands:
             tenant = self._setup_brand(brand)
             if tenant is not None:
-                tenants.append(tenant)
-        self._brand_group(tenants)
+                paired.append((brand, tenant))
+        if any(brand.in_group for brand in brands):
+            self._brand_group([tenant for brand, tenant in paired if brand.in_group])
         self._summary(brands)
 
     # ------------------------------------------------------------------ setup
@@ -397,27 +554,35 @@ class Command(BaseCommand):
         else:
             self.stdout.write(f"  tenant [{tenant.id}] {tenant.name!r} slug={tenant.slug!r}")
 
-        event_types = self._programs(tenant)
+        event_types = self._programs(tenant, brand)
         self._products(tenant, brand)
-        for program, spec in ((RETAIL, retail_spec(brand)), (EVENT, event_spec(brand.name))):
+        for program, spec in sections_for(brand):
             self._template(tenant, brand, program, spec, event_types.get(program))
         self._sync_products_sampled(tenant)
-        self._photo_buckets(tenant)
-        self._checkin_programs(tenant, event_types)
-        self._tenant_settings(tenant)
+        self._photo_buckets(tenant, brand)
+        self._checkin_programs(tenant, brand, event_types)
+        self._tenant_settings(tenant, brand)
         self._branding(tenant, brand)
         self._checkin_code(tenant, brand)
         return tenant
 
     def _print_plan(self, brand: Brand) -> None:
-        self.stdout.write(f"  programs: {', '.join(PROGRAMS)}")
+        self.stdout.write(f"  programs: {', '.join(brand.programs)}")
         self.stdout.write(f"  SKUs ({len(brand.skus)}):")
         for sku in brand.skus:
-            self.stdout.write(f"    - {brand.product_type} — {sku.name}")
-        for program, spec in ((RETAIL, retail_spec(brand)), (EVENT, event_spec(brand.name))):
-            self.stdout.write(f"  template {template_name(brand, program)!r}")
+            type_name = sku.product_type or brand.product_type
+            self.stdout.write(f"    - {type_name} — {sku.name}")
+        for program, spec in sections_for(brand):
+            n_fields = sum(len(fields) for _, fields in spec)
+            self.stdout.write(
+                f"  template {template_name(brand, program)!r}: "
+                f"{len(spec)} sections / {n_fields} fields"
+            )
             for section, fields in spec:
-                tag = " (per brand)" if section in PER_BRAND_SECTIONS else " (shared)"
+                if brand.in_group:
+                    tag = " (per brand)" if section in PER_BRAND_SECTIONS else " (shared)"
+                else:
+                    tag = ""
                 self.stdout.write(f"    [{section}]{tag}: {len(fields)} field(s)")
         self.stdout.write(f"  standing code: would mint {brand.code_prefix}-XXXXXX")
 
@@ -479,10 +644,13 @@ class Command(BaseCommand):
 
     # -------------------------------------------------------------- programs
 
-    def _programs(self, tenant: Tenant) -> dict[str, EventType]:
-        """Exactly Retail Sampling + Event Activation event & request types."""
+    def _programs(self, tenant: Tenant, brand: Brand) -> dict[str, EventType]:
+        """The brand's programs only (group brands: Retail + Event)."""
+        programs = brand.programs
         out: dict[str, EventType] = {}
         for old, new in EVENT_TYPE_RENAMES.items():
+            if new not in programs:
+                continue
             legacy = EventType.objects.filter(tenant_id=tenant.id, name__iexact=old).first()
             if legacy and not EventType.objects.filter(tenant_id=tenant.id, name__iexact=new).exists():
                 self.stdout.write(f"  event type {legacy.name!r} → {new!r}")
@@ -491,7 +659,8 @@ class Command(BaseCommand):
                     legacy.slug = slugify(new)
                     legacy.save(update_fields=["name", "slug"])
 
-        for program in PROGRAMS:
+        default_program = programs[0]
+        for program in programs:
             et = EventType.objects.filter(tenant_id=tenant.id, name__iexact=program).first()
             if et is None:
                 self.stdout.write(f"  + event type {program!r}")
@@ -501,7 +670,7 @@ class Command(BaseCommand):
                         slug=slugify(program),
                         tenant=tenant,
                         created_by=self.creator,
-                        is_default=program == RETAIL,
+                        is_default=program == default_program,
                     )
             if et is not None:
                 out[program] = et
@@ -510,15 +679,16 @@ class Command(BaseCommand):
                 if self.apply:
                     RequestType.objects.create(name=program, tenant=tenant, created_by=self.creator)
 
-        if self.apply and RETAIL in out:
+        if self.apply and default_program in out:
+            default = out[default_program]
             EventType.objects.filter(tenant_id=tenant.id, is_default=True).exclude(
-                pk=out[RETAIL].pk
+                pk=default.pk
             ).update(is_default=False)
-            if not out[RETAIL].is_default:
-                out[RETAIL].is_default = True
-                out[RETAIL].save(update_fields=["is_default"])
+            if not default.is_default:
+                default.is_default = True
+                default.save(update_fields=["is_default"])
 
-        wanted = {p.lower() for p in PROGRAMS}
+        wanted = {p.lower() for p in programs}
         for et in EventType.objects.filter(tenant_id=tenant.id).order_by("id"):
             if (et.name or "").lower() in wanted:
                 continue
@@ -553,10 +723,20 @@ class Command(BaseCommand):
                 mark = "=" if sku.name in existing else "+"
                 self.stdout.write(f"  {mark} SKU {sku.name!r}")
             return
-        product_type, _ = ProductType.objects.get_or_create(
-            tenant=tenant, name=brand.product_type, defaults={"created_by": self.creator}
-        )
+        types: dict[str, ProductType] = {}
+
+        def _type_for(sku: Sku) -> ProductType:
+            type_name = sku.product_type or brand.product_type
+            found = types.get(type_name)
+            if found is None:
+                found, _ = ProductType.objects.get_or_create(
+                    tenant=tenant, name=type_name, defaults={"created_by": self.creator}
+                )
+                types[type_name] = found
+            return found
+
         for sku in brand.skus:
+            product_type = _type_for(sku)
             product = Product.objects.filter(tenant=tenant, name__iexact=sku.name).first()
             made = product is None
             if made:
@@ -570,11 +750,15 @@ class Command(BaseCommand):
                 product.product_type = product_type
                 product.save(update_fields=["product_type", "updated_at"])
             note = ""
-            if not product.image and not self.skip_images:
+            if sku.image_url and not product.image and not self.skip_images:
                 note = self._attach_product_image(product, sku.image_url)
+            image_note = ""
+            if note:
+                image_note = " · " + note
+            elif sku.image_url and not product.image:
+                image_note = " · NO IMAGE"
             self.stdout.write(
-                f"  {'+' if made else '='} SKU [{product.id}] {sku.name!r}"
-                f"{' · ' + note if note else ''}{'' if product.image else ' · NO IMAGE'}"
+                f"  {'+' if made else '='} SKU [{product.id}] {sku.name!r}{image_note}"
             )
 
     def _retire_skus(self, tenant: Tenant, brand: Brand) -> None:
@@ -694,7 +878,10 @@ class Command(BaseCommand):
                 },
             )
             layout = dict(template.layout or {})
-            layout[CO_BRAND_SECTIONS_KEY] = list(PER_BRAND_SECTIONS)
+            if brand.in_group:
+                layout[CO_BRAND_SECTIONS_KEY] = list(PER_BRAND_SECTIONS)
+            else:
+                layout.pop(CO_BRAND_SECTIONS_KEY, None)
             template.layout = layout
             template.event_type = event_type
             template.save(update_fields=["layout", "event_type"])
@@ -781,36 +968,45 @@ class Command(BaseCommand):
 
     # ---------------------------------------------------------- walk-up/brand
 
-    def _photo_buckets(self, tenant: Tenant) -> None:
-        names = sorted({b["name"] for buckets in PHOTO_BUCKETS_BY_PROGRAM.values() for b in buckets})
+    def _photo_buckets(self, tenant: Tenant, brand: Brand) -> None:
+        buckets_by_program = photo_buckets_for(brand)
+        names = sorted({b["name"] for buckets in buckets_by_program.values() for b in buckets})
         for name in names:
             if FileRecapCategory.objects.filter(tenant_id=tenant.id, name__iexact=name).exists():
                 continue
             self.stdout.write(f"  + photo bucket {name!r}")
             if self.apply:
                 FileRecapCategory.objects.create(name=name, tenant_id=tenant.id, created_by=self.creator)
-        if tenant.checkin_photo_buckets != PHOTO_BUCKETS_BY_PROGRAM:
+        if tenant.checkin_photo_buckets != buckets_by_program:
             self.stdout.write("  checkin_photo_buckets → per-program buckets")
             if self.apply:
-                tenant.checkin_photo_buckets = PHOTO_BUCKETS_BY_PROGRAM
+                tenant.checkin_photo_buckets = buckets_by_program
                 tenant.save(update_fields=["checkin_photo_buckets"])
 
-    def _checkin_programs(self, tenant: Tenant, event_types: dict[str, EventType]) -> None:
-        if not self.apply or len(event_types) != len(PROGRAMS):
-            self.stdout.write(f"  walk-up programs: {', '.join(PROGRAMS)}")
+    def _checkin_programs(
+        self, tenant: Tenant, brand: Brand, event_types: dict[str, EventType]
+    ) -> None:
+        programs = brand.programs
+        if not self.apply or len(event_types) != len(programs):
+            self.stdout.write(f"  walk-up programs: {', '.join(programs)}")
             return
-        tenant.checkin_event_type = event_types[RETAIL]
+        tenant.checkin_event_type = event_types[programs[0]]
         tenant.save(update_fields=["checkin_event_type"])
-        tenant.checkin_event_types.set([event_types[p] for p in PROGRAMS])
+        tenant.checkin_event_types.set([event_types[p] for p in programs])
 
-    def _tenant_settings(self, tenant: Tenant) -> None:
+    def _tenant_settings(self, tenant: Tenant, brand: Brand) -> None:
         wanted = {
             "checkin_location_mode": Tenant.CHECKIN_LOCATION_ADDRESS,
-            "insights_trend_series": Tenant.TREND_SERIES_SALES,
-            "activation_mix_includes_walkups": True,
-            "auto_approve_requests": True,
-            "request_approved_cc_emails": ", ".join(REQUEST_APPROVED_CC),
         }
+        if brand.in_group:
+            wanted.update(
+                {
+                    "insights_trend_series": Tenant.TREND_SERIES_SALES,
+                    "activation_mix_includes_walkups": True,
+                    "auto_approve_requests": True,
+                    "request_approved_cc_emails": ", ".join(REQUEST_APPROVED_CC),
+                }
+            )
         changed = [k for k, v in wanted.items() if getattr(tenant, k) != v]
         for key in changed:
             self.stdout.write(f"  {key}: {getattr(tenant, key)!r} → {wanted[key]!r}")
@@ -820,6 +1016,8 @@ class Command(BaseCommand):
             tenant.save(update_fields=changed)
 
     def _branding(self, tenant: Tenant, brand: Brand) -> None:
+        if not brand.primary_color:
+            return
         variables = {"--color-primary": brand.primary_color}
         theme = TenantTheme.objects.filter(tenant=tenant, color_scheme="light").first()
         if theme is None or (theme.css_variables or {}).get("--color-primary") != brand.primary_color:

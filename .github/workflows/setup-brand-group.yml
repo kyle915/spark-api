@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
     inputs:
       tenant:
-        description: "One brand slug (blank = all three)"
+        description: "Exact slug (blank = FAMUS group). martinellis is event-only."
         required: false
         default: ""
       skip_images:
