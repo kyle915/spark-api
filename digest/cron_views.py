@@ -6067,8 +6067,9 @@ class SetupBrandGroupView(View):
     standing check-in code each (minted once, never rotated) and the shared
     BrandGroup. Recaps stay admin-approved.
 
-    Params: tenant (one brand slug; default all), skip_images, apply
-    (default DRY RUN).
+    Params: tenant (one exact brand slug; blank runs the FAMUS group only —
+    ``martinellis`` is the event-only tenant and is not in that group),
+    skip_images, apply (default DRY RUN).
     """
 
     def _run(self, request: HttpRequest) -> HttpResponse:
