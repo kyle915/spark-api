@@ -12,6 +12,7 @@ from events.sheet_event_confirmations import (
     STATUS_QUEUED,
     STATUS_SENT,
     SheetRowPayload,
+    _restore_epoch_clocks,
     parse_sheet_clock,
     parse_sheet_date_iso,
     payload_from_mapping,
@@ -36,6 +37,8 @@ from events.sheet_event_confirmations import (
         ("13:00", time(13, 0)),
         ("9", time(9, 0)),
         (" 3:15p ", time(15, 15)),
+        ("1:30 PM", time(13, 30)),
+        ("4:30 PM", time(16, 30)),
     ],
 )
 def test_parse_sheet_clock(raw, expected):
@@ -43,8 +46,57 @@ def test_parse_sheet_clock(raw, expected):
 
 
 def test_parse_sheet_clock_rejects_junk():
-    with pytest.raises(ValueError):
-        parse_sheet_clock("noonish")
+    with pytest.raises(ValueError, match="Unrecognized time"):
+        parse_sheet_clock("Dec 30, 1899")
+
+
+def test_restore_epoch_clocks_rereads_displayed_time():
+    payload = SheetRowPayload(
+        row_number=17,
+        sheet_id=TORCH_PUBLIC_FORM_SHEET_ID,
+        start_time="Dec 30, 1899",
+        end_time="December 30, 1899",
+    )
+    with patch(
+        "events.sheet_event_confirmations._displayed_clock_row",
+        return_value={"start time": "1:30 PM", "end time": "4:30 PM"},
+    ):
+        _restore_epoch_clocks(payload)
+    assert payload.start_time == "1:30 PM"
+    assert payload.end_time == "4:30 PM"
+    assert parse_sheet_clock(payload.start_time) == time(13, 30)
+    assert parse_sheet_clock(payload.end_time) == time(16, 30)
+
+
+def test_restore_epoch_clocks_leaves_text_times_alone():
+    payload = SheetRowPayload(
+        row_number=16,
+        sheet_id=TORCH_PUBLIC_FORM_SHEET_ID,
+        start_time="1:30p",
+        end_time="4:30p",
+    )
+    with patch(
+        "events.sheet_event_confirmations._displayed_clock_row",
+    ) as read:
+        _restore_epoch_clocks(payload)
+    read.assert_not_called()
+    assert payload.start_time == "1:30p"
+
+
+def test_restore_epoch_clocks_keeps_error_when_reread_fails():
+    payload = SheetRowPayload(
+        row_number=17,
+        sheet_id=TORCH_PUBLIC_FORM_SHEET_ID,
+        start_time="Dec 30, 1899",
+        end_time="4:30p",
+    )
+    with patch(
+        "events.sheet_event_confirmations._displayed_clock_row",
+        side_effect=RuntimeError("sheets down"),
+    ):
+        _restore_epoch_clocks(payload)
+    assert payload.start_time == "Dec 30, 1899"
+    assert payload.end_time == "4:30p"
 
 
 @pytest.mark.parametrize(
