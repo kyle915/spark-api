@@ -271,6 +271,73 @@ def validate_sheet_id(sheet_id: str | None) -> str:
     return config_for_sheet_id(sheet_id).sheet_id
 
 
+# Time-only Sheets cells are Dates on the 1899-12-30 epoch. Apps Script
+# formats every Date as "MMM d, yyyy", so 1:30 PM arrives as "Dec 30, 1899"
+# and the clock is gone. The installed script keeps doing that until it is
+# re-pasted; the API re-reads the displayed time when it sees this date.
+_SHEETS_EPOCH_DATE = re.compile(
+    r"^dec(?:ember)?\.?\s+30,?\s+1899$",
+    re.IGNORECASE,
+)
+
+
+def _is_sheets_epoch_date(raw: str | None) -> bool:
+    text = re.sub(r"\s+", " ", (raw or "").strip())
+    return bool(text) and _SHEETS_EPOCH_DATE.match(text) is not None
+
+
+def _displayed_clock_row(sheet_id: str, row_number: int) -> dict[str, str]:
+    """Header-keyed displayed values for one row. First header wins."""
+    config = config_for_sheet_id(sheet_id)
+    svc = _service()
+    if svc is None:
+        return {}
+    tab = _resolve_tab_title(config, svc)
+    header = _read_header(svc, sheet_id, tab)
+    width = max(len(header), 1)
+    resp = _sheets_execute(
+        svc.spreadsheets().values().get(
+            spreadsheetId=sheet_id,
+            range=_qualify(tab, f"A{row_number}:{_col_letter(width)}{row_number}"),
+            valueRenderOption="FORMATTED_VALUE",
+        ),
+        label=f"clock-reread-{row_number}",
+    )
+    raw = (resp.get("values") or [[]])[0]
+    out: dict[str, str] = {}
+    for i, name in enumerate(header):
+        key = (name or "").strip().lower()
+        if not key or key in out:
+            continue
+        cell = raw[i] if i < len(raw) else ""
+        out[key] = str(cell or "").strip()
+    return out
+
+
+def _restore_epoch_clocks(payload: SheetRowPayload) -> None:
+    """Replace a Sheets-epoch time with the clock shown on the row."""
+    if not (
+        _is_sheets_epoch_date(payload.start_time)
+        or _is_sheets_epoch_date(payload.end_time)
+    ):
+        return
+    try:
+        displayed = _displayed_clock_row(payload.sheet_id, payload.row_number)
+    except Exception:  # noqa: BLE001 — keep the original time error
+        logger.exception(
+            "sheet clock reread failed row=%s", payload.row_number
+        )
+        return
+    if _is_sheets_epoch_date(payload.start_time):
+        fresh = displayed.get("start time") or ""
+        if fresh and not _is_sheets_epoch_date(fresh):
+            payload.start_time = fresh
+    if _is_sheets_epoch_date(payload.end_time):
+        fresh = displayed.get("end time") or ""
+        if fresh and not _is_sheets_epoch_date(fresh):
+            payload.end_time = fresh
+
+
 def parse_sheet_clock(raw: str | None) -> time:
     """Parse Torch sheet times like ``1p``, ``4p``, ``10:30a``, ``13:00``."""
     text = (raw or "").strip()
@@ -1355,6 +1422,7 @@ def _create_and_send(
 def send_from_sheet_row(payload: SheetRowPayload) -> ActionResult:
     """Idempotent send path for one sheet row."""
     validate_sheet_id(payload.sheet_id)
+    _restore_epoch_clocks(payload)
 
     # Cancelled means the previous booking is void. A fresh Send (after a BA
     # swap or a reinstated demo) should email the row's current BA without
@@ -1468,6 +1536,7 @@ def cancel_from_sheet_row(payload: SheetRowPayload) -> ActionResult:
     from events.models import EventConfirmation
 
     validate_sheet_id(payload.sheet_id)
+    _restore_epoch_clocks(payload)
 
     if _already_cancelled(payload):
         return ActionResult(

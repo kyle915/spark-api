@@ -214,6 +214,20 @@ function sendConfirmationsForTomorrow() {
   SpreadsheetApp.getUi().alert('Queued ' + queued + ' tomorrow row(s).');
 }
 
+function _postedCell_(key, cell) {
+  if (Object.prototype.toString.call(cell) !== '[object Date]') {
+    return cell;
+  }
+  var tz = Session.getScriptTimeZone();
+  var name = String(key || '').trim().toLowerCase();
+  // Time-only cells sit on the Sheets epoch (1899-12-30). A date format
+  // drops the clock and the API rejects "Dec 30, 1899".
+  if (name === 'start time' || name === 'end time' || cell.getFullYear() < 1905) {
+    return Utilities.formatDate(cell, tz, 'h:mm a');
+  }
+  return Utilities.formatDate(cell, tz, 'MMM d, yyyy');
+}
+
 function _postRow_(sheet, rowNumber, action, dryRun, resend) {
   var props = PropertiesService.getScriptProperties();
   var secret = props.getProperty('SPARK_CRON_SECRET');
@@ -230,16 +244,7 @@ function _postRow_(sheet, rowNumber, action, dryRun, resend) {
   for (var i = 0; i < headers.length; i++) {
     var key = (headers[i] || '').toString().trim();
     if (!key) continue;
-    var cell = rowValues[i];
-    if (Object.prototype.toString.call(cell) === '[object Date]') {
-      values[key] = Utilities.formatDate(
-        cell,
-        Session.getScriptTimeZone(),
-        'MMM d, yyyy'
-      );
-    } else {
-      values[key] = cell;
-    }
+    values[key] = _postedCell_(key, rowValues[i]);
   }
 
   var payload = {
