@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from asgiref.sync import async_to_sync
+from django.test import override_settings
 
 from events import models as em
 from events.routing import ALWAYS_INCLUDE_INTERNAL_EMAILS
@@ -13,6 +14,7 @@ from recaps.mutation_parts.notify import (
     _collect_recap_approved_recipients,
     _kick_torch_portal_recap_submit_notify,
     _notify_recap_approved_to_rmm_or_clients,
+    _notify_recap_ready_for_review_to_admins,
     is_torch_portal_recap,
 )
 
@@ -90,6 +92,72 @@ class TestTorchPortalRecapNotify(EventsGraphQLTestCase):
         ):
             assert blast not in emails
         assert reply_to == "events@igniteproductions.co"
+
+    def test_portal_recap_drops_junior_even_when_he_is_the_requestor(self):
+        req = self._torch_request(
+            requestor_email="Junior@igniteproductions.co",
+            address="100 Ocean Dr, Miami Beach, FL 33139",
+        )
+        event = self.create_event(
+            name="Torch activation",
+            tenant=self.torch,
+            address="100 Ocean Dr, Miami Beach, FL 33139",
+            request=req,
+        )
+        recap = self._make_recap(tenant=self.torch, event=event)
+        emails = [e.lower() for e, _ in _collect_recap_approved_recipients(recap)[0]]
+        assert "junior@igniteproductions.co" not in emails
+        assert "liberty@torchdrinks.com" in emails
+        assert "events@igniteproductions.co" in emails
+        assert "nevena@igniteproductions.co" in emails
+
+    def test_other_brand_approved_mail_keeps_junior(self):
+        self.ld.recap_recipient_emails = "Junior@igniteproductions.co"
+        self.ld.save(update_fields=["recap_recipient_emails"])
+        event = self.create_event(name="LD demo", tenant=self.ld, address="NY")
+        recap = self._make_recap(tenant=self.ld, event=event, name="LD junior")
+        emails = [e.lower() for e, _ in _collect_recap_approved_recipients(recap)[0]]
+        assert "junior@igniteproductions.co" in emails
+
+    @override_settings(
+        RECAP_REVIEW_COPY_EMAILS=[
+            "Junior@igniteproductions.co",
+            "kyle@igniteproductions.co",
+            "amiel@igniteproductions.co",
+        ]
+    )
+    def test_ready_for_review_drops_junior_on_torch_only(self):
+        ba = self.create_user(
+            username="ba-recap-review@test.com",
+            email="ba-recap-review@test.com",
+            role=self.roles["ambassador"],
+        )
+        torch_event = self.create_event(
+            name="Torch review", tenant=self.torch, address="Austin, TX"
+        )
+        torch_recap = self._make_recap(tenant=self.torch, event=torch_event)
+        ld_event = self.create_event(
+            name="LD review", tenant=self.ld, address="NY"
+        )
+        ld_recap = self._make_recap(tenant=self.ld, event=ld_event, name="LD review")
+        sent: list[list[str]] = []
+
+        def _record(self, *args, **kwargs):
+            sent.append(list(self.to_emails))
+
+        with patch(
+            "recaps.mutation_parts.notify.RecapReadyForReviewAdminMailer.send",
+            new=_record,
+        ):
+            async_to_sync(_notify_recap_ready_for_review_to_admins)(torch_recap, ba)
+            async_to_sync(_notify_recap_ready_for_review_to_admins)(ld_recap, ba)
+
+        torch_to = {email.lower() for email in sent[0]}
+        ld_to = {email.lower() for email in sent[1]}
+        assert "junior@igniteproductions.co" not in torch_to
+        assert "kyle@igniteproductions.co" in torch_to
+        assert "amiel@igniteproductions.co" in torch_to
+        assert "junior@igniteproductions.co" in ld_to
 
     def test_standing_torch_recap_without_request_is_not_portal(self):
         event = self.create_event(

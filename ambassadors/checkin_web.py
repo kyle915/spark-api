@@ -3011,14 +3011,19 @@ def notify_checkin_recap_submitted(recap) -> None:
     from django.conf import settings
     from django.utils.html import escape
 
-    from events.torch_portal import is_torch_tenant, suppress_torch_emails
+    from events.torch_portal import (
+        is_torch_tenant,
+        omit_torch_recap_skips,
+        suppress_torch_emails,
+    )
     from utils.mailer import Envelope, Mailer
 
     event = getattr(recap, "event", None)
     tenant = getattr(recap, "tenant", None) or getattr(event, "tenant", None)
 
     # People, by name — a recap is something a human reviews, unlike the clock
-    # punches that go to the shared events@ inbox.
+    # punches that go to the shared events@ inbox. The shared list is not
+    # edited per brand; Torch recap mail drops its own skips below.
     to = [
         e.strip()
         for e in getattr(settings, "CHECKIN_RECAP_NOTIFY_EMAILS", [])
@@ -3026,6 +3031,7 @@ def notify_checkin_recap_submitted(recap) -> None:
     ]
     if is_torch_tenant(tenant):
         to = suppress_torch_emails(to, tenant=tenant)
+    to = omit_torch_recap_skips(to, tenant)
     # Env can replace CHECKIN_RECAP_NOTIFY_EMAILS; these three still go out
     # for every brand, retail and activation alike.
     to = merge_always_include_internal(to)

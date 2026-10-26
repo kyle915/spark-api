@@ -203,3 +203,41 @@ class TestCheckinRecapSubmittedMailer(AmbassadorsGraphQLTestCase):
             assert "Approving it logs their hours." in env.html
             assert f"{CLIENT_HOST}/recap/view-custom/{recap.uuid}" in env.html
             assert "admin.igniteproductions.co" not in env.html
+
+    @override_settings(
+        CHECKIN_RECAP_NOTIFY_EMAILS=[
+            "Junior@igniteproductions.co",
+            "nevena@igniteproductions.co",
+            "kyle@igniteproductions.co",
+        ],
+        PUBLIC_CHECKIN_BASE_URL="https://client.igniteproductions.co",
+    )
+    def test_torch_recap_submitted_drops_junior_other_brands_keep_him(self):
+        def _send(recap):
+            captured = {}
+
+            def capture(self):
+                captured["envelope"] = self.envelope()
+
+            with patch("utils.mailer.Mailer.send_now", capture):
+                notify_checkin_recap_submitted(recap)
+            return captured["envelope"]
+
+        other_to = [email.lower() for email in _send(self._custom_recap()).to_emails]
+        self.tenant.slug = "torch"
+        self.tenant.name = "Torch"
+        self.tenant.save(update_fields=["slug", "name"])
+        torch_recap = self._custom_recap()
+        assert "junior@igniteproductions.co" in other_to
+        for standing in ALWAYS_INCLUDE_INTERNAL_EMAILS:
+            assert standing in other_to
+
+        torch_env = _send(torch_recap)
+        torch_to = [email.lower() for email in torch_env.to_emails]
+        assert "junior@igniteproductions.co" not in torch_to
+        assert "nevena@igniteproductions.co" in torch_to
+        assert "kyle@igniteproductions.co" in torch_to
+        for standing in ALWAYS_INCLUDE_INTERNAL_EMAILS:
+            assert standing in torch_to
+        assert torch_env.subject.startswith("Recap submitted —")
+        assert "Approving it logs their hours." in torch_env.html

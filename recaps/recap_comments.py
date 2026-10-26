@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import re
 
+from events.torch_portal import omit_torch_recap_skips
 from recaps.models import RecapComment
 
 logger = logging.getLogger(__name__)
@@ -67,6 +68,10 @@ def notify_ops_comment(recap, *, kind: str, comment: RecapComment) -> None:
         rmm_email = getattr(rmm, "email", None) if rmm else None
         if rmm_email and rmm_email not in admins:
             admins.append(rmm_email)
+        tenant = getattr(event, "tenant", None) if event is not None else None
+        if tenant is None:
+            tenant = getattr(recap, "tenant", None)
+        admins = omit_torch_recap_skips(admins, tenant)
         if not admins:
             return
         name = getattr(recap, "name", None) or "Recap"
