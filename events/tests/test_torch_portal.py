@@ -2,13 +2,17 @@
 
 from types import SimpleNamespace
 
+from events.field_marketing_mail import TORCH_PLAN_SUBMIT_INTERNAL_EMAILS
+from events.request_auto_approve import FAMUS_EVENT_SUBMISSION_SKIP_EMAILS
 from events.routing import ALWAYS_INCLUDE_INTERNAL_EMAILS
 from events.torch_portal import (
+    TORCH_RECAP_SKIP_EMAILS,
     TORCH_RECAP_SUBMIT_CC,
     TORCH_REQUEST_APPROVED_CC,
     TORCH_SUPPRESS_EMAILS,
     is_torch_public_form_slug,
     is_torch_tenant,
+    omit_torch_recap_skips,
     should_auto_approve_public_request,
     suppress_torch_emails,
     torch_recap_submit_lists,
@@ -102,3 +106,53 @@ def test_baesha_is_suppressed_from_torch_emails_only():
     to_recap, cc_recap = torch_recap_submit_lists(["Baesha@igniteproductions.co", "buyer@store.com"])
     assert to_recap == ["buyer@store.com"]
     assert "baesha@igniteproductions.co" not in {e.lower() for e in cc_recap}
+
+
+def test_junior_is_skipped_on_torch_recap_mail_only():
+    shared = [
+        "Junior@igniteproductions.co",
+        "kyle@igniteproductions.co",
+        *ALWAYS_INCLUDE_INTERNAL_EMAILS,
+    ]
+    torch_slugs = (
+        _tenant(slug="torch", name="Torch"),
+        _tenant(slug="torch-thc", name="Torch THC"),
+        _tenant(slug="keee-torch-thc", request_url_name="keee-torch-thc"),
+        _tenant(name="Torch THC"),
+    )
+    for tenant in torch_slugs:
+        kept = omit_torch_recap_skips(shared, tenant)
+        lowered = {email.lower() for email in kept}
+        assert "junior@igniteproductions.co" not in lowered
+        assert "kyle@igniteproductions.co" in lowered
+        for standing in ALWAYS_INCLUDE_INTERNAL_EMAILS:
+            assert standing in lowered
+
+    famus = _tenant(slug="famus-energy", request_url_name="famus-energy", name="FAMUS Energy")
+    liquid = _tenant(slug="liquid-death", name="Liquid Death")
+    assert omit_torch_recap_skips(shared, famus) == shared
+    assert omit_torch_recap_skips(shared, liquid) == shared
+    assert omit_torch_recap_skips(shared, None) == shared
+
+    # Non-recap Torch suppression still only drops Baesha.
+    assert "junior@igniteproductions.co" not in TORCH_SUPPRESS_EMAILS
+    assert "junior@igniteproductions.co" in TORCH_RECAP_SKIP_EMAILS
+    assert suppress_torch_emails(shared, tenant=torch_slugs[0])[0] == shared[0]
+
+    # Request approved still addresses him. Recap submit does not.
+    to_approved, _cc = torch_request_approved_lists("Junior@igniteproductions.co")
+    assert to_approved == ["Junior@igniteproductions.co"]
+    to_recap, cc_recap = torch_recap_submit_lists(
+        ["Junior@igniteproductions.co", "buyer@store.com"]
+    )
+    assert to_recap == ["buyer@store.com"]
+    assert "junior@igniteproductions.co" not in {e.lower() for e in cc_recap}
+    only_junior, cc_only = torch_recap_submit_lists(["Junior@igniteproductions.co"])
+    assert only_junior == [TORCH_RECAP_SUBMIT_CC[0]]
+    assert "junior@igniteproductions.co" not in {e.lower() for e in cc_only}
+
+    # Field-marketing plan mail and the Famus event-submission skip stay put.
+    assert "junior@igniteproductions.co" in TORCH_PLAN_SUBMIT_INTERNAL_EMAILS
+    assert FAMUS_EVENT_SUBMISSION_SKIP_EMAILS == frozenset(
+        {"junior@igniteproductions.co"}
+    )

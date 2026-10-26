@@ -11,6 +11,8 @@ from typing import Any
 
 from django.utils import timezone as dj_tz
 
+from events.torch_portal import omit_torch_recap_skips
+
 logger = logging.getLogger(__name__)
 
 LOOKS_GOOD = "looks_good"
@@ -98,6 +100,10 @@ def notify_ops_signoff(recap, *, kind: str) -> None:
         rmm_email = getattr(rmm, "email", None) if rmm else None
         if rmm_email and rmm_email not in admins:
             admins.append(rmm_email)
+        tenant = getattr(event, "tenant", None) if event is not None else None
+        if tenant is None:
+            tenant = getattr(recap, "tenant", None)
+        admins = omit_torch_recap_skips(admins, tenant)
         name = getattr(recap, "name", None) or "Recap"
         brand = _tenant_brand_name(recap)
         status = recap.client_signoff_status

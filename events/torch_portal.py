@@ -37,6 +37,14 @@ TORCH_SUPPRESS_EMAILS: frozenset[str] = frozenset({
     "baesha@igniteproductions.co",
 })
 
+# Off Torch recap mail only (submitted, approved, review, sign-off,
+# comments, suspect-numbers). Shared lists keep this address for every
+# other brand, and Torch mail that is not a recap (request approved,
+# field-marketing plan submit, clock-in) keeps it too.
+TORCH_RECAP_SKIP_EMAILS: frozenset[str] = frozenset({
+    "junior@igniteproductions.co",
+})
+
 
 def suppress_torch_emails(
     emails: list[str] | tuple[str, ...],
@@ -73,6 +81,30 @@ def is_torch_tenant(tenant) -> bool:
     if name in TORCH_TENANT_NAMES:
         return True
     return False
+
+
+def _drop_torch_recap_skips(
+    emails: list[str] | tuple[str, ...],
+) -> list[str]:
+    return [
+        email
+        for email in emails
+        if (email or "").strip().lower() not in TORCH_RECAP_SKIP_EMAILS
+    ]
+
+
+def omit_torch_recap_skips(
+    emails: list[str] | tuple[str, ...],
+    tenant,
+) -> list[str]:
+    """Drop Torch recap skips when ``tenant`` is Torch.
+
+    A shared recipient list is left intact for every other brand. Passing
+    a non-Torch tenant (or none) returns the list unchanged.
+    """
+    if not is_torch_tenant(tenant):
+        return list(emails)
+    return _drop_torch_recap_skips(emails)
 
 
 def should_auto_approve_public_request(
@@ -123,10 +155,15 @@ def torch_recap_submit_lists(
     requestor_emails: list[str] | tuple[str, ...],
 ) -> tuple[list[str], list[str]]:
     """To: requestor(s). CC: Liberty + events + Nevena. No Kyle/Harris blast."""
-    requestors = suppress_torch_emails(_dedupe_emails(requestor_emails))
+    requestors = _drop_torch_recap_skips(
+        suppress_torch_emails(_dedupe_emails(requestor_emails))
+    )
     seen = {e.lower() for e in requestors}
     cc = [
-        e for e in suppress_torch_emails(_dedupe_emails(TORCH_RECAP_SUBMIT_CC))
+        e
+        for e in _drop_torch_recap_skips(
+            suppress_torch_emails(_dedupe_emails(TORCH_RECAP_SUBMIT_CC))
+        )
         if e.lower() not in seen
     ]
     if requestors:
