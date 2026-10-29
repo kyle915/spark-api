@@ -10,7 +10,11 @@ from django.utils import timezone
 from ambassadors.models import Attendance, FileType, Source
 from ambassadors.tests.base import AmbassadorsGraphQLTestCase
 from recaps import models as recap_models
-from recaps.recap_review_checks import recap_review_checks
+from recaps.recap_review_checks import (
+    flagged_review_checks,
+    flagged_review_checks_for_ids,
+    recap_review_checks,
+)
 
 
 def _by_code(result):
@@ -222,3 +226,47 @@ class TestRecapReviewChecksResolver(AmbassadorsGraphQLTestCase):
             {"recapId": "987654321"}, self.admin, self.endpoint_path)
         assert missing.errors is None
         assert all(c["status"] == "na" for c in missing.data["recapReviewChecks"])
+
+    @pytest.mark.asyncio
+    async def test_batched_review_flags_returns_flagged_only(self):
+        from asgiref.sync import sync_to_async
+
+        clean = await sync_to_async(
+            recap_models.CustomRecap.objects.create, thread_sensitive=True
+        )(
+            name="clean", event=self.event, tenant=self.tenant,
+            custom_recap_template=self.template, total_engagements=40,
+            created_by=self.system_user, updated_by=self.system_user)
+        result = await self._execute_query_authenticated(
+            """
+            query Q($ids: [ID!]!, $isCustom: Boolean!) {
+              recapReviewFlags(recapIds: $ids, isCustom: $isCustom) {
+                recapId
+                flags { code label }
+              }
+            }
+            """,
+            {
+                "ids": [str(self.recap.id), str(clean.id)],
+                "isCustom": True,
+            },
+            self.admin,
+            self.endpoint_path,
+        )
+        assert result.errors is None, f"errored: {result.errors}"
+        by_id = {
+            str(row["recapId"]): row["flags"]
+            for row in result.data["recapReviewFlags"]
+        }
+        flagged_codes = {f["code"] for f in by_id[str(self.recap.id)]}
+        assert "engagements_rate" in flagged_codes
+        assert by_id[str(clean.id)] == []
+
+    def test_flagged_helpers_omit_pass_and_na(self):
+        flags = flagged_review_checks(self.recap.id, is_custom=True)
+        assert any(f["code"] == "engagements_rate" for f in flags)
+        assert all("status" not in f for f in flags)
+        batched = flagged_review_checks_for_ids(
+            [self.recap.id], is_custom=True
+        )
+        assert batched[self.recap.id] == flags
