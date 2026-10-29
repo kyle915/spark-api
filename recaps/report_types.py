@@ -32,7 +32,11 @@ from django.utils import timezone
 from recaps import report_service
 from recaps.photo_reuse import photo_reuse_checks
 from recaps.recap_quality import recap_quality_flags
-from recaps.recap_review_checks import recap_review_checks
+from recaps.recap_review_checks import (
+    MAX_REVIEW_FLAG_BATCH,
+    flagged_review_checks_for_ids,
+    recap_review_checks,
+)
 from recaps.report_tokens import make_report_token
 from recaps.tenant_ba_leaderboard import tenant_ba_leaderboard
 from recaps.scoped_ai import build_event_scope, build_recap_scope
@@ -1703,6 +1707,26 @@ class RecapReviewCheck:
     detail: str
 
 
+@strawberry.type
+class RecapReviewFlagSummary:
+    """Slim flagged-check badge for the Needs-review list.
+
+    Advisory only — never auto-approves. ``na`` / ``pass`` checks are
+    omitted; the list only surfaces what ops should glance at.
+    """
+
+    code: str
+    label: str
+
+
+@strawberry.type
+class RecapReviewFlagsForRecap:
+    """One recap's flagged review-check summary in a batched list response."""
+
+    recap_id: strawberry.ID
+    flags: list[RecapReviewFlagSummary]
+
+
 def _build_recap_review_checks(result) -> list[RecapReviewCheck]:
     checks: list[RecapReviewCheck] = []
     for item in result or []:
@@ -1722,6 +1746,17 @@ def _build_recap_review_checks(result) -> list[RecapReviewCheck]:
             )
         )
     return checks
+
+
+def _build_recap_review_flag_summaries(result) -> list[RecapReviewFlagSummary]:
+    flags: list[RecapReviewFlagSummary] = []
+    for item in result or []:
+        if not isinstance(item, dict):
+            continue
+        code, label = item.get("code"), item.get("label")
+        if isinstance(code, str) and code and isinstance(label, str) and label:
+            flags.append(RecapReviewFlagSummary(code=code, label=label))
+    return flags
 
 
 def _build_recap_quality_type(result: dict) -> RecapQualityResult:
@@ -3451,6 +3486,87 @@ class CampaignReportQueries:
             return await sync_to_async(_build, thread_sensitive=True)()
         except Exception:
             return _build_recap_review_checks(recap_review_checks(0))
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def recap_review_flags(
+        self,
+        info: strawberry.Info,
+        recap_ids: list[strawberry.ID],
+        is_custom: bool = False,
+    ) -> list[RecapReviewFlagsForRecap]:
+        """Batched flagged review-check summaries for the Needs-review list.
+
+        One GraphQL round-trip for a page of recaps (cap
+        :data:`MAX_REVIEW_FLAG_BATCH`). Returns only ``flag`` checks —
+        advisory badges so ops can skip opening every row. Never
+        auto-approves. Out-of-scope / missing ids return empty ``flags``.
+        """
+        service = _CampaignReportService()
+        scope_tenant_id = await service.resolve_scope_tenant_id(info)
+
+        parsed: list[tuple[str, int]] = []
+        for raw in (recap_ids or [])[:MAX_REVIEW_FLAG_BATCH]:
+            try:
+                rid = resolve_id_to_int(str(raw).strip())
+            except Exception:
+                continue
+            if rid is None:
+                continue
+            parsed.append((str(raw).strip() or str(rid), int(rid)))
+
+        if not parsed:
+            return []
+
+        def _build() -> list[RecapReviewFlagsForRecap]:
+            from recaps.models import CustomRecap, Recap
+
+            ids = [rid for _, rid in parsed]
+            if is_custom:
+                scoped = {
+                    row["id"]: row["tenant_id"]
+                    for row in CustomRecap.objects.filter(id__in=ids).values(
+                        "id", "tenant_id"
+                    )
+                }
+            else:
+                scoped = {
+                    row["id"]: row["event__tenant_id"]
+                    for row in Recap.objects.filter(id__in=ids).values(
+                        "id", "event__tenant_id"
+                    )
+                }
+
+            allowed: list[int] = []
+            for _, rid in parsed:
+                row_tenant_id = scoped.get(rid)
+                if row_tenant_id is None:
+                    continue
+                if scope_tenant_id is not None and row_tenant_id != scope_tenant_id:
+                    continue
+                allowed.append(rid)
+
+            by_id = flagged_review_checks_for_ids(allowed, is_custom=is_custom)
+            bundles: list[RecapReviewFlagsForRecap] = []
+            for raw_id, rid in parsed:
+                bundles.append(
+                    RecapReviewFlagsForRecap(
+                        recap_id=strawberry.ID(raw_id),
+                        flags=_build_recap_review_flag_summaries(
+                            by_id.get(rid, [])
+                        ),
+                    )
+                )
+            return bundles
+
+        try:
+            return await sync_to_async(_build, thread_sensitive=True)()
+        except Exception:
+            return [
+                RecapReviewFlagsForRecap(
+                    recap_id=strawberry.ID(raw_id), flags=[]
+                )
+                for raw_id, _ in parsed
+            ]
 
 
 # Maps each ``setTenantGoals`` mutation argument to its ``TenantGoal``

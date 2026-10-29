@@ -436,3 +436,43 @@ def recap_review_checks(recap_id, is_custom: bool = False) -> list[dict]:
         ]
     except Exception:
         return _all_na()
+
+
+def flagged_review_checks(recap_id, is_custom: bool = False) -> list[dict]:
+    """Flagged checks only — slim ``{code, label}`` for Needs-review list badges.
+
+    Advisory only: never approves, rejects, or mutates. Missing / broken
+    recaps return an empty list (same never-raise posture as the full
+    check list).
+    """
+    out: list[dict] = []
+    for item in recap_review_checks(recap_id, is_custom=is_custom):
+        if not isinstance(item, dict):
+            continue
+        if item.get("status") != "flag":
+            continue
+        code, label = item.get("code"), item.get("label")
+        if isinstance(code, str) and code and isinstance(label, str) and label:
+            out.append({"code": code, "label": label})
+    return out
+
+
+# Cap for the batched GraphQL list helper — one Needs-review page is ~25.
+MAX_REVIEW_FLAG_BATCH = 50
+
+
+def flagged_review_checks_for_ids(
+    recap_ids: list[int], is_custom: bool = False
+) -> dict[int, list[dict]]:
+    """Map each id → flagged ``{code, label}`` summaries (empty when clean).
+
+    One GraphQL round-trip from the list UI; each id still runs the same
+    fixed rules as the detail pane. Cap at :data:`MAX_REVIEW_FLAG_BATCH`.
+    """
+    out: dict[int, list[dict]] = {}
+    for rid in recap_ids[:MAX_REVIEW_FLAG_BATCH]:
+        try:
+            out[int(rid)] = flagged_review_checks(int(rid), is_custom=is_custom)
+        except (TypeError, ValueError):
+            continue
+    return out
