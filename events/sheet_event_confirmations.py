@@ -200,6 +200,44 @@ SHEET_CONFIG_BY_ID: dict[str, SheetConfirmationConfig] = {
     c.sheet_id: c for c in SHEET_CONFIGS
 }
 
+# Human labels for the staffing / settings chrome. Not emailed to BAs.
+SHEET_AUTOMATION_LABELS: dict[str, str] = {
+    "torch": "Torch Retail Schedule",
+    "liquid-death": "Liquid Death retail schedule",
+    "brand-group": "Famus / Wook / Alcohol Armor Schedule",
+    "pivot": "Pivot Retail Schedule",
+}
+
+_BRAND_GROUP_TENANT_SLUGS = frozenset(
+    {"famus-energy", "alcohol-armor", "wook-water"}
+)
+
+
+def sheet_automation_for_tenant(tenant) -> SheetConfirmationConfig | None:
+    """Which Apps Script confirmation workbook (if any) covers this tenant.
+
+    Distinct from ``Tenant.linked_sheet_url`` — that is request/spark-form
+    append sync. Ops looking at Settings linked-sheet will not see Torch /
+    Pivot / Famus confirmation stamps; this mapping is what the staffing tab
+    uses instead.
+    """
+    if tenant is None:
+        return None
+    slug = (getattr(tenant, "slug", "") or "").strip().lower()
+    if is_torch_tenant(tenant):
+        return TORCH_CONFIG
+    if is_liquid_death_tenant(tenant):
+        return LIQUID_DEATH_CONFIG
+    if slug == PIVOT_TENANT_SLUG:
+        return PIVOT_CONFIG
+    if slug in _BRAND_GROUP_TENANT_SLUGS:
+        return BRAND_GROUP_CONFIG
+    return None
+
+
+def sheet_url_for_config(config: SheetConfirmationConfig) -> str:
+    return f"https://docs.google.com/spreadsheets/d/{config.sheet_id}/edit"
+
 _TAB_TITLE_CACHE: dict[str, str] = {}
 
 _TIME_RE = re.compile(
@@ -678,6 +716,29 @@ def _find_mailed_confirmation(
     return None
 
 
+def _record_sheet_stamp(confirmation, *, status: str, payload: SheetRowPayload) -> None:
+    """Persist the last successful sheet stamp on the confirmation row.
+
+    Ops visibility reads these fields from the staffing tab so a failed
+    Queued→Sent stamp is visible without opening the workbook. No-op when
+    the confirmation was never saved (transient cancel builds).
+    """
+    from events.models import EventConfirmation
+
+    if confirmation is None or not getattr(confirmation, "pk", None):
+        return
+    config = config_for_sheet_id(payload.sheet_id)
+    EventConfirmation.objects.filter(pk=confirmation.pk).update(
+        source=EventConfirmation.SOURCE_SHEET,
+        sheet_key=config.key,
+        sheet_id=config.sheet_id,
+        sheet_row=int(payload.row_number),
+        sheet_stamp_status=(status or "")[:32],
+        sheet_stamped_at=dj_tz.now(),
+        updated_at=dj_tz.now(),
+    )
+
+
 def _finalize_queued_sent(
     payload: SheetRowPayload,
     confirmation,
@@ -719,6 +780,7 @@ def _finalize_queued_sent(
             sent_at=now_label,
             sent_column_value=f"Sent {now_label}",
         )
+        _record_sheet_stamp(confirmation, status=STATUS_SENT, payload=payload)
     except Exception as stamp_exc:  # noqa: BLE001
         logger.exception(
             "sheet finalize Sent stamp failed row=%s",
@@ -1352,6 +1414,10 @@ def _create_and_send(
         timezone=tz_row,
         products=products,
         brand_slugs=brand_slugs,
+        source=EventConfirmation.SOURCE_SHEET,
+        sheet_key=config.key,
+        sheet_id=config.sheet_id,
+        sheet_row=int(payload.row_number),
         send_reminders=True,
         created_by=None,
     )
@@ -1374,6 +1440,9 @@ def _create_and_send(
                 error=err,
                 confirmation_uuid=uuid_str,
                 sent_column_value=f"Error: {err}",
+            )
+            _record_sheet_stamp(
+                confirmation, status=STATUS_ERROR, payload=payload
             )
         except Exception:  # noqa: BLE001 — email outcome already known
             logger.exception(
@@ -1402,6 +1471,7 @@ def _create_and_send(
             sent_at=now_label,
             sent_column_value=f"Sent {now_label}",
         )
+        _record_sheet_stamp(confirmation, status=STATUS_SENT, payload=payload)
     except Exception as stamp_exc:  # noqa: BLE001 — do not 500 after a real send
         logger.exception(
             "sheet Sent stamp failed after email ok row=%s",
@@ -1643,6 +1713,10 @@ def cancel_from_sheet_row(payload: SheetRowPayload) -> ActionResult:
         sent_at=now_label if emailed else None,
         sent_column_value=f"Cancelled {now_label}",
     )
+    if confirmation is not None and getattr(confirmation, "pk", None):
+        _record_sheet_stamp(
+            confirmation, status=STATUS_CANCELLED, payload=payload
+        )
     return ActionResult(
         ok=True,
         action="cancel",

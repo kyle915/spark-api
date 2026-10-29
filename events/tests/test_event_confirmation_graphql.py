@@ -40,6 +40,12 @@ FORM_QUERY = """
         fromEmail
         hasRecapLink
         hasTrainingLink
+        sheetAutomation {
+          key
+          label
+          sheetId
+          sheetUrl
+        }
       }
     }
 """
@@ -56,6 +62,9 @@ SEND_MUTATION = """
           dateLabel
           timeLabel
           products
+          source
+          sheetRow
+          sheetStampStatus
           sendReminders
           sends { stage sentAt }
         }
@@ -65,7 +74,16 @@ SEND_MUTATION = """
 
 LIST_QUERY = """
     query List($tenantId: ID!) {
-      eventConfirmations(tenantId: $tenantId) { uuid baEmail sendReminders }
+      eventConfirmations(tenantId: $tenantId) {
+        uuid
+        baEmail
+        sendReminders
+        source
+        sheetKey
+        sheetRow
+        sheetStampStatus
+        brandSlugs
+      }
     }
 """
 
@@ -151,6 +169,9 @@ class TestEventConfirmationGraphQL(AmbassadorsGraphQLTestCase):
         assert data["hasRecapLink"] is True
         assert data["hasTrainingLink"] is True
         assert "staffing@igniteproductions.co" in data["fromEmail"]
+        # Liquid Death sheet confirmations are live — not Settings linked-sheet.
+        assert data["sheetAutomation"]["key"] == "liquid-death"
+        assert "spreadsheets/d/" in data["sheetAutomation"]["sheetUrl"]
 
     @pytest.mark.asyncio
     async def test_a_tenant_with_no_links_is_flagged_not_faked(self):
@@ -162,6 +183,7 @@ class TestEventConfirmationGraphQL(AmbassadorsGraphQLTestCase):
         assert data["hasRecapLink"] is False
         assert data["hasTrainingLink"] is False
         assert data["recapUrl"] == ""
+        assert data["sheetAutomation"] is None
 
     @pytest.mark.asyncio
     async def test_torch_gets_torch_skus_and_links_not_liquid_death(self):
@@ -217,6 +239,9 @@ class TestEventConfirmationGraphQL(AmbassadorsGraphQLTestCase):
         # hours early.
         assert row.starts_at.isoformat() == "2026-08-01T18:00:00+00:00"
         assert row.ends_at.isoformat() == "2026-08-01T21:00:00+00:00"
+        assert row.source == EventConfirmation.SOURCE_ADMIN
+        assert payload["confirmation"]["source"] == "admin"
+        assert payload["confirmation"]["sheetRow"] is None
         # …and it renders back as the BA's local wall clock.
         assert payload["confirmation"]["dateLabel"] == "08/01/2026"
         assert payload["confirmation"]["timeLabel"] == "1p - 4p"

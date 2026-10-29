@@ -1517,6 +1517,32 @@ class EventConfirmation(models.Model):
     # only these brands — never the other brands on a shared workbook.
     brand_slugs = models.JSONField(default=list, blank=True)
 
+    # Provenance for ops visibility. Sheet automation (Torch / Pivot / Famus
+    # brand-group / LD) writes source=sheet plus the workbook id + row so the
+    # staffing tab can show "Sheet row 5" without opening the workbook.
+    # Settings linked-sheet is a different pipeline (request append) — these
+    # fields are for Apps Script confirmations only.
+    SOURCE_ADMIN = "admin"
+    SOURCE_SHEET = "sheet"
+    SOURCE_CHOICES = [
+        (SOURCE_ADMIN, "Admin tab"),
+        (SOURCE_SHEET, "Sheet automation"),
+    ]
+    source = models.CharField(
+        max_length=16,
+        choices=SOURCE_CHOICES,
+        default=SOURCE_ADMIN,
+        db_index=True,
+    )
+    sheet_key = models.CharField(max_length=32, blank=True, default="")
+    sheet_id = models.CharField(max_length=128, blank=True, default="")
+    sheet_row = models.PositiveIntegerField(null=True, blank=True)
+    # Last status we successfully wrote back to the sheet (Sent / Error /
+    # Cancelled / Queued). Distinct from EventConfirmationSend — a stamp can
+    # fail after the email left, which is exactly the ops pain this tracks.
+    sheet_stamp_status = models.CharField(max_length=32, blank=True, default="")
+    sheet_stamped_at = models.DateTimeField(null=True, blank=True)
+
     # Whether the sweep may fire t24/t3 for this row. Opt-in per send (the tab
     # defaults it ON): a confirmation an admin never sent stays silent, so a
     # misbehaving sweep can't reach BAs nobody chose to email.

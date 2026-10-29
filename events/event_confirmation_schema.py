@@ -49,6 +49,20 @@ class ConfirmationTimezoneOption:
 
 
 @strawberry.type
+class SheetConfirmationAutomationInfo:
+    """Apps Script sheet → confirmation automation for this tenant, if any.
+
+    Not the Settings linked-sheet (request append). Ops looking for Sent /
+    Error / last stamp after a Torch / Pivot / Famus Send checkbox live here.
+    """
+
+    key: str
+    label: str
+    sheet_id: str
+    sheet_url: str
+
+
+@strawberry.type
 class EventConfirmationFormOptions:
     product_options: list[str]
     recap_url: str
@@ -71,6 +85,8 @@ class EventConfirmationFormOptions:
     # warns rather than silently sending an email with a missing button.
     has_recap_link: bool
     has_training_link: bool
+    # Null when this tenant has no sheet confirmation workbook.
+    sheet_automation: SheetConfirmationAutomationInfo | None
 
 
 @strawberry.type
@@ -111,6 +127,13 @@ class EventConfirmationRow:
     date_label: str
     time_label: str
     products: list[str]
+    brand_slugs: list[str]
+    source: str
+    sheet_key: str
+    sheet_id: str
+    sheet_row: int | None
+    sheet_stamp_status: str
+    sheet_stamped_at: str | None
     send_reminders: bool
     cancelled_at: str | None
     created_at: str | None
@@ -155,6 +178,20 @@ class SendEventConfirmationResponse:
 # Helpers
 # ---------------------------------------------------------------------------
 
+def _effective_source(confirmation) -> str:
+    """admin | sheet. Prefer explicit provenance fields over created_by."""
+    from events.models import EventConfirmation
+
+    if (getattr(confirmation, "sheet_id", "") or "").strip():
+        return EventConfirmation.SOURCE_SHEET
+    if getattr(confirmation, "sheet_row", None):
+        return EventConfirmation.SOURCE_SHEET
+    stored = (getattr(confirmation, "source", "") or "").strip()
+    if stored == EventConfirmation.SOURCE_SHEET:
+        return EventConfirmation.SOURCE_SHEET
+    return EventConfirmation.SOURCE_ADMIN
+
+
 def _row(confirmation) -> EventConfirmationRow:
     from events.event_confirmations import format_event_date, format_time_range
 
@@ -171,6 +208,15 @@ def _row(confirmation) -> EventConfirmationRow:
         date_label=format_event_date(local_start),
         time_label=format_time_range(local_start, confirmation.local_end()),
         products=list(confirmation.products or []),
+        brand_slugs=[str(s) for s in (confirmation.brand_slugs or [])],
+        source=_effective_source(confirmation),
+        sheet_key=(getattr(confirmation, "sheet_key", "") or "").strip(),
+        sheet_id=(getattr(confirmation, "sheet_id", "") or "").strip(),
+        sheet_row=getattr(confirmation, "sheet_row", None),
+        sheet_stamp_status=(
+            getattr(confirmation, "sheet_stamp_status", "") or ""
+        ).strip(),
+        sheet_stamped_at=_iso(getattr(confirmation, "sheet_stamped_at", None)),
         send_reminders=bool(confirmation.send_reminders),
         cancelled_at=_iso(confirmation.cancelled_at),
         created_at=_iso(confirmation.created_at),
@@ -314,6 +360,12 @@ class EventConfirmationQueries:
             if tenant is None:
                 raise ValueError("Tenant not found.")
 
+            from events.sheet_event_confirmations import (
+                SHEET_AUTOMATION_LABELS,
+                sheet_automation_for_tenant,
+                sheet_url_for_config,
+            )
+
             recap = recap_url_for(tenant)
             training = training_url_for(tenant)
             zones = [
@@ -323,6 +375,15 @@ class EventConfirmationQueries:
                 for z in TimeZone.objects.order_by("name").distinct("name")
             ]
             default_label, type_options = _event_type_choices(tenant)
+            auto = sheet_automation_for_tenant(tenant)
+            sheet_info = None
+            if auto is not None:
+                sheet_info = SheetConfirmationAutomationInfo(
+                    key=auto.key,
+                    label=SHEET_AUTOMATION_LABELS.get(auto.key, auto.key),
+                    sheet_id=auto.sheet_id,
+                    sheet_url=sheet_url_for_config(auto),
+                )
             return EventConfirmationFormOptions(
                 product_options=confirmation_product_options(tenant),
                 recap_url=recap,
@@ -335,6 +396,7 @@ class EventConfirmationQueries:
                 brand_name=(tenant.name or "").strip(),
                 has_recap_link=bool(recap),
                 has_training_link=bool(training),
+                sheet_automation=sheet_info,
             )
 
         return await sync_to_async(_go)()
@@ -561,6 +623,7 @@ class EventConfirmationMutations:
                 timezone_name=tz_name,
                 timezone=tz_row,
                 products=[str(p) for p in (input.products or [])],
+                source=EventConfirmation.SOURCE_ADMIN,
                 send_reminders=bool(input.send_reminders),
                 created_by=user if getattr(user, "id", None) else None,
             )
