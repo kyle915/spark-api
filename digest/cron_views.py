@@ -6203,6 +6203,57 @@ class SetupDudeWipesCheckinView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class SetupBastionBuntinCheckinView(View):
+    """GET/POST `/internal/cron/setup-bastion-buntin-checkin`.
+
+    Creates the Bastion Buntin agency tenant if missing (createTenant-style
+    seeds), seeds Future Golf + Avocados from Mexico Event Activation recaps
+    (LD/Martinelli shape minus samples-given), mints the standing `BB-`
+    check-in code, pins Future Golf as the default selectable program, and
+    labels LD event photo buckets. Address location mode.
+
+    Idempotent: get_or_create for templates, and an existing checkin_code is
+    left alone (rotating it breaks every copy already shared). Recaps stay
+    human-reviewed (walk-up leaves approved=False).
+
+    Params: tenant (default "bastion-buntin"), prefix, apply (default DRY RUN).
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        kwargs: dict = {}
+        for key in ("tenant", "prefix"):
+            val = request.GET.get(key) or request.POST.get(key)
+            if val:
+                kwargs[key] = str(val)
+        raw = (request.GET.get("apply") or request.POST.get("apply") or "").lower()
+        apply_it = raw in ("1", "true", "yes", "on")
+        if apply_it:
+            kwargs["apply"] = True
+
+        out = io.StringIO()
+        try:
+            call_command("setup_bastion_buntin_checkin", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("setup-bastion-buntin-checkin cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc),
+                 "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse({"ok": True, "apply": apply_it, "log": out.getvalue()})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class SetupFreshVintageCheckinView(View):
     """GET/POST `/internal/cron/setup-fresh-vintage-checkin`.
 
@@ -11029,6 +11080,7 @@ def _registered_views() -> dict[str, Any]:
         "setup-kalshi-checkin": SetupKalshiCheckinView,
         "setup-pivot-energy-checkin": SetupPivotEnergyCheckinView,
         "setup-dude-wipes-checkin": SetupDudeWipesCheckinView,
+        "setup-bastion-buntin-checkin": SetupBastionBuntinCheckinView,
         "setup-brand-group": SetupBrandGroupView,
         "seed-brand-group-demo": SeedBrandGroupDemoView,
         "setup-fresh-vintage-checkin": SetupFreshVintageCheckinView,
