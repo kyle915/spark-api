@@ -1,0 +1,48 @@
+# One-shot / on-demand: attach filed Famus walk-up Events onto Tracker
+# Requests that still show DUE. Dry-run is the default; set apply=true to write.
+name: Link walk-in recaps to requests
+
+on:
+  workflow_dispatch:
+    inputs:
+      tenant_slug:
+        description: Exact tenant slug
+        required: true
+        default: famus-energy
+      days_back:
+        description: Lookback window in days
+        required: true
+        default: "45"
+      apply:
+        description: "true to write links; anything else is dry-run"
+        required: true
+        default: "false"
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/link-walkin-recaps-to-requests
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          TENANT_SLUG: ${{ github.event.inputs.tenant_slug }}
+          DAYS_BACK: ${{ github.event.inputs.days_back }}
+          APPLY: ${{ github.event.inputs.apply }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          APPLY_Q="false"
+          case "$(echo "$APPLY" | tr '[:upper:]' '[:lower:]')" in
+            1|true|yes|on) APPLY_Q="true" ;;
+          esac
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST \
+            "$CRON_URL?tenant_slug=$TENANT_SLUG&days_back=$DAYS_BACK&apply=$APPLY_Q" \
+            -H "X-Cron-Secret: $CRON_SECRET")
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          echo
+          test "$STATUS" = "200"
