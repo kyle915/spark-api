@@ -4983,6 +4983,49 @@ class OffboardClientUsersView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class StripTorchSuppressRecipientsView(View):
+    """POST `/internal/cron/strip-torch-suppress-recipients`.
+
+    Fires `strip_torch_suppress_recipients` — removes TORCH_SUPPRESS_EMAILS
+    (baesha@…) from Torch tenant `recap_recipient_emails` and
+    `request_approved_cc_emails` only. Does not deactivate the user or touch
+    other brands. DRY-RUN by default; only `apply=true` writes.
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _bool(name: str) -> bool:
+            raw = (request.GET.get(name) or request.POST.get(name) or "").lower()
+            return raw in ("1", "true", "yes", "on")
+
+        apply = _bool("apply") or _bool("execute")
+        out = io.StringIO()
+        try:
+            call_command("strip_torch_suppress_recipients", stdout=out, apply=apply)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("strip-torch-suppress-recipients cron failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "log": out.getvalue(),
+                },
+                status=500,
+            )
+        return JsonResponse({"ok": True, "applied": apply, "log": out.getvalue()})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class ImportStoreRosterView(View):
     """POST `/internal/cron/import-store-roster`.
 
@@ -11055,6 +11098,7 @@ def _registered_views() -> dict[str, Any]:
         "backfill-recap-retailers": BackfillRecapRetailersView,
     "backfill-store-recap-names": BackfillStoreRecapNamesView,
     "offboard-client-users": OffboardClientUsersView,
+    "strip-torch-suppress-recipients": StripTorchSuppressRecipientsView,
     "import-store-roster": ImportStoreRosterView,
     "audit-torch-recaps": AuditTorchRecapsView,
         "describe-sheet-tabs": DescribeSheetTabsView,

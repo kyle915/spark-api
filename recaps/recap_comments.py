@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import re
 
-from events.torch_portal import omit_torch_recap_skips
+from events.torch_portal import omit_torch_recap_skips, suppress_torch_emails
 from recaps.models import RecapComment
 
 logger = logging.getLogger(__name__)
@@ -71,6 +71,8 @@ def notify_ops_comment(recap, *, kind: str, comment: RecapComment) -> None:
         tenant = getattr(event, "tenant", None) if event is not None else None
         if tenant is None:
             tenant = getattr(recap, "tenant", None)
+        # Baesha is off every Torch mail; junior is off Torch recap mail only.
+        admins = suppress_torch_emails(admins, tenant=tenant)
         admins = omit_torch_recap_skips(admins, tenant)
         if not admins:
             return

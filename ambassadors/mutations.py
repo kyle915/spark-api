@@ -2030,7 +2030,8 @@ class ShiftAttendanceMutations:
             # sync_to_async, and bridging sync→async to the push wrapper from a
             # no-running-loop thread deadlocks (see resolve_extension / api
             # 378d829). The async resolver body delivers natively below.
-            watcher_ids = _spark_admin_user_ids()
+            tenant = getattr(event, "tenant", None)
+            watcher_ids = _spark_admin_user_ids(tenant=tenant)
             push = {
                 "title": title,
                 "body": body,
@@ -2052,6 +2053,7 @@ class ShiftAttendanceMutations:
                     status=status,
                     eta_minutes=input.eta_minutes,
                     note=input.note or "",
+                    tenant=tenant,
                 )
             except Exception:
                 logging.getLogger(__name__).exception(
@@ -2156,7 +2158,8 @@ class ShiftAttendanceMutations:
             body = f"{ba_name} is requesting +{minutes} min at {venue}."
             if input.reason:
                 body += f" — “{input.reason[:120]}”"
-            watcher_ids = _spark_admin_user_ids()
+            tenant = getattr(event, "tenant", None)
+            watcher_ids = _spark_admin_user_ids(tenant=tenant)
             push = {
                 "title": title,
                 "body": body,
@@ -2181,6 +2184,7 @@ class ShiftAttendanceMutations:
                     reason=input.reason or "",
                     event_uuid=str(getattr(event, "uuid", "")),
                     extension_id=ext.id,
+                    tenant=tenant,
                 )
             except Exception:
                 logging.getLogger(__name__).exception(
@@ -2494,14 +2498,20 @@ def _event_watcher_user_ids(event) -> list[int]:
     return [i for i in ids if i]
 
 
-def _spark_admin_user_ids() -> list[int]:
+def _spark_admin_user_ids(tenant=None) -> list[int]:
     """Active Ignite (Spark-admin) user ids — the push counterpart to
     _get_spark_admin_emails(). Shift-status (running-late / can't-make-it)
     and extension-request notifications go to the IGNITE ADMIN TEAM ONLY,
-    never the client / assigned RMM. Honors the same CC suppression list."""
+    never the client / assigned RMM. Honors the same CC suppression list,
+    and drops ``TORCH_SUPPRESS_EMAILS`` when ``tenant`` is Torch."""
     from django.contrib.auth import get_user_model
     from tenants.models import Role
     from events.routing import CC_SUPPRESS_EMAILS
+    from events.torch_portal import TORCH_SUPPRESS_EMAILS, is_torch_tenant
+
+    blocked = set(CC_SUPPRESS_EMAILS)
+    if tenant is not None and is_torch_tenant(tenant):
+        blocked |= {e.lower() for e in TORCH_SUPPRESS_EMAILS}
 
     User = get_user_model()
     try:
@@ -2515,13 +2525,14 @@ def _spark_admin_user_ids() -> list[int]:
     return [
         uid
         for (uid, email) in rows
-        if uid and (email or "").strip().lower() not in CC_SUPPRESS_EMAILS
+        if uid and (email or "").strip().lower() not in blocked
     ]
 
 
 def _email_admins_extension_request(
     *, ba_name: str, venue: str, minutes: int, reason: str, event_uuid: str,
     extension_id: int | None = None,
+    tenant=None,
 ) -> None:
     """Email every active Spark admin that a BA requested an extension.
 
@@ -2533,9 +2544,10 @@ def _email_admins_extension_request(
     page), so an admin can decide straight from their inbox."""
     from html import escape as _esc
     from events.mutations import _get_spark_admin_emails
+    from events.torch_portal import suppress_torch_emails
     from utils.mailer import Envelope, Mailer
 
-    admins = _get_spark_admin_emails()
+    admins = suppress_torch_emails(_get_spark_admin_emails(), tenant=tenant)
     if not admins:
         return
     ba_e, venue_e = _esc(ba_name or "A BA"), _esc(venue or "their shift")
@@ -2597,6 +2609,7 @@ def _email_admins_extension_request(
 def _email_admins_shift_status(
     *, ba_name: str, venue: str, status: str,
     eta_minutes: int | None, note: str,
+    tenant=None,
 ) -> None:
     """Email every active Spark admin that a BA reported running-late /
     can't-make-it. Mirrors _email_admins_extension_request: synchronous
@@ -2604,9 +2617,10 @@ def _email_admins_shift_status(
     caller wraps it in try/except so a mail failure never blocks the report."""
     from html import escape as _esc
     from events.mutations import _get_spark_admin_emails
+    from events.torch_portal import suppress_torch_emails
     from utils.mailer import Envelope, Mailer
 
-    admins = _get_spark_admin_emails()
+    admins = suppress_torch_emails(_get_spark_admin_emails(), tenant=tenant)
     if not admins:
         return
     ba_e, venue_e = _esc(ba_name or "A BA"), _esc(venue or "their shift")
