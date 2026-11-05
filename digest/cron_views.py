@@ -5349,6 +5349,70 @@ class ReconcileTrackerRowsView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class LinkWalkinRecapsToRequestsView(View):
+    """GET/POST `/internal/cron/link-walkin-recaps-to-requests`.
+
+    Attaches filed request-less walk-up Events onto Tracker Requests that
+    still show DUE (same day + fuzzy place / unique store name). Default
+    tenant is Famus Energy. Dry-run unless apply=1.
+
+    Params: tenant_slug (default famus-energy), days_back, apply.
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        kwargs: dict = {}
+        val = request.GET.get("tenant_slug") or request.POST.get("tenant_slug")
+        if val:
+            kwargs["tenant_slug"] = str(val)
+        raw_n = request.GET.get("days_back") or request.POST.get("days_back")
+        if raw_n:
+            try:
+                kwargs["days_back"] = int(raw_n)
+            except (TypeError, ValueError):
+                pass
+        raw = (request.GET.get("apply") or request.POST.get("apply") or "").lower()
+        apply_it = raw in ("1", "true", "yes", "on")
+        if apply_it:
+            kwargs["apply"] = True
+
+        out = io.StringIO()
+        try:
+            call_command("link_walkin_recaps_to_requests", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("link-walkin-recaps-to-requests cron failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "log": out.getvalue(),
+                },
+                status=500,
+            )
+        log = out.getvalue()
+        report = None
+        for line in log.splitlines():
+            if line.startswith("JSON_RESULT:"):
+                try:
+                    report = json.loads(line[len("JSON_RESULT:") :])
+                except Exception:  # noqa: BLE001
+                    report = None
+        return JsonResponse(
+            {"ok": True, "apply": apply_it, "report": report, "log": log}
+        )
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class FixLdOrphanLogRowsView(View):
     """GET/POST `/internal/cron/fix-ld-orphan-log-rows`.
 
@@ -11108,6 +11172,7 @@ def _registered_views() -> dict[str, Any]:
         "audit-ld-tracker-sync": AuditLdTrackerSyncView,
         "explain-request-mirror": ExplainRequestMirrorView,
         "reconcile-tracker-rows": ReconcileTrackerRowsView,
+        "link-walkin-recaps-to-requests": LinkWalkinRecapsToRequestsView,
         "fix-ld-orphan-log-rows": FixLdOrphanLogRowsView,
         "setup-total-wireless-checkin": SetupTotalWirelessCheckinView,
         "setup-feel-free-checkin": SetupFeelFreeCheckinView,

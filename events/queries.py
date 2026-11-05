@@ -1746,14 +1746,28 @@ class RequestQueries:
         qs = await _scoped_requests(info, tenant_id)
 
         def _go():
+            from events.missing_recaps_gate import (
+                missing_recaps_disabled_for_tenant_id,
+            )
+
             data = admin_payloads.compute_sidebar_request_counts(qs)
+            recaps_due = data.recaps_due
+            # Famus keeps Missing Recaps off — zero the sidebar badge even
+            # when empty schedule shells would otherwise count as due.
+            tenant_ids = list(
+                qs.order_by().values_list("tenant_id", flat=True).distinct()[:2]
+            )
+            if len(tenant_ids) == 1 and missing_recaps_disabled_for_tenant_id(
+                tenant_ids[0]
+            ):
+                recaps_due = 0
             return types.SidebarRequestCounts(
                 tracker=data.tracker,
                 approvals=data.approvals,
                 approvals_sla_breach=data.approvals_sla_breach,
                 upcoming=data.upcoming,
                 done_30d=data.done_30d,
-                recaps_due=data.recaps_due,
+                recaps_due=recaps_due,
             )
 
         return await sync_to_async(_go)()
