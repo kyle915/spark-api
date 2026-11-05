@@ -1,4 +1,8 @@
-"""Junior stays on shared lists. Torch recap notifications drop him."""
+"""Junior stays on shared lists. Torch recap notifications drop him.
+
+Baesha is on TORCH_SUPPRESS (every Torch mail), so the same paths must
+drop her for Torch and keep her for other brands.
+"""
 
 from types import SimpleNamespace
 
@@ -7,8 +11,10 @@ from recaps.mutation_parts.notify import _send_recap_data_quality_alert
 from recaps.recap_comments import notify_ops_comment
 
 JUNIOR = "Junior@igniteproductions.co"
+BAESHA = "Baesha@igniteproductions.co"
 SHARED = [
     JUNIOR,
+    BAESHA,
     "kyle@igniteproductions.co",
     "amiel@igniteproductions.co",
 ]
@@ -61,15 +67,15 @@ def test_signoff_comment_and_suspect_numbers_drop_junior_for_torch_only(monkeypa
 
     assert len(envelopes) == 6
     for envelope in envelopes[:3]:
-        assert "junior@igniteproductions.co" not in {
-            email.lower() for email in envelope.to_emails
-        }
+        lowered = {email.lower() for email in envelope.to_emails}
+        assert "junior@igniteproductions.co" not in lowered
+        assert "baesha@igniteproductions.co" not in lowered
         assert "amiel@igniteproductions.co" in envelope.to_emails
         assert "kyle@igniteproductions.co" in envelope.to_emails
     for envelope in envelopes[3:]:
-        assert "junior@igniteproductions.co" in {
-            email.lower() for email in envelope.to_emails
-        }
+        lowered = {email.lower() for email in envelope.to_emails}
+        assert "junior@igniteproductions.co" in lowered
+        assert "baesha@igniteproductions.co" in lowered
 
     assert envelopes[0].subject.startswith("Recap sign-off —")
     assert envelopes[1].subject.startswith("Recap question —")

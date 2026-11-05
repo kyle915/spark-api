@@ -11,7 +11,7 @@ from typing import Any
 
 from django.utils import timezone as dj_tz
 
-from events.torch_portal import omit_torch_recap_skips
+from events.torch_portal import omit_torch_recap_skips, suppress_torch_emails
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +103,8 @@ def notify_ops_signoff(recap, *, kind: str) -> None:
         tenant = getattr(event, "tenant", None) if event is not None else None
         if tenant is None:
             tenant = getattr(recap, "tenant", None)
+        # Baesha is off every Torch mail; junior is off Torch recap mail only.
+        admins = suppress_torch_emails(admins, tenant=tenant)
         admins = omit_torch_recap_skips(admins, tenant)
         name = getattr(recap, "name", None) or "Recap"
         brand = _tenant_brand_name(recap)

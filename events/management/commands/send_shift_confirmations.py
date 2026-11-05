@@ -266,9 +266,17 @@ class Command(BaseCommand):
         from ambassadors.queries import _shift_time_labels
 
         try:
+            from events.torch_portal import is_torch_tenant, suppress_torch_emails
             from tenants.support import _resolve_ignite_recipients
 
             recipients = _resolve_ignite_recipients()
+            # Any Torch row in this digest → strip TORCH_SUPPRESS (baesha).
+            # Mixed-brand digests lose her for that send rather than leak Torch.
+            if any(
+                is_torch_tenant(getattr(getattr(r, "event", None), "tenant", None))
+                for r in rows
+            ):
+                recipients = suppress_torch_emails(recipients)
             if not recipients:
                 self.stdout.write(
                     "  [alert] No Ignite recipients resolved — alert skipped."
