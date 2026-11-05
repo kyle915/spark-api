@@ -63,15 +63,43 @@ def _labels(ev: Event) -> list[str]:
     return [x for x in out if x]
 
 
-def _same_place(a: Event, b: Event) -> bool:
+def _same_place(a: Event, b: Event, *, extra_labels: list[str] | None = None) -> bool:
     if addresses_fuzzy_match(a.address or "", b.address or ""):
         return True
     a_keys = {_name_key(x) for x in _labels(a) if _name_key(x)}
     b_keys = {_name_key(x) for x in _labels(b) if _name_key(x)}
+    for label in extra_labels or []:
+        k = _name_key(label)
+        if k:
+            b_keys.add(k)
     # Require a meaningful token (≥4 chars) so "Shell"/"BP" alone never
     # decide — uniqueness on the day still gates the final pair.
     shared = {k for k in a_keys & b_keys if len(k) >= 4}
     return bool(shared)
+
+
+def _request_labels(req: Request) -> list[str]:
+    out = [getattr(req, "name", "") or "", getattr(req, "address", "") or ""]
+    retailer = getattr(req, "retailer", None)
+    if retailer is not None:
+        out.append(getattr(retailer, "name", "") or "")
+    return [x for x in out if x]
+
+
+def _orphan_matches_request(orphan: Event, req: Request, shells: list[Event]) -> bool:
+    extras = _request_labels(req)
+    if any(_same_place(orphan, shell, extra_labels=extras) for shell in shells):
+        return True
+    # Direct orphan address ↔ request address (shell address may be blank).
+    if addresses_fuzzy_match(orphan.address or "", req.address or ""):
+        return True
+    # Venue name on the request against tokens in the orphan title/address.
+    o_keys = {_name_key(x) for x in _labels(orphan) + [orphan.address or ""] if _name_key(x)}
+    for label in extras:
+        k = _name_key(label)
+        if k and len(k) >= 4 and (k in o_keys or any(k in ok for ok in o_keys)):
+            return True
+    return False
 
 
 def _has_filed(event_id: int) -> bool:
@@ -140,6 +168,7 @@ class Command(BaseCommand):
                 deleted_at__isnull=True,
                 date__gte=lo,
             )
+            .select_related("retailer")
             .prefetch_related("event_set__retailer")
             .order_by("id")
         )
@@ -170,7 +199,7 @@ class Command(BaseCommand):
                 oday = event_calendar_date(orphan)
                 if day is not None and oday is not None and oday != day:
                     continue
-                if any(_same_place(orphan, shell) for shell in events):
+                if _orphan_matches_request(orphan, req, events):
                     candidates.append(orphan)
 
             if not candidates:
@@ -196,13 +225,13 @@ class Command(BaseCommand):
                 if r.id != req.id
                 and r.id not in claimed_request
                 and not any(_has_filed(ev.id) for ev in r.event_set.all())
-                and any(
-                    _same_place(orphan, shell)
-                    and (
-                        day is None
-                        or event_calendar_date(shell) in (None, day)
+                and _orphan_matches_request(orphan, r, list(r.event_set.all()))
+                and (
+                    day is None
+                    or any(
+                        event_calendar_date(shell) in (None, day)
+                        for shell in r.event_set.all()
                     )
-                    for shell in r.event_set.all()
                 )
             ]
             if rival_requests:
