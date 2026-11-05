@@ -136,3 +136,37 @@ class TestFiledContent(AmbassadorsGraphQLTestCase):
             self.event.__class__.objects.filter(id=self.event.id)
         )
         assert list(qs.values_list("id", flat=True)) == []
+
+    def test_empty_sibling_excluded_when_request_has_filed(self):
+        """Schedule shell stays off Missing Recaps once a walk-up twin filed."""
+        from events import models as em
+
+        req = em.Request.objects.create(
+            name="Smiley's",
+            address="1 Main St",
+            tenant=self.tenant,
+            created_by=self.sys,
+            date=timezone.now(),
+        )
+        shell = self.create_event(
+            name="Smiley's shell",
+            tenant=self.tenant,
+            request=req,
+        )
+        filed_twin = self.create_event(
+            name="Smiley's walk-up",
+            tenant=self.tenant,
+            request=req,
+        )
+        rm.Recap.objects.create(
+            name="filed",
+            event=filed_twin,
+            ambassador=self.ambassador,
+            created_by=self.sys,
+            updated_by=self.sys,
+            products_sold=2,
+        )
+        qs = events_missing_filed_recap(
+            em.Event.objects.filter(id__in=[shell.id, filed_twin.id])
+        )
+        assert list(qs.values_list("id", flat=True)) == []

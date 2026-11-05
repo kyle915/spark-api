@@ -2878,6 +2878,50 @@ def find_or_create_walkin_event(
                 continue
             scheduled = [e for e in bucket if getattr(e, "request_id", None)]
             return (scheduled or bucket)[0]
+
+        # Tier 3 — unique scheduled store-name match. Address fuzzy fails when
+        # the BA types/GPS a different street than the Tracker row (or the
+        # schedule only carried a venue name). Require exactly one scheduled
+        # Event that day whose name/retailer normalizes to the typed store
+        # name (≥4 chars) so chains like "Shell" on a multi-stop day stay
+        # ambiguous and fork a walk-in instead of attaching to the wrong row.
+        name_key = normalize_place(store_name or "")
+        name_key = re.sub(r"[•·].*$", "", name_key).strip()
+        name_key = re.sub(r"\d{4}-\d{2}-\d{2}", "", name_key).strip()
+        name_key = re.sub(r"\s+", " ", name_key).strip()
+        if name_key and len(name_key) >= 4:
+            name_hits: list = []
+            for ev in Event.objects.filter(
+                tenant=tenant,
+                date__gte=lo,
+                date__lte=hi,
+                request__isnull=False,
+                co_activation_host__isnull=True,
+            ).select_related("retailer"):
+                if type_id is not None and getattr(ev, "event_type_id", None) != type_id:
+                    continue
+                labels = [
+                    getattr(ev, "name", "") or "",
+                    getattr(getattr(ev, "retailer", None), "name", "") or "",
+                ]
+                for label in labels:
+                    lk = normalize_place(label)
+                    lk = re.sub(r"[•·].*$", "", lk).strip()
+                    lk = re.sub(r"\d{4}-\d{2}-\d{2}", "", lk).strip()
+                    lk = re.sub(r"\s+", " ", lk).strip()
+                    if lk == name_key or (name_key in lk and len(name_key) >= 6):
+                        name_hits.append(ev)
+                        break
+            # Deduplicate while preserving order.
+            seen: set[int] = set()
+            unique = []
+            for ev in name_hits:
+                if ev.id in seen:
+                    continue
+                seen.add(ev.id)
+                unique.append(ev)
+            if len(unique) == 1:
+                return unique[0]
         return None
 
     with transaction.atomic():

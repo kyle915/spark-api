@@ -67,19 +67,45 @@ def events_missing_filed_recap(qs: QuerySet) -> QuerySet:
 
     An empty clock-out stub does not count as filed, so those events
     stay on /recaps/missing.
+
+    Also drop empty schedule shells whose Request already has a sibling
+    Event with a filed recap (walk-up filed on an orphan that was later
+    linked, or a twin Event on the same request). Tracker already shows
+    ``1 RECAP`` for that request — nagging the empty twin is a false due.
     """
+    from events.models import Event
     from recaps.models import CustomRecap, Recap
 
-    return qs.annotate(
-        _has_filed_legacy=Exists(
-            Recap.objects.filter(event_id=OuterRef("pk")).filter(legacy_filed_q())
-        ),
-        _has_filed_custom=Exists(
-            CustomRecap.objects.filter(event_id=OuterRef("pk")).filter(
-                custom_filed_q()
+    sibling_filed = Exists(
+        Event.objects.filter(request_id=OuterRef("request_id"))
+        .exclude(pk=OuterRef("pk"))
+        .filter(
+            Exists(
+                Recap.objects.filter(event_id=OuterRef("pk")).filter(legacy_filed_q())
             )
-        ),
-    ).filter(_has_filed_legacy=False, _has_filed_custom=False)
+            | Exists(
+                CustomRecap.objects.filter(event_id=OuterRef("pk")).filter(
+                    custom_filed_q()
+                )
+            )
+        )
+    )
+
+    return (
+        qs.annotate(
+            _has_filed_legacy=Exists(
+                Recap.objects.filter(event_id=OuterRef("pk")).filter(legacy_filed_q())
+            ),
+            _has_filed_custom=Exists(
+                CustomRecap.objects.filter(event_id=OuterRef("pk")).filter(
+                    custom_filed_q()
+                )
+            ),
+            _sibling_has_filed=sibling_filed,
+        )
+        .filter(_has_filed_legacy=False, _has_filed_custom=False)
+        .filter(Q(request_id__isnull=True) | Q(_sibling_has_filed=False))
+    )
 
 
 def recap_instance_is_filed(obj, *, is_custom: bool = False) -> bool:

@@ -2259,7 +2259,13 @@ class RecapQueries:
                 raise GraphQLError("Invalid tenant id.")
 
         def _fetch() -> List[types.MissingRecapEventType]:
+            from events.missing_recaps_gate import (
+                missing_recaps_disabled_for_tenant_id,
+            )
             from recaps.filed import events_missing_filed_recap
+
+            if missing_recaps_disabled_for_tenant_id(resolved_tenant_id):
+                return []
 
             qs = (
                 event_models.Event.objects.select_related(
