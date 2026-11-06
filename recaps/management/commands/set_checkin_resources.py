@@ -257,11 +257,19 @@ def _presets() -> dict[str, list[dict]]:
         # Alcohol Armor. Do not remint PE-Y7VPYC.
         "pivot": _pivot_resources(base),
         "pivot-energy-drink": _pivot_resources(base),
-        # Famus Energy standing walk-up (FM-PAG4TX). Both buttons show on
-        # the check-in page, including while the BA files the recap.
+        # Famus Energy standing walk-up (FM-PAG4TX). Buttons show on the
+        # check-in page, including while the BA files the recap. Video is
+        # kind=link (opens in a new tab — browsers play the MP4). Email
+        # "Review Training" still prefers the first pdf (BA FAQ Guide).
         # Do not attach this preset to Wook Water or Alcohol Armor.
         # Do not remint FM-PAG4TX.
         "famus-energy": [
+            {
+                "label": "BA Training Video",
+                "kind": "link",
+                "url": f"{base}/training/famus-energy/ba-training-video.mp4",
+                "note": "Watch before your first Famus shift",
+            },
             {
                 "label": "BA FAQ Guide",
                 "kind": "pdf",
