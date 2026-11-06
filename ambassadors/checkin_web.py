@@ -17,15 +17,14 @@ same primitives:
   lands in the recap list / dashboards exactly like an app-filed one.
 
 Everything here is pure-sync so the public sync views (``events/checkin_views``)
-can call it directly. The only async work — the post-submit data-quality guard
-and the admin "recap ready" notification — is offloaded to a fresh thread with
-its own event loop (never ``asyncio.run()`` on the caller's thread), matching
-``ambassadors/push.py::_send_push_to_user_sync`` so a nested thread-sensitive DB
-write can't deadlock the ASGI worker.
+can call it directly. The only post-submit work — the data-quality guard and the
+admin/crew "recap ready" notification — is offloaded to a fresh thread (never
+``asyncio.run()`` on the caller's thread) with ``fresh_db_connection`` hygiene so
+a nested thread-sensitive DB write can't deadlock the ASGI worker or reuse a
+Cloud SQL connection the request-boundary signals never recycle.
 """
 from __future__ import annotations
 
-import asyncio
 import concurrent.futures
 import hashlib
 import logging
@@ -1811,43 +1810,70 @@ def submit_checkin_recap(
 
 
 def _finalize_recap_offthread(recap_id: int) -> None:
-    """Run the async data-quality guard + admin "recap ready" notification on a
-    fresh thread (its own loop, no asgiref thread-local) so a nested
-    thread-sensitive DB write can't deadlock the calling ASGI worker. Both are
-    best-effort — a failure here never fails the submitted recap."""
+    """Run the data-quality guard + admin/crew "recap ready" mail on a fresh
+    thread so a nested thread-sensitive DB write can't deadlock the calling
+    ASGI worker.
+
+    Both are best-effort — a failure here never fails the submitted recap
+    (the CustomRecap row is already committed before this runs).
+
+    Connection hygiene matters: this worker (and asgiref's SingleThreadExecutor
+    that nested ``sync_to_async`` may bounce onto) never sees Django's
+    ``request_started`` / ``request_finished`` cleanup. After a Cloud SQL idle
+    drop the thread kept a dead psycopg handle and every later finalize failed
+    with ``OperationalError: the connection is closed`` (Spark alert since
+    2026-08-07, e.g. recap id=2565). Mirror ``utils.db.fresh_db_connection`` /
+    ``recaps.mutation_parts.notify._thread_recap_approved_notify``: close before
+    and after, and run sync ORM on *this* thread via ``async_to_sync`` so nested
+    ``sync_to_async`` lands back here on the connection we just opened — not on
+    a long-lived executor thread with a stale handle.
+    """
     if block_if_suppressed("recap submitted notifications", recap_id):
         return
 
-    async def _run():
-        from asgiref.sync import sync_to_async
+    def _worker() -> None:
+        from asgiref.sync import async_to_sync
 
         from recaps import models as rmodels
         from recaps.mutations import (
             _guard_recap_data_quality,
             _notify_recap_ready_for_review_to_admins,
         )
+        from utils.db import close_thread_connections, fresh_db_connection
 
-        recap = await sync_to_async(
-            rmodels.CustomRecap.objects.select_related("created_by", "event", "tenant").get
-        )(id=recap_id)
-        created_by = await sync_to_async(lambda: recap.created_by)()
-        try:
-            await _guard_recap_data_quality(recap)
-        except Exception:  # noqa: BLE001
-            logger.exception("checkin recap: data-quality guard failed id=%s", recap_id)
-        try:
-            await _notify_recap_ready_for_review_to_admins(recap, created_by)
-        except Exception:  # noqa: BLE001
-            logger.exception("checkin recap: notify-admins failed id=%s", recap_id)
-        # Field-ops crew for the check-in link specifically — nobody is
-        # watching a queue for these, so the submission has to reach a person.
-        try:
-            await sync_to_async(notify_checkin_recap_submitted)(recap)
-        except Exception:  # noqa: BLE001
-            logger.exception("checkin recap: crew notify failed id=%s", recap_id)
+        def _run() -> None:
+            recap = rmodels.CustomRecap.objects.select_related(
+                "created_by", "event", "tenant"
+            ).get(id=recap_id)
+            created_by = recap.created_by
+            try:
+                async_to_sync(_guard_recap_data_quality)(recap)
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    "checkin recap: data-quality guard failed id=%s", recap_id
+                )
+            try:
+                async_to_sync(_notify_recap_ready_for_review_to_admins)(
+                    recap, created_by
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    "checkin recap: notify-admins failed id=%s", recap_id
+                )
+            # Field-ops crew for the check-in link specifically — nobody is
+            # watching a queue for these, so the submission has to reach a person.
+            try:
+                notify_checkin_recap_submitted(recap)
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    "checkin recap: crew notify failed id=%s", recap_id
+                )
 
-    def _worker():
-        asyncio.run(_run())
+        close_thread_connections()
+        try:
+            fresh_db_connection(_run)()
+        finally:
+            close_thread_connections()
 
     try:
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:

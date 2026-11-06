@@ -141,16 +141,15 @@ class TestFiledContent(AmbassadorsGraphQLTestCase):
         """Schedule shell stays off Missing Recaps once a walk-up twin filed."""
         from events import models as em
 
-        request_type = em.RequestType.objects.create(
-            name="Retail Sampling",
-            tenant=self.tenant,
-            created_by=self.sys,
-        )
+        # request_type is NOT NULL on events_request (same constraint that
+        # broke develop CI after #1330). Create one so the sibling fixture
+        # can insert.
+        req_type = self.create_request_type("Retail Sampling", self.tenant)
         req = em.Request.objects.create(
             name="Smiley's",
             address="1 Main St",
-            request_type=request_type,
             tenant=self.tenant,
+            request_type=req_type,
             created_by=self.sys,
             date=timezone.now(),
         )
