@@ -1007,6 +1007,31 @@ class EventMutations:
 
             event_input.request_id = request_input.id
 
+            # Snapshot notes before the dual save so client edits can notify ops.
+            try:
+                request_id_int = resolve_id_to_int(request_input.id)
+            except (TypeError, ValueError, GraphQLError):
+                request_id_int = None
+            try:
+                event_id_int = resolve_id_to_int(event_input.id)
+            except (TypeError, ValueError, GraphQLError):
+                event_id_int = None
+
+            notes_before_request = None
+            notes_before_event = None
+            if request_id_int is not None:
+                notes_before_request = await sync_to_async(
+                    lambda: models.Request.objects.filter(id=request_id_int)
+                    .values_list("notes", flat=True)
+                    .first()
+                )()
+            if event_id_int is not None:
+                notes_before_event = await sync_to_async(
+                    lambda: models.Event.objects.filter(id=event_id_int)
+                    .values_list("notes", flat=True)
+                    .first()
+                )()
+
             def _update_request_and_event() -> tuple[models.Request, models.Event]:
                 with transaction.atomic():
                     request = request_service.save_sync()
@@ -1041,6 +1066,29 @@ class EventMutations:
                 ).get
             )(id=event.id)
 
+            actor = request_service.user or event_service.user
+            tenant = request.tenant or event.tenant
+            from events.client_notes_notify import maybe_notify_and_log_client_notes_edit
+
+            await maybe_notify_and_log_client_notes_edit(
+                user=actor,
+                tenant=tenant,
+                notes_before=notes_before_event,
+                notes_after=event.notes,
+                event=event,
+                request=request,
+                source="event",
+            )
+            await maybe_notify_and_log_client_notes_edit(
+                user=actor,
+                tenant=tenant,
+                notes_before=notes_before_request,
+                notes_after=request.notes,
+                event=event,
+                request=request,
+                source="request",
+            )
+
             return build_mutation_response(
                 types.EventWithRequestDetailResponse,
                 success=True,
@@ -1066,6 +1114,7 @@ class EventMutations:
         try:
             event_id = resolve_id_to_int(input.id)
             original_event = await sync_to_async(models.Event.objects.get)(id=event_id)
+            notes_before = original_event.notes
             relevant_fields_before = {
                 "date": original_event.date,
                 "start_time": original_event.start_time,
@@ -1074,11 +1123,15 @@ class EventMutations:
                 "address": original_event.address,
                 "retailer_id": original_event.retailer_id,
             }
+            event_service = EventMutationService()
+            actor = await event_service.get_user(info)
             event: models.Event = await EventMutationService.process_create_or_update(
                 input=input, info=info
             )
             event = await sync_to_async(
-                models.Event.objects.select_related("rmm_asigned").get
+                models.Event.objects.select_related(
+                    "rmm_asigned", "tenant", "retailer", "request"
+                ).get
             )(id=event.id)
             relevant_fields_after = {
                 "date": event.date,
@@ -1108,6 +1161,18 @@ class EventMutations:
                         req.save(update_fields=["date", "updated_at"])
 
                 await sync_to_async(_sync_request_date)()
+
+            from events.client_notes_notify import maybe_notify_and_log_client_notes_edit
+
+            await maybe_notify_and_log_client_notes_edit(
+                user=actor,
+                tenant=event.tenant,
+                notes_before=notes_before,
+                notes_after=event.notes,
+                event=event,
+                request=event.request,
+                source="event",
+            )
             return build_mutation_response(
                 types.EventDetailResponse,
                 success=True,
@@ -4290,14 +4355,43 @@ class RequestMutations:
     ) -> types.RequestDetailResponse:
         """Update an existing request."""
         try:
+            request_id = resolve_id_to_int(input.id)
+            notes_before = await sync_to_async(
+                lambda: models.Request.objects.filter(id=request_id)
+                .values_list("notes", flat=True)
+                .first()
+            )()
+            request_service = RequestMutationService()
+            actor = await request_service.get_user(info)
             request: models.Request = (
                 await RequestMutationService.process_create_or_update(
                     input=input, info=info
                 )
             )
             request = await sync_to_async(
-                models.Request.objects.select_related("timezone", "rmm_asigned").get
+                models.Request.objects.select_related(
+                    "timezone", "rmm_asigned", "tenant", "retailer"
+                ).get
             )(id=request.id)
+
+            from events.client_notes_notify import maybe_notify_and_log_client_notes_edit
+
+            # Linked event (if any) so the email can deep-link to /event/view.
+            linked_event = await sync_to_async(
+                lambda: models.Event.objects.select_related("retailer")
+                .filter(request_id=request.id)
+                .order_by("-id")
+                .first()
+            )()
+            await maybe_notify_and_log_client_notes_edit(
+                user=actor,
+                tenant=request.tenant,
+                notes_before=notes_before,
+                notes_after=request.notes,
+                event=linked_event,
+                request=request,
+                source="request",
+            )
             return build_mutation_response(
                 types.RequestDetailResponse,
                 success=True,
