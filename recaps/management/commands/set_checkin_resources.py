@@ -52,6 +52,10 @@ _NICKNAME_TO_SLUG = {
     "pivot": "pivot-energy-drink",
     "pivot energy": "pivot-energy-drink",
     "pivot energy drink": "pivot-energy-drink",
+    "mab": "mark-anthony-brands",
+    "mark anthony": "mark-anthony-brands",
+    "mark anthony brands": "mark-anthony-brands",
+    "long drink": "mark-anthony-brands",
 }
 
 # Where the assets are served from. They live in the FRONT-END repo under
@@ -283,6 +287,38 @@ def _presets() -> dict[str, list[dict]]:
                 "note": "Logo, colors, and how to represent Famus",
             },
         ],
+        # Mark Anthony Brands · Total Wine Long Drink (standing MAB-V696HM).
+        # Do not remint MAB-V696HM.
+        "mark-anthony-brands": [
+            {
+                "label": "BA Training Guide for Long Drink",
+                "kind": "pdf",
+                "url": (
+                    f"{base}/training/mark-anthony-brands/ba-training-guide.pdf"
+                ),
+                "note": "Long Drink Brand Ambassador Sampling Guide 2026",
+            },
+        ],
+        "mark anthony": [
+            {
+                "label": "BA Training Guide for Long Drink",
+                "kind": "pdf",
+                "url": (
+                    f"{base}/training/mark-anthony-brands/ba-training-guide.pdf"
+                ),
+                "note": "Long Drink Brand Ambassador Sampling Guide 2026",
+            },
+        ],
+        "mab": [
+            {
+                "label": "BA Training Guide for Long Drink",
+                "kind": "pdf",
+                "url": (
+                    f"{base}/training/mark-anthony-brands/ba-training-guide.pdf"
+                ),
+                "note": "Long Drink Brand Ambassador Sampling Guide 2026",
+            },
+        ],
     }
 
 
@@ -424,6 +460,11 @@ class Command(BaseCommand):
             "pivot energy": "pivot-energy-drink",
             "pivot energy drink": "pivot-energy-drink",
             "pivot-energy-drink": "pivot-energy-drink",
+            "mab": "mark-anthony-brands",
+            "mark anthony": "mark-anthony-brands",
+            "mark anthony brands": "mark-anthony-brands",
+            "mark-anthony-brands": "mark-anthony-brands",
+            "long drink": "mark-anthony-brands",
         }
         for cand in candidates:
             if not cand:

@@ -15,6 +15,12 @@ from __future__ import annotations
 
 PRODUCTS_SAMPLED_FIELD = "Products Sampled"
 
+# Optional CustomRecapTemplate.layout key: list of ProductType names. When set,
+# Products Sampled pills resolve to that subset of the live catalog (e.g. Mark
+# Anthony Brands Total Wine Long Drink → ["The Finnish Long Drink"] while
+# On-Premise keeps the full MAB catalog on its own template).
+PRODUCTS_SAMPLED_TYPES_KEY = "productsSampledProductTypes"
+
 # Product Seeding (and similar) use a BA-facing label but still resolve from
 # the tenant Product catalog — same pills → productSamples qty path.
 PRODUCTS_SAMPLED_ALIASES = frozenset(
@@ -31,15 +37,43 @@ def is_products_sampled_field(name: str | None) -> bool:
     return (name or "").strip().lower() in PRODUCTS_SAMPLED_ALIASES
 
 
-def products_sampled_options_for_tenant(tenant) -> list[str]:
+def products_sampled_options_for_tenant(
+    tenant, product_types: list[str] | None = None
+) -> list[str]:
     """Live catalog labels as ``Type — Name`` (same shape as LD / confirmation).
 
     Empty when the tenant has no Product rows — callers should fall back to
-    whatever was stored on the CustomField.
+    whatever was stored on the CustomField. When ``product_types`` is set,
+    only those ProductType names are included (order preserved from catalog).
     """
     from events.event_confirmations import catalog_product_options
 
-    return catalog_product_options(tenant)
+    live = catalog_product_options(tenant)
+    if not product_types:
+        return live
+    wanted = {str(t).strip().lower() for t in product_types if str(t).strip()}
+    if not wanted:
+        return live
+    sep = " — "
+    out: list[str] = []
+    for label in live:
+        type_part = label.split(sep, 1)[0].strip().lower() if sep in label else ""
+        if type_part in wanted:
+            out.append(label)
+    return out
+
+
+def product_types_filter_for_field(field) -> list[str] | None:
+    """Read ``layout.productsSampledProductTypes`` from the field's template."""
+    tpl = getattr(field, "custom_recap_template", None)
+    layout = getattr(tpl, "layout", None) if tpl is not None else None
+    if not isinstance(layout, dict):
+        return None
+    raw = layout.get(PRODUCTS_SAMPLED_TYPES_KEY)
+    if not isinstance(raw, list) or not raw:
+        return None
+    cleaned = [str(t).strip() for t in raw if str(t).strip()]
+    return cleaned or None
 
 
 def resolve_products_sampled_options(
@@ -47,18 +81,20 @@ def resolve_products_sampled_options(
     field_name: str | None,
     tenant,
     stored: list[str] | None,
+    product_types: list[str] | None = None,
 ) -> list[str]:
     """Options the BA / admin should see for this field.
 
-    Products Sampled + a non-empty catalog → catalog. Otherwise the stored
-    JSON list (or []).
+    Products Sampled + a non-empty catalog → catalog (optionally filtered by
+    ProductType names from the template layout). Otherwise the stored JSON
+    list (or []).
     """
     fallback = [str(o) for o in stored] if isinstance(stored, list) else []
     if not is_products_sampled_field(field_name):
         return fallback
     if tenant is None:
         return fallback
-    live = products_sampled_options_for_tenant(tenant)
+    live = products_sampled_options_for_tenant(tenant, product_types=product_types)
     return live if live else fallback
 
 
@@ -109,4 +145,5 @@ def resolve_field_options(field, stored: list[str] | None = None) -> list[str]:
         field_name=name,
         tenant=tenant,
         stored=list(stored) if stored else [],
+        product_types=product_types_filter_for_field(field),
     )
