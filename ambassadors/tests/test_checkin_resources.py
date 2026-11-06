@@ -446,17 +446,25 @@ class TestSetCheckinResourcesCommand(AmbassadorsGraphQLTestCase):
         famus.refresh_from_db()
         wook.refresh_from_db()
         armor.refresh_from_db()
-        assert [r["kind"] for r in famus.checkin_resources] == ["pdf", "pdf"]
+        assert [r["kind"] for r in famus.checkin_resources] == [
+            "link",
+            "pdf",
+            "pdf",
+        ]
         assert [r["label"] for r in famus.checkin_resources] == [
+            "BA Training Video",
             "BA FAQ Guide",
             "Brand Guidelines",
         ]
         assert [r["url"] for r in famus.checkin_resources] == [
             "https://client.igniteproductions.co/training/famus-energy/"
+            "ba-training-video.mp4",
+            "https://client.igniteproductions.co/training/famus-energy/"
             "ba-faq-guide.pdf",
             "https://client.igniteproductions.co/training/famus-energy/"
             "brand-guidelines.pdf",
         ]
+        # Email CTA prefers first pdf, not the video link.
         assert famus.checkin_training_url == (
             "https://client.igniteproductions.co/training/famus-energy/"
             "ba-faq-guide.pdf"
