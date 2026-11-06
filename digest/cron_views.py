@@ -4176,6 +4176,116 @@ class SeedMabRecapTemplateView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class SetupMabLongDrinkCheckinView(View):
+    """GET/POST `/internal/cron/setup-mab-long-drink-checkin`.
+
+    Total Wine Long Drink retail on Mark Anthony Brands: Torch-style recap
+    wording, Long Drink SKUs + can art, standing ``MAB-V696HM`` (never reminted).
+
+    Params: tenant, owner_email, code, skip_images, apply.
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        kwargs: dict = {}
+        for key in ("tenant", "owner_email", "code"):
+            val = request.GET.get(key) or request.POST.get(key)
+            if val:
+                kwargs[key] = str(val)
+        for flag in ("apply", "skip_images"):
+            raw = (
+                request.GET.get(flag) or request.POST.get(flag) or ""
+            ).lower()
+            if raw in ("1", "true", "yes", "on"):
+                kwargs[flag] = True
+
+        out = io.StringIO()
+        try:
+            call_command("setup_mab_long_drink_checkin", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("setup-mab-long-drink-checkin cron failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "log": out.getvalue(),
+                },
+                status=500,
+            )
+        apply_it = bool(kwargs.get("apply"))
+        return JsonResponse({"ok": True, "apply": apply_it, "log": out.getvalue()})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class OnboardLongDrinkProductsView(View):
+    """GET/POST `/internal/cron/onboard-long-drink-products`.
+
+    Seeds The Finnish Long Drink ProductType + SKUs (+ can artwork) on
+    Mark Anthony Brands. DRY-RUN unless apply is truthy.
+
+    Params: owner_email (required), tenant, skip_images, force_images, apply.
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        owner_email = (
+            request.GET.get("owner_email")
+            or request.POST.get("owner_email")
+            or ""
+        ).strip()
+        if not owner_email:
+            return JsonResponse(
+                {"ok": False, "error": "owner-email-required"}, status=400
+            )
+
+        kwargs: dict = {"owner_email": owner_email}
+        tenant = request.GET.get("tenant") or request.POST.get("tenant")
+        if tenant:
+            kwargs["tenant"] = str(tenant)
+        for flag in ("apply", "skip_images", "force_images"):
+            raw = (
+                request.GET.get(flag) or request.POST.get(flag) or ""
+            ).lower()
+            if raw in ("1", "true", "yes", "on"):
+                kwargs[flag] = True
+
+        out = io.StringIO()
+        try:
+            call_command("onboard_long_drink_products", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("onboard-long-drink-products cron failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "log": out.getvalue(),
+                },
+                status=500,
+            )
+        return JsonResponse({"ok": True, "log": out.getvalue()})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class SetupMabCheckinView(View):
     """GET/POST `/internal/cron/setup-mab-checkin`.
 
@@ -11149,6 +11259,8 @@ def _registered_views() -> dict[str, Any]:
         "setup-daou-checkin": SetupDaouCheckinView,
         "setup-neutonic-checkin": SetupNeutonicCheckinView,
         "setup-mab-checkin": SetupMabCheckinView,
+        "setup-mab-long-drink-checkin": SetupMabLongDrinkCheckinView,
+        "onboard-long-drink-products": OnboardLongDrinkProductsView,
         "onboard-drekker-products": OnboardDrekkerProductsView,
         "onboard-brew-dr-products": OnboardBrewDrProductsView,
         "onboard-daou-products": OnboardDaouProductsView,
