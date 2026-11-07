@@ -140,6 +140,11 @@ class Tenant(Asyncable, models.Model):
     checkin_code = models.CharField(
         max_length=32, null=True, blank=True, unique=True, db_index=True
     )
+    # Optional Google Sheet id for brand-group / retail schedule sync.
+    # When set, sheet confirmation routing prefers this over code constants.
+    retail_sheet_id = models.CharField(
+        max_length=128, null=True, blank=True, db_index=True
+    )
     # Recap-only twin of `checkin_code` for 3rd-party / agency filers who are
     # NOT on Spark's time clock. Same `/checkin/<code>` page, but the payload
     # sets `recapOnly` and the clock / sampling-stop / ping endpoints refuse

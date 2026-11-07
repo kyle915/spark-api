@@ -530,6 +530,14 @@ class QuerySpark(GoogleCalendarQueries, TenantThemingQuery, TenantLaunchQueries)
                 )
             if filters.email:
                 queryset = queryset.filter(email__icontains=filters.email)
+            if getattr(filters, "search", None):
+                q = (filters.search or "").strip()
+                if q:
+                    queryset = queryset.filter(
+                        Q(first_name__icontains=q)
+                        | Q(last_name__icontains=q)
+                        | Q(email__icontains=q)
+                    )
             if filters.role:
                 queryset = queryset.filter(role__slug=filters.role.value)
 
@@ -816,6 +824,14 @@ class QueryClients(
                 )
             if filters.email:
                 queryset = queryset.filter(email__icontains=filters.email)
+            if getattr(filters, "search", None):
+                q = (filters.search or "").strip()
+                if q:
+                    queryset = queryset.filter(
+                        Q(first_name__icontains=q)
+                        | Q(last_name__icontains=q)
+                        | Q(email__icontains=q)
+                    )
             if filters.role:
                 queryset = queryset.filter(role__slug=filters.role.value)
 

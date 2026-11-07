@@ -48,14 +48,15 @@ class TestFinalizeRecapOffthreadDb(AmbassadorsGraphQLTestCase):
             event_type=self.etype,
             date=timezone.now(),
         )
+        uniq = f"ba-finalize-{self.tenant.id}@test.com"
         ba_user = self.create_user(
-            username="ba-finalize@test.com",
-            email="ba-finalize@test.com",
+            username=uniq,
+            email=uniq,
             role=self.roles["ambassador"],
             first_name="Bailey",
             last_name="Ambassador",
         )
-        self.ba = self.create_ambassador(ba_user, phone="5550100123")
+        self.ba = self.create_ambassador(ba_user, phone=f"555{self.tenant.id:07d}"[-10:])
         self.recap = CustomRecap.objects.create(
             name=self.event.name,
             submitted_at=timezone.now(),
@@ -106,6 +107,10 @@ class TestFinalizeRecapOffthreadDb(AmbassadorsGraphQLTestCase):
             patch(
                 "ambassadors.checkin_web.notify_checkin_recap_submitted"
             ) as crew_mock,
+            patch(
+                "events.walkin_link.try_link_orphan_event",
+                return_value=None,
+            ),
         ):
             # Must not raise; must reach all three best-effort steps.
             _finalize_recap_offthread(self.recap.id)

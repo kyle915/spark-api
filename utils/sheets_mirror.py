@@ -599,11 +599,23 @@ def _weekday_ld(dt, tz) -> str:
 
 def _skus_for_request(request) -> str:
     """'SKUs to sample' — comma-joined product names on the request, de-duped
-    in order. Empty on none / any error (a Sheets miss must never break a save)."""
+    in order. Empty on none / any error (a Sheets miss must never break a save).
+
+    Prefer ``prefetch_related("request_product__product")`` on the Request
+    queryset that feeds the mirror so this is not N+1 per row.
+    """
     try:
         out: list[str] = []
         seen: set[str] = set()
-        for rp in request.request_product.all():
+        products = getattr(request, "_prefetched_objects_cache", {}).get(
+            "request_product"
+        )
+        iterable = (
+            products
+            if products is not None
+            else request.request_product.select_related("product").all()
+        )
+        for rp in iterable:
             product = getattr(rp, "product", None)
             name = (getattr(product, "name", "") or "").strip() if product else ""
             key = name.lower()
