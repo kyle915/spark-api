@@ -65,7 +65,10 @@ EXPECTED_MAX_HOURS: dict[str, float] = {
     "export-recaps-to-sheet": 30,
     "export-ld-summary": 30,
     "send-daily-retail-rollup": 30,
+    "reconcile-tracker-rows": 30,
+    "link-walkin-recaps-to-requests": 30,
     # weekly (Monday)
+    "audit-brand-group-sheet-config": 8 * 24,
     "send-client-weekly-digest": 8 * 24,
     "recap-data-health": 8 * 24,
     "send-executive-summary": 8 * 24,

@@ -2506,12 +2506,7 @@ def _spark_admin_user_ids(tenant=None) -> list[int]:
     and drops ``TORCH_SUPPRESS_EMAILS`` when ``tenant`` is Torch."""
     from django.contrib.auth import get_user_model
     from tenants.models import Role
-    from events.routing import CC_SUPPRESS_EMAILS
-    from events.torch_portal import TORCH_SUPPRESS_EMAILS, is_torch_tenant
-
-    blocked = set(CC_SUPPRESS_EMAILS)
-    if tenant is not None and is_torch_tenant(tenant):
-        blocked |= {e.lower() for e in TORCH_SUPPRESS_EMAILS}
+    from events.outbound_policy import apply_outbound_policy
 
     User = get_user_model()
     try:
@@ -2522,10 +2517,21 @@ def _spark_admin_user_ids(tenant=None) -> list[int]:
         )
     except Exception:
         return []
+    emails = [
+        (email or "").strip()
+        for (_uid, email) in rows
+        if (email or "").strip()
+    ]
+    allowed = {
+        e.lower()
+        for e in apply_outbound_policy(
+            emails, tenant=tenant, kind="generic", merge_internal=False
+        )
+    }
     return [
         uid
         for (uid, email) in rows
-        if uid and (email or "").strip().lower() not in blocked
+        if uid and (email or "").strip().lower() in allowed
     ]
 
 
@@ -2544,10 +2550,12 @@ def _email_admins_extension_request(
     page), so an admin can decide straight from their inbox."""
     from html import escape as _esc
     from events.mutations import _get_spark_admin_emails
-    from events.torch_portal import suppress_torch_emails
+    from events.outbound_policy import apply_outbound_policy
     from utils.mailer import Envelope, Mailer
 
-    admins = suppress_torch_emails(_get_spark_admin_emails(), tenant=tenant)
+    admins = apply_outbound_policy(
+        _get_spark_admin_emails(), tenant=tenant, kind="generic"
+    )
     if not admins:
         return
     ba_e, venue_e = _esc(ba_name or "A BA"), _esc(venue or "their shift")
@@ -2617,10 +2625,12 @@ def _email_admins_shift_status(
     caller wraps it in try/except so a mail failure never blocks the report."""
     from html import escape as _esc
     from events.mutations import _get_spark_admin_emails
-    from events.torch_portal import suppress_torch_emails
+    from events.outbound_policy import apply_outbound_policy
     from utils.mailer import Envelope, Mailer
 
-    admins = suppress_torch_emails(_get_spark_admin_emails(), tenant=tenant)
+    admins = apply_outbound_policy(
+        _get_spark_admin_emails(), tenant=tenant, kind="generic"
+    )
     if not admins:
         return
     ba_e, venue_e = _esc(ba_name or "A BA"), _esc(venue or "their shift")

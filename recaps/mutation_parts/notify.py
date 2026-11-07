@@ -7,12 +7,11 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 
+from events.outbound_policy import apply_outbound_policy
 from events.torch_portal import (
     TORCH_RECAP_SKIP_EMAILS,
     TORCH_SUPPRESS_EMAILS,
     is_torch_tenant,
-    omit_torch_recap_skips,
-    suppress_torch_emails,
 )
 from events.torch_retail_routing import (
     EXECUTION_RETAIL,
@@ -481,9 +480,7 @@ async def _notify_recap_ready_for_review_to_admins(
         recipients = [filer_email] if filer_email else []
 
     tenant = await sync_to_async(recap_tenant)(recap)
-    if is_torch_tenant(tenant):
-        recipients = suppress_torch_emails(recipients, tenant=tenant)
-    recipients = omit_torch_recap_skips(recipients, tenant)
+    recipients = apply_outbound_policy(recipients, tenant=tenant, kind="recap")
     if not recipients:
         return
 
@@ -576,9 +573,7 @@ def _send_recap_data_quality_alert(
 
         recipients = _resolve_ignite_recipients()
         tenant = recap_tenant(custom_recap)
-        if is_torch_tenant(tenant):
-            recipients = suppress_torch_emails(recipients, tenant=tenant)
-        recipients = omit_torch_recap_skips(recipients, tenant)
+        recipients = apply_outbound_policy(recipients, tenant=tenant, kind="recap")
         if not recipients:
             return
         ev = getattr(custom_recap, "event", None)

@@ -5291,6 +5291,45 @@ class AddLdOthersRowView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class AuditBrandGroupSheetConfigView(View):
+    """GET/POST `/internal/cron/audit-brand-group-sheet-config`.
+
+    READ-ONLY. Compares brand-group tenant check-in codes and retail sheet
+    ids against standing constants. Never remints checkin_code.
+
+    Query params: alert (1/true to email on mismatches).
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        kwargs: dict = {}
+        raw = (request.GET.get("alert") or request.POST.get("alert") or "").lower()
+        if raw in ("1", "true", "yes", "on"):
+            kwargs["alert"] = True
+
+        out = io.StringIO()
+        try:
+            call_command("audit_brand_group_sheet_config", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("audit-brand-group-sheet-config cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc),
+                 "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse({"ok": True, "log": out.getvalue()})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class AuditLdTrackerSyncView(View):
     """GET/POST `/internal/cron/audit-ld-tracker-sync`.
 
@@ -11281,6 +11320,7 @@ def _registered_views() -> dict[str, Any]:
         "fix-ld-kpi-totals": FixLdKpiTotalsView,
         "add-ld-others-row": AddLdOthersRowView,
         "add-ld-type-rows": AddLdTypeRowsView,
+        "audit-brand-group-sheet-config": AuditBrandGroupSheetConfigView,
         "audit-ld-tracker-sync": AuditLdTrackerSyncView,
         "explain-request-mirror": ExplainRequestMirrorView,
         "reconcile-tracker-rows": ReconcileTrackerRowsView,

@@ -3426,10 +3426,14 @@ def _get_request_cc_emails(
             continue
         seen.add(key)
         deduped.append(normalized)
-    out = suppress_cc(deduped)
-    if tenant is not None:
-        out = suppress_torch_emails(out, tenant=tenant)
-    return merge_always_include_internal(out, exclude_email=exclude_email)
+    from events.outbound_policy import apply_outbound_policy
+
+    return apply_outbound_policy(
+        deduped,
+        tenant=tenant,
+        kind="generic",
+        exclude_email=exclude_email,
+    )
 
 
 async def _get_request_cc_emails_async(

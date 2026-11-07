@@ -38,7 +38,6 @@ from django.db import transaction
 from django.utils import timezone as dj_tz
 from django.utils.dateparse import parse_datetime
 
-from events.routing import merge_always_include_internal
 from events.torch_portal import is_torch_tenant
 from tenants.models import normalize_checkin_resources
 from recaps import co_activation
@@ -1091,7 +1090,7 @@ def _email_admins_checkin_landed(event, ambassador) -> None:
     from django.conf import settings
     from django.utils.html import escape
 
-    from events.torch_portal import is_torch_tenant, suppress_torch_emails
+    from events.outbound_policy import apply_outbound_policy
     from utils.mailer import Envelope, Mailer
 
     # The shared events@ inbox, NOT every Spark admin. This used to fan out via
@@ -1105,8 +1104,7 @@ def _email_admins_checkin_landed(event, ambassador) -> None:
         if (e or "").strip()
     ]
     tenant = getattr(event, "tenant", None) if event is not None else None
-    if is_torch_tenant(tenant):
-        admins = suppress_torch_emails(admins, tenant=tenant)
+    admins = apply_outbound_policy(admins, tenant=tenant, kind="generic", merge_internal=False)
     if not admins:
         return
     user = getattr(ambassador, "user", None)
@@ -3026,11 +3024,7 @@ def notify_checkin_recap_submitted(recap) -> None:
     from django.conf import settings
     from django.utils.html import escape
 
-    from events.torch_portal import (
-        is_torch_tenant,
-        omit_torch_recap_skips,
-        suppress_torch_emails,
-    )
+    from events.outbound_policy import apply_outbound_policy
     from utils.mailer import Envelope, Mailer
 
     event = getattr(recap, "event", None)
@@ -3044,12 +3038,7 @@ def notify_checkin_recap_submitted(recap) -> None:
         for e in getattr(settings, "CHECKIN_RECAP_NOTIFY_EMAILS", [])
         if (e or "").strip()
     ]
-    if is_torch_tenant(tenant):
-        to = suppress_torch_emails(to, tenant=tenant)
-    to = omit_torch_recap_skips(to, tenant)
-    # Env can replace CHECKIN_RECAP_NOTIFY_EMAILS; these three still go out
-    # for every brand, retail and activation alike.
-    to = merge_always_include_internal(to)
+    to = apply_outbound_policy(to, tenant=tenant, kind="recap")
     if not to:
         return
 

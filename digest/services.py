@@ -18,8 +18,7 @@ from django.utils import timezone
 
 from ambassadors.models import AmbassadorEvent
 from events.models import Event, Request
-from events.routing import suppress_cc
-from events.torch_portal import suppress_torch_emails
+from events.outbound_policy import apply_outbound_policy
 from recaps.models import Recap
 from tenants.models import Tenant, TenantedUser, Role
 
@@ -304,6 +303,4 @@ def admin_recipients_for_tenant(tenant: Tenant) -> list[str]:
     for tu in qs:
         if tu.user and tu.user.email:
             emails.append(tu.user.email)
-    return suppress_torch_emails(
-        suppress_cc(list(dict.fromkeys(emails))), tenant=tenant
-    )  # de-dupe, preserve order
+    return apply_outbound_policy(list(dict.fromkeys(emails)), tenant=tenant, kind="generic")
