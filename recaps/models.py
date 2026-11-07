@@ -506,6 +506,13 @@ class CustomRecap(models.Model):
     # later in the audit — and stays visible for a human to correct.
     data_quality_flags = models.TextField(blank=True, default="")
 
+    # Check-in finalize (DQ + ready-for-review + crew mail). The recap row
+    # commits before finalize runs; these fields make silent post-submit
+    # gaps visible and let Cloud Tasks retry failed finalize.
+    finalize_status = models.CharField(max_length=16, blank=True, default="")
+    finalize_error = models.TextField(blank=True, default="")
+    finalize_attempted_at = models.DateTimeField(null=True, blank=True)
+
     timezone = models.ForeignKey(
         TimeZone,
         on_delete=models.RESTRICT,

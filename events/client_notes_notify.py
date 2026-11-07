@@ -14,7 +14,6 @@ from typing import Any
 from django.conf import settings
 from django.utils import timezone as dj_tz
 
-from events.torch_portal import suppress_torch_emails
 from tenants.models import Role
 
 logger = logging.getLogger(__name__)
@@ -111,11 +110,11 @@ def _clip(text: str) -> str:
 def _ops_recipient_emails(tenant) -> list[str]:
     """Active Ignite staff: spark-admin roll-up + every @igniteproductions.co.
 
-    Matches the request-CC "notify ops" pattern, then applies CC suppress and
-    Torch ``TORCH_SUPPRESS_EMAILS`` (Baesha off Torch mail only).
+    Matches the request-CC "notify ops" pattern, then applies central
+    outbound policy (CC suppress + Torch suppress).
     """
     from events.mutations import _get_ignite_domain_emails, _get_spark_admin_emails
-    from events.routing import suppress_cc
+    from events.outbound_policy import apply_outbound_policy
 
     combined = list(_get_spark_admin_emails() or []) + list(
         _get_ignite_domain_emails() or []
@@ -131,8 +130,7 @@ def _ops_recipient_emails(tenant) -> list[str]:
             continue
         seen.add(key)
         deduped.append(normalized)
-    out = suppress_cc(deduped)
-    return suppress_torch_emails(out, tenant=tenant)
+    return apply_outbound_policy(deduped, tenant=tenant, kind="generic")
 
 
 def _actor_email(user: Any) -> str:

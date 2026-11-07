@@ -169,6 +169,44 @@ async def recap_approved_notify_view(request: HttpRequest) -> HttpResponse:
 
 @csrf_exempt
 @require_http_methods(["POST"])
+async def checkin_recap_finalize_view(request: HttpRequest) -> HttpResponse:
+    """POST `/api/tasks/checkin-recap-finalize`.
+
+    Body JSON: ``{"recap_id": int}``. Runs DQ + notify + walk-up auto-link.
+    Returns 200 after attempt. On failure Cloud Tasks may retry (status
+    stays ``failed`` until a later attempt succeeds).
+    """
+    if not _secret_ok(request):
+        return HttpResponseForbidden("Forbidden")
+
+    from asgiref.sync import sync_to_async
+
+    from ambassadors.finalize_recap import run_finalize_recap
+
+    try:
+        body = json.loads((request.body or b"").decode("utf-8") or "{}")
+    except (ValueError, UnicodeDecodeError):
+        logger.warning("checkin-recap-finalize: bad json")
+        return JsonResponse({"ok": False, "error": "bad-json"}, status=200)
+
+    recap_id = body.get("recap_id") if isinstance(body, dict) else None
+    if not isinstance(recap_id, int):
+        return JsonResponse({"ok": False, "error": "bad-payload"}, status=200)
+
+    try:
+        ok = await sync_to_async(run_finalize_recap)(recap_id)
+    except Exception:
+        logger.exception("checkin-recap-finalize failed recap=%s", recap_id)
+        # Non-200 so Cloud Tasks retries transient failures.
+        return JsonResponse({"ok": False}, status=500)
+
+    if not ok:
+        return JsonResponse({"ok": False}, status=500)
+    return JsonResponse({"ok": True})
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
 async def heic_convert_view(request: HttpRequest) -> HttpResponse:
     """POST `/api/tasks/heic-convert`.
 

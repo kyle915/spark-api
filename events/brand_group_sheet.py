@@ -127,7 +127,43 @@ def parse_brand_slugs(raw: str | None) -> list[str]:
 
 
 def standing_checkin_code(slug: str) -> str:
-    return _STANDING_BY_SLUG.get((slug or "").strip(), "")
+    """Prefer Tenant.checkin_code from DB when present; else code constants."""
+    key = (slug or "").strip()
+    if not key:
+        return ""
+    try:
+        from tenants.models import Tenant
+
+        row = (
+            Tenant.objects.filter(slug=key)
+            .only("id", "slug", "checkin_code")
+            .first()
+        )
+        if row is None:
+            row = (
+                Tenant.objects.filter(request_url_name=key)
+                .only("id", "slug", "checkin_code")
+                .first()
+            )
+        db_code = (getattr(row, "checkin_code", None) or "").strip() if row else ""
+        if db_code:
+            return db_code
+    except Exception:
+        pass
+    return _STANDING_BY_SLUG.get(key, "")
+
+
+def retail_sheet_id_for_tenant(tenant) -> str:
+    """Prefer Tenant.retail_sheet_id; fall back to brand-group constants."""
+    db_id = (getattr(tenant, "retail_sheet_id", None) or "").strip()
+    if db_id:
+        return db_id
+    slug = (getattr(tenant, "slug", "") or "").strip()
+    if slug == PIVOT_TENANT_SLUG:
+        return PIVOT_SHEET_ID
+    if slug in _STANDING_BY_SLUG and slug != PIVOT_TENANT_SLUG:
+        return BRAND_GROUP_SHEET_ID
+    return ""
 
 
 def assert_standing_checkin(tenant) -> None:

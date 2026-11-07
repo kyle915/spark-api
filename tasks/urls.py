@@ -16,6 +16,11 @@ urlpatterns = [
         name="tasks.recap_approved_notify",
     ),
     path(
+        "checkin-recap-finalize",
+        views.checkin_recap_finalize_view,
+        name="tasks.checkin_recap_finalize",
+    ),
+    path(
         "heic-convert",
         views.heic_convert_view,
         name="tasks.heic_convert",

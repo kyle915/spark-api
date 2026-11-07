@@ -42,4 +42,6 @@ class UserFiltersInput:
     tenant_id: strawberry.ID | None = None
     name: str | None = None
     email: str | None = None
+    # Free-text search across first/last name and email (People page).
+    search: str | None = None
     role: RoleFilterEnum | None = None

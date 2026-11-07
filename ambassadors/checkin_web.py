@@ -1797,7 +1797,11 @@ def submit_checkin_recap(
                 "checkin recap: approved booking hours failed recap=%s", recap.id
             )
 
-    _finalize_recap_offthread(recap.id)
+    # Retryable finalize (DQ + notify + walk-up auto-link). Never fails the
+    # already-committed CustomRecap — status lives on finalize_* columns.
+    from ambassadors.finalize_recap import enqueue_finalize_recap
+
+    enqueue_finalize_recap(recap.id)
     try:
         from ambassadors.walkup_draft import clear_walkup_recap_draft
 
@@ -1810,74 +1814,15 @@ def submit_checkin_recap(
 
 
 def _finalize_recap_offthread(recap_id: int) -> None:
-    """Run the data-quality guard + admin/crew "recap ready" mail on a fresh
-    thread so a nested thread-sensitive DB write can't deadlock the calling
-    ASGI worker.
+    """Compat wrapper — prefer :func:`ambassadors.finalize_recap.run_finalize_recap`.
 
-    Both are best-effort — a failure here never fails the submitted recap
-    (the CustomRecap row is already committed before this runs).
-
-    Connection hygiene matters: this worker (and asgiref's SingleThreadExecutor
-    that nested ``sync_to_async`` may bounce onto) never sees Django's
-    ``request_started`` / ``request_finished`` cleanup. After a Cloud SQL idle
-    drop the thread kept a dead psycopg handle and every later finalize failed
-    with ``OperationalError: the connection is closed`` (Spark alert since
-    2026-08-07, e.g. recap id=2565). Mirror ``utils.db.fresh_db_connection`` /
-    ``recaps.mutation_parts.notify._thread_recap_approved_notify``: close before
-    and after, and run sync ORM on *this* thread via ``async_to_sync`` so nested
-    ``sync_to_async`` lands back here on the connection we just opened — not on
-    a long-lived executor thread with a stale handle.
+    Kept so existing tests and callers keep working. Runs inline (not
+    enqueued) with the same fresh-connection + status persistence path.
     """
-    if block_if_suppressed("recap submitted notifications", recap_id):
-        return
-
-    def _worker() -> None:
-        from asgiref.sync import async_to_sync
-
-        from recaps import models as rmodels
-        from recaps.mutations import (
-            _guard_recap_data_quality,
-            _notify_recap_ready_for_review_to_admins,
-        )
-        from utils.db import close_thread_connections, fresh_db_connection
-
-        def _run() -> None:
-            recap = rmodels.CustomRecap.objects.select_related(
-                "created_by", "event", "tenant"
-            ).get(id=recap_id)
-            created_by = recap.created_by
-            try:
-                async_to_sync(_guard_recap_data_quality)(recap)
-            except Exception:  # noqa: BLE001
-                logger.exception(
-                    "checkin recap: data-quality guard failed id=%s", recap_id
-                )
-            try:
-                async_to_sync(_notify_recap_ready_for_review_to_admins)(
-                    recap, created_by
-                )
-            except Exception:  # noqa: BLE001
-                logger.exception(
-                    "checkin recap: notify-admins failed id=%s", recap_id
-                )
-            # Field-ops crew for the check-in link specifically — nobody is
-            # watching a queue for these, so the submission has to reach a person.
-            try:
-                notify_checkin_recap_submitted(recap)
-            except Exception:  # noqa: BLE001
-                logger.exception(
-                    "checkin recap: crew notify failed id=%s", recap_id
-                )
-
-        close_thread_connections()
-        try:
-            fresh_db_connection(_run)()
-        finally:
-            close_thread_connections()
+    from ambassadors.finalize_recap import run_finalize_recap
 
     try:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-            ex.submit(_worker).result(timeout=90)
+        run_finalize_recap(recap_id)
     except Exception:  # noqa: BLE001 — never fail the recap on finalize trouble
         logger.exception("checkin recap: finalize thread failed id=%s", recap_id)
 
