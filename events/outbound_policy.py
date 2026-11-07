@@ -38,6 +38,8 @@ def apply_outbound_policy(
     *,
     tenant=None,
     kind: str = "generic",
+    exclude_email: str | None = None,
+    merge_internal: bool = True,
 ) -> list[str]:
     """Filter + merge Ignite always-include for an outbound blast.
 
@@ -47,9 +49,16 @@ def apply_outbound_policy(
     """
     cleaned = [e for e in emails if (e or "").strip()]
     cleaned = suppress_torch_emails(cleaned, tenant)
-    if kind == "recap":
-        cleaned = omit_torch_recap_skips(cleaned, tenant)
+    match kind:
+        case "recap":
+            cleaned = omit_torch_recap_skips(cleaned, tenant)
+        case "generic":
+            pass
+        case _:
+            raise ValueError(f"unknown outbound policy kind: {kind!r}")
     # Global CC suppress (non-Torch paths that still use CC_SUPPRESS).
     suppress = {e.lower() for e in CC_SUPPRESS_EMAILS}
     cleaned = [e for e in cleaned if e.strip().lower() not in suppress]
-    return merge_always_include_internal(cleaned)
+    if merge_internal:
+        return merge_always_include_internal(cleaned, exclude_email=exclude_email)
+    return cleaned

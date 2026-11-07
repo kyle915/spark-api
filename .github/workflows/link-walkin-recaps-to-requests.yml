@@ -1,8 +1,11 @@
-# One-shot / on-demand: attach filed Famus walk-up Events onto Tracker
-# Requests that still show DUE. Dry-run is the default; set apply=true to write.
+# Nightly (Famus) + on-demand: attach filed walk-up Events onto Tracker
+# Requests that still show DUE. Dry-run is the default for manual runs;
+# the schedule uses apply=true for famus-energy.
 name: Link walk-in recaps to requests
 
 on:
+  schedule:
+    - cron: "0 9 * * *"
   workflow_dispatch:
     inputs:
       tenant_slug:
@@ -26,9 +29,9 @@ jobs:
         env:
           CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/link-walkin-recaps-to-requests
           CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
-          TENANT_SLUG: ${{ github.event.inputs.tenant_slug }}
-          DAYS_BACK: ${{ github.event.inputs.days_back }}
-          APPLY: ${{ github.event.inputs.apply }}
+          TENANT_SLUG: ${{ github.event.inputs.tenant_slug || 'famus-energy' }}
+          DAYS_BACK: ${{ github.event.inputs.days_back || '45' }}
+          APPLY: ${{ github.event_name == 'schedule' && 'true' || github.event.inputs.apply }}
         run: |
           if [ -z "$CRON_SECRET" ]; then
             echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."

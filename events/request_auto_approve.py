@@ -10,7 +10,7 @@ of the whole-Ignite roll-up. Torch keeps its own public-form gate
 from __future__ import annotations
 
 from events.event_confirmations import public_page_base
-from events.routing import merge_always_include_internal, suppress_cc
+from events.outbound_policy import apply_outbound_policy
 from tenants.models import parse_recipient_emails
 
 FAMUS_ENERGY_SLUG = "famus-energy"
@@ -51,10 +51,10 @@ def tenant_request_cc_emails(tenant) -> list[str]:
     """
     if not tenant_auto_approves_requests(tenant):
         return []
-    return merge_always_include_internal(
-        suppress_cc(
-            parse_recipient_emails(getattr(tenant, "request_approved_cc_emails", ""))
-        )
+    return apply_outbound_policy(
+        parse_recipient_emails(getattr(tenant, "request_approved_cc_emails", "")),
+        tenant=tenant,
+        kind="generic",
     )
 
 

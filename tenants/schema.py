@@ -288,6 +288,16 @@ class CronRunRow:
 
 
 @strawberry.type
+class SheetSyncErrorRow:
+    """Tenant with a failed linked-sheet mirror (admin observability)."""
+
+    slug: str
+    request_id: int | None
+    error_snippet: str
+    last_sync_at: str | None
+
+
+@strawberry.type
 class SystemHealthType:
     """Ignite-admin observability snapshot: what's running + what's broken.
 
@@ -305,6 +315,10 @@ class SystemHealthType:
     distinct_signatures: int
     recent_errors: list[BackendErrorRow]
     cron_runs: list[CronRunRow]
+    sheet_sync_error_tenant_count: int
+    sheet_sync_errors: list[SheetSyncErrorRow]
+    walkup_orphan_filed_count: int
+    walkup_orphan_filed_famus_count: int
 
 
 def _build_system_health_sync() -> dict:
@@ -313,6 +327,8 @@ def _build_system_health_sync() -> dict:
     from django.utils import timezone as _tz
 
     from digest.models import BackendErrorEvent, CronRun
+    from events.missing_recaps_gate import walkup_orphan_filed_count
+    from tenants.models import Tenant
 
     now = _tz.now()
     day_ago = now - _dt.timedelta(hours=24)
@@ -334,8 +350,47 @@ def _build_system_health_sync() -> dict:
         )
         for c in CronRun.objects.all()
     ]
+    sheet_err_qs = (
+        Tenant.objects.filter(linked_sheet_last_sync_error__isnull=False)
+        .exclude(linked_sheet_last_sync_error="")
+        .only(
+            "slug",
+            "linked_sheet_last_sync_error",
+            "linked_sheet_last_sync_at",
+            "linked_sheet_last_request_id",
+        )
+        .order_by("-linked_sheet_last_sync_at")[:15]
+    )
+    sheet_sync_errors = [
+        SheetSyncErrorRow(
+            slug=t.slug or "",
+            request_id=t.linked_sheet_last_request_id,
+            error_snippet=(t.linked_sheet_last_sync_error or "")[:200],
+            last_sync_at=(
+                t.linked_sheet_last_sync_at.isoformat()
+                if t.linked_sheet_last_sync_at
+                else None
+            ),
+        )
+        for t in sheet_err_qs
+    ]
+    sheet_sync_error_tenant_count = (
+        Tenant.objects.filter(linked_sheet_last_sync_error__isnull=False)
+        .exclude(linked_sheet_last_sync_error="")
+        .count()
+    )
+    famus = (
+        Tenant.objects.filter(slug="famus-energy").only("id").first()
+    )
+    famus_id = getattr(famus, "id", None)
     return {
         "cron_runs": crons,
+        "sheet_sync_errors": sheet_sync_errors,
+        "sheet_sync_error_tenant_count": sheet_sync_error_tenant_count,
+        "walkup_orphan_filed_count": walkup_orphan_filed_count(),
+        "walkup_orphan_filed_famus_count": (
+            walkup_orphan_filed_count(famus_id) if famus_id else 0
+        ),
         "errors_24h": qs.filter(last_seen__gte=day_ago).count(),
         "errors_7d": qs.filter(last_seen__gte=week_ago).count(),
         "distinct_signatures": qs.count(),
@@ -385,6 +440,10 @@ class QuerySpark(GoogleCalendarQueries, TenantThemingQuery, TenantLaunchQueries)
             distinct_signatures=data["distinct_signatures"],
             recent_errors=data["recent"],
             cron_runs=data["cron_runs"],
+            sheet_sync_error_tenant_count=data["sheet_sync_error_tenant_count"],
+            sheet_sync_errors=data["sheet_sync_errors"],
+            walkup_orphan_filed_count=data["walkup_orphan_filed_count"],
+            walkup_orphan_filed_famus_count=data["walkup_orphan_filed_famus_count"],
         )
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])

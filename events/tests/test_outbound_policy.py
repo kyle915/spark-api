@@ -28,3 +28,23 @@ def test_apply_outbound_policy_keeps_baesha_on_non_torch():
     emails = ["baesha@igniteproductions.co", "events@igniteproductions.co"]
     out = apply_outbound_policy(emails, tenant=T(), kind="generic")
     assert any("baesha@" in e.lower() for e in out)
+
+
+def test_apply_outbound_policy_honors_exclude_email():
+    class T:
+        slug = "famus-energy"
+        request_url_name = "famus-energy"
+        name = "Famus Energy"
+
+    emails = ["kyle@igniteproductions.co", "events@igniteproductions.co"]
+    out = apply_outbound_policy(
+        emails, tenant=T(), kind="generic", exclude_email="kyle@igniteproductions.co"
+    )
+    lowered = [e.lower() for e in out]
+    assert "kyle@igniteproductions.co" not in lowered
+
+
+def test_apply_outbound_policy_merge_internal_off():
+    emails = ["events@igniteproductions.co"]
+    out = apply_outbound_policy(emails, kind="generic", merge_internal=False)
+    assert out == emails

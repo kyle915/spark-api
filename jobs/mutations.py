@@ -357,7 +357,7 @@ def _notify_admins_of_application(application_id: int) -> None:
         # ---- Recipients: Ignite admin team only (@igniteproductions.co),
         # case-insensitive dedupe. A non-Ignite RMM / poster is dropped, as is
         # any address on the shared CC suppression list (removed team members). ----
-        from events.routing import CC_SUPPRESS_EMAILS
+        from events.outbound_policy import apply_outbound_policy
 
         IGNITE_DOMAIN = "@igniteproductions.co"
         recipients: list[str] = []
@@ -365,12 +365,7 @@ def _notify_admins_of_application(application_id: int) -> None:
 
         def add(email: str | None) -> None:
             e = (email or "").strip()
-            if (
-                e
-                and e.lower().endswith(IGNITE_DOMAIN)
-                and e.lower() not in seen
-                and e.lower() not in CC_SUPPRESS_EMAILS
-            ):
+            if e and e.lower().endswith(IGNITE_DOMAIN) and e.lower() not in seen:
                 seen.add(e.lower())
                 recipients.append(e)
 
@@ -383,6 +378,9 @@ def _notify_admins_of_application(application_id: int) -> None:
         add("events@igniteproductions.co")
         add("keis@igniteproductions.co")
         add("myriant@igniteproductions.co")
+        recipients = apply_outbound_policy(
+            recipients, tenant=tenant, kind="generic", merge_internal=False
+        )
         if not recipients:
             return
 

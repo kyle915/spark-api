@@ -30,7 +30,7 @@ from events.envelopes import (
     ink_on,
 )
 from events.mutations import _get_request_cc_emails
-from events.torch_portal import suppress_torch_emails
+from events.outbound_policy import apply_outbound_policy
 from utils.mailer import Envelope, Mailer
 
 logger = logging.getLogger(__name__)
@@ -235,8 +235,8 @@ def notify_plan_deleted(
     config = plan_submit_mail_for(event.tenant)
     if not config:
         return
-    internal = suppress_torch_emails(
-        _normalize(config.internal_emails), tenant=event.tenant
+    internal = apply_outbound_policy(
+        _normalize(config.internal_emails), tenant=event.tenant, kind="generic"
     )
     if not internal:
         return
@@ -283,15 +283,20 @@ def notify_plan_submitted(
     """Send the plan-submitted emails. Never raises: the plan is already saved."""
     config = plan_submit_mail_for(event.tenant)
     internal = (
-        suppress_torch_emails(_normalize(config.internal_emails), tenant=event.tenant)
+        apply_outbound_policy(
+            _normalize(config.internal_emails), tenant=event.tenant, kind="generic"
+        )
         if config
         else []
     )
     request = event.request
     if config:
         raw_submitter = (getattr(actor, "email", None) or "").strip()
-        allowed_submitter = suppress_torch_emails(
-            [raw_submitter] if raw_submitter else [], tenant=event.tenant
+        allowed_submitter = apply_outbound_policy(
+            [raw_submitter] if raw_submitter else [],
+            tenant=event.tenant,
+            kind="generic",
+            merge_internal=False,
         )
         submitter_email = allowed_submitter[0] if allowed_submitter else ""
         content = PlanMailContent(

@@ -199,7 +199,8 @@ class Command(BaseCommand):
         from ambassadors.queries import _shift_time_labels
 
         try:
-            from events.torch_portal import is_torch_tenant, suppress_torch_emails
+            from events.outbound_policy import apply_outbound_policy
+            from events.torch_portal import is_torch_tenant
             from tenants.support import _resolve_ignite_recipients
 
             recipients = _resolve_ignite_recipients()
@@ -209,7 +210,12 @@ class Command(BaseCommand):
                 is_torch_tenant(getattr(getattr(r, "event", None), "tenant", None))
                 for r in rows
             ):
-                recipients = suppress_torch_emails(recipients)
+                recipients = apply_outbound_policy(
+                    recipients,
+                    tenant=None,
+                    kind="generic",
+                    merge_internal=False,
+                )
             if not recipients:
                 self.stdout.write(
                     "  [alert] No Ignite recipients resolved — alert skipped."

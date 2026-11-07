@@ -1,0 +1,50 @@
+# Weekly: brand-group check-in codes + retail sheet ids vs constants (read-only).
+name: Audit brand group sheet config
+
+on:
+  schedule:
+    - cron: "0 14 * * 1"
+  workflow_dispatch:
+    inputs:
+      alert:
+        description: "Email Ignite when mismatches found"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+jobs:
+  audit-brand-group-sheet-config:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire audit-brand-group-sheet-config cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/audit-brand-group-sheet-config
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          ALERT: ${{ github.event.inputs.alert || 'false' }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+
+          ALERT_Q=""
+          case "$(echo "$ALERT" | tr '[:upper:]' '[:lower:]')" in
+            1|true|yes|on) ALERT_Q="alert=true" ;;
+          esac
+
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            --max-time 300 \
+            -X POST "$CRON_URL${ALERT_Q:+?$ALERT_Q}" \
+            -H "X-Cron-Secret: $CRON_SECRET")
+
+          echo "HTTP $STATUS"
+          python3 -c 'import json; d=json.load(open("/tmp/cron-response.json")); print(d.get("log") or d); print(d.get("detail") or "")'
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS — see body above."
+            exit 1
+          fi

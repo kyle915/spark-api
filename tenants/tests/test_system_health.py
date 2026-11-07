@@ -63,6 +63,10 @@ class TestSystemHealth(EventsGraphQLTestCase):
         assert health.distinct_signatures == 1
         assert health.recent_errors[0].count == 3
         assert health.git_sha  # server info folded in
+        assert health.walkup_orphan_filed_count >= 0
+        assert health.walkup_orphan_filed_famus_count >= 0
+        assert health.sheet_sync_error_tenant_count >= 0
+        assert isinstance(health.sheet_sync_errors, list)
 
     def test_client_gets_null(self):
         assert self._health(self.client_user) is None
