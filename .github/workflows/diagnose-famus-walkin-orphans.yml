@@ -1,0 +1,31 @@
+# One-shot read-only: list Famus filed walk-up orphans via Cloud Run Job
+# on the live image (no code deploy required for the diagnose body).
+name: Diagnose Famus walk-in orphans
+
+on:
+  workflow_dispatch:
+    inputs:
+      days_back:
+        description: Lookback window in days
+        required: true
+        default: "45"
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_DEPLOY_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Run diagnose job
+        env:
+          DAYS_BACK: ${{ github.event.inputs.days_back }}
+        run: python3 scripts/diagnose_famus_walkin_orphans_job.py "$DAYS_BACK"
