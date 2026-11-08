@@ -236,7 +236,10 @@ def notify_plan_deleted(
     if not config:
         return
     internal = apply_outbound_policy(
-        _normalize(config.internal_emails), tenant=event.tenant, kind="generic"
+        _normalize(config.internal_emails),
+        tenant=event.tenant,
+        kind="generic",
+        merge_internal=False,
     )
     if not internal:
         return
@@ -284,7 +287,10 @@ def notify_plan_submitted(
     config = plan_submit_mail_for(event.tenant)
     internal = (
         apply_outbound_policy(
-            _normalize(config.internal_emails), tenant=event.tenant, kind="generic"
+            _normalize(config.internal_emails),
+            tenant=event.tenant,
+            kind="generic",
+            merge_internal=False,
         )
         if config
         else []

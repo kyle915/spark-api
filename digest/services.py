@@ -303,4 +303,9 @@ def admin_recipients_for_tenant(tenant: Tenant) -> list[str]:
     for tu in qs:
         if tu.user and tu.user.email:
             emails.append(tu.user.email)
-    return apply_outbound_policy(list(dict.fromkeys(emails)), tenant=tenant, kind="generic")
+    return apply_outbound_policy(
+        list(dict.fromkeys(emails)),
+        tenant=tenant,
+        kind="generic",
+        merge_internal=False,
+    )

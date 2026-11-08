@@ -610,11 +610,14 @@ def _skus_for_request(request) -> str:
         products = getattr(request, "_prefetched_objects_cache", {}).get(
             "request_product"
         )
-        iterable = (
-            products
-            if products is not None
-            else request.request_product.select_related("product").all()
-        )
+        if products is not None:
+            iterable = products
+        else:
+            rp = request.request_product
+            if hasattr(rp, "select_related"):
+                iterable = rp.select_related("product").all()
+            else:
+                iterable = rp.all()
         for rp in iterable:
             product = getattr(rp, "product", None)
             name = (getattr(product, "name", "") or "").strip() if product else ""
