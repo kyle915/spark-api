@@ -10,7 +10,7 @@ digest goes to the full retail list, including the weekly-only people.
 from __future__ import annotations
 
 from events.routing import _state_code_from_request, extract_state_code
-from events.torch_portal import TORCH_SUPPRESS_EMAILS
+from events.outbound_policy import apply_outbound_policy
 from recaps.recap_types import (
     RECAP_TYPE_EVENT,
     RECAP_TYPE_GUERILLA,
@@ -93,18 +93,14 @@ TORCH_RETAIL_IGNITE_OPS: tuple[str, ...] = (
 
 
 def _dedupe_emails(emails: list[str] | tuple[str, ...]) -> list[str]:
-    out: list[str] = []
-    seen: set[str] = set()
-    for email in emails:
-        normalized = (email or "").strip()
-        if not normalized:
-            continue
-        key = normalized.lower()
-        if key in seen or key in TORCH_SUPPRESS_EMAILS:
-            continue
-        seen.add(key)
-        out.append(normalized)
-    return out
+    # Torch retail routing always targets Torch tenants — apply central
+    # outbound policy (Baesha suppress) without merging always-include.
+    return apply_outbound_policy(
+        list(emails),
+        tenant=None,
+        kind="generic",
+        merge_internal=False,
+    )
 
 
 def torch_retail_recap_emails(state_code: str | None) -> list[str]:

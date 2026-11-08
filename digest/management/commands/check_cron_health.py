@@ -187,29 +187,81 @@ class Command(BaseCommand):
             if not throttled:
                 alertable.append(p)
 
-        if not alertable:
+        # Per-tenant sheet mirror health (silent 429 / sync gaps).
+        sheet_problems = self._sheet_sync_problems()
+        for sp in sheet_problems:
+            w(
+                f"  [sheet-sync] {sp['slug']} — "
+                f"{(sp['error'] or '')[:120]} "
+                f"(at {sp['at'] or 'unknown'})"
+            )
+
+        if not alertable and not sheet_problems:
             w(self.style.SUCCESS("No new cron-health alerts."))
             return
 
         if dry:
-            w(f"DRY-RUN — would alert on {len(alertable)} cron(s); "
-              "no email sent, nothing stamped.")
+            w(
+                f"DRY-RUN — would alert on {len(alertable)} cron(s) "
+                f"+ {len(sheet_problems)} sheet sync error(s); "
+                "no email sent, nothing stamped."
+            )
             return
 
-        sent = self._send_alert(alertable, now)
+        sent = self._send_alert(alertable, now, sheet_problems=sheet_problems)
         if sent:
             for p in alertable:
                 row = p["row"]
                 if row is not None:
                     row.last_alerted_at = now
                     row.save(update_fields=["last_alerted_at"])
-            w(self.style.SUCCESS(f"Alert emailed for {len(alertable)} cron(s)."))
+            w(
+                self.style.SUCCESS(
+                    f"Alert emailed for {len(alertable)} cron(s) "
+                    f"+ {len(sheet_problems)} sheet sync error(s)."
+                )
+            )
         else:
             w("No Ignite recipients — alert not sent (nothing stamped).")
 
     # -- helpers -----------------------------------------------------------
 
-    def _send_alert(self, alertable: list[dict], now) -> bool:
+    def _sheet_sync_problems(self) -> list[dict]:
+        """Tenants whose last linked-sheet mirror attempt failed."""
+        from tenants.models import Tenant
+
+        rows = (
+            Tenant.objects.filter(linked_sheet_last_sync_error__isnull=False)
+            .exclude(linked_sheet_last_sync_error="")
+            .only(
+                "slug",
+                "linked_sheet_last_sync_error",
+                "linked_sheet_last_sync_at",
+            )
+            .order_by("-linked_sheet_last_sync_at")[:25]
+        )
+        out: list[dict] = []
+        for t in rows:
+            out.append(
+                {
+                    "slug": t.slug or f"tenant-{t.pk}",
+                    "error": (t.linked_sheet_last_sync_error or "")[:500],
+                    "at": (
+                        t.linked_sheet_last_sync_at.isoformat()
+                        if t.linked_sheet_last_sync_at
+                        else None
+                    ),
+                }
+            )
+        return out
+
+    def _send_alert(
+        self,
+        alertable: list[dict],
+        now,
+        *,
+        sheet_problems: list[dict] | None = None,
+    ) -> bool:
         """Email one digest of the problem crons to the Ignite team.
         Returns True if an email was dispatched."""
         import html as _html
@@ -220,6 +272,8 @@ class Command(BaseCommand):
         recipients = _resolve_ignite_recipients()
         if not recipients:
             return False
+
+        sheet_problems = sheet_problems or []
 
         def _row(p: dict) -> str:
             row = p["row"]
@@ -248,6 +302,28 @@ class Command(BaseCommand):
 
         table = "".join(_row(p) for p in alertable)
         n = len(alertable)
+        sheet_block = ""
+        if sheet_problems:
+            sheet_rows = "".join(
+                "<tr>"
+                f"<td>📄</td>"
+                f"<td><b>{_html.escape(sp['slug'])}</b></td>"
+                f"<td colspan='5'>{_html.escape(sp['error'][:200])}</td>"
+                "</tr>"
+                for sp in sheet_problems
+            )
+            sheet_block = f"""
+            <h3 style="margin:16px 0 8px">{len(sheet_problems)} linked-sheet sync error(s)</h3>
+            <p style="margin:0 0 12px;color:#555">
+              Per-tenant Master Tracker mirror last attempt failed (429s /
+              permission / silent gaps). Prefer
+              <code>sync_tenant_to_sheet --incremental --apply</code>.
+            </p>
+            <table cellpadding="6" style="border-collapse:collapse" border="1">
+              <tr><th></th><th>Tenant</th><th colspan="5">Last error</th></tr>
+              {sheet_rows}
+            </table>
+            """
         body = f"""
         <h2 style="margin:0 0 8px">{n} scheduled job(s) need attention</h2>
         <p style="margin:0 0 12px;color:#555">
@@ -263,12 +339,18 @@ class Command(BaseCommand):
           </tr>
           {table}
         </table>
+        {sheet_block}
         <p style="color:#888;margin-top:12px">
           Cron staleness watchdog · see the full heartbeat list on System Health
           → Automations. Re-alerts are throttled per job.
         </p>
         """
-        subject = f"[Spark] {n} scheduled job(s) overdue or erroring"
+        subject_bits = []
+        if n:
+            subject_bits.append(f"{n} scheduled job(s) overdue or erroring")
+        if sheet_problems:
+            subject_bits.append(f"{len(sheet_problems)} sheet sync error(s)")
+        subject = "[Spark] " + " · ".join(subject_bits or ["cron health"])
 
         class _CronAlertMailer(Mailer):
             def envelope(self) -> Envelope:

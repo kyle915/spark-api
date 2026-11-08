@@ -23,11 +23,16 @@ Usage:
     python manage.py sync_tenant_to_sheet --tenant-slug liquid-death \\
         --since-date 2026-07-01 --status-slug pending --apply
 """
+from datetime import timedelta
+
 from django.core.management.base import BaseCommand, CommandError
+from django.utils import timezone
 
 from events.models import Request
 from tenants.models import Tenant
 from utils.sheets_mirror import bulk_sync_requests, delete_ld_rows
+
+_INCREMENTAL_FALLBACK_DAYS = 7
 
 
 class Command(BaseCommand):
@@ -84,6 +89,15 @@ class Command(BaseCommand):
             "activity needs to land in Spark's tracked rows.",
         )
         parser.add_argument(
+            "--incremental",
+            action="store_true",
+            help=(
+                "Only sync rows updated since Tenant.linked_sheet_last_sync_at "
+                "(or the last 7 days when that watermark is empty). Cuts 429s "
+                "on recurring reconcile crons."
+            ),
+        )
+        parser.add_argument(
             "--status-slug",
             type=str,
             default=None,
@@ -113,6 +127,7 @@ class Command(BaseCommand):
         limit = opts.get("limit")
         since_date = opts.get("since_date")
         status_slug = opts.get("status_slug")
+        incremental = bool(opts.get("incremental"))
 
         if not apply:
             self.stdout.write(
@@ -137,6 +152,13 @@ class Command(BaseCommand):
                 qs = qs.filter(date__gte=since_date)
             if status_slug:
                 qs = qs.filter(status__slug=status_slug)
+            if incremental:
+                watermark = tenant.linked_sheet_last_sync_at
+                if watermark is None:
+                    watermark = timezone.now() - timedelta(
+                        days=_INCREMENTAL_FALLBACK_DAYS
+                    )
+                qs = qs.filter(updated_at__gte=watermark)
             qs = qs.order_by("date", "id")
             if limit:
                 qs = qs[:limit]
@@ -148,6 +170,8 @@ class Command(BaseCommand):
                 scope.append(f"date>={since_date}")
             if status_slug:
                 scope.append(f"status={status_slug}")
+            if incremental:
+                scope.append("incremental")
             scope_note = f" ({', '.join(scope)})" if scope else ""
             self.stdout.write("")
             self.stdout.write(

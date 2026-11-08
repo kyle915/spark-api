@@ -8,11 +8,7 @@ from django.contrib.auth import get_user_model
 from django.utils import timezone
 
 from events.outbound_policy import apply_outbound_policy
-from events.torch_portal import (
-    TORCH_RECAP_SKIP_EMAILS,
-    TORCH_SUPPRESS_EMAILS,
-    is_torch_tenant,
-)
+from events.torch_portal import is_torch_tenant
 from events.torch_retail_routing import (
     EXECUTION_RETAIL,
     TORCH_RETAIL_IGNITE_OPS,
@@ -287,14 +283,19 @@ def _collect_recap_approved_recipients(
 
         def _push(email: str | None, first: str | None = None):
             e = (email or "").strip()
-            if (
-                not e
-                or e.lower() in seen
-                or e.lower() in TORCH_SUPPRESS_EMAILS
-                or e.lower() in TORCH_RECAP_SKIP_EMAILS
-            ):
+            if not e or e.lower() in seen:
                 return
             if is_placeholder_recipient_email(e):
+                return
+            # Central policy: Torch suppress + recap skips (Junior).
+            kept = apply_outbound_policy(
+                [e],
+                tenant=getattr(recap, "tenant", None)
+                or getattr(getattr(recap, "event", None), "tenant", None),
+                kind="recap",
+                merge_internal=False,
+            )
+            if not kept:
                 return
             seen.add(e.lower())
             recipients.append((e, (first or "").strip()))
