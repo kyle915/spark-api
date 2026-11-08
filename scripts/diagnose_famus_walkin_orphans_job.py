@@ -234,18 +234,39 @@ def main() -> int:
     print("+", " ".join(cmd[:14]), "...", flush=True)
     subprocess.run(cmd, check=True)
 
-    print("===== fetching logs =====", flush=True)
-    logs = gcloud(
-        "logging",
-        "read",
-        'resource.type="cloud_run_job" AND resource.labels.job_name='
-        f'"{JOB}"',
-        "--limit=80",
-        "--freshness=45m",
-        "--format=value(textPayload)",
+    print("===== fetching execution logs =====", flush=True)
+    # Prefer job execution logs API (deploy SA often lacks logging.read).
+    exe = gcloud(
+        "run",
+        "jobs",
+        "executions",
+        "list",
+        f"--job={JOB}",
+        f"--region={REGION}",
+        "--limit=1",
+        "--format=value(name)",
+    ).strip()
+    print(f"execution={exe}", flush=True)
+    proc = subprocess.run(
+        [
+            "gcloud",
+            "run",
+            "jobs",
+            "executions",
+            "logs",
+            "read",
+            exe,
+            f"--region={REGION}",
+            f"--project={PROJECT}",
+        ],
+        capture_output=True,
+        text=True,
     )
+    logs = (proc.stdout or "") + (proc.stderr or "")
     print(logs)
-    for line in (logs or "").splitlines():
+    if proc.returncode != 0:
+        print(f"::warning::execution logs read rc={proc.returncode}", flush=True)
+    for line in logs.splitlines():
         if "JSON_ORPHANS:" in line:
             print(line, flush=True)
     return 0
