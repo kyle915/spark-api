@@ -403,6 +403,49 @@ class TestTenantCheckinLink(AmbassadorsGraphQLTestCase):
             == "1500 n clybourn chicago il"
         )
 
+    def test_fuzzy_match_road_rd_and_state_name(self):
+        # Famus orphan 6840 → REQ 5337 Smiley's Columbia: GPS spelled Road +
+        # Kentucky; Tracker stored Rd + KY.
+        assert checkin_web.addresses_fuzzy_match(
+            "1125 Campbellsville Road, Columbia, Kentucky 42728",
+            "1125 Campbellsville Rd, Columbia, KY 42728, USA",
+        )
+        assert checkin_web.address_core_key(
+            "1125 Campbellsville Road, Columbia, Kentucky 42728"
+        ) == checkin_web.address_core_key(
+            "1125 Campbellsville Rd, Columbia, KY 42728, USA"
+        ) == "1125 campbellsville columbia ky"
+
+    def test_fuzzy_match_highway_south_vs_s_dixie_blvd(self):
+        # Famus orphan 7013 → REQ 5347 Radcliff: "Dixie Highway South" vs
+        # "S Dixie Blvd" — trailing/leading dir + Highway/Blvd family.
+        assert checkin_web.addresses_fuzzy_match(
+            "2300 Dixie Highway South, Radcliff, KY 40160",
+            "2300 S Dixie Blvd, Radcliff, KY 40160, USA",
+        )
+        assert checkin_web.address_core_key(
+            "2300 Dixie Highway South, Radcliff, KY 40160"
+        ) == checkin_web.address_core_key(
+            "2300 S Dixie Blvd, Radcliff, KY 40160, USA"
+        ) == "2300 s dixie radcliff ky"
+
+    def test_fuzzy_match_unnumbered_street_soft(self):
+        # Famus orphan 7034 → REQ 5323 Tamarack: GPS omitted the house number
+        # but named the same street/city/state. Soft path must match; a
+        # different street in the same city must not.
+        assert checkin_web.addresses_fuzzy_match(
+            "Tamarack Road, Owensboro, Kentucky 42301",
+            "1035 Tamarack Rd, Owensboro, KY 42301, USA",
+        )
+        assert not checkin_web.addresses_fuzzy_match(
+            "Tamarack Road, Owensboro, Kentucky 42301",
+            "3425 US-60, Vine Grove, KY 40175, USA",
+        )
+        assert not checkin_web.addresses_fuzzy_match(
+            "Owensboro, Kentucky 42301",
+            "1035 Tamarack Rd, Owensboro, KY 42301, USA",
+        )
+
     def test_walkin_connects_across_directional_variance(self):
         import datetime
 
