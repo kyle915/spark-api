@@ -95,6 +95,7 @@ class WalkinLinkResult:
     ambiguous: int
     orphans_with_filed: int
     rows: list[dict]
+    orphan_details: list[dict] | None = None
 
 
 def link_walkin_recaps_for_tenant(
@@ -102,6 +103,7 @@ def link_walkin_recaps_for_tenant(
     *,
     days_back: int = 45,
     apply: bool = False,
+    diagnose: bool = False,
 ) -> WalkinLinkResult:
     """Link filed request-less walk-up Events onto DUE Tracker Requests."""
     now = djtz.now()
@@ -216,6 +218,10 @@ def link_walkin_recaps_for_tenant(
         else:
             would_link += 1
 
+    orphan_details = None
+    if diagnose:
+        orphan_details = _diagnose_orphans(orphans, due_requests)
+
     return WalkinLinkResult(
         tenant_slug=getattr(tenant, "slug", "") or "",
         apply=apply,
@@ -224,7 +230,65 @@ def link_walkin_recaps_for_tenant(
         ambiguous=ambiguous,
         orphans_with_filed=len(orphans),
         rows=report,
+        orphan_details=orphan_details,
     )
+
+
+
+def _diagnose_orphans(orphans: list[Event], due_requests: list[Request]) -> list[dict]:
+    """Explain why each filed orphan did not auto-link (read-only)."""
+    due_open: list[tuple[Request, list[Event], object]] = []
+    for req in due_requests:
+        shells = list(req.event_set.all())
+        if not shells:
+            continue
+        if any(has_filed_recap(ev.id) for ev in shells):
+            continue
+        day = None
+        for ev in shells:
+            day = event_calendar_date(ev) or day
+        if day is None and getattr(req, "date", None) is not None:
+            rd = req.date
+            day = rd.date() if hasattr(rd, "date") else rd
+        due_open.append((req, shells, day))
+
+    out: list[dict] = []
+    for orphan in orphans:
+        oday = event_calendar_date(orphan)
+        same_day: list[dict] = []
+        matched: list[dict] = []
+        for req, shells, day in due_open:
+            if day is not None and oday is not None and day != oday:
+                continue
+            entry = {
+                "request_id": req.id,
+                "name": getattr(req, "name", "") or "",
+                "address": getattr(req, "address", "") or "",
+                "day": day.isoformat() if day else None,
+            }
+            same_day.append(entry)
+            if _orphan_matches_request(orphan, req, shells):
+                matched.append(entry)
+        if not same_day:
+            reason = "no-same-day-due"
+        elif matched:
+            reason = "place-match-but-not-unique"
+        else:
+            reason = "same-day-no-place-match"
+        out.append(
+            {
+                "event_id": orphan.id,
+                "name": getattr(orphan, "name", "") or "",
+                "address": getattr(orphan, "address", "") or "",
+                "day": oday.isoformat() if oday else None,
+                "retailer": getattr(getattr(orphan, "retailer", None), "name", None),
+                "reason": reason,
+                "matched_due": matched,
+                "same_day_due_count": len(same_day),
+                "same_day_due": same_day[:15],
+            }
+        )
+    return out
 
 
 def try_link_orphan_event(event_id: int) -> int | None:

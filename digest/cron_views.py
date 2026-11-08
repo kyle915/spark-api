@@ -5505,7 +5505,7 @@ class LinkWalkinRecapsToRequestsView(View):
     still show DUE (same day + fuzzy place / unique store name). Default
     tenant is Famus Energy. Dry-run unless apply=1.
 
-    Params: tenant_slug (default famus-energy), days_back, apply.
+    Params: tenant_slug (default famus-energy), days_back, apply, diagnose.
     """
 
     def _run(self, request: HttpRequest) -> HttpResponse:
@@ -5527,6 +5527,12 @@ class LinkWalkinRecapsToRequestsView(View):
         apply_it = raw in ("1", "true", "yes", "on")
         if apply_it:
             kwargs["apply"] = True
+        raw_d = (
+            request.GET.get("diagnose") or request.POST.get("diagnose") or ""
+        ).lower()
+        diagnose_it = raw_d in ("1", "true", "yes", "on")
+        if diagnose_it:
+            kwargs["diagnose"] = True
 
         out = io.StringIO()
         try:

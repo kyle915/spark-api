@@ -20,6 +20,10 @@ on:
         description: "true to write links; anything else is dry-run"
         required: true
         default: "false"
+      diagnose:
+        description: "true to include unmatched orphan details in JSON"
+        required: true
+        default: "false"
 
 jobs:
   run:
@@ -41,9 +45,13 @@ jobs:
           case "$(echo "$APPLY" | tr '[:upper:]' '[:lower:]')" in
             1|true|yes|on) APPLY_Q="true" ;;
           esac
+          DIAGNOSE_Q="false"
+          case "$(echo "$DIAGNOSE" | tr '[:upper:]' '[:lower:]')" in
+            1|true|yes|on) DIAGNOSE_Q="true" ;;
+          esac
           STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
             -X POST \
-            "$CRON_URL?tenant_slug=$TENANT_SLUG&days_back=$DAYS_BACK&apply=$APPLY_Q" \
+            "$CRON_URL?tenant_slug=$TENANT_SLUG&days_back=$DAYS_BACK&apply=$APPLY_Q&diagnose=$DIAGNOSE_Q" \
             -H "X-Cron-Secret: $CRON_SECRET")
           echo "HTTP $STATUS"
           cat /tmp/cron-response.json
