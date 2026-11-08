@@ -480,7 +480,9 @@ async def _notify_recap_ready_for_review_to_admins(
         recipients = [filer_email] if filer_email else []
 
     tenant = await sync_to_async(recap_tenant)(recap)
-    recipients = apply_outbound_policy(recipients, tenant=tenant, kind="recap")
+    recipients = apply_outbound_policy(
+        recipients, tenant=tenant, kind="recap", merge_internal=False
+    )
     if not recipients:
         return
 
@@ -573,7 +575,9 @@ def _send_recap_data_quality_alert(
 
         recipients = _resolve_ignite_recipients()
         tenant = recap_tenant(custom_recap)
-        recipients = apply_outbound_policy(recipients, tenant=tenant, kind="recap")
+        recipients = apply_outbound_policy(
+            recipients, tenant=tenant, kind="recap", merge_internal=False
+        )
         if not recipients:
             return
         ev = getattr(custom_recap, "event", None)

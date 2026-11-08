@@ -71,7 +71,9 @@ def notify_ops_comment(recap, *, kind: str, comment: RecapComment) -> None:
         tenant = getattr(event, "tenant", None) if event is not None else None
         if tenant is None:
             tenant = getattr(recap, "tenant", None)
-        admins = apply_outbound_policy(admins, tenant=tenant, kind="recap")
+        admins = apply_outbound_policy(
+            admins, tenant=tenant, kind="recap", merge_internal=False
+        )
         if not admins:
             return
         name = getattr(recap, "name", None) or "Recap"

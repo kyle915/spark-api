@@ -103,7 +103,9 @@ def notify_ops_signoff(recap, *, kind: str) -> None:
         tenant = getattr(event, "tenant", None) if event is not None else None
         if tenant is None:
             tenant = getattr(recap, "tenant", None)
-        admins = apply_outbound_policy(admins, tenant=tenant, kind="recap")
+        admins = apply_outbound_policy(
+            admins, tenant=tenant, kind="recap", merge_internal=False
+        )
         name = getattr(recap, "name", None) or "Recap"
         brand = _tenant_brand_name(recap)
         status = recap.client_signoff_status

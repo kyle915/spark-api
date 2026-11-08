@@ -13,8 +13,13 @@ from tenants.models import Tenant
 def test_audit_flags_checkin_mismatch():
     from django.contrib.auth import get_user_model
 
+    from tenants.tests.base import ensure_role
+
+    role = ensure_role("System")
     user = get_user_model().objects.create_user(
-        username="audit-bg-user", email="audit-bg@igniteproductions.co"
+        username="audit-bg-user",
+        email="audit-bg@igniteproductions.co",
+        role=role,
     )
     tenant = Tenant.objects.create(
         name="Famus Energy",

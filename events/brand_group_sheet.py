@@ -169,7 +169,9 @@ def retail_sheet_id_for_tenant(tenant) -> str:
 def assert_standing_checkin(tenant) -> None:
     """Refuse a send whose tenant code is not the standing walk-up code."""
     slug = (getattr(tenant, "slug", "") or "").strip()
-    expected = standing_checkin_code(slug)
+    # Compare against constants only — never prefer DB checkin_code (that would
+    # let a stale code pass and nullify the standing-code guard).
+    expected = _STANDING_BY_SLUG.get(slug, "")
     if not expected:
         return
     actual = (getattr(tenant, "checkin_code", "") or "").strip()
