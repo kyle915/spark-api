@@ -7,7 +7,6 @@ other public spark-form stay pending until a human approves.
 
 from __future__ import annotations
 
-from events.routing import merge_always_include_internal
 
 TORCH_PUBLIC_FORM_SLUGS = frozenset({"keee-torch-thc"})
 TORCH_TENANT_SLUGS = frozenset({"torch", "torch-thc", "keee-torch-thc"})
@@ -138,13 +137,17 @@ def torch_request_approved_lists(
     requestor_email: str | None,
 ) -> tuple[list[str], list[str]]:
     """To: requestor (or first CC). CC: Liberty + Ignite Torch list."""
+    from events.outbound_policy import apply_outbound_policy
+
     requestor = (requestor_email or "").strip()
-    cc = merge_always_include_internal(
-        suppress_torch_emails(_dedupe_emails(TORCH_REQUEST_APPROVED_CC))
+    cc = apply_outbound_policy(
+        _dedupe_emails(TORCH_REQUEST_APPROVED_CC),
+        tenant=None,
+        kind="generic",
+        merge_internal=True,
+        exclude_email=requestor or None,
     )
     if requestor:
-        requestor_key = requestor.lower()
-        cc = [e for e in cc if e.lower() != requestor_key]
         return [requestor], cc
     if not cc:
         return [], []
@@ -155,14 +158,28 @@ def torch_recap_submit_lists(
     requestor_emails: list[str] | tuple[str, ...],
 ) -> tuple[list[str], list[str]]:
     """To: requestor(s). CC: Liberty + events + Nevena. No Kyle/Harris blast."""
+    from events.outbound_policy import apply_outbound_policy
+
+    # Torch-only path: tenant=None still strips TORCH_SUPPRESS; Junior skip
+    # is unconditional here (omit_torch_recap_skips needs a Torch tenant).
     requestors = _drop_torch_recap_skips(
-        suppress_torch_emails(_dedupe_emails(requestor_emails))
+        apply_outbound_policy(
+            _dedupe_emails(requestor_emails),
+            tenant=None,
+            kind="generic",
+            merge_internal=False,
+        )
     )
     seen = {e.lower() for e in requestors}
     cc = [
         e
         for e in _drop_torch_recap_skips(
-            suppress_torch_emails(_dedupe_emails(TORCH_RECAP_SUBMIT_CC))
+            apply_outbound_policy(
+                _dedupe_emails(TORCH_RECAP_SUBMIT_CC),
+                tenant=None,
+                kind="generic",
+                merge_internal=False,
+            )
         )
         if e.lower() not in seen
     ]

@@ -56,11 +56,10 @@ from .request_auto_approve import (
     tenant_request_cc_emails,
 )
 from .request_soft_delete import soft_delete_request
+from .outbound_policy import apply_outbound_policy
 from .torch_portal import (
-    TORCH_SUPPRESS_EMAILS,
     is_torch_tenant,
     should_auto_approve_public_request,
-    suppress_torch_emails,
     torch_request_approved_lists,
 )
 from utils.torch_public_form_sheet import (
@@ -3122,12 +3121,12 @@ async def _notify_notification_group_users_for_request(
         .values_list("user__email", flat=True)
         .distinct()
     )
-    is_torch = await sync_to_async(lambda: is_torch_tenant(request.tenant))()
-    if is_torch:
-        to_emails = [
-            e for e in to_emails
-            if (e or "").strip().lower() not in TORCH_SUPPRESS_EMAILS
-        ]
+    to_emails = apply_outbound_policy(
+        list(to_emails),
+        tenant=request.tenant,
+        kind="generic",
+        merge_internal=False,
+    )
     if not to_emails:
         return
 
@@ -3169,12 +3168,17 @@ async def _notify_notification_group_users_for_request_created(
     if not recipients:
         return
 
-    is_torch = await sync_to_async(lambda: is_torch_tenant(request.tenant))()
     for recipient in recipients:
         recipient_email = (recipient.get("user__email") or "").strip()
         if not recipient_email:
             continue
-        if is_torch and recipient_email.lower() in TORCH_SUPPRESS_EMAILS:
+        kept = apply_outbound_policy(
+            [recipient_email],
+            tenant=request.tenant,
+            kind="generic",
+            merge_internal=False,
+        )
+        if not kept:
             continue
         first_name = (recipient.get("user__first_name") or "").strip()
         last_name = (recipient.get("user__last_name") or "").strip()
