@@ -1,5 +1,5 @@
-# One-shot read-only: list Famus filed walk-up orphans via Cloud Run Job
-# on the live image (no code deploy required for the diagnose body).
+# One-shot: Famus filed walk-up orphan diagnose via cron HTTP (read-only).
+# Requires Cloud Run to have diagnose= support (develop deploy).
 name: Diagnose Famus walk-in orphans
 
 on:
@@ -14,18 +14,21 @@ jobs:
   diagnose:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v2
-        with:
-          credentials_json: ${{ secrets.GCP_DEPLOY_SERVICE_ACCOUNT }}
-
-      - name: Set up Cloud SDK
-        uses: google-github-actions/setup-gcloud@v2
-
-      - name: Run diagnose job
+      - name: Call cron diagnose
         env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/link-walkin-recaps-to-requests
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
           DAYS_BACK: ${{ github.event.inputs.days_back }}
-        run: python3 scripts/diagnose_famus_walkin_orphans_job.py "$DAYS_BACK"
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST \
+            "$CRON_URL?tenant_slug=famus-energy&days_back=$DAYS_BACK&apply=false&diagnose=true" \
+            -H "X-Cron-Secret: $CRON_SECRET")
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          echo
+          test "$STATUS" = "200"
