@@ -2210,7 +2210,9 @@ _STREET_SUFFIXES = {
 
 # Geocoder / USPS spellings of the SAME road type. Ave+Blvd share a family
 # because reverse-geocode of the Vons at 1201 Avocado returns "Boulevard"
-# while ops types "Ave". St/Street is a different family — Oak St ≠ Oak Ave.
+# while ops types "Ave". Hwy joins that family too: "Dixie Highway" and
+# "Dixie Blvd" are the same road under admin vs geocoder spelling. St/Street
+# is a different family — Oak St ≠ Oak Ave.
 _SUFFIX_CANON = {
     "ave": "ave",
     "avenue": "ave",
@@ -2232,8 +2234,8 @@ _SUFFIX_CANON = {
     "place": "pl",
     "ter": "ter",
     "terrace": "ter",
-    "hwy": "hwy",
-    "highway": "hwy",
+    "hwy": "ave",
+    "highway": "ave",
     "pkwy": "pkwy",
     "parkway": "pkwy",
     "sq": "sq",
@@ -2263,50 +2265,99 @@ _ADDR_COUNTRY_TOKENS = {"usa", "us", "united", "states"}
 
 # Directional words → a single canonical form. A reverse-geocoder spells them
 # out ("North Clybourn Avenue") while an admin abbreviates ("N Clybourn Ave"),
-# so we fold both to the abbreviation before comparing.
+# so we fold both to the abbreviation before comparing. Trailing forms
+# ("Dixie Highway South") are collected into the same slot as leading ones
+# ("S Dixie Blvd") so token order does not fork a match.
 _DIRECTIONALS = {
     "north": "n", "south": "s", "east": "e", "west": "w",
     "northeast": "ne", "northwest": "nw", "southeast": "se", "southwest": "sw",
 }
+# Single-letter leading abbrevs only. Two-letter NE/NW/SE/SW stay as place
+# tokens so state "NE" (Nebraska) is not mistaken for a quadrant — full words
+# like "Northeast" still fold via _DIRECTIONALS into dirs.
+_DIRECTIONAL_ABBREVS = {"n", "s", "e", "w"}
+
+# Full single-token state name → USPS abbreviation. Walk-in GPS reverse-geocode
+# often spells "Kentucky" while Tracker rows store "KY". Two-word states
+# (New York, …) stay as separate tokens — rare on these Famus rows.
+_US_STATE_FOLD = {
+    "alabama": "al", "alaska": "ak", "arizona": "az", "arkansas": "ar",
+    "california": "ca", "colorado": "co", "connecticut": "ct",
+    "delaware": "de", "florida": "fl", "georgia": "ga", "hawaii": "hi",
+    "idaho": "id", "illinois": "il", "indiana": "in", "iowa": "ia",
+    "kansas": "ks", "kentucky": "ky", "louisiana": "la", "maine": "me",
+    "maryland": "md", "massachusetts": "ma", "michigan": "mi",
+    "minnesota": "mn", "mississippi": "ms", "missouri": "mo",
+    "montana": "mt", "nebraska": "ne", "nevada": "nv", "ohio": "oh",
+    "oklahoma": "ok", "oregon": "or", "pennsylvania": "pa",
+    "tennessee": "tn", "texas": "tx", "utah": "ut", "vermont": "vt",
+    "virginia": "va", "washington": "wa", "wisconsin": "wi",
+    "wyoming": "wy",
+}
 
 
-def address_core_parts(value: str) -> tuple[str, str]:
-    """Split an address into ``(core_key, canonical_suffix)``.
+def _address_parse(
+    value: str,
+) -> tuple[str | None, list[str], list[str], str]:
+    """Parse an address into ``(number|None, dirs, place_tokens, suffix)``.
 
-    ``core_key`` is number + street name + city/state (suffix/ZIP/USA
-    dropped, directionals folded). ``canonical_suffix`` is the street-type
-    family ("ave", "st", …) or "" when the address has no suffix token.
-    Returns ``("", "")`` when there's no leading street number — that key
-    isn't safe and callers fall back to :func:`normalize_place`.
+    Directionals (leading or trailing) are collected into ``dirs``; street-type
+    suffix / ZIP / USA are dropped; full state names fold to USPS abbreviations.
+    ``number`` is None when the string does not begin with a street number.
     """
     base = normalize_place(value)
     if not base:
-        return "", ""
+        return None, [], [], ""
     toks = base.split()
-    # Require a leading street number; without one this loose key isn't safe.
-    if not toks[0].isdigit():
-        return "", ""
-    core = []
+    number: str | None = None
+    start = 0
+    if toks[0].isdigit():
+        number = toks[0]
+        start = 1
+    dirs: list[str] = []
+    place: list[str] = []
     suffix = ""
-    for i, t in enumerate(toks):
+    for t in toks[start:]:
         if t in _SUFFIX_CANON:
             if not suffix:
                 suffix = _SUFFIX_CANON[t]
             continue
         if t in _ADDR_COUNTRY_TOKENS:
             continue
-        # Drop a 5-digit ZIP, but never the leading street number (i == 0).
-        if i > 0 and re.fullmatch(r"\d{5}", t):
+        if re.fullmatch(r"\d{5}", t):
             continue
-        core.append(_DIRECTIONALS.get(t, t))
-    return " ".join(core).strip(), suffix
+        if t in _DIRECTIONALS:
+            dirs.append(_DIRECTIONALS[t])
+            continue
+        if t in _DIRECTIONAL_ABBREVS:
+            dirs.append(t)
+            continue
+        place.append(_US_STATE_FOLD.get(t, t))
+    return number, dirs, place, suffix
+
+
+def address_core_parts(value: str) -> tuple[str, str]:
+    """Split an address into ``(core_key, canonical_suffix)``.
+
+    ``core_key`` is number + directionals + street name + city/state (suffix/
+    ZIP/USA dropped, directionals and state names folded). ``canonical_suffix``
+    is the street-type family ("ave", "st", …) or "" when the address has no
+    suffix token. Returns ``("", "")`` when there's no leading street number —
+    that key isn't safe and callers fall back to :func:`normalize_place` or the
+    soft path in :func:`addresses_fuzzy_match`.
+    """
+    number, dirs, place, suffix = _address_parse(value)
+    if number is None:
+        return "", ""
+    core = " ".join([number, *dirs, *place]).strip()
+    return core, suffix
 
 
 def address_core_key(value: str) -> str:
     """A looser "same store?" key than :func:`normalize_place`: on top of the
     case/punctuation/space flattening it drops street-type suffix words
     (ave/avenue/blvd/…), country tokens (usa) and any trailing 5-digit ZIP, and
-    folds directionals (north→n).
+    folds directionals (north→n) and single-token state names (kentucky→ky).
 
     Only trusted when the address begins with a STREET NUMBER. The stripped
     key alone is not enough to decide "same place" — Oak St and Oak Ave share
@@ -2316,21 +2367,63 @@ def address_core_key(value: str) -> str:
     return address_core_parts(value)[0]
 
 
+def _suffixes_compatible(suffix_a: str, suffix_b: str) -> bool:
+    if not suffix_a or not suffix_b:
+        return True
+    return suffix_a == suffix_b
+
+
+def _soft_place_key(dirs: list[str], place: list[str]) -> str:
+    return " ".join([*dirs, *place]).strip()
+
+
+def _addresses_soft_match(a: str, b: str) -> bool:
+    """Match when one side lacks a street number but names the same street.
+
+    BA GPS sometimes reverse-geocodes "Tamarack Road, Owensboro, Kentucky"
+    while the Tracker row has "1035 Tamarack Rd, Owensboro, KY". Require a
+    street-type suffix on the unnumbered side, a substantial street token, and
+    exact equality of (dirs + place) after folds — city-only strings do not
+    match.
+    """
+    num_a, dirs_a, place_a, suf_a = _address_parse(a)
+    num_b, dirs_b, place_b, suf_b = _address_parse(b)
+    if (num_a is None) == (num_b is None):
+        return False
+    if not _suffixes_compatible(suf_a, suf_b):
+        return False
+    if num_a is None:
+        un_dirs, un_place, un_suf = dirs_a, place_a, suf_a
+        num_dirs, num_place = dirs_b, place_b
+    else:
+        un_dirs, un_place, un_suf = dirs_b, place_b, suf_b
+        num_dirs, num_place = dirs_a, place_a
+    if not un_suf:
+        return False
+    if not any(len(t) >= 4 for t in un_place):
+        return False
+    return _soft_place_key(un_dirs, un_place) == _soft_place_key(
+        num_dirs, num_place
+    )
+
+
 def addresses_fuzzy_match(a: str, b: str) -> bool:
     """True when two addresses name the same place under geocoder noise.
 
     Requires the same number + street name + city/state (ZIP/USA ignored,
-    directionals folded). Street-type suffixes must be in the same family
-    (Ave↔Boulevard for the Vons pair) or missing on one side. Different
-    families — Oak St vs Oak Ave — do not match, even in the same city.
+    directionals and state names folded, dirs re-homed after the number).
+    Street-type suffixes must be in the same family (Ave↔Boulevard↔Highway)
+    or missing on one side. Different families — Oak St vs Oak Ave — do not
+    match, even in the same city. When exactly one side lacks a street number,
+    falls back to a tight soft street-name match.
     """
     key_a, suffix_a = address_core_parts(a)
     key_b, suffix_b = address_core_parts(b)
-    if not key_a or not key_b or key_a != key_b:
-        return False
-    if suffix_a and suffix_b and suffix_a != suffix_b:
-        return False
-    return True
+    if key_a and key_b:
+        if key_a != key_b:
+            return False
+        return _suffixes_compatible(suffix_a, suffix_b)
+    return _addresses_soft_match(a, b)
 
 
 def _prefer_roster_name(current: str, roster_name: str) -> str:
