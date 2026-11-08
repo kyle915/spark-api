@@ -234,41 +234,34 @@ def main() -> int:
     print("+", " ".join(cmd[:14]), "...", flush=True)
     subprocess.run(cmd, check=True)
 
-    print("===== fetching execution logs =====", flush=True)
-    # Prefer job execution logs API (deploy SA often lacks logging.read).
-    exe = gcloud(
-        "run",
-        "jobs",
-        "executions",
-        "list",
-        f"--job={JOB}",
-        f"--region={REGION}",
-        "--limit=1",
-        "--format=value(name)",
-    ).strip()
-    print(f"execution={exe}", flush=True)
+    print("===== fetching job logs =====", flush=True)
     proc = subprocess.run(
         [
             "gcloud",
             "run",
             "jobs",
-            "executions",
             "logs",
             "read",
-            exe,
+            JOB,
             f"--region={REGION}",
             f"--project={PROJECT}",
+            "--limit=200",
         ],
         capture_output=True,
         text=True,
     )
-    logs = (proc.stdout or "") + (proc.stderr or "")
+    logs = (proc.stdout or "") + "\n" + (proc.stderr or "")
     print(logs)
     if proc.returncode != 0:
-        print(f"::warning::execution logs read rc={proc.returncode}", flush=True)
+        print(f"::warning::jobs logs read rc={proc.returncode}", flush=True)
+    found = False
     for line in logs.splitlines():
         if "JSON_ORPHANS:" in line:
             print(line, flush=True)
+            found = True
+    if not found:
+        print("::warning::JSON_ORPHANS not found in job logs", flush=True)
+    return 0
     return 0
 
 
