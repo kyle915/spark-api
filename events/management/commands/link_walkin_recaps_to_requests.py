@@ -42,6 +42,11 @@ class Command(BaseCommand):
             action="store_true",
             help="Run for every tenant that has a brand_group set.",
         )
+        parser.add_argument(
+            "--diagnose",
+            action="store_true",
+            help="Include unmatched orphan details in JSON_RESULT.",
+        )
 
     def handle(self, *args, **opts):
         apply = bool(opts["apply"])
@@ -74,7 +79,10 @@ class Command(BaseCommand):
         with cron_db_session():
             for tenant in tenants:
                 result = link_walkin_recaps_for_tenant(
-                    tenant, days_back=days_back, apply=apply
+                    tenant,
+                    days_back=days_back,
+                    apply=apply,
+                    diagnose=bool(opts.get("diagnose")),
                 )
                 for row in result.rows:
                     status = row.get("status")
@@ -88,15 +96,17 @@ class Command(BaseCommand):
                     f"would_link={result.would_link} ambiguous={result.ambiguous} "
                     f"orphans_with_filed={result.orphans_with_filed}"
                 )
-                combined.append(
-                    {
-                        "tenant": result.tenant_slug,
-                        "apply": result.apply,
-                        "linked": result.linked,
-                        "would_link": result.would_link,
-                        "ambiguous": result.ambiguous,
-                        "rows": result.rows,
-                    }
-                )
+                entry = {
+                    "tenant": result.tenant_slug,
+                    "apply": result.apply,
+                    "linked": result.linked,
+                    "would_link": result.would_link,
+                    "ambiguous": result.ambiguous,
+                    "orphans_with_filed": result.orphans_with_filed,
+                    "rows": result.rows,
+                }
+                if result.orphan_details is not None:
+                    entry["orphan_details"] = result.orphan_details
+                combined.append(entry)
 
         self.stdout.write("JSON_RESULT:" + json.dumps({"tenants": combined}))
