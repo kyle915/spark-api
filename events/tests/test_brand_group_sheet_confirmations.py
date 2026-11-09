@@ -505,10 +505,14 @@ PIVOT_COMPARISON_URL = (
 
 
 def test_pivot_sheet_id_is_allowlisted_and_famus_stays_the_default():
+    from events.sheet_event_confirmation_views import default_brand_group_sheet_id
+
     assert validate_sheet_id(PIVOT_SHEET_ID) == PIVOT_SHEET_ID
     assert validate_sheet_id(BRAND_GROUP_SHEET_ID) == BRAND_GROUP_SHEET_ID
+    assert default_brand_group_sheet_id() == BRAND_GROUP_SHEET_ID
     assert (
-        BrandGroupSheetEventConfirmationView.default_sheet_id == BRAND_GROUP_SHEET_ID
+        BrandGroupSheetEventConfirmationView().default_sheet_id
+        == BRAND_GROUP_SHEET_ID
     )
     with pytest.raises(ValueError, match="unknown sheet"):
         validate_sheet_id("not-a-sheet")

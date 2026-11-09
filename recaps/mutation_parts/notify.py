@@ -328,6 +328,15 @@ def _collect_recap_approved_recipients(
             return
         if is_placeholder_recipient_email(e):
             return
+        # Same choke point as Torch branch — global CC suppress + policy.
+        kept = apply_outbound_policy(
+            [e],
+            tenant=tenant,
+            kind="recap",
+            merge_internal=False,
+        )
+        if not kept:
+            return
         seen.add(e.lower())
         recipients.append((e, (first or "").strip()))
 

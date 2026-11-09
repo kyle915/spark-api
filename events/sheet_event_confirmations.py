@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, time, timedelta
 from typing import Any, Callable
 from zoneinfo import ZoneInfo
@@ -32,6 +32,7 @@ from events.brand_group_sheet import (
     catalogs_for_tenants,
     match_sku_tokens,
     parse_brand_slugs,
+    retail_sheet_id_for_tenant,
     tenants_for_slugs,
 )
 from events.event_confirmations import checkin_url_for, is_liquid_death_tenant
@@ -220,6 +221,8 @@ def sheet_automation_for_tenant(tenant) -> SheetConfirmationConfig | None:
     append sync. Ops looking at Settings linked-sheet will not see Torch /
     Pivot / Famus confirmation stamps; this mapping is what the staffing tab
     uses instead.
+
+    Brand-group / Pivot prefer ``Tenant.retail_sheet_id`` when set.
     """
     if tenant is None:
         return None
@@ -229,8 +232,14 @@ def sheet_automation_for_tenant(tenant) -> SheetConfirmationConfig | None:
     if is_liquid_death_tenant(tenant):
         return LIQUID_DEATH_CONFIG
     if slug == PIVOT_TENANT_SLUG:
+        resolved = retail_sheet_id_for_tenant(tenant) or PIVOT_SHEET_ID
+        if resolved != PIVOT_CONFIG.sheet_id:
+            return replace(PIVOT_CONFIG, sheet_id=resolved)
         return PIVOT_CONFIG
     if slug in _BRAND_GROUP_TENANT_SLUGS:
+        resolved = retail_sheet_id_for_tenant(tenant) or BRAND_GROUP_SHEET_ID
+        if resolved != BRAND_GROUP_CONFIG.sheet_id:
+            return replace(BRAND_GROUP_CONFIG, sheet_id=resolved)
         return BRAND_GROUP_CONFIG
     return None
 
@@ -297,12 +306,29 @@ class ActionResult:
 def config_for_sheet_id(sheet_id: str | None) -> SheetConfirmationConfig:
     sid = (sheet_id or "").strip() or TORCH_PUBLIC_FORM_SHEET_ID
     cfg = SHEET_CONFIG_BY_ID.get(sid)
-    if cfg is None:
-        raise ValueError(
-            f"Refusing unknown sheet id {sid!r}; allowlist is "
-            + ", ".join(sorted(SHEET_CONFIG_BY_ID))
+    if cfg is not None:
+        return cfg
+    # Tenant-stored retail_sheet_id (same layout as brand-group / pivot).
+    try:
+        from tenants.models import Tenant
+
+        row = (
+            Tenant.objects.filter(retail_sheet_id=sid)
+            .only("id", "slug", "retail_sheet_id")
+            .first()
         )
-    return cfg
+    except Exception:
+        row = None
+    if row is not None:
+        slug = (row.slug or "").strip().lower()
+        if slug == PIVOT_TENANT_SLUG:
+            return replace(PIVOT_CONFIG, sheet_id=sid)
+        if slug in _BRAND_GROUP_TENANT_SLUGS:
+            return replace(BRAND_GROUP_CONFIG, sheet_id=sid)
+    raise ValueError(
+        f"Refusing unknown sheet id {sid!r}; allowlist is "
+        + ", ".join(sorted(SHEET_CONFIG_BY_ID))
+    )
 
 
 def validate_sheet_id(sheet_id: str | None) -> str:

@@ -1752,8 +1752,8 @@ class RequestQueries:
 
             data = admin_payloads.compute_sidebar_request_counts(qs)
             recaps_due = data.recaps_due
-            # Famus keeps Missing Recaps off — zero the sidebar badge even
-            # when empty schedule shells would otherwise count as due.
+            # Per-tenant Missing Recaps gate (empty by default). Zero the
+            # sidebar badge only when a slug is re-added to the disabled set.
             tenant_ids = list(
                 qs.order_by().values_list("tenant_id", flat=True).distinct()[:2]
             )

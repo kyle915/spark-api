@@ -267,22 +267,17 @@ class Command(BaseCommand):
 
         try:
             from events.outbound_policy import apply_outbound_policy
-            from events.torch_portal import is_torch_tenant
             from tenants.support import _resolve_ignite_recipients
 
-            recipients = _resolve_ignite_recipients()
-            # Any Torch row in this digest → strip TORCH_SUPPRESS (baesha).
-            # Mixed-brand digests lose her for that send rather than leak Torch.
-            if any(
-                is_torch_tenant(getattr(getattr(r, "event", None), "tenant", None))
-                for r in rows
-            ):
-                recipients = apply_outbound_policy(
-                    recipients,
-                    tenant=None,
-                    kind="generic",
-                    merge_internal=False,
-                )
+            # Always run policy (tenant=None strips Torch suppress). Ignite
+            # roll-up already went through policy; re-apply is idempotent and
+            # covers mixed-brand digests without a Torch-row gate.
+            recipients = apply_outbound_policy(
+                _resolve_ignite_recipients(),
+                tenant=None,
+                kind="generic",
+                merge_internal=False,
+            )
             if not recipients:
                 self.stdout.write(
                     "  [alert] No Ignite recipients resolved — alert skipped."

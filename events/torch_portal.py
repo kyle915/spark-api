@@ -23,14 +23,6 @@ TORCH_REQUEST_APPROVED_CC: tuple[str, ...] = (
     "nevena@igniteproductions.co",
 )
 
-# Recap submitted: requestor + Liberty + events + Nevena only.
-# Do not blast Kyle / Harris / myriant / keis unless they are the requestor.
-TORCH_RECAP_SUBMIT_CC: tuple[str, ...] = (
-    "liberty@torchdrinks.com",
-    "events@igniteproductions.co",
-    "nevena@igniteproductions.co",
-)
-
 # Ignite addresses excluded from Torch-related Spark emails.
 TORCH_SUPPRESS_EMAILS: frozenset[str] = frozenset({
     "baesha@igniteproductions.co",
@@ -153,38 +145,3 @@ def torch_request_approved_lists(
         return [], []
     return [cc[0]], cc[1:]
 
-
-def torch_recap_submit_lists(
-    requestor_emails: list[str] | tuple[str, ...],
-) -> tuple[list[str], list[str]]:
-    """To: requestor(s). CC: Liberty + events + Nevena. No Kyle/Harris blast."""
-    from events.outbound_policy import apply_outbound_policy
-
-    # Torch-only path: tenant=None still strips TORCH_SUPPRESS; Junior skip
-    # is unconditional here (omit_torch_recap_skips needs a Torch tenant).
-    requestors = _drop_torch_recap_skips(
-        apply_outbound_policy(
-            _dedupe_emails(requestor_emails),
-            tenant=None,
-            kind="generic",
-            merge_internal=False,
-        )
-    )
-    seen = {e.lower() for e in requestors}
-    cc = [
-        e
-        for e in _drop_torch_recap_skips(
-            apply_outbound_policy(
-                _dedupe_emails(TORCH_RECAP_SUBMIT_CC),
-                tenant=None,
-                kind="generic",
-                merge_internal=False,
-            )
-        )
-        if e.lower() not in seen
-    ]
-    if requestors:
-        return requestors, cc
-    if not cc:
-        return [], []
-    return [cc[0]], cc[1:]

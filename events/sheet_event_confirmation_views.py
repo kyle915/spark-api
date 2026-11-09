@@ -25,13 +25,42 @@ from django.utils.decorators import method_decorator
 from django.views import View
 from django.views.decorators.csrf import csrf_exempt
 
-from events.brand_group_sheet import BRAND_GROUP_SHEET_ID
+from events.brand_group_sheet import (
+    BRAND_GROUP_SHEET_ID,
+    retail_sheet_id_for_tenant,
+)
 from events.sheet_event_confirmations import (
     LIQUID_DEATH_SHEET_ID,
     TORCH_PUBLIC_FORM_SHEET_ID,
     handle_action,
     validate_sheet_id,
 )
+
+
+def default_brand_group_sheet_id() -> str:
+    """Prefer a seeded Tenant.retail_sheet_id; fall back to the constant.
+
+    The brand-group confirmation endpoint covers Famus / Alcohol Armor /
+    Wook Water on one shared workbook. Any of those tenants with a DB sheet
+    id wins; otherwise the standing constant.
+    """
+    try:
+        from tenants.models import Tenant
+
+        for slug in ("famus-energy", "alcohol-armor", "wook-water"):
+            tenant = (
+                Tenant.objects.filter(slug=slug)
+                .only("id", "slug", "retail_sheet_id")
+                .first()
+            )
+            if tenant is None:
+                continue
+            sid = retail_sheet_id_for_tenant(tenant)
+            if sid:
+                return sid
+    except Exception:
+        pass
+    return BRAND_GROUP_SHEET_ID
 
 logger = logging.getLogger(__name__)
 
@@ -200,4 +229,6 @@ class LiquidDeathSheetEventConfirmationView(SheetEventConfirmationView):
 
 
 class BrandGroupSheetEventConfirmationView(SheetEventConfirmationView):
-    default_sheet_id = BRAND_GROUP_SHEET_ID
+    @property
+    def default_sheet_id(self) -> str:
+        return default_brand_group_sheet_id()
