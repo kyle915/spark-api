@@ -75,18 +75,20 @@ def _resolve_ignite_recipients() -> list[str]:
     list of addresses — empty if nothing is configured.
 
     Imported lazily to avoid an import cycle (events imports tenants models).
+    Runs through ``apply_outbound_policy`` so cron health / autopilot / audit
+    alerts inherit Torch + global CC suppress (not only ``suppress_cc``).
     """
     from events.mutations import (
         _get_request_review_copy_emails,
         _get_spark_admin_emails,
     )
-    from events.routing import IGNITE_REVIEW_CC, suppress_cc
+    from events.outbound_policy import apply_outbound_policy
+    from events.routing import IGNITE_REVIEW_CC
 
     composed = list(IGNITE_REVIEW_CC)
     composed += _get_spark_admin_emails()
     composed += _get_request_review_copy_emails()
-    # Dedupe case-insensitively, preserve first-seen order, then drop the
-    # known suppressed address(es) — same hygiene as the approval CC.
+    # Dedupe case-insensitively, preserve first-seen order.
     seen: set[str] = set()
     deduped: list[str] = []
     for email in composed:
@@ -98,7 +100,12 @@ def _resolve_ignite_recipients() -> list[str]:
             continue
         seen.add(key)
         deduped.append(normalized)
-    return suppress_cc(deduped)
+    # tenant=None → Torch suppress still applies (ops digests must not leak
+    # Baesha onto Torch-adjacent blasts). merge_internal=False: this IS the
+    # Ignite roll-up; do not re-merge ALWAYS_INCLUDE.
+    return apply_outbound_policy(
+        deduped, tenant=None, kind="generic", merge_internal=False
+    )
 
 
 def _normalize_category(raw: str | None) -> str:

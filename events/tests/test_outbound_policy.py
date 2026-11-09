@@ -48,3 +48,16 @@ def test_apply_outbound_policy_merge_internal_off():
     emails = ["events@igniteproductions.co"]
     out = apply_outbound_policy(emails, kind="generic", merge_internal=False)
     assert out == emails
+
+
+def test_apply_outbound_policy_tenant_none_still_strips_torch_suppress():
+    emails = [
+        "kyle@igniteproductions.co",
+        "baesha@igniteproductions.co",
+    ]
+    out = apply_outbound_policy(
+        emails, tenant=None, kind="generic", merge_internal=False
+    )
+    lowered = [e.lower() for e in out]
+    assert "baesha@igniteproductions.co" not in lowered
+    assert "kyle@igniteproductions.co" in lowered

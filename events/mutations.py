@@ -507,6 +507,17 @@ async def _notify_notification_group_users_for_event(
     if not to_emails:
         return
 
+    from events.outbound_policy import apply_outbound_policy
+
+    to_emails = apply_outbound_policy(
+        to_emails,
+        tenant=getattr(event, "tenant", None),
+        kind="generic",
+        merge_internal=False,
+    )
+    if not to_emails:
+        return
+
     mailer = EventApprovedNotificationMailer(
         event=event,
         location=location,

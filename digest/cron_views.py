@@ -5430,6 +5430,75 @@ class ExplainRequestMirrorView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class SyncTenantToSheetIncrementalView(View):
+    """GET/POST `/internal/cron/sync-tenant-to-sheet-incremental`.
+
+    Runs ``sync_tenant_to_sheet --all-linked --incremental --apply`` so
+    recurring sheet mirrors only touch rows updated since the tenant
+    watermark (or the last 7 days). Cuts 429s vs full backfill.
+
+    Params (query or POST, all optional):
+      - tenant_slug: restrict to one tenant (default: every linked tenant)
+      - dry_run / apply: dry_run=1 skips writes; otherwise apply=true
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _get(name: str) -> str:
+            return (request.GET.get(name) or request.POST.get(name) or "").strip()
+
+        def _bool(name: str, default: bool = False) -> bool:
+            raw = _get(name).lower()
+            if not raw:
+                return default
+            return raw in ("1", "true", "yes", "on")
+
+        tenant_slug = _get("tenant_slug")
+        dry_run = _bool("dry_run", default=False)
+
+        cmd_args: list[str] = ["--incremental"]
+        if tenant_slug:
+            cmd_args += ["--tenant-slug", tenant_slug]
+        else:
+            cmd_args += ["--all-linked"]
+        if not dry_run:
+            cmd_args += ["--apply"]
+
+        out = io.StringIO()
+        try:
+            call_command("sync_tenant_to_sheet", *cmd_args, stdout=out)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("sync-tenant-to-sheet-incremental cron failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "log": out.getvalue(),
+                },
+                status=500,
+            )
+        return JsonResponse(
+            {
+                "ok": True,
+                "tenant_slug": tenant_slug or "(all-linked)",
+                "dry_run": dry_run,
+                "incremental": True,
+                "log": out.getvalue(),
+            }
+        )
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class ReconcileTrackerRowsView(View):
     """GET/POST `/internal/cron/reconcile-tracker-rows`.
 
@@ -11329,6 +11398,7 @@ def _registered_views() -> dict[str, Any]:
         "audit-brand-group-sheet-config": AuditBrandGroupSheetConfigView,
         "audit-ld-tracker-sync": AuditLdTrackerSyncView,
         "explain-request-mirror": ExplainRequestMirrorView,
+        "sync-tenant-to-sheet-incremental": SyncTenantToSheetIncrementalView,
         "reconcile-tracker-rows": ReconcileTrackerRowsView,
         "link-walkin-recaps-to-requests": LinkWalkinRecapsToRequestsView,
         "fix-ld-orphan-log-rows": FixLdOrphanLogRowsView,
