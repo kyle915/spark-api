@@ -66,6 +66,30 @@ class PayrollTimesheet:
 
 
 @strawberry.type
+class PayrollShiftRow:
+    """One (event, ambassador) shift behind a timesheet row — what the admin
+    opens to see WHY a BA's total is what it is, and to fix a bad punch."""
+
+    event_uuid: str
+    event_name: str
+    date: str | None = None
+    tenant_name: str | None = None
+    address: str | None = None
+    clock_in_at: str | None = None
+    clock_out_at: str | None = None
+    # Attendance uuids so the admin punch editor can target the exact rows.
+    clock_in_attendance_uuid: str | None = None
+    clock_out_attendance_uuid: str | None = None
+    on_the_clock: bool = False
+    scheduled_hours: float | None = None
+    hours: float | None = None
+    # True when `hours` fell back to the scheduled length (no clock pair).
+    estimated: bool = False
+    rate: float | None = None
+    pay: float | None = None
+
+
+@strawberry.type
 class PayrollQueries:
     @strawberry.field(permission_classes=[IsClientOrSparkAdmin])
     async def payroll_timesheet(
@@ -224,6 +248,127 @@ class PayrollQueries:
                 total_estimated_pay=round(total_pay, 2) if any_pay_total else None,
                 flagged_rows=flagged,
             )
+
+        return await sync_to_async(_go)()
+
+
+    @strawberry.field(permission_classes=[IsClientOrSparkAdmin])
+    async def payroll_timesheet_shifts(
+        self,
+        info: strawberry.Info,
+        start_date: str,
+        end_date: str,
+        ambassador_uuid: str,
+        tenant_id: strawberry.ID | None = None,
+    ) -> list[PayrollShiftRow]:
+        """The shifts behind one BA's timesheet row over [start_date, end_date]
+        (inclusive, by event date) — same scope, clock join and rate join as
+        `payroll_timesheet`, un-aggregated. Oldest first."""
+        user = info.context.request.user
+        is_admin, allowed = await _accessible_tenants(user)
+        resolved_tid = None
+        if tenant_id is not None:
+            try:
+                resolved_tid = resolve_id_to_int(tenant_id)
+            except Exception:  # noqa: BLE001
+                resolved_tid = None
+
+        def _go() -> list[PayrollShiftRow]:
+            from ambassadors.attendance_hours import (
+                clock_facts,
+                pay_for,
+                rate_map,
+                scheduled_hours,
+                worked_hours,
+            )
+            from ambassadors.models import AmbassadorEvent, Attendance
+
+            try:
+                start = _date.fromisoformat(str(start_date))
+                end = _date.fromisoformat(str(end_date))
+            except (TypeError, ValueError):
+                return []
+
+            qs = AmbassadorEvent.objects.filter(
+                ambassador__uuid=str(ambassador_uuid),
+                is_approved=True,
+                event__date__date__gte=start,
+                event__date__date__lte=end,
+            ).select_related("event", "event__tenant")
+            if not is_admin:
+                qs = qs.filter(event__tenant_id__in=(allowed or set()))
+            elif resolved_tid is not None:
+                qs = qs.filter(event__tenant_id=resolved_tid)
+            bookings = list(qs.order_by("event__date", "id")[:500])
+            if not bookings:
+                return []
+
+            amb_id = bookings[0].ambassador_id
+            event_ids = [b.event_id for b in bookings]
+            facts = clock_facts(event_ids)
+            rates = rate_map(event_ids)
+
+            # First clock-in / last clock-out attendance uuid per event.
+            in_uuid: dict[int, str] = {}
+            out_uuid: dict[int, str] = {}
+            for ev_id, src, att_uuid in (
+                Attendance.objects.filter(
+                    event_id__in=event_ids,
+                    ambassador_id=amb_id,
+                    source__name__in=["clock_in", "clock_out"],
+                )
+                .order_by("clock_time", "id")
+                .values_list("event_id", "source__name", "uuid")
+            ):
+                if src == "clock_in":
+                    in_uuid.setdefault(ev_id, str(att_uuid))
+                else:
+                    out_uuid[ev_id] = str(att_uuid)
+
+            rows: list[PayrollShiftRow] = []
+            seen: set[int] = set()
+            for b in bookings:
+                ev = b.event
+                if ev is None or ev.id in seen:
+                    continue
+                seen.add(ev.id)
+                key = (ev.id, amb_id)
+                f = facts.get(key) or {}
+                sched = scheduled_hours(
+                    getattr(ev, "start_time", None), getattr(ev, "end_time", None)
+                )
+                wh, est = worked_hours(f or None, sched)
+                rate = rates.get(key)
+                on_clock = f.get("latest_kind") == "clock_in"
+                t_in, t_out = f.get("first_in"), f.get("last_out")
+                rows.append(
+                    PayrollShiftRow(
+                        event_uuid=str(ev.uuid),
+                        event_name=ev.name or "",
+                        date=ev.date.date().isoformat() if ev.date else None,
+                        tenant_name=getattr(ev.tenant, "name", None),
+                        address=ev.address or None,
+                        clock_in_at=t_in.isoformat() if t_in else None,
+                        clock_out_at=(
+                            t_out.isoformat() if t_out and not on_clock else None
+                        ),
+                        clock_in_attendance_uuid=in_uuid.get(ev.id),
+                        clock_out_attendance_uuid=(
+                            None if on_clock else out_uuid.get(ev.id)
+                        ),
+                        on_the_clock=on_clock,
+                        scheduled_hours=sched,
+                        hours=wh,
+                        estimated=bool(est) and wh is not None,
+                        rate=rate,
+                        pay=(
+                            round(pay_for(wh, rate), 2)
+                            if wh is not None and rate is not None
+                            else None
+                        ),
+                    )
+                )
+            return rows
 
         return await sync_to_async(_go)()
 
