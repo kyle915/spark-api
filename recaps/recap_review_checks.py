@@ -12,6 +12,14 @@ explainable rule over facts already stored on the recap:
 * ``gps_distance`` — haversine distance between the clock-in GPS fix and
   the venue coordinates, flagged past 1.0 mile. Hidden (``na``) when
   either coordinate pair is missing — no fix is not a flag.
+* ``clock_out_distance`` — the same distance rule for the CLOCK-OUT fix. A
+  BA who leaves without clocking out and closes the shift from home shows
+  up here. ``na`` when there is no clock-out fix.
+* ``shift_overrun`` — time on the clock versus the scheduled shift length,
+  flagged when the BA was clocked in more than an hour past the scheduled
+  length (a forgotten clock-out). Compares durations, not wall-clock
+  times, so stored-timezone quirks on the event cannot cause a false flag.
+  ``na`` without a clock-in/out pair or a scheduled window.
 * ``photo_buckets`` — photo buckets configured for this tenant/program
   (``Tenant.checkin_photo_buckets`` via ``photo_bucket_specs``) with no
   (or too few) photos filed under that bucket's category, named in the
@@ -49,9 +57,15 @@ _IMAGE_EXT_RE = re.compile(r"\.(jpe?g|png|webp|gif|heic|heif)(\?|$)", re.IGNOREC
 _RECEIPT_BUCKET_RE = re.compile(r"receipt|product\s*spend|expense", re.IGNORECASE)
 _MONEY_RE = re.compile(r"-?\d+(?:\.\d+)?")
 
+# Clocked in this much longer than the shift was scheduled for reads as a
+# forgotten clock-out rather than a busy day.
+OVERRUN_FLAG_HOURS = 1.0
+
 CHECK_CODES = (
     "engagements_rate",
     "gps_distance",
+    "clock_out_distance",
+    "shift_overrun",
     "photo_buckets",
     "duplicate_photos",
     "spend_without_receipt",
@@ -70,6 +84,8 @@ def _all_na() -> list[dict]:
     return [
         _na("engagements_rate", "Engagements vs shift hours"),
         _na("gps_distance", "Clock-in distance"),
+        _na("clock_out_distance", "Clock-out distance"),
+        _na("shift_overrun", "Time on the clock"),
         _na("photo_buckets", "Photo buckets"),
         _na("duplicate_photos", "Duplicate photos"),
         _na("spend_without_receipt", "Spend receipt"),
@@ -279,6 +295,84 @@ def _check_gps(facts: _Facts, attendance: list) -> dict:
     return _check("gps_distance", f"Clock-in {shown} from venue", "pass", detail)
 
 
+def _source_name(row) -> str:
+    try:
+        return getattr(getattr(row, "source", None), "name", "") or ""
+    except Exception:
+        return ""
+
+
+def _check_clock_out_gps(facts: _Facts, attendance: list) -> dict:
+    label = "Clock-out distance"
+    venue = _valid_coords(getattr(facts.event, "coordinates", None))
+    clock = None
+    for row in reversed(attendance):
+        if _source_name(row) != "clock_out":
+            continue
+        clock = _valid_coords(getattr(row, "coordinates", None))
+        break  # only the final clock-out counts
+    if venue is None or clock is None:
+        return _na("clock_out_distance", label)
+    miles = _haversine_miles(clock, venue)
+    shown = f"{miles:.1f} mi" if miles >= 0.1 else "<0.1 mi"
+    detail = (
+        f"Clock-out GPS is {shown} from the venue address "
+        f"(check flags over {GPS_FLAG_MILES:.0f} mi)"
+    )
+    if miles > GPS_FLAG_MILES:
+        return _check(
+            "clock_out_distance",
+            f"Clocked out {shown} from the venue — worth a look",
+            "flag",
+            detail,
+        )
+    return _check(
+        "clock_out_distance", f"Clock-out {shown} from venue", "pass", detail
+    )
+
+
+def _scheduled_hours(event) -> float | None:
+    start = getattr(event, "start_time", None)
+    end = getattr(event, "end_time", None) or getattr(event, "new_end_time", None)
+    if not start or not end:
+        return None
+    try:
+        delta = (end - start).total_seconds() / 3600
+    except TypeError:
+        # time objects (no date): wall-clock length, rolling over midnight.
+        s = start.hour * 3600 + start.minute * 60 + start.second
+        e = end.hour * 3600 + end.minute * 60 + end.second
+        delta = (e - s) / 3600
+        if delta < 0:
+            delta += 24
+    return delta if delta > 0 else None
+
+
+def _check_shift_overrun(facts: _Facts, attendance: list) -> dict:
+    label = "Time on the clock"
+    ins = [r.clock_time for r in attendance if _source_name(r) == "clock_in" and r.clock_time]
+    outs = [r.clock_time for r in attendance if _source_name(r) == "clock_out" and r.clock_time]
+    scheduled = _scheduled_hours(facts.event)
+    if not ins or not outs or scheduled is None:
+        return _na("shift_overrun", label)
+    worked = (max(outs) - min(ins)).total_seconds() / 3600
+    if worked <= 0:
+        return _na("shift_overrun", label)
+    detail = (
+        f"On the clock {_fmt_hours(worked)} for a {_fmt_hours(scheduled)} shift "
+        f"(check flags more than {OVERRUN_FLAG_HOURS:.0f}h over)"
+    )
+    if worked - scheduled > OVERRUN_FLAG_HOURS:
+        return _check(
+            "shift_overrun",
+            f"On the clock {_fmt_hours(worked)} for a {_fmt_hours(scheduled)} shift "
+            "— check for a late clock-out",
+            "flag",
+            detail,
+        )
+    return _check("shift_overrun", "Time on the clock fits the shift", "pass", detail)
+
+
 def _bucket_specs(facts: _Facts) -> list[dict]:
     try:
         from ambassadors.checkin_web import photo_bucket_specs
@@ -416,7 +510,7 @@ def _check_spend(facts: _Facts, buckets: list[dict]) -> dict:
 
 
 def recap_review_checks(recap_id, is_custom: bool = False) -> list[dict]:
-    """The five rule-based review checks for one recap. Never raises."""
+    """The rule-based review checks for one recap. Never raises."""
     try:
         rid = int(recap_id)
     except (TypeError, ValueError):
@@ -430,6 +524,8 @@ def recap_review_checks(recap_id, is_custom: bool = False) -> list[dict]:
         return [
             _check_engagements_rate(facts, attendance),
             _check_gps(facts, attendance),
+            _check_clock_out_gps(facts, attendance),
+            _check_shift_overrun(facts, attendance),
             _check_photo_buckets(facts, buckets),
             _check_duplicates(facts),
             _check_spend(facts, buckets),
