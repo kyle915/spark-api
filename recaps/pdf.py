@@ -604,6 +604,30 @@ def format_user_email(user) -> str:
     return getattr(user, "email", None) or "N/A"
 
 
+def mask_person_name(full_name: str | None) -> str:
+    """First name + last initial: "Jane Doe" -> "Jane D.".
+
+    Client-facing PDFs must not print a brand ambassador's full name
+    (mirrors the web app's client views). A single-token name is returned
+    as-is (there is no surname to reveal); blank stays blank.
+    """
+    parts = (full_name or "").split()
+    if len(parts) < 2:
+        return parts[0] if parts else ""
+    return f"{parts[0]} {parts[-1][0].upper()}."
+
+
+def format_user_name_masked(user) -> str:
+    """First name + last initial for `user`; never falls back to the
+    username/str(user) (both are usually the email address)."""
+    if not user:
+        return "N/A"
+    first_name = (getattr(user, "first_name", "") or "").strip()
+    last_name = (getattr(user, "last_name", "") or "").strip()
+    masked = mask_person_name(f"{first_name} {last_name}")
+    return masked or "N/A"
+
+
 def format_bool(value) -> str:
     if value is None:
         return "N/A"
@@ -676,7 +700,11 @@ def build_recap_pdf_html(
     *,
     public_share: bool = False,
     invert_spark_mark: bool = False,
+    mask_ambassador: bool = False,
 ) -> str:
+    # mask_ambassador: render for a non-Ignite viewer (client / BA). The
+    # ambassador is shown as first name + last initial and the email row is
+    # dropped entirely — clients must not get BA contact details in a PDF.
     # Image-type custom fields (e.g. "Product Purchase Receipt (Image)")
     # store a GCS blob path as their value. The resolver pre-fetches those
     # blobs into `custom_field_images` ({blob_path: image_bytes}); when a
@@ -687,7 +715,11 @@ def build_recap_pdf_html(
     ambassador_user = None
     if getattr(recap, "ambassador", None) and getattr(recap.ambassador, "user", None):
         ambassador_user = recap.ambassador.user
-    ambassador_name = format_user_name(ambassador_user)
+    ambassador_name = (
+        format_user_name_masked(ambassador_user)
+        if mask_ambassador
+        else format_user_name(ambassador_user)
+    )
     ambassador_email = format_user_email(ambassador_user)
     # External-BA fallback: when the recap was attributed to a worker
     # who isn't in Spark yet (sub-contractor, not-yet-onboarded BA),
@@ -697,8 +729,19 @@ def build_recap_pdf_html(
     # blank — external BAs don't have a Spark account by definition.
     external_ba_name = (getattr(recap, "external_ba_name", None) or "").strip()
     if ambassador_user is None and external_ba_name:
-        ambassador_name = f"{external_ba_name} (external)"
+        shown = (
+            mask_person_name(external_ba_name)
+            if mask_ambassador
+            else external_ba_name
+        )
+        ambassador_name = f"{shown} (external)"
         ambassador_email = ""
+    ambassador_email_row = (
+        ""
+        if mask_ambassador
+        else "<div><span>Ambassador Email</span>"
+        f"<strong>{safe(ambassador_email)}</strong></div>"
+    )
 
     engagements = _related_items(recap, "consumer_engagements")
     engagement = engagements[0] if engagements else None
@@ -825,7 +868,7 @@ def build_recap_pdf_html(
         <div><span>Used Corpo Card</span><strong>{format_bool(getattr(recap, "used_corpo_card", None))}</strong></div>
         <div><span>Timezone</span><strong>{format_object_name(getattr(recap, "timezone", None))}</strong></div>
         <div><span>Ambassador</span><strong>{safe(ambassador_name)}</strong></div>
-        <div><span>Ambassador Email</span><strong>{safe(ambassador_email)}</strong></div>
+        {ambassador_email_row}
         <div><span>State</span><strong>{format_object_name(_event_state(recap))}</strong></div>
         <div><span>City</span><strong>{format_object_name(_recap_city(recap))}</strong></div>
         <div><span>Retailer</span><strong>{format_object_name(_event_retailer(recap))}</strong></div>
@@ -877,7 +920,7 @@ def build_recap_pdf_html(
         format_date_only(_submitted_at(recap))
     }</strong></div>
         <div><span>Ambassador</span><strong>{safe(ambassador_name)}</strong></div>
-        <div><span>Ambassador Email</span><strong>{safe(ambassador_email)}</strong></div>
+        {ambassador_email_row}
         <div><span>Job</span><strong>{
         safe(getattr(recap.job, "name", None))
     }</strong></div>
@@ -1539,6 +1582,7 @@ def build_campaign_report_pdf(
     title: str,
     subtitle: str,
     recaps_with_images: list,
+    mask_ambassador: bool = False,
 ) -> bytes:
     """Build a multi-recap campaign report PDF.
 
@@ -1595,7 +1639,12 @@ def build_campaign_report_pdf(
     detail_pages: list[str] = []
     for idx, (recap, images) in enumerate(recaps_with_images):
         body = _extract_body(
-            build_recap_pdf_html(recap, images, invert_spark_mark=False)
+            build_recap_pdf_html(
+                recap,
+                images,
+                invert_spark_mark=False,
+                mask_ambassador=mask_ambassador,
+            )
         )
         # Force each detail block to start on a fresh page (the cover
         # owns the first page).

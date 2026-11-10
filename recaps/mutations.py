@@ -3039,6 +3039,45 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
         )
         return _is_admin_access(role_slug, is_staff, is_super, email)
 
+    async def _caller_member_tenant_ids(self) -> set[int]:
+        """Ids of every tenant the caller is an ACTIVE member of.
+
+        Same membership rule `user.get_tenant(tenant_id=...)` applies
+        (TenantedUser, is_active=True), resolved in one query so a bulk
+        selection doesn't cost a query per recap.
+        """
+        user = self.user
+        if user is None or getattr(user, "pk", None) is None:
+            return set()
+
+        @sync_to_async
+        def _ids():
+            return set(
+                TenantedUser.objects.filter(
+                    user_id=user.pk, is_active=True
+                ).values_list("tenant_id", flat=True)
+            )
+
+        return await _ids()
+
+    @staticmethod
+    def _recap_within_tenants(recap, tenant_ids: set[int]) -> bool:
+        """True when every tenant the recap resolves to is in `tenant_ids`.
+
+        A recap's tenant is its event's tenant; CustomRecap also carries a
+        direct tenant FK. Both must be allowed when both are set, and a
+        recap with no resolvable tenant is denied rather than falling open.
+        `event` must be select_related by the caller (async-safe read).
+        """
+        resolved = set()
+        event = getattr(recap, "event", None)
+        if event is not None and getattr(event, "tenant_id", None):
+            resolved.add(event.tenant_id)
+        own = getattr(recap, "tenant_id", None)
+        if own:
+            resolved.add(own)
+        return bool(resolved) and resolved <= tenant_ids
+
     async def _caller_editing_ambassador(self):
         """The caller's Ambassador record IFF they're editing as a BA.
 
@@ -4754,6 +4793,28 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
             return ordered
 
         ordered = await fetch_recaps()
+
+        # Cross-tenant READ gate. This core loaded Recap / CustomRecap rows
+        # by raw PK behind only StrictIsAuthenticated, so any authenticated
+        # user (a client of another brand, or a BA) could pass guessed ids
+        # and receive another tenant's photos, metrics and ambassador names
+        # as one PDF — via download AND via the email path, which shares
+        # this method.
+        #   - Ignite admins (DB-backed `_is_admin_access`, never the
+        #     unhydrated JWT role) may bundle any recaps.
+        #   - Everyone else keeps only recaps in a tenant they are an active
+        #     member of. A foreign id is dropped exactly like an id that
+        #     doesn't exist, so the response can't confirm the recap exists
+        #     under another brand (#247 posture).
+        caller_is_admin = await self._caller_is_admin()
+        if not caller_is_admin:
+            member_tenant_ids = await self._caller_member_tenant_ids()
+            ordered = [
+                (k, obj)
+                for (k, obj) in ordered
+                if self._recap_within_tenants(obj, member_tenant_ids)
+            ]
+
         if not ordered:
             raise GraphQLError("None of the supplied recap ids were found.")
 
@@ -4984,6 +5045,9 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
                 title=resolved_title,
                 subtitle=resolved_subtitle,
                 recaps_with_images=recaps_with_images,
+                # Non-admin viewers (clients / BAs) get first name + last
+                # initial and no ambassador email in the PDF.
+                mask_ambassador=not caller_is_admin,
             )
 
             return (
@@ -5007,9 +5071,9 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
         is purely a one-shot artifact callers can re-generate any time.
 
         Permission posture: requires authenticated user (set at the
-        resolver layer). Cross-tenant isolation is enforced by filtering
-        the recap set to the caller's accessible tenants — see
-        `_accessible_tenant_ids` on the parent service.
+        resolver layer). Cross-tenant isolation is enforced inside
+        `build_campaign_report_pdf_with_meta`, which drops every recap
+        outside the caller's member tenants (admins excepted).
         """
         if not isinstance(self.input, inputs.GenerateCampaignReportPdfInput):
             raise GraphQLError("Invalid input type.")
@@ -5028,8 +5092,17 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
             subtitle=self.input.subtitle,
         )
 
+        # The object is served from a public URL, so the name must not be
+        # guessable: timestamp-to-the-second + recap count alone let anyone
+        # enumerate other tenants' reports (and two exports in the same
+        # second overwrote each other).
+        import uuid as _uuid
+
         timestamp = django_timezone.now().strftime("%Y%m%d%H%M%S")
-        blob_name = f"campaign-reports/{timestamp}-{recap_count}-recaps.pdf"
+        blob_name = (
+            f"campaign-reports/{timestamp}-{recap_count}-recaps-"
+            f"{_uuid.uuid4().hex}.pdf"
+        )
         upload_bytes(blob_name, pdf_bytes, content_type="application/pdf")
         return public_url(blob_name)
 
