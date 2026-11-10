@@ -941,6 +941,36 @@ def public_checkin_clear_clock(request: HttpRequest, code: str) -> HttpResponse:
 
 
 # --------------------------------------------------------------------------
+# POST my-shifts (the BA's own recent shifts: hours + approval/paid status)
+# --------------------------------------------------------------------------
+@csrf_exempt
+@require_http_methods(["POST"])
+def public_checkin_my_shifts(request: HttpRequest, code: str) -> HttpResponse:
+    """Recent shifts for the signed-in check-in session — worked hours and
+    where each one stands (waiting on review / confirmed / hours approved /
+    paid). Session-token gated like every other post-identify endpoint, and
+    scoped to the link's tenant. Returns no rates or dollar amounts: the
+    identity behind a check-in session is a phone number, not a login."""
+    from ambassadors import checkin_history
+
+    if _over_limit("my-shifts-ip", _client_ip(request), limit=40, window=300):
+        return _rate_limited()
+    data = _body(request)
+    loaded, err = _load_session(code, data.get("session") or "")
+    if err is not None:
+        return err
+    event, ambassador = loaded
+    try:
+        payload = checkin_history.shift_history_for(
+            ambassador=ambassador, tenant=event.tenant
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("checkin my-shifts failed code=%s", code)
+        return _err("Couldn't load your shifts. Try again.", status=500, code="server")
+    return JsonResponse(payload)
+
+
+# --------------------------------------------------------------------------
 # POST upload-url (signed GCS PUT for one photo)
 # --------------------------------------------------------------------------
 _SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
