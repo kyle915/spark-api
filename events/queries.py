@@ -14,11 +14,13 @@ from django.db.models import (
     DateField,
     DateTimeField,
     DurationField,
+    Exists,
     ExpressionWrapper,
     F,
     Func,
     IntegerField,
     Model,
+    OuterRef,
     Q,
     QuerySet,
     Value,
@@ -1572,6 +1574,20 @@ def _apply_request_list_filters(
         queryset = queryset.filter(activation_plan_id__isnull=False)
     elif filters.has_activation_plan is False:
         queryset = queryset.filter(activation_plan_id__isnull=True)
+    if filters.unstaffed is not None:
+        from ambassadors.models import AmbassadorEvent
+
+        staffed = Exists(
+            AmbassadorEvent.objects.filter(event__request_id=OuterRef("pk"))
+        )
+        if filters.unstaffed:
+            # "Needs a BA": there is an event to staff and nobody on it.
+            has_event = Exists(
+                models.Event.objects.filter(request_id=OuterRef("pk"))
+            )
+            queryset = queryset.filter(has_event).filter(~staffed)
+        else:
+            queryset = queryset.filter(staffed)
 
     return queryset
 

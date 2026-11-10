@@ -131,6 +131,50 @@ class TestRequestTrackerFilters(EventsGraphQLTestCase):
         assert nodes[0]["schedulingStatus"] == "already_scheduled"
 
     @pytest.mark.asyncio
+    async def test_unstaffed_filter(self):
+        """unstaffed=True → has an event with nobody on it; False → staffed."""
+
+        @sync_to_async
+        def _seed():
+            from ambassadors.models import AmbassadorEvent
+
+            open_event = em.Event.objects.create(
+                name="Open shift", tenant=self.tenant, request=self.pending_req,
+                date=self.today + timedelta(days=3), created_by=self.sys,
+            )
+            staffed_event = em.Event.objects.create(
+                name="Staffed shift", tenant=self.tenant, request=self.done_req,
+                date=self.today - timedelta(days=10), created_by=self.sys,
+            )
+            ba_user = self.create_user(
+                username="unstaffed-ba", email="unstaffed-ba@test.com",
+                role=self.roles["ambassador"],
+            )
+            ba = self.create_ambassador(ba_user)
+            AmbassadorEvent.objects.create(
+                ambassador=ba, event=staffed_event, tenant=self.tenant,
+                created_by=self.sys,
+            )
+            return open_event
+
+        await _seed()
+
+        async def _uuids(flag):
+            res = await self._execute_mutation(
+                REQUESTS_FILTER_Q,
+                {
+                    "first": 50,
+                    "filters": {"tenantId": str(self.tenant.id), "unstaffed": flag},
+                },
+                user=self.admin,
+            )
+            assert res.errors is None, res.errors
+            return {e["node"]["uuid"] for e in res.data["requests"]["edges"]}
+
+        assert await _uuids(True) == {str(self.pending_req.uuid)}
+        assert await _uuids(False) == {str(self.done_req.uuid)}
+
+    @pytest.mark.asyncio
     async def test_state_code_filter(self):
         res = await self._execute_mutation(
             REQUESTS_FILTER_Q,
