@@ -391,3 +391,102 @@ class TestScheduledClientReports(AmbassadorsGraphQLTestCase):
         # swallowed, not raised.
         assert mock_send.call_count == 1
         assert other.scheduled_report_recipients() == ["client@borjomi.com"]
+
+
+@pytest.mark.django_db(transaction=True)
+class TestPersonalReportSubscriptions(AmbassadorsGraphQLTestCase):
+    """A person can subscribe THEMSELVES to a brand's monthly report without
+    touching the brand-wide recipient list."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self, db):
+        from tenants.models import ClientReportSubscription, TenantedUser
+
+        self.roles = self.setup_default_roles()
+        self.system_user = self.get_system_user()
+        # Brand switch OFF and no brand-wide recipients: only a personal
+        # subscription can cause an email here.
+        self.brand = self.create_tenant(
+            name="Sub Brand", scheduled_report_enabled=False, recap_recipient_emails=""
+        )
+        # Brand switch ON with a brand-wide list (for the union/dedupe case).
+        self.listed = self.create_tenant(
+            name="Listed Brand",
+            scheduled_report_enabled=True,
+            recap_recipient_emails="Boss@Listed.com",
+        )
+        self.member = self.create_user(
+            username="member@sub.com", email="member@sub.com",
+            role=self.roles["client"],
+        )
+        TenantedUser.objects.create(
+            user=self.member, tenant=self.brand, created_by=self.system_user
+        )
+        self.outsider = self.create_user(
+            username="gone@sub.com", email="gone@sub.com", role=self.roles["client"],
+        )
+        self.Sub = ClientReportSubscription
+
+    def _run(self):
+        sent = []
+        real_init = cmd_mod.ClientMonthlyReportMailer.__init__
+
+        def _spy_init(inner_self, **kwargs):
+            real_init(inner_self, **kwargs)
+            sent.append(inner_self)
+
+        with mock.patch.object(
+            cmd_mod.timezone, "now", return_value=_FAKE_NOW
+        ), mock.patch.object(
+            cmd_mod, "build_client_monthly_report_pdf", return_value=b"%PDF"
+        ), mock.patch.object(
+            cmd_mod.ClientMonthlyReportMailer, "__init__", _spy_init
+        ), mock.patch.object(
+            cmd_mod.ClientMonthlyReportMailer, "send", autospec=True
+        ):
+            call_command("send_scheduled_client_reports")
+        return {m.tenant_name: m.recipients for m in sent}
+
+    def test_subscriber_gets_report_even_when_brand_switch_is_off(self):
+        self.Sub.objects.create(user=self.member, tenant=self.brand)
+        out = self._run()
+        assert out["Sub Brand"] == ["member@sub.com"]
+
+    def test_no_subscription_and_brand_off_sends_nothing(self):
+        out = self._run()
+        assert "Sub Brand" not in out
+
+    def test_unsubscribed_and_non_member_and_inactive_are_excluded(self):
+        self.Sub.objects.create(user=self.member, tenant=self.brand, monthly_report=False)
+        # Subscribed but no longer a member of the brand -> not emailed.
+        self.Sub.objects.create(user=self.outsider, tenant=self.brand)
+        out = self._run()
+        assert "Sub Brand" not in out
+
+        self.Sub.objects.filter(user=self.member).update(monthly_report=True)
+        self.member.is_active = False
+        self.member.save(update_fields=["is_active"])
+        assert "Sub Brand" not in self._run()
+
+    def test_union_with_brand_list_is_deduped_case_insensitively(self):
+        from tenants.models import TenantedUser
+
+        boss = self.create_user(
+            username="boss@listed.com", email="boss@listed.com",
+            role=self.roles["client"],
+        )
+        TenantedUser.objects.create(
+            user=boss, tenant=self.listed, created_by=self.system_user
+        )
+        TenantedUser.objects.create(
+            user=self.member, tenant=self.listed, created_by=self.system_user
+        )
+        self.Sub.objects.create(user=boss, tenant=self.listed)
+        self.Sub.objects.create(user=self.member, tenant=self.listed)
+        out = self._run()
+        assert out["Listed Brand"] == ["Boss@Listed.com", "member@sub.com"]
+
+    def test_merge_helper(self):
+        assert cmd_mod.merge_report_recipients(
+            ["a@x.com", " B@x.com "], ["b@x.com", "", "c@x.com"], None
+        ) == ["a@x.com", "B@x.com", "c@x.com"]
