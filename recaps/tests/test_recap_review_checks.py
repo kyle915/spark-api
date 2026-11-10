@@ -114,6 +114,50 @@ class TestRecapReviewChecks(AmbassadorsGraphQLTestCase):
         assert checks["gps_distance"]["status"] == "flag"
         assert "mi" in checks["gps_distance"]["label"]
 
+    def _punch(self, recap, kind, coords, when):
+        source, _ = Source.objects.get_or_create(name=kind)
+        return Attendance.objects.create(
+            clock_time=when, coordinates=coords, event=self.event,
+            ambassador=recap.ambassador, source=source)
+
+    def test_clock_out_far_from_venue_flags(self):
+        recap = self._recap()
+        t0 = self.event.start_time
+        self._punch(recap, "clock_in", [40.0005, -74.0005], t0)
+        self._punch(recap, "clock_out", [40.09, -74.0], t0 + timedelta(hours=2))  # ~6 mi
+        checks = _by_code(recap_review_checks(recap.id, is_custom=True))
+        assert checks["gps_distance"]["status"] == "pass"
+        assert checks["clock_out_distance"]["status"] == "flag"
+        assert "mi" in checks["clock_out_distance"]["label"]
+
+    def test_clock_out_near_passes_and_missing_fix_is_na(self):
+        recap = self._recap()
+        t0 = self.event.start_time
+        self._punch(recap, "clock_in", [40.0005, -74.0005], t0)
+        checks = _by_code(recap_review_checks(recap.id, is_custom=True))
+        assert checks["clock_out_distance"]["status"] == "na"
+        assert checks["shift_overrun"]["status"] == "na"
+        self._punch(recap, "clock_out", [40.0005, -74.0005], t0 + timedelta(hours=2))
+        checks = _by_code(recap_review_checks(recap.id, is_custom=True))
+        assert checks["clock_out_distance"]["status"] == "pass"
+
+    def test_shift_overrun_flags_a_forgotten_clock_out(self):
+        recap = self._recap()
+        t0 = self.event.start_time
+        self._punch(recap, "clock_in", None, t0)
+        self._punch(recap, "clock_out", None, t0 + timedelta(hours=7, minutes=9))
+        checks = _by_code(recap_review_checks(recap.id, is_custom=True))
+        assert checks["shift_overrun"]["status"] == "flag"  # 7h for a 2h shift
+        assert "late clock-out" in checks["shift_overrun"]["label"]
+
+    def test_shift_a_little_over_passes(self):
+        recap = self._recap()
+        t0 = self.event.start_time
+        self._punch(recap, "clock_in", None, t0)
+        self._punch(recap, "clock_out", None, t0 + timedelta(hours=2, minutes=45))
+        checks = _by_code(recap_review_checks(recap.id, is_custom=True))
+        assert checks["shift_overrun"]["status"] == "pass"
+
     def test_gps_near_passes(self):
         recap = self._recap()
         self._attendance(recap, [40.001, -74.001], timezone.now())
