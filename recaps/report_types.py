@@ -3884,12 +3884,136 @@ class FieldSamplingReportMutations:
         return FieldSamplingCalloutSummary(summary=summary)
 
 
+@strawberry.input
+class SetMyReportSubscriptionInput(SparkGraphQLInput):
+    """Subscribe / unsubscribe the SIGNED-IN person to a brand's monthly
+    report email. ``tenantId`` is overridden server-side for clients (own
+    brand only)."""
+
+    tenant_id: strawberry.ID
+    subscribed: bool
+
+
+@strawberry.type
+class MyReportSubscriptionResponse:
+    success: bool
+    message: str
+    # Authoritative only when ``success`` is true.
+    subscribed: bool
+    client_mutation_id: strawberry.ID | None = None
+
+
+@strawberry.type
+class ReportSubscriptionQueries:
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def my_report_subscription(
+        self, info: strawberry.Info, tenant_id: strawberry.ID | None = None
+    ) -> bool:
+        """True when the signed-in person is subscribed to this brand's
+        monthly report email. Never raises; out-of-scope → False."""
+        service = _CampaignReportService()
+        try:
+            target_tenant_id = await service.resolve_target_tenant_id(info, tenant_id)
+            user = await service.get_user(info)
+        except Exception:  # noqa: BLE001
+            return False
+        if target_tenant_id is None or user is None:
+            return False
+
+        def _read() -> bool:
+            from tenants.models import ClientReportSubscription
+
+            return ClientReportSubscription.objects.filter(
+                user_id=user.pk, tenant_id=target_tenant_id, monthly_report=True
+            ).exists()
+
+        try:
+            return await sync_to_async(_read, thread_sensitive=True)()
+        except Exception:  # noqa: BLE001
+            return False
+
+
 @strawberry.type
 class ScheduledReportMutations:
     """Mutation surface for the scheduled monthly client-report controls
     (the clients schema). The write side of the #698 feature; tenant scoping
     matches the read resolvers + ``TenantGoalsMutations`` exactly
     (:meth:`_CampaignReportService.resolve_target_tenant_id`)."""
+
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def set_my_report_subscription(
+        self,
+        info: strawberry.Info,
+        input: SetMyReportSubscriptionInput,
+    ) -> MyReportSubscriptionResponse:
+        """Subscribe / unsubscribe the signed-in person to a brand's monthly
+        report. Affects ONLY the caller's own subscription — never the
+        brand-wide recipient list. Tenant scoping matches the other report
+        resolvers (client → own brand; admins → any). Never raises."""
+
+        def _fail(message: str) -> MyReportSubscriptionResponse:
+            return MyReportSubscriptionResponse(
+                success=False,
+                message=message,
+                subscribed=bool(input.subscribed),
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        service = _CampaignReportService()
+        try:
+            target_tenant_id = await service.resolve_target_tenant_id(
+                info, input.tenant_id
+            )
+            user = await service.get_user(info)
+        except Exception:  # noqa: BLE001
+            target_tenant_id, user = None, None
+        if target_tenant_id is None or user is None:
+            return _fail("You do not have access to this brand.")
+
+        desired = bool(input.subscribed)
+
+        def _write():
+            from tenants.models import ClientReportSubscription, Tenant
+
+            if not Tenant.objects.filter(id=target_tenant_id).exists():
+                return None
+            email = (getattr(user, "email", "") or "").strip()
+            if desired and not email:
+                return "no_email"
+            sub, _created = ClientReportSubscription.objects.get_or_create(
+                user_id=user.pk,
+                tenant_id=target_tenant_id,
+                defaults={"monthly_report": desired},
+            )
+            if sub.monthly_report != desired:
+                sub.monthly_report = desired
+                sub.save(update_fields=["monthly_report", "updated_at"])
+            return sub.monthly_report
+
+        try:
+            state = await sync_to_async(_write, thread_sensitive=True)()
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(
+                "setMyReportSubscription failed for tenant=%s: %s",
+                target_tenant_id,
+                exc,
+            )
+            return _fail("Could not update your subscription.")
+        if state is None:
+            return _fail("Brand not found.")
+        if state == "no_email":
+            return _fail("Your account has no email address to send the report to.")
+
+        return MyReportSubscriptionResponse(
+            success=True,
+            message=(
+                "You'll get this brand's report by email at the start of each month."
+                if state
+                else "You're unsubscribed from this brand's monthly report email."
+            ),
+            subscribed=bool(state),
+            client_mutation_id=input.client_mutation_id,
+        )
 
     @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
     async def set_scheduled_report_enabled(

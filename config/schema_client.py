@@ -9,6 +9,7 @@ from recaps.schema import RecapQueryClient, RecapMutationsClient
 from recaps.recap_ai import RecapAiMutations, RecapAiQueries
 from recaps.report_types import (
     CampaignReportQueries,
+    ReportSubscriptionQueries,
     FieldSamplingReportMutations,
     ScheduledReportMutations,
     TenantGoalsMutations,
@@ -37,6 +38,7 @@ QueryClients = merge_types(
         EventQueryClient,
         RecapQueryClient,
         CampaignReportQueries,
+        ReportSubscriptionQueries,
         RecapAiQueries,
         AmbassadorQueryClient,
         QueryClients,
