@@ -28,6 +28,7 @@ from chats.schema import ChatQueryClient, ChatMutationsClient
 from announcements.schema import AnnouncementQueryClient, AnnouncementMutationsClient
 from jobboard.schema import JobBoardMutations, JobBoardQueries
 from timeclock.schema import ClockLinkMutations, ClockLinkQueries
+from recaps.checkin_issue_schema import CheckinIssueQueries
 from tenants.notification_pref_schema import (
     NotificationPreferenceMutations,
     NotificationPreferenceQueries,
@@ -43,6 +44,7 @@ QueryClients = merge_types(
         RecapQueryClient,
         CampaignReportQueries,
         ReportSubscriptionQueries,
+        CheckinIssueQueries,
         NotificationPreferenceQueries,
         RecapAiQueries,
         AmbassadorQueryClient,

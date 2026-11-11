@@ -89,6 +89,7 @@ def _all_na() -> list[dict]:
         _na("photo_buckets", "Photo buckets"),
         _na("duplicate_photos", "Duplicate photos"),
         _na("spend_without_receipt", "Spend receipt"),
+        _na("receipt_total_mismatch", "Receipts match spend"),
     ]
 
 
@@ -509,6 +510,42 @@ def _check_spend(facts: _Facts, buckets: list[dict]) -> dict:
     )
 
 
+def _check_receipt_total(recap_id: int, is_custom: bool, facts: _Facts) -> dict:
+    """Entered spend vs the totals read off the receipt photos. ``na``
+    unless every receipt image on the recap has been read."""
+    label = "Receipts match spend"
+    if not is_custom:
+        return _na("receipt_total_mismatch", label)
+    try:
+        from recaps.models import CustomRecapFile, ReceiptReading
+        from recaps.receipt_reader import (
+            RECEIPT_CATEGORY_RE,
+            compare_spend_to_receipts,
+        )
+
+        receipt_ids = list(
+            CustomRecapFile.objects.filter(
+                custom_recap_id=recap_id,
+                file_recap_category__name__iregex=RECEIPT_CATEGORY_RE.pattern,
+            ).values_list("id", flat=True)
+        )
+        readings = list(
+            ReceiptReading.objects.filter(custom_recap_file_id__in=receipt_ids).values(
+                "status", "total"
+            )
+        )
+        result = compare_spend_to_receipts(
+            _spend_total(facts), readings, len(receipt_ids)
+        )
+    except Exception:
+        return _na("receipt_total_mismatch", label)
+    if result["status"] == "na":
+        return _na("receipt_total_mismatch", label)
+    return _check(
+        "receipt_total_mismatch", result["label"], result["status"], result["detail"]
+    )
+
+
 def recap_review_checks(recap_id, is_custom: bool = False) -> list[dict]:
     """The rule-based review checks for one recap. Never raises."""
     try:
@@ -529,6 +566,7 @@ def recap_review_checks(recap_id, is_custom: bool = False) -> list[dict]:
             _check_photo_buckets(facts, buckets),
             _check_duplicates(facts),
             _check_spend(facts, buckets),
+            _check_receipt_total(rid, is_custom, facts),
         ]
     except Exception:
         return _all_na()

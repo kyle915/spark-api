@@ -1142,3 +1142,75 @@ class RecapMetricEdit(models.Model):
                 name="rc_metric_edit_one_recap",
             ),
         ]
+
+
+class ReceiptReading(models.Model):
+    """What Spark read off one receipt photo (see ``recaps.receipt_reader``).
+
+    One row per receipt image, written once by the background reader. Holds
+    only the printed total, merchant and date — never card details. A photo
+    that could not be read confidently is kept as ``unreadable`` so it is not
+    retried forever and the review check can say so.
+    """
+
+    STATUS_READ = "read"
+    STATUS_UNREADABLE = "unreadable"
+
+    id = models.BigAutoField(primary_key=True)
+    custom_recap_file = models.OneToOneField(
+        "CustomRecapFile",
+        on_delete=models.CASCADE,
+        related_name="receipt_reading",
+    )
+    status = models.CharField(max_length=16, default=STATUS_UNREADABLE)
+    total = models.DecimalField(max_digits=9, decimal_places=2, null=True, blank=True)
+    merchant = models.CharField(max_length=120, blank=True, default="")
+    # ISO date printed on the receipt, when legible; free of timezone.
+    receipt_date = models.CharField(max_length=10, blank=True, default="")
+    read_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self) -> str:  # pragma: no cover - admin/debug only
+        return f"file {self.custom_recap_file_id}: {self.status} {self.total}"
+
+
+class CheckinFieldIssue(models.Model):
+    """Something that went wrong for an ambassador on the web check-in,
+    reported by their phone (see ``events.checkin_views``).
+
+    The check-in page works around most failures on its own (queues, retries)
+    — which also meant staff never heard about them. This is a small,
+    append-only record so a lead can see "photo uploads are failing at this
+    store today" instead of finding out from a missing recap. No personal
+    data: a kind, a short detail and where it happened.
+    """
+
+    KINDS = (
+        "photo_upload_failed",
+        "gps_denied",
+        "gps_timeout",
+        "request_timeout",
+        "punch_not_saved",
+        "storage_unavailable",
+        "recap_submit_failed",
+    )
+
+    id = models.BigAutoField(primary_key=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    kind = models.CharField(max_length=40, db_index=True)
+    detail = models.CharField(max_length=200, blank=True, default="")
+    code = models.CharField(max_length=64, blank=True, default="")
+    tenant = models.ForeignKey(
+        "tenants.Tenant",
+        on_delete=models.CASCADE,
+        null=True,
+        related_name="checkin_field_issues",
+    )
+    event = models.ForeignKey(
+        "events.Event",
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="checkin_field_issues",
+    )
+
+    def __str__(self) -> str:  # pragma: no cover - admin/debug only
+        return f"{self.kind} tenant={self.tenant_id} event={self.event_id}"

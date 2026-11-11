@@ -3262,6 +3262,50 @@ class AuditTenantAccountSpendView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class ReadRecapReceiptsView(View):
+    """POST `/internal/cron/read-recap-receipts`.
+
+    Reads the printed total off receipt photos that have not been read yet
+    (see `recaps/receipt_reader.py`) so the review check can compare it with
+    the spend entered on the recap. Idempotent: each image is read once.
+
+    Params: tenant_id (optional), since_days (default 45), limit (default 40).
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _int(name: str, default: int | None) -> int | None:
+            raw = (request.POST.get(name) or request.GET.get(name) or "").strip()
+            if not raw:
+                return default
+            try:
+                return int(raw)
+            except ValueError:
+                return default
+
+        from recaps.receipt_reader import read_pending_receipts
+
+        try:
+            report = read_pending_receipts(
+                tenant_id=_int("tenant_id", None),
+                since_days=max(1, min(_int("since_days", 45) or 45, 365)),
+                limit=max(1, min(_int("limit", 40) or 40, 200)),
+            )
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("Read recap receipts cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "read-failed", "detail": str(exc)}, status=500
+            )
+        return JsonResponse({"ok": True, "report": report})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class RegenerateRecapPdfsView(View):
     """POST `/internal/cron/regenerate-recap-pdfs`.
 
@@ -11414,6 +11458,7 @@ def _registered_views() -> dict[str, Any]:
         "audit-tenant-account-spend": AuditTenantAccountSpendView,
         "dump-tenant-receipts": DumpTenantReceiptsView,
         "regenerate-recap-pdfs": RegenerateRecapPdfsView,
+        "read-recap-receipts": ReadRecapReceiptsView,
         "campaign-to-date": CampaignToDateView,
         "dedupe-skills": DedupeSkillsView,
         "purge-walkin-event": PurgeWalkinEventView,
