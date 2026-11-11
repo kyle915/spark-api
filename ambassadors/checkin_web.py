@@ -1158,6 +1158,113 @@ def _email_admins_checkin_landed(event, ambassador) -> None:
     _CheckinMailer().send_now()
 
 
+def shift_moved_to_other_brand(*, event, ambassador_id, link_tenant):
+    """The ambassador, when their shift on ``event`` was started on
+    ``link_tenant``'s link but the event now belongs to another brand.
+
+    A session token for an event outside the link's brand is normally just a
+    bad token. It is a *moved shift* only when this ambassador really worked
+    that event under this brand: their booking on it is still recorded
+    against the link's brand. Returns None otherwise.
+    """
+    from ambassadors.models import Ambassador, AmbassadorEvent
+
+    if event is None or link_tenant is None or not ambassador_id:
+        return None
+    if getattr(event, "tenant_id", None) == link_tenant.id:
+        return None
+    booked_here = AmbassadorEvent.objects.filter(
+        ambassador_id=ambassador_id, event_id=event.id, tenant_id=link_tenant.id
+    ).exists()
+    if not booked_here:
+        return None
+    return Ambassador.objects.select_related("user").filter(id=ambassador_id).first()
+
+
+def notify_shift_moved_brand(*, event, ambassador, link_tenant) -> None:
+    """Tell the hours inbox, once per shift per day, that an ambassador is
+    stuck because their event changed brand after they clocked in.
+    Best-effort: a failure here never changes what the ambassador sees."""
+    from django.core.cache import cache
+
+    try:
+        key = f"checkin.moved_brand.{event.id}.{ambassador.id}"
+        if not cache.add(key, 1, 24 * 60 * 60):
+            return
+        _email_admins_shift_moved_brand(event, ambassador, link_tenant)
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "checkin: moved-brand alert failed event=%s", getattr(event, "id", None)
+        )
+
+
+def _email_admins_shift_moved_brand(event, ambassador, link_tenant) -> None:
+    from django.conf import settings
+    from django.utils.html import escape
+
+    from events.outbound_policy import apply_outbound_policy
+    from utils.mailer import Envelope, Mailer
+
+    # Same shared inbox as the clock-in alert, not every admin.
+    admins = [
+        e.strip()
+        for e in getattr(settings, "CHECKIN_HOURS_NOTIFY_EMAILS", [])
+        if (e or "").strip()
+    ]
+    admins = apply_outbound_policy(
+        admins, tenant=link_tenant, kind="generic", merge_internal=False
+    )
+    if not admins:
+        return
+    user = getattr(ambassador, "user", None)
+    name = ""
+    if user:
+        name = f"{user.first_name or ''} {user.last_name or ''}".strip()
+    name = name or "A field rep"
+    phone = getattr(ambassador, "phone", None) or ""
+    was = getattr(link_tenant, "name", "") or "their brand"
+    now_brand = getattr(getattr(event, "tenant", None), "name", "") or "another brand"
+    venue = event.name or "an event"
+    base = (getattr(settings, "ADMIN_FRONTEND_URL", "") or "").rstrip("/")
+    link_html = (
+        f"<div style='margin:16px 0 4px'><a href='{base}/walkups' "
+        "style='display:inline-block;background:#c5f546;color:#0a0d09;"
+        "padding:10px 18px;border-radius:10px;text-decoration:none;"
+        "font-weight:700'>Open Walk-ups</a></div>"
+        if base and base != "http://localhost:3000"
+        else ""
+    )
+    phone_html = (
+        f"<p style='color:#555;margin:4px 0 0'>Phone: {escape(phone)}</p>"
+        if phone
+        else ""
+    )
+    html = (
+        "<div style='font-family:system-ui,sans-serif;color:#14181a'>"
+        f"<p style='font-size:15px;margin:0'><strong>{escape(name)}</strong> can't "
+        f"file their recap for <strong>{escape(venue)}</strong>.</p>"
+        f"{phone_html}"
+        f"<p style='color:#555'>They clocked in on the {escape(was)} link, but the "
+        f"event is now under <strong>{escape(now_brand)}</strong>. Their answers "
+        "are saved on their phone.</p>"
+        f"<p style='color:#555'>If the visit was {escape(was)}, move the event "
+        f"back and they can submit straight away. If it really was "
+        f"{escape(now_brand)}, send them the {escape(now_brand)} check-in link "
+        "and have them enter the same phone number.</p>"
+        f"{link_html}</div>"
+    )
+
+    class _MovedBrandMailer(Mailer):
+        def envelope(self) -> "Envelope":
+            return Envelope(
+                subject=f"Recap blocked — {name}'s shift moved to {now_brand}",
+                html=html,
+                to_emails=admins,
+            )
+
+    _MovedBrandMailer().send_now()
+
+
 # --------------------------------------------------------------------------
 # Recap submission
 # --------------------------------------------------------------------------
