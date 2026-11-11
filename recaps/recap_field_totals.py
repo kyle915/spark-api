@@ -79,6 +79,112 @@ def field_kind(label: str, saw_percent: bool) -> str:
     return "count"
 
 
+_FIVE_DIGITS = re.compile(r"\b\d{5}\b")
+_SUFFIXES = {
+    "rd": "road", "ave": "avenue", "av": "avenue", "st": "street", "dr": "drive",
+    "ln": "lane", "blvd": "boulevard", "pkwy": "parkway", "hwy": "highway",
+    "ct": "court", "pl": "place", "n": "north", "s": "south", "e": "east", "w": "west",
+}
+
+
+def _zip_code(text: str) -> str:
+    """The ZIP in a typed address: the last 5-digit group that is not the
+    leading street number ("28000 Greenspot Rd … 92346" → 92346)."""
+    text = (text or "").strip()
+    found = [m for m in _FIVE_DIGITS.finditer(text)]
+    found = [m for m in found if m.start() > 0]
+    return found[-1].group(0) if found else ""
+
+
+def _normal_place(text: str) -> str:
+    tokens = re.sub(r"[^a-z0-9 ]+", " ", (text or "").lower()).split()
+    return " ".join(_SUFFIXES.get(t, t) for t in tokens)
+
+
+def booth_day_key(address, event_name, coordinates, event_date) -> str:
+    """Which booth, which day — "" when it cannot be told.
+
+    Ambassadors at the same booth each type the address their own way
+    ("28000 Greenspot Rd, Highland, CA 92346" / "Greenspot Road, Highland,
+    California 92346"), so the store is identified by the most stable thing
+    available, in order:
+
+    1. the ZIP code in the address or event name;
+    2. the event's coordinates, rounded to about a kilometre;
+    3. the address (else name) with punctuation, case and street
+       abbreviations normalised.
+
+    The retailer is deliberately NOT used: a retailer here is a banner
+    (one "Costco" for every warehouse), which would merge different stores.
+    """
+    day = event_date.date().isoformat() if event_date else ""
+    if not day:
+        return ""
+    zip_code = _zip_code(address) or _zip_code(event_name)
+    if zip_code:
+        return f"z{zip_code}|{day}"
+    try:
+        if coordinates and len(coordinates) >= 2:
+            lat, lng = float(coordinates[0]), float(coordinates[1])
+            if lat or lng:
+                return f"g{lat:.2f},{lng:.2f}|{day}"
+    except (TypeError, ValueError):
+        pass
+    place = _normal_place(address) or _normal_place(event_name)
+    return f"a{place}|{day}" if place else ""
+
+
+def collapse_booth_days(rows):
+    """One answer per question per booth-day.
+
+    ``rows`` are ``(section, section_order, label, field_order, value,
+    recap_id, booth_key)``. When several recaps describe the same booth on
+    the same day they each repeat the booth's numbers, so for every question
+    this keeps a single value per booth-day:
+
+    * counts and money — the LARGEST value any of those recaps reported (a
+      partial or blank recap must not pull the day down, and two matching
+      recaps must not double it);
+    * prices, rates and ratings — the mean of the values reported that day.
+
+    Non-numeric answers pass through (they are ignored by the roll-up
+    anyway). The booth-day stands in for the recap id afterwards, so the
+    "how many" beside each total counts booth-days. A recap with no usable
+    booth key is kept as its own day rather than merged with strangers.
+    """
+    groups: "OrderedDict[tuple, dict]" = OrderedDict()
+    passthrough = []
+    for section, section_order, label, field_order, value, recap_id, booth in rows:
+        day = booth or f"recap-{recap_id}"
+        parsed = parse_number(value)
+        if parsed is None:
+            passthrough.append((section, section_order, label, field_order, value, day))
+            continue
+        key = ((section or "").strip().lower(), (label or "").strip().lower(), day)
+        g = groups.get(key)
+        if g is None:
+            g = groups[key] = {
+                "head": (section, section_order, label, field_order),
+                "day": day,
+                "values": [],
+                "percent": False,
+            }
+        g["values"].append(parsed[0])
+        g["percent"] = g["percent"] or parsed[1]
+    out = list(passthrough)
+    for g in groups.values():
+        section, section_order, label, field_order = g["head"]
+        if field_kind(label or "", g["percent"]) == "average":
+            number = sum(g["values"]) / len(g["values"])
+        else:
+            number = max(g["values"])
+        text = repr(round(number, 4)).rstrip("0").rstrip(".") if number % 1 else str(int(number))
+        if g["percent"]:
+            text += "%"
+        out.append((section, section_order, label, field_order, text, g["day"]))
+    return out
+
+
 def rollup_field_values(rows) -> list[dict]:
     """Group ``(section, section_order, label, field_order, value, recap_id)``
     rows into sections of totals. Pure — no database."""
@@ -143,8 +249,22 @@ def rollup_field_values(rows) -> list[dict]:
 
 
 def tenant_recap_field_totals(
-    tenant_id: int, start: date | None, end: date | None
+    tenant_id: int,
+    start: date | None,
+    end: date | None,
+    *,
+    one_per_booth_day: bool | None = None,
 ) -> list[dict]:
+    """``one_per_booth_day=None`` follows the brand's own setting
+    (``Tenant.count_one_recap_per_booth_day``)."""
+    if one_per_booth_day is None:
+        from tenants.models import Tenant
+
+        one_per_booth_day = bool(
+            Tenant.objects.filter(id=tenant_id)
+            .values_list("count_one_recap_per_booth_day", flat=True)
+            .first()
+        )
     window = _inclusive_dates_to_window(start, end)
     qs = CustomFieldValue.objects.filter(
         custom_recap__tenant_id=tenant_id,
@@ -152,12 +272,33 @@ def tenant_recap_field_totals(
     )
     qs = _approved_only(qs, "custom_recap__")
     qs = _filter_event_window(qs, "custom_recap__event__", window)
-    rows = qs.order_by("custom_recap_id", "id").values_list(
+    base = qs.order_by("custom_recap_id", "id")
+    if not one_per_booth_day:
+        rows = base.values_list(
+            "custom_field__recap_section__name",
+            "custom_field__recap_section__order",
+            "custom_field__name",
+            "custom_field__order",
+            "value",
+            "custom_recap_id",
+        )
+        return rollup_field_values(rows.iterator(chunk_size=5000))
+    wide = base.values_list(
         "custom_field__recap_section__name",
         "custom_field__recap_section__order",
         "custom_field__name",
         "custom_field__order",
         "value",
         "custom_recap_id",
+        "custom_recap__event__address",
+        "custom_recap__event__name",
+        "custom_recap__event__coordinates",
+        "custom_recap__event__date",
     )
-    return rollup_field_values(rows.iterator(chunk_size=5000))
+    keyed = (
+        (sec, sec_order, label, f_order, value, recap_id,
+         booth_day_key(address, event_name, coordinates, event_date))
+        for sec, sec_order, label, f_order, value, recap_id,
+            address, event_name, coordinates, event_date in wide.iterator(chunk_size=5000)
+    )
+    return rollup_field_values(collapse_booth_days(keyed))

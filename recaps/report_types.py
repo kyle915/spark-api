@@ -4077,6 +4077,22 @@ class IssueCheckinCodeResponse:
     client_mutation_id: strawberry.ID | None = None
 
 
+@strawberry.input
+class SetBoothDayCountingInput(SparkGraphQLInput):
+    """Count one recap per store per day in recap roll-ups (staff only)."""
+
+    tenant_id: strawberry.ID
+    enabled: bool
+
+
+@strawberry.type
+class SetBoothDayCountingResponse:
+    success: bool
+    message: str
+    enabled: bool
+    client_mutation_id: strawberry.ID | None = None
+
+
 @strawberry.type
 class ReportSubscriptionQueries:
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
@@ -4242,6 +4258,34 @@ class ReportSubscriptionQueries:
             categories=data["categories"],
             states=data["states"],
         )
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def tenant_booth_day_counting(
+        self, info: strawberry.Info, tenant_id: strawberry.ID
+    ) -> bool:
+        """True when this brand's recap roll-ups count one recap per store
+        per day. Tenant scoping matches ``tenantKpis``; never raises."""
+        service = _CampaignReportService()
+        try:
+            target = await service.resolve_target_tenant_id(info, tenant_id)
+        except Exception:  # noqa: BLE001
+            return False
+        if target is None:
+            return False
+
+        def _read() -> bool:
+            from tenants.models import Tenant
+
+            return bool(
+                Tenant.objects.filter(id=target)
+                .values_list("count_one_recap_per_booth_day", flat=True)
+                .first()
+            )
+
+        try:
+            return await sync_to_async(_read, thread_sensitive=True)()
+        except Exception:  # noqa: BLE001
+            return False
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def my_report_subscription(
@@ -4418,6 +4462,68 @@ class ScheduledReportMutations:
             code=code,
             url=url,
             created=created,
+            client_mutation_id=input.client_mutation_id,
+        )
+
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def set_booth_day_counting(
+        self,
+        info: strawberry.Info,
+        input: SetBoothDayCountingInput,
+    ) -> SetBoothDayCountingResponse:
+        """Switch one-recap-per-store-per-day counting on or off for a brand.
+        Ignite staff only: it changes the totals a client sees."""
+        desired = bool(input.enabled)
+
+        def _fail(message: str) -> SetBoothDayCountingResponse:
+            return SetBoothDayCountingResponse(
+                success=False,
+                message=message,
+                enabled=not desired,
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        service = _CampaignReportService()
+        try:
+            user = await service.get_user(info)
+            role_slug, is_staff, is_super, email = await resolve_request_user_access(user)
+        except Exception:  # noqa: BLE001
+            return _fail("Sign in to change this.")
+        if not _is_admin_access(role_slug, is_staff, is_super, email):
+            return _fail("Only Ignite staff can change how recaps are counted.")
+        try:
+            tenant_pk = resolve_id_to_int(input.tenant_id)
+        except Exception:  # noqa: BLE001
+            return _fail("Brand not found.")
+
+        def _write():
+            from tenants.models import Tenant
+
+            tenant = Tenant.objects.filter(id=tenant_pk).first()
+            if tenant is None:
+                return None
+            if tenant.count_one_recap_per_booth_day != desired:
+                tenant.count_one_recap_per_booth_day = desired
+                tenant.save(
+                    update_fields=["count_one_recap_per_booth_day", "updated_at"]
+                )
+            return tenant.count_one_recap_per_booth_day
+
+        try:
+            state = await sync_to_async(_write, thread_sensitive=True)()
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("setBoothDayCounting failed tenant=%s: %s", tenant_pk, exc)
+            return _fail("Could not update the setting.")
+        if state is None:
+            return _fail("Brand not found.")
+        return SetBoothDayCountingResponse(
+            success=True,
+            message=(
+                "Counting one recap per store per day."
+                if state
+                else "Counting every recap."
+            ),
+            enabled=bool(state),
             client_mutation_id=input.client_mutation_id,
         )
 
