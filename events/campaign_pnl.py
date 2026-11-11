@@ -22,6 +22,33 @@ from utils.graphql.mixins import resolve_id_to_int
 from events.staffing_board import _accessible_tenants
 
 
+def _per(cost: float, count: int) -> float | None:
+    """Cost per unit of output; None (not 0) when there is no output."""
+    return round(cost / count, 2) if count and count > 0 else None
+
+
+def _program_output(tenant_id: int, start, end) -> dict:
+    """Samples, engagements and units sold from approved recaps over the same
+    inclusive event-date window the cost side uses. Never raises."""
+    try:
+        from recaps.tenant_overview import (
+            _inclusive_dates_to_window,
+            _tenant_kpi_totals_window,
+        )
+
+        totals = _tenant_kpi_totals_window(
+            tenant_id, _inclusive_dates_to_window(start, end)
+        )
+        return {
+            "samples": int(totals.samples_distributed or 0)
+            or int(totals.consumers_reached or 0),
+            "engagements": int(totals.total_engagements or 0),
+            "units_sold": int(totals.products_sold or 0),
+        }
+    except Exception:  # noqa: BLE001
+        return {"samples": 0, "engagements": 0, "units_sold": 0}
+
+
 @strawberry.type
 class CampaignCostRow:
     tenant_id: str
@@ -35,6 +62,14 @@ class CampaignCostRow:
     total_cost: float = 0.0
     # How many events had ≥1 BA with no booked rate (labor understated).
     events_missing_rates: int = 0
+    # What the program produced over the same event-date window, so cost
+    # can be read per sample / per engagement / per unit sold.
+    samples: int = 0
+    engagements: int = 0
+    units_sold: int = 0
+    cost_per_sample: float | None = None
+    cost_per_engagement: float | None = None
+    cost_per_unit_sold: float | None = None
 
 
 @strawberry.type
@@ -118,8 +153,15 @@ class CampaignPnlQueries:
                 t_labor += labor
                 t_spend += spend
                 t_total += total
+                produced = _program_output(tid, start, end)
                 rows.append(
                     CampaignCostRow(
+                        samples=produced["samples"],
+                        engagements=produced["engagements"],
+                        units_sold=produced["units_sold"],
+                        cost_per_sample=_per(total, produced["samples"]),
+                        cost_per_engagement=_per(total, produced["engagements"]),
+                        cost_per_unit_sold=_per(total, produced["units_sold"]),
                         tenant_id=to_base64("TenantType", tid),
                         tenant_name=names.get(tid) or "(unnamed)",
                         events=len(ev_rows),

@@ -3981,6 +3981,58 @@ class RecapFieldTotalSection:
 
 
 @strawberry.type
+class EfficiencyRow:
+    """Samples and units per staffed hour for one slice (a weekday, a part
+    of the day, a store, or the whole window). Rates are null when the slice
+    has no clocked hours."""
+
+    label: str
+    recaps: int
+    sampled: int
+    sold: int
+    hours: float
+    samples_per_hour: float | None
+    units_per_hour: float | None
+
+
+@strawberry.type
+class FieldEfficiency:
+    total: EfficiencyRow
+    by_weekday: list[EfficiencyRow]
+    by_daypart: list[EfficiencyRow]
+    top_stores: list[EfficiencyRow]
+    recaps_without_hours: int
+
+
+@strawberry.type
+class GalleryPhoto:
+    id: str
+    url: str
+    category: str
+    recap_uuid: str
+    store: str
+    state: str
+    event_date: str
+
+
+@strawberry.type
+class PhotoGalleryPage:
+    total: int
+    photos: list[GalleryPhoto]
+    categories: list[str]
+    states: list[str]
+
+
+def _iso_date(raw):
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw).date()
+    except (ValueError, TypeError):
+        return None
+
+
+@strawberry.type
 class ReportSubscriptionQueries:
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def program_share_link(
@@ -4043,6 +4095,108 @@ class ReportSubscriptionQueries:
             )
             for sec in sections
         ]
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def tenant_field_efficiency(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> FieldEfficiency | None:
+        """Samples and units per staffed hour — overall, by weekday, by part
+        of day and by store. Approved recaps, windowed by event date; tenant
+        scoping matches ``tenantKpis``. None when out of scope or on error."""
+        service = _CampaignReportService()
+        try:
+            target = await service.resolve_target_tenant_id(info, tenant_id)
+        except Exception:  # noqa: BLE001
+            return None
+        if target is None:
+            return None
+        start_d, end_d = _iso_date(start_date), _iso_date(end_date)
+
+        def _build():
+            from recaps.field_efficiency import tenant_field_efficiency
+
+            return tenant_field_efficiency(target, start_d, end_d)
+
+        try:
+            data = await sync_to_async(_build, thread_sensitive=True)()
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("tenantFieldEfficiency failed tenant=%s: %s", target, exc)
+            return None
+
+        def _row(d: dict) -> EfficiencyRow:
+            return EfficiencyRow(**d)
+
+        return FieldEfficiency(
+            total=_row(data["total"]),
+            by_weekday=[_row(d) for d in data["by_weekday"]],
+            by_daypart=[_row(d) for d in data["by_daypart"]],
+            top_stores=[_row(d) for d in data["top_stores"]],
+            recaps_without_hours=data["recaps_without_hours"],
+        )
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def tenant_photo_gallery(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        state: str | None = None,
+        store: str | None = None,
+        category: str | None = None,
+        include_paperwork: bool = False,
+        first: int = 60,
+        offset: int = 0,
+    ) -> PhotoGalleryPage:
+        """Field photos from a brand's approved recaps, newest event first,
+        with the filter choices available in the window. Receipts and other
+        paperwork are excluded unless ``includePaperwork`` — and only staff
+        may ask for them. Never raises; degrades to an empty page."""
+        empty = PhotoGalleryPage(total=0, photos=[], categories=[], states=[])
+        service = _CampaignReportService()
+        try:
+            target = await service.resolve_target_tenant_id(info, tenant_id)
+            user = await service.get_user(info)
+            role_slug, is_staff, is_super, email = await resolve_request_user_access(user)
+        except Exception:  # noqa: BLE001
+            return empty
+        if target is None:
+            return empty
+        paperwork = bool(include_paperwork) and _is_admin_access(
+            role_slug, is_staff, is_super, email
+        )
+        start_d, end_d = _iso_date(start_date), _iso_date(end_date)
+
+        def _build():
+            from recaps.photo_gallery import tenant_photo_gallery
+
+            return tenant_photo_gallery(
+                target,
+                start=start_d,
+                end=end_d,
+                state=state,
+                store=store,
+                category=category,
+                include_paperwork=paperwork,
+                first=first,
+                offset=offset,
+            )
+
+        try:
+            data = await sync_to_async(_build, thread_sensitive=True)()
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("tenantPhotoGallery failed tenant=%s: %s", target, exc)
+            return empty
+        return PhotoGalleryPage(
+            total=data["total"],
+            photos=[GalleryPhoto(**p) for p in data["photos"]],
+            categories=data["categories"],
+            states=data["states"],
+        )
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def my_report_subscription(
