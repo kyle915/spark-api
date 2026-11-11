@@ -50,16 +50,22 @@ class TestParseClientClockTime:
         assert got is not None
         assert abs((got - when).total_seconds()) < 1
 
-    def test_rejects_a_future_stamp(self):
+    def test_a_fast_phone_clock_is_clamped_to_now_not_refused(self):
+        # A phone running ahead used to be unable to clock in or out at all.
         now = dj_tz.now()
         future = (now + _dt.timedelta(minutes=10)).isoformat()
-        with pytest.raises(checkin_web.ClientClockTimeError) as exc:
-            checkin_web.parse_client_clock_time(future, now=now)
-        assert exc.value.reason == "future"
+        assert checkin_web.parse_client_clock_time(future, now=now) == now
 
-    def test_rejects_a_stamp_older_than_24h(self):
+    def test_accepts_a_tap_from_yesterday(self):
+        # Queued offline, flushed when the page is reopened the next day.
         now = dj_tz.now()
-        old = (now - _dt.timedelta(hours=25)).isoformat()
+        when = now - _dt.timedelta(hours=30)
+        got = checkin_web.parse_client_clock_time(when.isoformat(), now=now)
+        assert abs((got - when).total_seconds()) < 1
+
+    def test_rejects_a_stamp_older_than_three_days(self):
+        now = dj_tz.now()
+        old = (now - _dt.timedelta(hours=73)).isoformat()
         with pytest.raises(checkin_web.ClientClockTimeError) as exc:
             checkin_web.parse_client_clock_time(old, now=now)
         assert exc.value.reason == "too_old"
@@ -124,15 +130,17 @@ class TestCheckinClientClockedInAt(AmbassadorsGraphQLTestCase):
         echoed = _dt.datetime.fromisoformat(body["clock"]["clockInAt"])
         assert abs((echoed - when).total_seconds()) < 2
 
-    def test_future_clocked_in_at_is_refused(self):
-        future = (dj_tz.now() + _dt.timedelta(hours=1)).isoformat()
+    def test_future_clocked_in_at_clocks_in_at_server_time(self):
+        before = dj_tz.now()
+        future = (before + _dt.timedelta(hours=1)).isoformat()
         res = self._clock(clockedInAt=future)
-        assert res.status_code == 400
-        assert res.json()["error"] == "future"
-        assert self._punches().count() == 0
+        assert res.status_code == 200
+        punch = self._punches().get()
+        assert before - _dt.timedelta(seconds=2) <= punch.clock_time
+        assert punch.clock_time <= dj_tz.now() + _dt.timedelta(seconds=2)
 
     def test_too_old_clocked_in_at_is_refused(self):
-        old = (dj_tz.now() - _dt.timedelta(hours=25)).isoformat()
+        old = (dj_tz.now() - _dt.timedelta(hours=73)).isoformat()
         res = self._clock(clockedInAt=old)
         assert res.status_code == 400
         assert res.json()["error"] == "too_old"
