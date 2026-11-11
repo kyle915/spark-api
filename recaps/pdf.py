@@ -25,7 +25,12 @@ from events.event_confirmations import PRODUCT_CATEGORY_SEPARATOR
 from recaps.products_sampled import is_products_sampled_field
 from recaps.sample_qty import sample_qty_labels
 from recaps.template_fallback import is_activation_template
-from recaps.types import _co_activation_info, _sold_unit_lines
+from recaps.types import (
+    _co_activation_info,
+    _consumers_sampled_from_fields,
+    _sold_unit_lines,
+    _sold_units_from_fields,
+)
 
 # We import WeasyPrint lazily inside build_recap_pdf to avoid startup crashes
 # when the native dependencies are missing.
@@ -669,6 +674,191 @@ def _recap_brand_name(recap) -> str:
     return name or "Spark"
 
 
+
+# ─── Client-facing presentation helpers ─────────────────────────────
+#
+# The generated PDF is attached to the recap and emailed to the brand on
+# approval, so it is written for a client reader: the ambassador is shown as
+# "First L." with no email address, internal bookkeeping fields are left out,
+# and numbers are formatted for reading.
+
+_SYNTHETIC_EMAIL_DOMAINS = ("walkup.spark",)
+
+
+def client_safe_ba_name(first: str | None, last: str | None, fallback: str = "") -> str:
+    """'Adaiah Dotson' → 'Adaiah D.'. Never returns an email or a phone."""
+    first = (first or "").strip()
+    last = (last or "").strip()
+    if first and last:
+        return f"{first} {last[0].upper()}."
+    if first or last:
+        return first or last
+    fallback = (fallback or "").strip()
+    if not fallback or "@" in fallback or re.fullmatch(r"[\d\s()+.-]{7,}", fallback):
+        return ""
+    return fallback
+
+
+def _client_safe_user_name(user) -> str:
+    if not user:
+        return ""
+    return client_safe_ba_name(
+        getattr(user, "first_name", None), getattr(user, "last_name", None)
+    )
+
+
+def _client_safe_free_name(raw: str | None) -> str:
+    """A typed full name (external BA) → first name + last initial."""
+    parts = (raw or "").strip().split()
+    if not parts:
+        return ""
+    if len(parts) == 1:
+        return client_safe_ba_name(parts[0], "")
+    return client_safe_ba_name(parts[0], parts[-1])
+
+
+_LEADING_DATE_RE = re.compile(r"^\s*\d{1,2}/\d{1,2}/\d{2,4}\s*[-–—:]\s*")
+_MONEY_LABEL_RE = re.compile(
+    r"\$|\bprice\b|\bspend\b|\bspent\b|\bcost\b|\brevenue\b|\bsales\s*(\$|amount|total)|\bamount\b",
+    re.IGNORECASE,
+)
+_COUNT_LABEL_RE = re.compile(
+    r"sampled|sold|consumer|engag|units|\btotal\b|how many|inventory|distributed|"
+    r"samples|attend|impression|reach|purchas|interaction|\bcases\b|\bcans\b|\bpacks\b",
+    re.IGNORECASE,
+)
+_NOT_A_COUNT_LABEL_RE = re.compile(
+    r"zip|postal|phone|store\s*(#|no|number)|\bid\b|code|\byear\b|address|receipt\s*#",
+    re.IGNORECASE,
+)
+_PLAIN_NUMBER_RE = re.compile(r"^\s*\$?\s*(\d{1,3}(?:,\d{3})+|\d+)(\.\d+)?\s*$")
+
+
+def format_answer_number(label: str | None, value):
+    """Format a numeric answer for reading; anything else passes through.
+
+    Money-labelled fields get a dollar sign and separators with the digits
+    exactly as entered (no rescaling — '1279' stays 1,279, it is not assumed
+    to be cents). Count-labelled whole numbers get thousands separators.
+    """
+    if not isinstance(value, str):
+        return value
+    m = _PLAIN_NUMBER_RE.match(value)
+    if not m:
+        return value
+    label = label or ""
+    whole = int(m.group(1).replace(",", ""))
+    frac = m.group(2) or ""
+    if _MONEY_LABEL_RE.search(label) and not _NOT_A_COUNT_LABEL_RE.search(label):
+        if frac and len(frac) == 2:  # ".5" → ".50"
+            frac += "0"
+        return f"${whole:,}{frac}"
+    if (
+        not frac
+        and _COUNT_LABEL_RE.search(label)
+        and not _NOT_A_COUNT_LABEL_RE.search(label)
+    ):
+        return f"{whole:,}"
+    return value
+
+
+def _pdf_title(recap) -> str:
+    """Store (and city) when known, otherwise the recap name without the
+    leading date the auto-namer adds — the date is printed underneath."""
+    retailer = _event_retailer(recap)
+    retailer_name = (getattr(retailer, "name", None) or "").strip()
+    city = _recap_city(recap)
+    city_name = (getattr(city, "name", None) or "").strip()
+    if retailer_name:
+        if city_name and city_name.lower() not in retailer_name.lower():
+            return f"{retailer_name} · {city_name}"
+        return retailer_name
+    name = (getattr(recap, "name", None) or "").strip()
+    stripped = _LEADING_DATE_RE.sub("", name).strip()
+    return stripped or name or "Field recap"
+
+
+def _long_date(value) -> str:
+    if not value:
+        return ""
+    try:
+        return f"{value.strftime('%B')} {value.day}, {value.year}"
+    except Exception:
+        return ""
+
+
+def _engagements_text(recap) -> str:
+    try:
+        n = int(getattr(recap, "total_engagements", None) or 0)
+    except (TypeError, ValueError):
+        return ""
+    return f"{n:,}" if n > 0 else ""
+
+
+def _headline_metrics(recap) -> list[tuple[str, str]]:
+    """Sampled / sold / conversion for the strip under the title. Uses the
+    same field matchers as the recap cards so the numbers agree."""
+    pairs = [
+        (
+            getattr(getattr(cfv, "custom_field", None), "name", None),
+            getattr(cfv, "value", None),
+        )
+        for cfv in _related_items(recap, "custom_field_value")
+    ]
+    sampled = _consumers_sampled_from_fields(pairs) if pairs else None
+    sold = _sold_units_from_fields(pairs) if pairs else None
+    out: list[tuple[str, str]] = []
+    if sampled:
+        out.append(("Sampled", f"{sampled:,}"))
+    else:
+        try:
+            engaged = int(getattr(recap, "total_engagements", None) or 0)
+        except (TypeError, ValueError):
+            engaged = 0
+        if engaged > 0:
+            out.append(("Engagements", f"{engaged:,}"))
+    if sold:
+        out.append(("Sold", f"{sold:,}"))
+    if sampled and sold:
+        pct = sold / sampled * 100
+        out.append(("Conversion", f"{pct:.1f}%" if pct < 10 else f"{pct:.0f}%"))
+    return out
+
+
+_PAPERWORK_IMAGE_RE = re.compile(
+    r"receipt|spend|expense|invoice|mileage|odometer|paperwork|signature",
+    re.IGNORECASE,
+)
+
+
+def _gallery_html(items: list[dict[str, str]]) -> str:
+    return (
+        '<div class="gallery">'
+        + "".join(
+            f'<figure><img src="{item["data_uri"]}" />'
+            f'<figcaption>{safe(item["caption"])}</figcaption></figure>'
+            for item in items
+        )
+        + "</div>"
+    )
+
+
+def _split_image_groups(
+    image_groups: dict[str, list[dict[str, str]]],
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    """(field photos, paperwork images), each captioned by its category."""
+    photos: list[dict[str, str]] = []
+    paperwork: list[dict[str, str]] = []
+    for category, items in image_groups.items():
+        label = _display_field_label(category)
+        if label.strip().lower() == "uncategorized":
+            label = "Photo"
+        target = paperwork if _PAPERWORK_IMAGE_RE.search(category or "") else photos
+        for item in items:
+            target.append({"data_uri": item["data_uri"], "caption": label})
+    return photos, paperwork
+
+
 def build_recap_pdf_html(
     recap,
     images: Iterable[dict[str, bytes]],
@@ -687,8 +877,9 @@ def build_recap_pdf_html(
     ambassador_user = None
     if getattr(recap, "ambassador", None) and getattr(recap.ambassador, "user", None):
         ambassador_user = recap.ambassador.user
-    ambassador_name = format_user_name(ambassador_user)
-    ambassador_email = format_user_email(ambassador_user)
+    # Client-facing: first name + last initial, and never an email (walk-up
+    # logins are placeholders that embed the ambassador's phone number).
+    ambassador_name = _client_safe_user_name(ambassador_user)
     # External-BA fallback: when the recap was attributed to a worker
     # who isn't in Spark yet (sub-contractor, not-yet-onboarded BA),
     # the linked Ambassador FK is null but recap.external_ba_name has
@@ -697,8 +888,7 @@ def build_recap_pdf_html(
     # blank — external BAs don't have a Spark account by definition.
     external_ba_name = (getattr(recap, "external_ba_name", None) or "").strip()
     if ambassador_user is None and external_ba_name:
-        ambassador_name = f"{external_ba_name} (external)"
-        ambassador_email = ""
+        ambassador_name = _client_safe_free_name(external_ba_name)
 
     engagements = _related_items(recap, "consumer_engagements")
     engagement = engagements[0] if engagements else None
@@ -765,6 +955,7 @@ def build_recap_pdf_html(
                     display_value = _display_answer(value)
             except Exception:
                 display_value = _display_answer(value)
+            display_value = format_answer_number(field_name, display_value)
         return (
             f"<div><span>{safe(_display_field_label(field_name))}</span>"
             f"<p>{safe(display_value)}</p></div>"
@@ -814,21 +1005,48 @@ def build_recap_pdf_html(
     )
 
     if is_custom_recap:
+        def _cell(label: str, value: str) -> str:
+            value = (value or "").strip()
+            if not value or value == "N/A":
+                return ""
+            return f"<div><span>{label}</span><strong>{escape(value)}</strong></div>"
+
+        event_obj = getattr(recap, "event", None)
+        location_bits = [
+            (getattr(_recap_city(recap), "name", None) or "").strip(),
+            (getattr(_event_state(recap), "name", None) or "").strip(),
+        ]
+        location = ", ".join(b for b in location_bits if b)
+        address = (getattr(event_obj, "address", None) or "").strip()
+        if address and address.lower() == _pdf_title(recap).lower():
+            address = ""  # already the page title
+        summary_cells = "".join(
+            [
+                _cell("Event date", format_date_only(_event_date(recap))),
+                _cell("Retailer", format_object_name(_event_retailer(recap))),
+                _cell("City", location),
+                _cell("Address", address),
+                _cell("Ambassador", ambassador_name),
+                _cell("Total Engagements", _engagements_text(recap)),
+            ]
+        )
+        metrics = _headline_metrics(recap)
+        headline_html = (
+            '<section class="headline">'
+            + "".join(
+                f'<div><strong>{escape(value)}</strong><span>{escape(label)}</span></div>'
+                for label, value in metrics
+            )
+            + "</section>"
+            if metrics
+            else ""
+        )
         summary_html = f"""
-    <section class="card">
+    {headline_html}
+    <section class="card compact">
       <h2>Summary</h2>
       <div class="grid">
-        <div><span>Name</span><strong>{safe(getattr(recap, "name", None))}</strong></div>
-        <div><span>Event</span><strong>{format_object_name(getattr(recap, "event", None))}</strong></div>
-        <div><span>Event Date</span><strong>{format_date_only(_event_date(recap))}</strong></div>
-        <div><span>Total Engagements</span><strong>{safe(getattr(recap, "total_engagements", None))}</strong></div>
-        <div><span>Used Corpo Card</span><strong>{format_bool(getattr(recap, "used_corpo_card", None))}</strong></div>
-        <div><span>Timezone</span><strong>{format_object_name(getattr(recap, "timezone", None))}</strong></div>
-        <div><span>Ambassador</span><strong>{safe(ambassador_name)}</strong></div>
-        <div><span>Ambassador Email</span><strong>{safe(ambassador_email)}</strong></div>
-        <div><span>State</span><strong>{format_object_name(_event_state(recap))}</strong></div>
-        <div><span>City</span><strong>{format_object_name(_recap_city(recap))}</strong></div>
-        <div><span>Retailer</span><strong>{format_object_name(_event_retailer(recap))}</strong></div>
+        {summary_cells}
       </div>
     </section>
 """
@@ -877,7 +1095,6 @@ def build_recap_pdf_html(
         format_date_only(_submitted_at(recap))
     }</strong></div>
         <div><span>Ambassador</span><strong>{safe(ambassador_name)}</strong></div>
-        <div><span>Ambassador Email</span><strong>{safe(ambassador_email)}</strong></div>
         <div><span>Job</span><strong>{
         safe(getattr(recap.job, "name", None))
     }</strong></div>
@@ -985,7 +1202,14 @@ def build_recap_pdf_html(
     samples_sales_html = ""
     if is_custom_recap:
         template = getattr(recap, "custom_recap_template", None)
-        if not sales:
+        # The template may already have its own "Sales Performance" section
+        # holding these fields; printing the derived card too gave the PDF
+        # two cards with the same heading.
+        has_own_sales_section = any(
+            (name or "").strip().lower() == "sales performance"
+            for name in custom_field_sections
+        )
+        if not sales and not has_own_sales_section:
             unit_lines = _sold_unit_lines(
                 (
                     getattr(getattr(cfv, "custom_field", None), "name", None),
@@ -1001,7 +1225,8 @@ def build_recap_pdf_html(
         # data; Event Activations never sell, and seeding / sampling-only
         # templates have no sales fields.
         show_sales = bool(sales) or (
-            (template is None or not is_activation_template(template))
+            not has_own_sales_section
+            and (template is None or not is_activation_template(template))
             and _template_collects_sales(recap, template)
         )
         sales_card = (
@@ -1091,6 +1316,44 @@ def build_recap_pdf_html(
         f'<p class="co-activation">{escape(co_activation)}</p>' if co_activation else ""
     )
     mark_src = _spark_mark_src(invert=invert_spark_mark)
+    title = _pdf_title(recap) if is_custom_recap else safe(recap.name)
+    long_date = _long_date(_event_date(recap)) if is_custom_recap else ""
+    if long_date and not subtitle.startswith("Demo"):
+        subtitle = f"{subtitle} · {long_date}"
+    if not eyebrow_html and is_custom_recap:
+        brand = _recap_brand_name(recap)
+        if brand and brand != "Spark":
+            eyebrow_html = f'<p class="eyebrow">{escape(brand)}</p>'
+    photos, paperwork = _split_image_groups(image_groups)
+    if is_custom_recap:
+        # Photos lead: the activation first, the paperwork last.
+        photos_html = (
+            f'<section class="card photos"><h2>Photos</h2>{_gallery_html(photos)}</section>'
+            if photos
+            else ""
+        )
+        paperwork_html = (
+            f'<section class="card photos"><h2>Receipts</h2>{_gallery_html(paperwork)}</section>'
+            if paperwork
+            else ""
+        )
+        if not photos and not paperwork:
+            paperwork_html = (
+                '<section class="card"><h2>Photos</h2>'
+                '<p class="empty">No photos were attached.</p></section>'
+            )
+        body_html = (
+            f"{summary_html}{photos_html}{samples_sales_html}"
+            f"{custom_fields_html}{paperwork_html}"
+        )
+    else:
+        body_html = f"""{summary_html}
+    {samples_sales_html}
+    {custom_fields_html}
+    <section class="card">
+      <h2>Images</h2>
+      {_build_images_html(image_groups)}
+    </section>"""
     return f"""
 <!doctype html>
 <html>
@@ -1103,20 +1366,14 @@ def build_recap_pdf_html(
       <div>
         <img class="spark-mark" src="{mark_src}" alt="Spark by Ignite" />
         {eyebrow_html}
-        <h1>{safe(recap.name)}</h1>
+        <h1>{escape(title) if is_custom_recap else title}</h1>
         <p class="subtitle">{subtitle}</p>
         {co_activation_html}
       </div>
       {badge_html}
     </header>
 
-    {summary_html}
-    {samples_sales_html}
-    {custom_fields_html}
-    <section class="card">
-      <h2>Images</h2>
-      {_build_images_html(image_groups)}
-    </section>
+    {body_html}
   </body>
 </html>
 """
@@ -1143,6 +1400,57 @@ _PDF_BASE_CSS = """
             width: auto;
             display: block;
             margin: 0 0 8px 0;
+        }"""
+
+_RECAP_REFRESH_CSS = """
+        .headline {
+            display: flex;
+            gap: 28px;
+            padding: 4px 2px 16px 2px;
+            break-inside: avoid;
+        }
+        .headline div { min-width: 90px; }
+        .headline strong {
+            display: block;
+            font-size: 26px;
+            letter-spacing: -0.03em;
+            color: #14160f;
+            font-variant-numeric: tabular-nums;
+        }
+        .headline span {
+            display: block;
+            margin-top: 2px;
+            font-size: 9px;
+            text-transform: uppercase;
+            letter-spacing: 0.14em;
+            color: #5c6154;
+        }
+        /* Keep rows, figures and short cards whole; let long cards split
+           cleanly with their border and padding on both pages. */
+        .card { box-decoration-break: clone; }
+        .card.compact { break-inside: avoid; }
+        h2 { break-after: avoid; }
+        .stack div, .grid div, .list li, figure { break-inside: avoid; }
+        .photos .gallery img { max-height: 200px; }
+        .photos .gallery figcaption {
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            font-size: 8px;
+        }
+        .stack p { font-variant-numeric: tabular-nums; }
+        @page {
+            @bottom-right {
+                content: "Page " counter(page) " of " counter(pages);
+                font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+                font-size: 8px;
+                color: #7a7f70;
+            }
+            @bottom-left {
+                content: "Spark by Ignite";
+                font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+                font-size: 8px;
+                color: #7a7f70;
+            }
         }"""
 
 _DROP_OFF_CSS = """
@@ -1382,7 +1690,13 @@ def build_recap_pdf(
         """
     if accent != _DEFAULT_PDF_ACCENT:
         theme_css = theme_css.replace(_DEFAULT_PDF_ACCENT, accent)
-    css = CSS(string=_PDF_BASE_CSS + theme_css + _DROP_OFF_CSS + _CO_ACTIVATION_CSS)
+    css = CSS(
+        string=_PDF_BASE_CSS
+        + theme_css
+        + _DROP_OFF_CSS
+        + _CO_ACTIVATION_CSS
+        + _RECAP_REFRESH_CSS
+    )
 
     return HTML(string=html).write_pdf(stylesheets=[css])
 
@@ -1785,5 +2099,12 @@ def build_campaign_report_pdf(
         .empty { margin: 0; color: #9ca3af; font-style: italic; }
     """
 
-    css = CSS(string=_PDF_BASE_CSS + single_pdf_css + cover_css + _DROP_OFF_CSS + _CO_ACTIVATION_CSS)
+    css = CSS(
+        string=_PDF_BASE_CSS
+        + single_pdf_css
+        + cover_css
+        + _DROP_OFF_CSS
+        + _CO_ACTIVATION_CSS
+        + _RECAP_REFRESH_CSS
+    )
     return HTML(string=html_doc).write_pdf(stylesheets=[css])
