@@ -330,6 +330,26 @@ def _load_session(code: str, token: str):
         if event is None:
             return None, _err("Couldn't find your check-in.", status=404, code="not_found")
         if getattr(event, "tenant_id", None) != target.id:
+            # The shift this phone is on now sits under another brand — an
+            # event edited after clock-in. The ambassador can't fix that, so
+            # say what happened, keep their saved answers (``moved_brand`` is
+            # not a dead-session code, the page keeps the session and draft)
+            # and tell staff once.
+            moved_amb = checkin_web.shift_moved_to_other_brand(
+                event=event, ambassador_id=amb_id, link_tenant=target
+            )
+            if moved_amb is not None:
+                checkin_web.notify_shift_moved_brand(
+                    event=event, ambassador=moved_amb, link_tenant=target
+                )
+                brand = getattr(event.tenant, "name", "") or "another brand"
+                return None, _err(
+                    f"Your shift was moved to {brand} after you clocked in, so "
+                    "this link can't file it. Your answers are saved on this "
+                    "phone — message your lead and they'll sort it out.",
+                    status=409,
+                    code="moved_brand",
+                )
             return None, _err("This session doesn't match the link.", status=401, code="mismatch")
 
     ambassador = (
