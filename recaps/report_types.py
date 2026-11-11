@@ -3961,6 +3961,26 @@ async def _program_share_state(info, requested_tenant_id) -> ProgramShareLink | 
 
 
 @strawberry.type
+class RecapFieldTotal:
+    """One recap-form field rolled up across a brand's approved recaps.
+    ``kind`` is ``count`` / ``money`` (``total`` is a sum) or ``average``
+    (``total`` is the mean — prices, rates, ratings)."""
+
+    label: str
+    kind: str
+    total: float
+    average: float
+    recaps: int
+    is_percent: bool
+
+
+@strawberry.type
+class RecapFieldTotalSection:
+    section: str
+    fields: list[RecapFieldTotal]
+
+
+@strawberry.type
 class ReportSubscriptionQueries:
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def program_share_link(
@@ -3973,6 +3993,54 @@ class ReportSubscriptionQueries:
         except Exception:  # noqa: BLE001
             state = None
         return state or ProgramShareLink(enabled=False, token=None)
+    async def tenant_recap_field_totals(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> list[RecapFieldTotalSection]:
+        """Every numeric recap answer for a brand, totalled field by field
+        under the form's own sections. Approved recaps only, windowed by
+        event date. Tenant scoping matches ``tenantKpis``. Never raises —
+        degrades to an empty list."""
+        service = _CampaignReportService()
+        try:
+            target_tenant_id = await service.resolve_target_tenant_id(info, tenant_id)
+        except Exception:  # noqa: BLE001
+            return []
+        if target_tenant_id is None:
+            return []
+
+        def _d(raw):
+            if not raw:
+                return None
+            try:
+                return datetime.fromisoformat(raw).date()
+            except (ValueError, TypeError):
+                return None
+
+        start_d, end_d = _d(start_date), _d(end_date)
+
+        def _build():
+            from recaps.recap_field_totals import tenant_recap_field_totals
+
+            return tenant_recap_field_totals(target_tenant_id, start_d, end_d)
+
+        try:
+            sections = await sync_to_async(_build, thread_sensitive=True)()
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(
+                "tenantRecapFieldTotals failed tenant=%s: %s", target_tenant_id, exc
+            )
+            return []
+        return [
+            RecapFieldTotalSection(
+                section=sec["section"],
+                fields=[RecapFieldTotal(**f) for f in sec["fields"]],
+            )
+            for sec in sections
+        ]
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def my_report_subscription(
