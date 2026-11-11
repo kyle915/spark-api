@@ -467,39 +467,90 @@ _CSV_ALIASES = {
     "product name": "name",
     "product": "name",
     "title": "name",
+    "item": "name",
+    "item name": "name",
+    "flavor": "name",
+    "description": "name",
     "sku": "sku",
     "sku code": "sku",
     "image url": "image_url",
-    "image_url": "image_url",
     "image": "image_url",
     "url": "image_url",
     "product type": "product_type",
-    "product_type": "product_type",
     "type": "product_type",
     "category": "product_type",
 }
 
 
+def _catalog_delimiter(first_line: str) -> str:
+    """Rows pasted from a spreadsheet are tab-separated; files are commas."""
+    if "\t" in first_line:
+        return "\t"
+    if "," not in first_line and ";" in first_line:
+        return ";"
+    return ","
+
+
+def _headerless_catalog_row(cells: list[str]) -> dict:
+    """A row with no header: the name comes first, a web address is the
+    image, and the first other value is the SKU."""
+    cells = [c.strip() for c in cells]
+    name = cells[0] if cells else ""
+    sku = ""
+    image_url = ""
+    for cell in cells[1:]:
+        if not cell:
+            continue
+        if cell.lower().startswith(("http://", "https://")):
+            image_url = image_url or cell
+        elif not sku:
+            sku = cell
+    return {"name": name, "sku": sku, "image_url": image_url, "product_type": ""}
+
+
 def parse_catalog_csv(text: str) -> tuple[list[dict], list[str]]:
+    """Catalog rows from pasted or uploaded text.
+
+    With a header row, columns are matched by name in any order. Without
+    one (a plain list of products, one per line), the first column is the
+    product name, a web address is the image and the next value is the SKU.
+    Comma, tab and semicolon separated text all work.
+    """
     rows: list[dict] = []
     errors: list[str] = []
-    stripped = (text or "").strip()
+    stripped = (text or "").lstrip("\ufeff").strip()
     if not stripped:
         return rows, errors
-    reader = csv.DictReader(io.StringIO(stripped))
-    if not reader.fieldnames:
-        return rows, ["Catalog CSV needs a header row: name, sku, image_url."]
-    header_map: dict[str, str] = {}
-    for raw_header in reader.fieldnames:
-        key = (raw_header or "").strip().lower()
-        if key in _CSV_ALIASES:
-            header_map[raw_header] = _CSV_ALIASES[key]
+    delimiter = _catalog_delimiter(stripped.splitlines()[0])
+    table = [
+        cells
+        for cells in csv.reader(io.StringIO(stripped), delimiter=delimiter)
+        if any((c or "").strip() for c in cells)
+    ]
+    if not table:
+        return rows, errors
+
+    header_map: dict[int, str] = {}
+    for idx, raw_header in enumerate(table[0]):
+        key = " ".join((raw_header or "").strip().lower().replace("_", " ").split())
+        target = _CSV_ALIASES.get(key)
+        if target and target not in header_map.values():
+            header_map[idx] = target
+
     if "name" not in header_map.values():
-        return rows, ["Catalog CSV needs a 'name' column (name, sku, image_url)."]
-    for line_no, raw_row in enumerate(reader, start=2):
+        # No recognisable header: every line is a product.
+        for line_no, cells in enumerate(table, start=1):
+            row = _headerless_catalog_row(cells)
+            if not row["name"]:
+                errors.append(f"Line {line_no}: missing product name — skipped.")
+                continue
+            rows.append(row)
+        return rows, errors
+
+    for line_no, cells in enumerate(table[1:], start=2):
         row = {
-            target: (raw_row.get(source) or "").strip()
-            for source, target in header_map.items()
+            target: (cells[idx] if idx < len(cells) else "").strip()
+            for idx, target in header_map.items()
         }
         if not any(row.values()):
             continue
