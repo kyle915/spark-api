@@ -3262,6 +3262,73 @@ class AuditTenantAccountSpendView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class RegenerateRecapPdfsView(View):
+    """POST `/internal/cron/regenerate-recap-pdfs`.
+
+    Re-renders the stored Spark PDF on approved recaps with the current
+    layout (see `recaps/management/commands/regenerate_recap_pdfs.py`). Only
+    recaps that already have a Spark PDF are touched; no email is sent.
+    DRY-RUN unless `apply` is truthy. Paged: pass the returned
+    `report.next_after_id` back as `after_id` until it is null.
+
+    Params: start, end (YYYY-MM-DD, required), tenant_id, limit, after_id, apply.
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _param(name: str) -> str:
+            return (request.POST.get(name) or request.GET.get(name) or "").strip()
+
+        start, end = _param("start"), _param("end")
+        if not start or not end:
+            return JsonResponse(
+                {"ok": False, "error": "start-and-end-required (YYYY-MM-DD)"}, status=400
+            )
+        kwargs: dict = {"start": start, "end": end}
+        for name in ("tenant_id", "limit", "after_id"):
+            raw = _param(name)
+            if raw:
+                try:
+                    kwargs[name] = int(raw)
+                except ValueError:
+                    return JsonResponse(
+                        {"ok": False, "error": f"{name}-must-be-int"}, status=400
+                    )
+        if _param("apply").lower() in ("1", "true", "yes", "on"):
+            kwargs["apply"] = True
+
+        out = io.StringIO()
+        try:
+            call_command("regenerate_recap_pdfs", stdout=out, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("Regenerate recap PDFs cron failed")
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "command-failed",
+                    "detail": str(exc),
+                    "log": out.getvalue(),
+                },
+                status=500,
+            )
+        log = out.getvalue()
+        report = None
+        for line in log.splitlines():
+            if line.startswith("JSON_RESULT: "):
+                try:
+                    report = json.loads(line[len("JSON_RESULT: "):])
+                except ValueError:
+                    report = None
+        return JsonResponse({"ok": True, "report": report, "log": log})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class DumpTenantReceiptsView(View):
     """GET/POST `/internal/cron/dump-tenant-receipts`.
 
@@ -11346,6 +11413,7 @@ def _registered_views() -> dict[str, Any]:
         "audit-tenant-consumers": AuditTenantConsumersView,
         "audit-tenant-account-spend": AuditTenantAccountSpendView,
         "dump-tenant-receipts": DumpTenantReceiptsView,
+        "regenerate-recap-pdfs": RegenerateRecapPdfsView,
         "campaign-to-date": CampaignToDateView,
         "dedupe-skills": DedupeSkillsView,
         "purge-walkin-event": PurgeWalkinEventView,
