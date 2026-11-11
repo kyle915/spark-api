@@ -221,7 +221,7 @@ class TestCampaignReportTenantIsolation(AmbassadorsGraphQLTestCase):
     # ── admin ─────────────────────────────────────────────────────────
 
     @pytest.mark.asyncio
-    async def test_admin_can_bundle_across_tenants_with_full_names(self):
+    async def test_admin_can_bundle_across_tenants(self):
         payload, rendered = await self._generate(
             [
                 _gid("RecapType", self.recap_a.id),

@@ -414,6 +414,10 @@ def _custom_field_sections(recap) -> dict[str, list[tuple[str, object]]]:
         raw = custom_field_value.value
         if is_products_sampled_field(field_name):
             raw = _sku_names_only(raw)
+        elif is_ba_name_field(field_name):
+            raw = _client_safe_free_name(str(raw))
+            if not raw:
+                continue
         sections.setdefault(section_name, []).append(
             (field_name, _format_field_value(raw))
         )
@@ -691,8 +695,11 @@ def client_safe_ba_name(first: str | None, last: str | None, fallback: str = "")
     last = (last or "").strip()
     if first and last:
         return f"{first} {last[0].upper()}."
-    if first or last:
-        return first or last
+    if first:
+        return first
+    if last:
+        # A last-name-only record must not print the full surname.
+        return f"{last[0].upper()}."
     fallback = (fallback or "").strip()
     if not fallback or "@" in fallback or re.fullmatch(r"[\d\s()+.-]{7,}", fallback):
         return ""
@@ -715,6 +722,19 @@ def _client_safe_free_name(raw: str | None) -> str:
     if len(parts) == 1:
         return client_safe_ba_name(parts[0], "")
     return client_safe_ba_name(parts[0], parts[-1])
+
+
+# Custom fields that hold the ambassador's typed name ("BA Name",
+# "Ambassador Full Name", "Brand Ambassador's Name"). Their answers get the
+# same "First L." treatment as the Summary ambassador row.
+_BA_NAME_FIELD_RE = re.compile(
+    r"^\s*(?:ba|brand\s+ambassador|ambassador)(?:'s|\u2019s)?\s+(?:full\s+)?name\b",
+    re.IGNORECASE,
+)
+
+
+def is_ba_name_field(field_name: str | None) -> bool:
+    return bool(_BA_NAME_FIELD_RE.match(field_name or ""))
 
 
 _LEADING_DATE_RE = re.compile(r"^\s*\d{1,2}/\d{1,2}/\d{2,4}\s*[-–—:]\s*")
