@@ -20,6 +20,7 @@ from django_rq import job
 from django.core.mail import EmailMultiAlternatives
 from rq import Retry
 
+from utils.notification_prefs import drop_muted_recipients
 from utils.outbound import block_if_suppressed
 from utils.queues import Queues, rq_is_enabled
 
@@ -449,6 +450,11 @@ class MailDrivers:
     def send(self, envelope: Envelope) -> None:
         if block_if_suppressed("email", envelope.subject):
             return
+        had_recipients = bool(envelope.to_emails)
+        drop_muted_recipients(envelope)
+        if had_recipients and not envelope.to_emails:
+            # Everyone on it muted this category.
+            return
         self.drivers[self.driver].send(envelope)
 
 
@@ -561,6 +567,7 @@ class Mailer:
             if logo_attachment:
                 attachments.append(logo_attachment)
         envelope.attachments = attachments
+        drop_muted_recipients(envelope)
         return envelope
 
     def dispatch(self) -> None:
