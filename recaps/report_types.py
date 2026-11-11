@@ -3993,6 +3993,8 @@ class ReportSubscriptionQueries:
         except Exception:  # noqa: BLE001
             state = None
         return state or ProgramShareLink(enabled=False, token=None)
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def tenant_recap_field_totals(
         self,
         info: strawberry.Info,
