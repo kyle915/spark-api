@@ -176,7 +176,7 @@ def _over_limit(scope: str, ident: str, *, limit: int, window: int) -> bool:
 
 def _rate_limited() -> JsonResponse:
     return _err(
-        "Too many attempts. Wait a minute and try again.",
+        "Too many attempts from this network. Wait a few minutes and try again.",
         status=429,
         code="rate_limited",
     )
@@ -418,7 +418,11 @@ def public_checkin_context(request: HttpRequest, code: str) -> HttpResponse:
 def public_checkin_identify(request: HttpRequest, code: str) -> HttpResponse:
     ip = _client_ip(request)
     # Per-IP burst guard first — it's the real flood defence and costs nothing.
-    if _over_limit("identify-ip", ip, limit=10, window=300):
+    # A crew on one store's Wi-Fi shares an address, and resuming a session
+    # on page load spends identify calls too: 10 per 5 minutes locked out
+    # the 3rd or 4th ambassador at a busy store. 60 still stops a flood.
+    if _over_limit("identify-ip", ip, limit=60, window=300):
+        logger.warning("checkin identify rate-limited ip=%s code=%s", ip, code)
         return _rate_limited()
 
     kind, target = checkin_web.resolve_checkin_target(code)

@@ -670,10 +670,11 @@ def _ensure_source(name: str):
     return source
 
 
-# A BA who tapped Clock in at 3pm with no bars will flush at 5pm. Accept the
-# client timestamp so payroll matches the tap, but refuse a future stamp or
-# one older than a day (that's not "I lost service", that's a rewritten shift).
-CLOCKED_IN_MAX_AGE = timedelta(hours=24)
+# A BA who tapped Clock in at 3pm with no bars will flush at 5pm — or the
+# next morning, when they reopen the page. Accept the client timestamp so
+# payroll matches the tap. Three days covers a weekend without signal; older
+# than that is not "I lost service", it is a rewritten shift.
+CLOCKED_IN_MAX_AGE = timedelta(hours=72)
 CLOCKED_IN_FUTURE_SKEW = timedelta(minutes=2)
 
 
@@ -708,9 +709,15 @@ def parse_client_clock_time(raw, *, now=None):
         parsed = parsed.replace(tzinfo=dt_timezone.utc)
     now = now or dj_tz.now()
     if parsed > now + CLOCKED_IN_FUTURE_SKEW:
-        raise ClientClockTimeError(
-            "future", "That clock-in time is in the future."
+        # The phone's clock is fast. Refusing here left the ambassador unable
+        # to clock in or out at all, with nothing they could do about it.
+        # Nobody can have tapped in the future, so the tap happened now.
+        logger.warning(
+            "checkin clock time %s is ahead of server now %s — using server time",
+            parsed.isoformat(),
+            now.isoformat(),
         )
+        return now
     if parsed < now - CLOCKED_IN_MAX_AGE:
         raise ClientClockTimeError(
             "too_old", "That clock-in time is too old to use."
