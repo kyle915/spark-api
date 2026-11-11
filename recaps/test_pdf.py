@@ -757,6 +757,40 @@ def test_client_safe_ba_name_never_leaks_contact_details():
     assert client_safe_ba_name("Elmer", "") == "Elmer"
     assert client_safe_ba_name("", "", "checkin-9516271509@walkup.spark") == ""
     assert client_safe_ba_name("", "", "(951) 627-1509") == ""
+    # A last-name-only record is reduced to an initial, never the surname.
+    assert client_safe_ba_name("", "Dotson") == "D."
+
+
+def test_ba_name_custom_field_is_masked_like_the_summary_row():
+    section = SimpleNamespace(name="Event Details")
+    recap = SimpleNamespace(
+        custom_field_value=RelatedList(
+            [
+                SimpleNamespace(
+                    value="Adaiah Marie Dotson",
+                    custom_field=SimpleNamespace(name="BA Name", recap_section=section),
+                ),
+                SimpleNamespace(
+                    value="Jordan Rivera",
+                    custom_field=SimpleNamespace(
+                        name="Brand Ambassador's Full Name", recap_section=section
+                    ),
+                ),
+                SimpleNamespace(
+                    value="Binny's Lincoln Park",
+                    custom_field=SimpleNamespace(name="Store Name", recap_section=section),
+                ),
+            ]
+        )
+    )
+
+    assert _custom_field_sections(recap) == {
+        "Event Details": [
+            ("BA Name", "Adaiah D."),
+            ("Brand Ambassador's Full Name", "Jordan R."),
+            ("Store Name", "Binny's Lincoln Park"),
+        ]
+    }
 
 
 def test_format_answer_number_formats_money_and_counts_only():
