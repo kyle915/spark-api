@@ -61,9 +61,23 @@ from recaps.client_report import (
 )
 from recaps.envelopes import ClientMonthlyReportMailer
 from recaps.tenant_overview import _MONTH_ABBR, _add_months
-from tenants.models import Tenant
+from tenants.models import Tenant, monthly_report_subscriber_emails
 
 logger = logging.getLogger(__name__)
+
+
+def merge_report_recipients(*groups) -> list[str]:
+    """Union of recipient lists, first spelling wins, case-insensitive."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for group in groups:
+        for email in group or []:
+            key = (email or "").strip().lower()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            out.append(email.strip())
+    return out
 
 
 def _prior_complete_month(now=None) -> tuple[int, int]:
@@ -148,7 +162,15 @@ class Command(BaseCommand):
         # if its flag was left on). --tenant narrows to one id WITHOUT
         # bypassing the opt-in gate, so testing still can't email a brand that
         # hasn't opted in.
-        tenants = Tenant.active().filter(scheduled_report_enabled=True)
+        # ...plus any brand where at least one person subscribed THEMSELVES
+        # (ClientReportSubscription) — that personal opt-in works even when
+        # the brand-wide switch is off.
+        from django.db.models import Q
+
+        tenants = Tenant.active().filter(
+            Q(scheduled_report_enabled=True)
+            | Q(client_report_subscriptions__monthly_report=True)
+        ).distinct()
         if only_tenant is not None:
             tenants = tenants.filter(id=only_tenant)
 
@@ -165,7 +187,14 @@ class Command(BaseCommand):
         for tenant in tenants.iterator():
             enabled += 1
             try:
-                recipients = tenant.scheduled_report_recipients()
+                # Brand-wide list only when the brand switch is on; personal
+                # subscribers always. Deduped case-insensitively.
+                recipients = merge_report_recipients(
+                    tenant.scheduled_report_recipients()
+                    if tenant.scheduled_report_enabled
+                    else [],
+                    monthly_report_subscriber_emails(tenant),
+                )
                 if not recipients:
                     # Opted in but no recipients configured -> nothing to send.
                     skipped_no_recipients += 1

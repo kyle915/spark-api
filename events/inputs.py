@@ -103,6 +103,10 @@ class RequestFiltersInput(BaseTenantInput):
     status_slugs: list[str] | None = None
     # Two-value scheduling metadata on Request.scheduling_status.
     scheduling_status: str | None = None
+    # Staffing: True = has an event but NO ambassador assigned to it yet
+    # (invited or confirmed); False = at least one ambassador assigned;
+    # None = either. Powers the Master Tracker "Unstaffed" filter.
+    unstaffed: bool | None = None
     # Activation Plan grouping (FMM forward slate).
     activation_plan_id: strawberry.ID | None = None
     # True = only requests on a plan; False = only unplanned; None = either.

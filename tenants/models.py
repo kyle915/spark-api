@@ -474,6 +474,10 @@ class Tenant(Asyncable, models.Model):
     # flips this on, so deploying the feature mails nobody. The report's
     # recipients reuse `recap_recipient_emails` (the same client contacts
     # the recap-approval emails go to); see `scheduled_report_recipients()`.
+    # Public program page (``/program/<token>``). OFF by default: the signed
+    # link only resolves while this is on, so switching it off revokes every
+    # link that was ever shared for this brand.
+    program_share_enabled = models.BooleanField(default=False)
     scheduled_report_enabled = models.BooleanField(
         default=False,
         help_text="When ON, this brand receives an automated monthly performance-report PDF by email (sent to recap_recipient_emails). OFF by default — opt-in only.",
@@ -545,6 +549,85 @@ class Tenant(Asyncable, models.Model):
         is what makes the feature mail nobody until it is explicitly set up.
         """
         return parse_recipient_emails(self.recap_recipient_emails)
+
+
+class ClientReportSubscription(models.Model):
+    """One person's opt-in to a brand's scheduled MONTHLY report email.
+
+    Separate from ``Tenant.recap_recipient_emails`` (the brand-wide client
+    contact list an Ignite admin curates, which also drives recap-approval
+    email): a brand user can subscribe or unsubscribe THEMSELVES without
+    touching who gets approval mail. The monthly cron emails the union of the
+    brand-wide list (when ``scheduled_report_enabled``) and these subscribers.
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="client_report_subscriptions",
+    )
+    tenant = models.ForeignKey(
+        Tenant,
+        on_delete=models.CASCADE,
+        related_name="client_report_subscriptions",
+    )
+    monthly_report = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "tenant"],
+                name="uniq_client_report_subscription_user_tenant",
+            )
+        ]
+
+    def __str__(self) -> str:  # pragma: no cover - admin/debug only
+        return f"{self.user_id}→{self.tenant_id} monthly={self.monthly_report}"
+
+
+def monthly_report_subscriber_emails(tenant) -> list[str]:
+    """Emails of people who subscribed THEMSELVES to ``tenant``'s monthly
+    report and can still see that brand: an active user who is either an
+    active member of the tenant or Ignite staff. Deduped, lower-cased order
+    of first appearance."""
+    from utils.graphql.permissions import _is_admin_access  # lazy: avoid cycles
+
+    subs = (
+        ClientReportSubscription.objects.filter(
+            tenant=tenant, monthly_report=True, user__is_active=True
+        )
+        .select_related("user", "user__role")
+        .order_by("id")
+    )
+    member_ids = set(
+        TenantedUser.objects.filter(
+            tenant=tenant, is_active=True
+        ).values_list("user_id", flat=True)
+    )
+    out: list[str] = []
+    seen: set[str] = set()
+    for sub in subs:
+        user = sub.user
+        email = (getattr(user, "email", "") or "").strip()
+        if not email:
+            continue
+        is_staff_user = _is_admin_access(
+            (getattr(getattr(user, "role", None), "slug", "") or "").lower(),
+            bool(getattr(user, "is_staff", False)),
+            bool(getattr(user, "is_superuser", False)),
+            email,
+        )
+        if user.id not in member_ids and not is_staff_user:
+            continue
+        key = email.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(email)
+    return out
 
 
 class BrandGroup(models.Model):
@@ -1448,3 +1531,36 @@ class TenantGoal(models.Model):
 
     def __str__(self) -> str:
         return f"KPI goals {self.year} @ tenant {self.tenant_id}"
+
+
+class NotificationPreference(models.Model):
+    """One person's choice to stop (or resume) an optional email category.
+
+    Opt-OUT: no row means the person gets the email, exactly as before this
+    model existed. A row with ``email_enabled=False`` mutes that category for
+    that person only. Categories and what they cover live in
+    ``utils.notification_prefs`` — account, sign-in and shift emails are not
+    categories and can never be muted.
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="notification_preferences",
+    )
+    category = models.CharField(max_length=40)
+    email_enabled = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "category"],
+                name="uniq_notification_preference_user_category",
+            )
+        ]
+
+    def __str__(self) -> str:  # pragma: no cover - admin/debug only
+        return f"{self.user_id}:{self.category}={self.email_enabled}"

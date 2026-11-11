@@ -144,14 +144,24 @@ def test_customrecapfile_display_url_plain_image_unchanged():
 # ---------------------------------------------------------------------------
 
 
+class _FakeCategory:
+    def __init__(self, name: str):
+        self.name = name
+
+
 class _FakeCustomRecapFile:
-    def __init__(self, blob: str):
+    def __init__(self, blob: str, category: str | None = None):
         self.__dict__["url"] = _FakeFieldFile(blob)
+        if category is not None:
+            self.__dict__["file_recap_category"] = _FakeCategory(category)
 
 
-def _resolve_hero_image_url(blobs: list[str]) -> str | None:
+def _resolve_hero_image_url(blobs: list) -> str | None:
     inst = recap_types.CustomRecap.__new__(recap_types.CustomRecap)
-    files = [_FakeCustomRecapFile(b) for b in blobs]
+    files = [
+        _FakeCustomRecapFile(*b) if isinstance(b, tuple) else _FakeCustomRecapFile(b)
+        for b in blobs
+    ]
     with patch.object(
         recap_types, "_prefetched", return_value=files
     ), patch(
@@ -177,3 +187,43 @@ def test_hero_image_url_heic_rewrites_to_jpg_sibling():
 def test_hero_image_url_skips_non_image_without_heic():
     out = _resolve_hero_image_url(["recaps/notes.pdf", "recaps/clip.mp4"])
     assert out is None
+
+
+def test_hero_image_url_skips_receipt_bucket_for_a_field_photo():
+    out = _resolve_hero_image_url(
+        [
+            ("recaps/receipt.jpg", "Expense Receipts"),
+            ("recaps/spend.jpg", "Product Spend"),
+            ("recaps/booth.jpg", "Full booth setup, straight-on"),
+        ]
+    )
+    assert out == "https://cdn/recaps/booth.jpg"
+
+
+def test_hero_image_url_falls_back_to_receipt_when_it_is_the_only_image():
+    out = _resolve_hero_image_url(
+        [("recaps/receipt.jpg", "Expense Receipts"), "recaps/notes.pdf"]
+    )
+    assert out == "https://cdn/recaps/receipt.jpg"
+
+
+def test_hero_image_url_uncategorised_image_counts_as_a_photo():
+    out = _resolve_hero_image_url(
+        [("recaps/receipt.jpg", "Receipts"), "recaps/plain.jpg"]
+    )
+    assert out == "https://cdn/recaps/plain.jpg"
+
+
+def test_is_paperwork_file_reads_a_loaded_category_on_real_models():
+    from recaps import models as recap_models
+
+    receipt = recap_models.CustomRecapFile(
+        file_recap_category=recap_models.FileRecapCategory(name="Expense Receipts")
+    )
+    booth = recap_models.CustomRecapFile(
+        file_recap_category=recap_models.FileRecapCategory(name="Table setup")
+    )
+    assert recap_types._is_paperwork_file(receipt) is True
+    assert recap_types._is_paperwork_file(booth) is False
+    # No category loaded: treated as a normal photo, and no query is attempted.
+    assert recap_types._is_paperwork_file(recap_models.CustomRecapFile()) is False

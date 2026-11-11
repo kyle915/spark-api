@@ -5045,9 +5045,6 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
                 title=resolved_title,
                 subtitle=resolved_subtitle,
                 recaps_with_images=recaps_with_images,
-                # Non-admin viewers (clients / BAs) get first name + last
-                # initial and no ambassador email in the PDF.
-                mask_ambassador=not caller_is_admin,
             )
 
             return (

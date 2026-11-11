@@ -236,9 +236,6 @@ class TestCampaignReportTenantIsolation(AmbassadorsGraphQLTestCase):
         assert "OWN-LEGACY-RECAP" in html
         assert "FOREIGN-CUSTOM-RECAP" in html
         assert "FOREIGN-LEGACY-RECAP" in html
-        # Ignite staff keep the full ambassador identity.
-        assert "Jordan Rivera" in html
-        assert "jordan.rivera@ba.test" in html
 
     # ── same-tenant client ────────────────────────────────────────────
 

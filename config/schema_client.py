@@ -9,6 +9,7 @@ from recaps.schema import RecapQueryClient, RecapMutationsClient
 from recaps.recap_ai import RecapAiMutations, RecapAiQueries
 from recaps.report_types import (
     CampaignReportQueries,
+    ReportSubscriptionQueries,
     FieldSamplingReportMutations,
     ScheduledReportMutations,
     TenantGoalsMutations,
@@ -27,6 +28,10 @@ from chats.schema import ChatQueryClient, ChatMutationsClient
 from announcements.schema import AnnouncementQueryClient, AnnouncementMutationsClient
 from jobboard.schema import JobBoardMutations, JobBoardQueries
 from timeclock.schema import ClockLinkMutations, ClockLinkQueries
+from tenants.notification_pref_schema import (
+    NotificationPreferenceMutations,
+    NotificationPreferenceQueries,
+)
 from utils.utils import BlockIntrospectionForAnonymous
 from utils.graphql.gcs_schema import GCSQuery
 
@@ -37,6 +42,8 @@ QueryClients = merge_types(
         EventQueryClient,
         RecapQueryClient,
         CampaignReportQueries,
+        ReportSubscriptionQueries,
+        NotificationPreferenceQueries,
         RecapAiQueries,
         AmbassadorQueryClient,
         QueryClients,
@@ -62,6 +69,7 @@ MutationClients = merge_types(
         RecapAiMutations,
         TenantGoalsMutations,
         ScheduledReportMutations,
+        NotificationPreferenceMutations,
         FieldSamplingReportMutations,
         MutationClients,
         ClientJobMutations,

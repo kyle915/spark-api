@@ -1,3 +1,4 @@
+import base64
 from io import BytesIO
 from datetime import datetime
 from types import SimpleNamespace
@@ -406,10 +407,11 @@ def test_build_recap_pdf_html_groups_custom_fields_by_recap_section():
     assert "Consumer Feedback" in html
     assert "Great comments" in html
     assert "<h2>Custom Fields</h2>" not in html
-    assert "Used Corpo Card" in html
-    assert "City" in html
+    # Client-facing summary: no internal bookkeeping fields, no BA email.
+    assert "Used Corpo Card" not in html
+    assert "Timezone" not in html
+    assert "Ambassador Email" not in html
     assert "Miami" in html
-    assert html.index("State") < html.index("City") < html.index("Retailer")
     assert "Submitted At" not in html
     assert "Filling For Ambassador" not in html
     assert "Late" not in html
@@ -743,3 +745,140 @@ def test_torch_retail_pdf_sales_card_counts_cans_and_packs_as_one_unit_each():
     assert "How many packs did consumers purchase?: 2" in sales_card
     assert "Total units sold: 5" in sales_card
     assert "45" not in sales_card
+
+
+# ─── Client-facing presentation ─────────────────────────────────────
+
+
+def test_client_safe_ba_name_never_leaks_contact_details():
+    from recaps.pdf import client_safe_ba_name
+
+    assert client_safe_ba_name("Adaiah", "Dotson") == "Adaiah D."
+    assert client_safe_ba_name("Elmer", "") == "Elmer"
+    assert client_safe_ba_name("", "", "checkin-9516271509@walkup.spark") == ""
+    assert client_safe_ba_name("", "", "(951) 627-1509") == ""
+
+
+def test_format_answer_number_formats_money_and_counts_only():
+    from recaps.pdf import format_answer_number
+
+    assert format_answer_number("Estimated sales $", "125342.00") == "$125,342.00"
+    assert format_answer_number("Costco retail price: Almond Oil", "1279") == "$1,279"
+    assert format_answer_number("Total number of consumers sampled", "4000") == "4,000"
+    assert format_answer_number("Units sold: Almond Oil", "44") == "44"
+    assert (
+        format_answer_number("How many were first-time consumers?", "4000") == "4,000"
+    )
+    # Not counts: left exactly as entered.
+    assert format_answer_number("Store number", "1715") == "1715"
+    assert format_answer_number("Zip code", "92346") == "92346"
+    assert format_answer_number("Sell-out time", "5:00pm") == "5:00pm"
+    assert format_answer_number("Foot traffic level", "4") == "4"
+    assert format_answer_number("Any feedback?", "No") == "No"
+
+
+def _refresh_recap(values, *, name="10/11/2026 - 28000 Greenspot Road, Highland"):
+    section = SimpleNamespace(name="Sampling")
+    user = SimpleNamespace(
+        first_name="Adaiah",
+        last_name="Dotson",
+        email="checkin-9516271509@walkup.spark",
+        username="checkin-9516271509",
+    )
+    return SimpleNamespace(
+        name=name,
+        approved=True,
+        ambassador=SimpleNamespace(user=user),
+        external_ba_name="",
+        retailer=None,
+        location=SimpleNamespace(name="Highland"),
+        state=SimpleNamespace(name="California"),
+        tenant=SimpleNamespace(name="Fresh Vintage Farms"),
+        timezone=None,
+        custom_recap_template=SimpleNamespace(name="Costco Roadshow Recap"),
+        total_engagements=4000,
+        used_corpo_card=True,
+        source_label="",
+        event=SimpleNamespace(
+            name=name,
+            date=datetime(2026, 10, 11, 9, 0),
+            address="28000 Greenspot Road",
+            retailer=None,
+            state=None,
+            tenant=SimpleNamespace(name="Fresh Vintage Farms", slug="fresh-vintage"),
+        ),
+        custom_field_value=SimpleNamespace(
+            all=lambda: [
+                SimpleNamespace(
+                    value=value,
+                    custom_field=SimpleNamespace(name=label, recap_section=section),
+                )
+                for label, value in values
+            ]
+        ),
+    )
+
+
+def test_custom_recap_pdf_is_client_facing_with_headline():
+    recap = _refresh_recap(
+        [
+            ("Total number of consumers sampled", "4000"),
+            ("Units sold: Almond Oil", "44"),
+            ("Units sold: Garlic Almond Oil", "54"),
+        ]
+    )
+    html = build_recap_pdf_html(recap, [])
+
+    # Ambassador: first name + last initial; no email, no phone.
+    assert "Adaiah D." in html
+    assert "Dotson" not in html
+    assert "walkup.spark" not in html
+    assert "9516271509" not in html
+    assert "Ambassador Email" not in html
+    # Title drops the auto-namer's leading date; the date prints underneath.
+    assert "<h1>28000 Greenspot Road, Highland</h1>" in html
+    assert "October 11, 2026" in html
+    # Headline strip.
+    assert 'class="headline"' in html
+    assert "<strong>4,000</strong><span>Sampled</span>" in html
+    assert "<strong>98</strong><span>Sold</span>" in html
+    assert "<strong>2.5%</strong><span>Conversion</span>" in html
+    # No N/A filler in the summary.
+    assert "<strong>N/A</strong>" not in html
+
+
+def test_custom_recap_pdf_photos_lead_and_receipts_trail():
+    png = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+    )
+    recap = _refresh_recap([("Total number of consumers sampled", "120")])
+    html = build_recap_pdf_html(
+        recap,
+        [
+            {"name": "Web check-in photo", "bytes": png, "category": "Expense Receipts"},
+            {"name": "Web check-in photo", "bytes": png, "category": "Full booth setup"},
+        ],
+    )
+    assert "<h2>Photos</h2>" in html and "<h2>Receipts</h2>" in html
+    assert html.index("<h2>Photos</h2>") < html.index("<h2>Sampling</h2>")
+    assert html.index("<h2>Sampling</h2>") < html.index("<h2>Receipts</h2>")
+    # Captioned by category, not by the upload's file name.
+    assert "<figcaption>Full booth setup</figcaption>" in html
+    assert "Web check-in photo" not in html
+
+
+def test_custom_recap_pdf_has_one_sales_performance_card():
+    section = SimpleNamespace(name="Sales Performance")
+    recap = _refresh_recap([])
+    recap.custom_field_value = SimpleNamespace(
+        all=lambda: [
+            SimpleNamespace(
+                value="44",
+                custom_field=SimpleNamespace(
+                    name="Units sold: Almond Oil", recap_section=section
+                ),
+            )
+        ]
+    )
+    html = build_recap_pdf_html(recap, [])
+    assert html.count("<h2>Sales Performance</h2>") == 1
