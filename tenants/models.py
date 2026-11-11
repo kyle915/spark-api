@@ -478,6 +478,11 @@ class Tenant(Asyncable, models.Model):
     # link only resolves while this is on, so switching it off revokes every
     # link that was ever shared for this brand.
     program_share_enabled = models.BooleanField(default=False)
+    # Programs where several ambassadors each file a recap for the SAME
+    # booth on the same day (roadshows): every recap repeats the booth's
+    # totals, so adding recaps up double-counts. When on, roll-ups of recap
+    # answers count one recap per store per day. Off by default.
+    count_one_recap_per_booth_day = models.BooleanField(default=False)
     # Optional end date for the public link; NULL = no expiry. Past this
     # moment the link behaves exactly like one that was switched off.
     program_share_expires_at = models.DateTimeField(null=True, blank=True)
