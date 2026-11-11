@@ -1527,3 +1527,36 @@ class TenantGoal(models.Model):
 
     def __str__(self) -> str:
         return f"KPI goals {self.year} @ tenant {self.tenant_id}"
+
+
+class NotificationPreference(models.Model):
+    """One person's choice to stop (or resume) an optional email category.
+
+    Opt-OUT: no row means the person gets the email, exactly as before this
+    model existed. A row with ``email_enabled=False`` mutes that category for
+    that person only. Categories and what they cover live in
+    ``utils.notification_prefs`` — account, sign-in and shift emails are not
+    categories and can never be muted.
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="notification_preferences",
+    )
+    category = models.CharField(max_length=40)
+    email_enabled = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "category"],
+                name="uniq_notification_preference_user_category",
+            )
+        ]
+
+    def __str__(self) -> str:  # pragma: no cover - admin/debug only
+        return f"{self.user_id}:{self.category}={self.email_enabled}"
