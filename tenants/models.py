@@ -478,6 +478,13 @@ class Tenant(Asyncable, models.Model):
     # link only resolves while this is on, so switching it off revokes every
     # link that was ever shared for this brand.
     program_share_enabled = models.BooleanField(default=False)
+    # Optional end date for the public link; NULL = no expiry. Past this
+    # moment the link behaves exactly like one that was switched off.
+    program_share_expires_at = models.DateTimeField(null=True, blank=True)
+    # How many times the public page has been opened, and when last. A
+    # plain counter — no visitor details are kept.
+    program_share_views = models.PositiveIntegerField(default=0)
+    program_share_last_viewed_at = models.DateTimeField(null=True, blank=True)
     scheduled_report_enabled = models.BooleanField(
         default=False,
         help_text="When ON, this brand receives an automated monthly performance-report PDF by email (sent to recap_recipient_emails). OFF by default — opt-in only.",

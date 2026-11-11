@@ -110,3 +110,98 @@ class TestProgramShare(BaseGraphQLTestCase):
         )()
         assert got.status_code == 200
         assert json.loads(got.content)["brand"] == "Share Brand"
+
+
+@pytest.mark.django_db(transaction=True)
+class TestProgramShareControls(BaseGraphQLTestCase):
+    @pytest.fixture(autouse=True)
+    def setup(self, db):
+        self.roles = self.setup_default_roles()
+        self.schema = schema_clients
+        self.endpoint_path = "/api/v1/graphql/clients"
+        self.tenant = self.create_tenant(name="Controls Brand")
+
+    def _get(self):
+        return Client().get(f"/api/public/program/{make_program_token(self.tenant.id)}")
+
+    def test_each_open_is_counted(self):
+        Tenant.objects.filter(id=self.tenant.id).update(program_share_enabled=True)
+        assert self._get().status_code == 200
+        assert self._get().status_code == 200
+        t = Tenant.objects.get(id=self.tenant.id)
+        assert t.program_share_views == 2
+        assert t.program_share_last_viewed_at is not None
+
+    def test_a_refused_open_is_not_counted(self):
+        assert self._get().status_code == 404
+        assert Tenant.objects.get(id=self.tenant.id).program_share_views == 0
+
+    def test_an_expired_link_is_not_found(self):
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        Tenant.objects.filter(id=self.tenant.id).update(
+            program_share_enabled=True,
+            program_share_expires_at=timezone.now() - timedelta(minutes=1),
+        )
+        res = self._get()
+        assert res.status_code == 404
+        assert "Controls Brand" not in res.content.decode()
+        Tenant.objects.filter(id=self.tenant.id).update(
+            program_share_expires_at=timezone.now() + timedelta(days=1)
+        )
+        assert self._get().status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_turning_on_with_an_expiry_and_reading_it_back(self):
+        def _user():
+            user = self.create_user(
+                username="c@controls.com", email="c@controls.com",
+                role=self.roles["client"], password="password123",
+            )
+            self.create_tenanted_user(user=user, tenant=self.tenant)
+            return user
+
+        me = await sync_to_async(_user)()
+        res = await self._execute_mutation(
+            """
+            mutation Set($input: SetProgramShareEnabledInput!) {
+              setProgramShareEnabled(input: $input) { success message enabled token expiresAt }
+            }
+            """,
+            {"input": {"tenantId": str(self.tenant.id), "enabled": True, "expiresInDays": 30}},
+            self.endpoint_path,
+            user=me,
+        )
+        assert res.errors is None, res.errors
+        out = res.data["setProgramShareEnabled"]
+        assert out["success"] is True and out["expiresAt"]
+        assert "30 days" in out["message"]
+
+        got = await self._execute_mutation(
+            """
+            query L($tid: ID) {
+              programShareLink(tenantId: $tid) { enabled token expiresAt expired views lastViewedAt }
+            }
+            """,
+            {"tid": str(self.tenant.id)},
+            self.endpoint_path,
+            user=me,
+        )
+        link = got.data["programShareLink"]
+        assert link["enabled"] is True and link["expired"] is False
+        assert link["token"] and link["expiresAt"] and link["views"] == 0
+
+        # Turning it on again with no expiry clears the end date.
+        again = await self._execute_mutation(
+            """
+            mutation Set($input: SetProgramShareEnabledInput!) {
+              setProgramShareEnabled(input: $input) { success expiresAt }
+            }
+            """,
+            {"input": {"tenantId": str(self.tenant.id), "enabled": True}},
+            self.endpoint_path,
+            user=me,
+        )
+        assert again.data["setProgramShareEnabled"]["expiresAt"] is None

@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import logging
 
+from django.db.models import F
 from django.http import HttpRequest, JsonResponse
+from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
@@ -58,6 +60,10 @@ def public_program_view(request: HttpRequest, token: str) -> JsonResponse:
     tenant = Tenant.objects.filter(id=tenant_id, program_share_enabled=True).first()
     if tenant is None:
         return JsonResponse(_NOT_AVAILABLE, status=404)
+    expires = tenant.program_share_expires_at
+    if expires is not None and expires <= timezone.now():
+        # An expired link is indistinguishable from one that was turned off.
+        return JsonResponse(_NOT_AVAILABLE, status=404)
     try:
         payload = build_program_share(tenant)
     except Exception as exc:  # noqa: BLE001
@@ -66,6 +72,14 @@ def public_program_view(request: HttpRequest, token: str) -> JsonResponse:
             {"error": "unavailable", "message": "This page is temporarily unavailable."},
             status=503,
         )
+    try:
+        # Count the open. Atomic, and never allowed to break the page.
+        Tenant.objects.filter(id=tenant.id).update(
+            program_share_views=F("program_share_views") + 1,
+            program_share_last_viewed_at=timezone.now(),
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning("could not count program page view for tenant=%s", tenant.id)
     response = JsonResponse(payload)
     response["Cache-Control"] = "private, max-age=300"
     response["X-Robots-Tag"] = "noindex, nofollow"

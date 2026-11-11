@@ -3910,15 +3910,24 @@ class SetProgramShareEnabledInput(SparkGraphQLInput):
 
     tenant_id: strawberry.ID
     enabled: bool
+    # When turning the link on: stop it working after this many days.
+    # Omitted / null / 0 = no expiry. Ignored when turning the link off.
+    expires_in_days: int | None = None
 
 
 @strawberry.type
 class ProgramShareLink:
     """State of a brand's public program link. ``token`` is only present
-    while the link is on."""
+    while the link is on and not expired."""
 
     enabled: bool
     token: str | None = None
+    # ISO timestamp the link stops working, or null for no expiry.
+    expires_at: str | None = None
+    expired: bool = False
+    # Times the public page has been opened, and when last (ISO).
+    views: int = 0
+    last_viewed_at: str | None = None
 
 
 @strawberry.type
@@ -3927,6 +3936,7 @@ class SetProgramShareEnabledResponse:
     message: str
     enabled: bool
     token: str | None = None
+    expires_at: str | None = None
     client_mutation_id: strawberry.ID | None = None
 
 
@@ -3945,18 +3955,35 @@ async def _program_share_state(info, requested_tenant_id) -> ProgramShareLink | 
 
         return (
             Tenant.objects.filter(id=tenant_id)
-            .values_list("program_share_enabled", flat=True)
+            .values_list(
+                "program_share_enabled",
+                "program_share_expires_at",
+                "program_share_views",
+                "program_share_last_viewed_at",
+            )
             .first()
         )
 
-    enabled = await sync_to_async(_read, thread_sensitive=True)()
-    if enabled is None:
+    row = await sync_to_async(_read, thread_sensitive=True)()
+    if row is None:
         return None
+    return _program_share_link(tenant_id, *row)
+
+
+def _program_share_link(tenant_id, enabled, expires_at, views, last_viewed_at):
+    from django.utils import timezone as _tz
+
     from recaps.program_tokens import make_program_token
 
+    expired = bool(enabled and expires_at is not None and expires_at <= _tz.now())
+    live = bool(enabled) and not expired
     return ProgramShareLink(
         enabled=bool(enabled),
-        token=make_program_token(tenant_id) if enabled else None,
+        token=make_program_token(tenant_id) if live else None,
+        expires_at=expires_at.isoformat() if expires_at else None,
+        expired=expired,
+        views=int(views or 0),
+        last_viewed_at=last_viewed_at.isoformat() if last_viewed_at else None,
     )
 
 
@@ -4088,6 +4115,11 @@ class ScheduledReportMutations:
         """Switch a brand's public program link on or off. Off revokes every
         link shared so far. Client → own brand only; admins → any."""
         desired = bool(input.enabled)
+        try:
+            days = int(input.expires_in_days or 0)
+        except (TypeError, ValueError):
+            days = 0
+        days = max(0, min(days, 365))
 
         def _fail(message: str) -> SetProgramShareEnabledResponse:
             return SetProgramShareEnabledResponse(
@@ -4111,10 +4143,24 @@ class ScheduledReportMutations:
             tenant = Tenant.objects.filter(id=tenant_id).first()
             if tenant is None:
                 return None
-            if tenant.program_share_enabled != desired:
-                tenant.program_share_enabled = desired
-                tenant.save(update_fields=["program_share_enabled", "updated_at"])
-            return tenant.program_share_enabled
+            from datetime import timedelta as _td
+
+            from django.utils import timezone as _tz
+
+            tenant.program_share_enabled = desired
+            if desired:
+                # Turning on (or re-saving) sets the expiry the caller chose.
+                tenant.program_share_expires_at = (
+                    _tz.now() + _td(days=days) if days else None
+                )
+            tenant.save(
+                update_fields=[
+                    "program_share_enabled",
+                    "program_share_expires_at",
+                    "updated_at",
+                ]
+            )
+            return tenant.program_share_enabled, tenant.program_share_expires_at
 
         try:
             state = await sync_to_async(_write, thread_sensitive=True)()
@@ -4125,15 +4171,22 @@ class ScheduledReportMutations:
             return _fail("Brand not found.")
         from recaps.program_tokens import make_program_token
 
+        enabled_now, expires_at = state
+        if enabled_now and expires_at:
+            message = (
+                f"Program link is on for {days} day{'s' if days != 1 else ''}. "
+                "Anyone with the link can view it until then."
+            )
+        elif enabled_now:
+            message = "Program link is on. Anyone with the link can view it."
+        else:
+            message = "Program link is off. Shared links no longer work."
         return SetProgramShareEnabledResponse(
             success=True,
-            message=(
-                "Program link is on. Anyone with the link can view it."
-                if state
-                else "Program link is off. Shared links no longer work."
-            ),
-            enabled=bool(state),
-            token=make_program_token(tenant_id) if state else None,
+            message=message,
+            enabled=bool(enabled_now),
+            token=make_program_token(tenant_id) if enabled_now else None,
+            expires_at=expires_at.isoformat() if expires_at else None,
             client_mutation_id=input.client_mutation_id,
         )
 
