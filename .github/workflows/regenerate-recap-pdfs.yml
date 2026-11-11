@@ -1,0 +1,100 @@
+name: Regenerate recap PDFs (manual)
+
+# Fires `/internal/cron/regenerate-recap-pdfs` on Cloud Run to re-render the
+# stored Spark PDF on approved recaps with the current layout. See
+# recaps/management/commands/regenerate_recap_pdfs.py.
+#
+# Only recaps that ALREADY have a Spark-generated PDF are touched; no email
+# is sent and other attachments are left alone.
+#
+# DRY-RUN unless apply=true. Renders are slow, so each run does one page
+# (`limit` recaps). The response's `report.next_after_id` is the cursor for
+# the next run; this workflow loops until it is null or `max_pages` is hit.
+#
+# Secret-gated via `X-Cron-Secret` (shared INTERNAL_CRON_SECRET).
+
+on:
+  workflow_dispatch:
+    inputs:
+      start:
+        description: "Event date from, YYYY-MM-DD (inclusive)"
+        required: true
+      end:
+        description: "Event date to, YYYY-MM-DD (inclusive)"
+        required: true
+      tenant_id:
+        description: "Limit to one tenant id (blank = all tenants)"
+        required: false
+        default: ""
+      limit:
+        description: "Recaps per page"
+        required: false
+        default: "15"
+      max_pages:
+        description: "Stop after this many pages"
+        required: false
+        default: "40"
+      apply:
+        description: "Actually rebuild the PDFs (false = list only)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  regenerate-recap-pdfs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - name: Page through the regenerate endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/regenerate-recap-pdfs
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          START: ${{ github.event.inputs.start }}
+          END: ${{ github.event.inputs.end }}
+          TENANT_ID: ${{ github.event.inputs.tenant_id }}
+          LIMIT: ${{ github.event.inputs.limit }}
+          MAX_PAGES: ${{ github.event.inputs.max_pages }}
+          APPLY: ${{ github.event.inputs.apply }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          AFTER=0
+          PAGE=0
+          REBUILT=0
+          FAILED=0
+          while [ "$PAGE" -lt "$MAX_PAGES" ]; do
+            PAGE=$((PAGE + 1))
+            STATUS=$(curl -sS -o /tmp/resp.json -w '%{http_code}' \
+              --max-time 900 \
+              -X POST "$CRON_URL" \
+              -H "X-Cron-Secret: $CRON_SECRET" \
+              --data-urlencode "start=$START" \
+              --data-urlencode "end=$END" \
+              --data-urlencode "tenant_id=$TENANT_ID" \
+              --data-urlencode "limit=$LIMIT" \
+              --data-urlencode "after_id=$AFTER" \
+              --data-urlencode "apply=$APPLY")
+            echo "── page $PAGE (after id $AFTER) · HTTP $STATUS"
+            if [ "$STATUS" != "200" ]; then
+              cat /tmp/resp.json
+              exit 1
+            fi
+            python3 -c "import json; d=json.load(open('/tmp/resp.json')); print(d.get('log',''))"
+            NEXT=$(python3 -c "import json; r=json.load(open('/tmp/resp.json')).get('report') or {}; print(r.get('next_after_id') or '')")
+            REBUILT=$((REBUILT + $(python3 -c "import json; r=json.load(open('/tmp/resp.json')).get('report') or {}; print(r.get('rebuilt') or 0)")))
+            FAILED=$((FAILED + $(python3 -c "import json; r=json.load(open('/tmp/resp.json')).get('report') or {}; print(r.get('failed') or 0)")))
+            if [ -z "$NEXT" ]; then
+              echo "Done."
+              break
+            fi
+            AFTER="$NEXT"
+          done
+          echo "TOTAL rebuilt=$REBUILT failed=$FAILED last_after_id=$AFTER apply=$APPLY"
