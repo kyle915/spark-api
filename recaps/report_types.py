@@ -4032,6 +4032,24 @@ def _iso_date(raw):
         return None
 
 
+@strawberry.input
+class IssueCheckinCodeInput(SparkGraphQLInput):
+    """Issue a brand's standing ambassador check-in link (staff only)."""
+
+    tenant_id: strawberry.ID
+
+
+@strawberry.type
+class IssueCheckinCodeResponse:
+    success: bool
+    message: str
+    code: str | None = None
+    url: str | None = None
+    # False when the brand already had a code (it is never rotated).
+    created: bool = False
+    client_mutation_id: strawberry.ID | None = None
+
+
 @strawberry.type
 class ReportSubscriptionQueries:
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
@@ -4288,6 +4306,65 @@ class ScheduledReportMutations:
             ),
             enabled=bool(state),
             token=make_program_token(tenant_id) if state else None,
+            client_mutation_id=input.client_mutation_id,
+        )
+
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def issue_checkin_code(
+        self,
+        info: strawberry.Info,
+        input: IssueCheckinCodeInput,
+    ) -> IssueCheckinCodeResponse:
+        """Issue the brand's standing check-in link if it does not have one.
+        Ignite staff only. An existing code is returned untouched — rotating
+        it would break every link already handed to ambassadors."""
+
+        def _fail(message: str) -> IssueCheckinCodeResponse:
+            return IssueCheckinCodeResponse(
+                success=False,
+                message=message,
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        service = _CampaignReportService()
+        try:
+            user = await service.get_user(info)
+            role_slug, is_staff, is_super, email = await resolve_request_user_access(user)
+        except Exception:  # noqa: BLE001
+            return _fail("Sign in to issue a check-in link.")
+        if not _is_admin_access(role_slug, is_staff, is_super, email):
+            return _fail("Only Ignite staff can issue a check-in link.")
+        try:
+            tenant_pk = resolve_id_to_int(input.tenant_id)
+        except Exception:  # noqa: BLE001
+            return _fail("Brand not found.")
+
+        def _issue():
+            from tenants.launch import checkin_url, ensure_checkin_code
+            from tenants.models import Tenant
+
+            tenant = Tenant.objects.filter(id=tenant_pk).first()
+            if tenant is None:
+                return None
+            code, created = ensure_checkin_code(tenant)
+            return code, checkin_url(code), created
+
+        try:
+            issued = await sync_to_async(_issue, thread_sensitive=True)()
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("issueCheckinCode failed tenant=%s: %s", tenant_pk, exc)
+            return _fail("Could not issue a check-in link. Try again.")
+        if issued is None:
+            return _fail("Brand not found.")
+        code, url, created = issued
+        return IssueCheckinCodeResponse(
+            success=True,
+            message=(
+                "Check-in link issued." if created else "This brand already has a check-in link."
+            ),
+            code=code,
+            url=url,
+            created=created,
             client_mutation_id=input.client_mutation_id,
         )
 
