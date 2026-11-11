@@ -1,0 +1,65 @@
+name: Read recap receipts
+
+# Fires `/internal/cron/read-recap-receipts` on Cloud Run. Reads the printed
+# total off receipt photos that have not been read yet, so the review check
+# can compare it with the spend entered on the recap. See
+# recaps/receipt_reader.py.
+#
+# Each image is read once (the result is stored), so this is cheap to run
+# often: a run with nothing new makes no vision calls.
+#
+# Secret-gated via `X-Cron-Secret` (shared INTERNAL_CRON_SECRET).
+#
+# Schedule: hourly at :23 (offset from :00 so crons don't stampede).
+
+on:
+  schedule:
+    - cron: "23 * * * *"
+  workflow_dispatch:
+    inputs:
+      tenant_id:
+        description: "Limit to one tenant id (blank = all tenants)"
+        required: false
+        default: ""
+      since_days:
+        description: "Only recaps created in the last N days"
+        required: false
+        default: "45"
+      limit:
+        description: "Receipt images to read this run"
+        required: false
+        default: "40"
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  read-recap-receipts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Fire read-recap-receipts cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/read-recap-receipts
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          TENANT_ID: ${{ github.event.inputs.tenant_id || '' }}
+          SINCE_DAYS: ${{ github.event.inputs.since_days || '45' }}
+          LIMIT: ${{ github.event.inputs.limit || '40' }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS -o /tmp/resp.json -w '%{http_code}' \
+            --max-time 900 \
+            -X POST "$CRON_URL" \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            --data-urlencode "tenant_id=$TENANT_ID" \
+            --data-urlencode "since_days=$SINCE_DAYS" \
+            --data-urlencode "limit=$LIMIT")
+          echo "HTTP $STATUS"
+          cat /tmp/resp.json
+          echo
+          [ "$STATUS" != "200" ] && exit 1 || exit 0
