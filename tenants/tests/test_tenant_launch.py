@@ -147,6 +147,36 @@ class TestCatalogImport:
         assert third["created"] == 0
         assert Product.objects.filter(tenant=tenant).count() == 2
 
+    def test_csv_without_a_header_is_a_plain_product_list(self):
+        rows, errors = parse_catalog_csv("Famus Energy Citrus\nFamus Energy Berry\n\n")
+        assert errors == []
+        assert [r["name"] for r in rows] == ["Famus Energy Citrus", "Famus Energy Berry"]
+        assert rows[0]["sku"] == "" and rows[0]["image_url"] == ""
+
+        rows, errors = parse_catalog_csv(
+            "Acme Cola,ACME-1,https://x/1.jpg\nAcme Lime,https://x/2.jpg\n"
+        )
+        assert errors == []
+        assert rows == [
+            {"name": "Acme Cola", "sku": "ACME-1", "image_url": "https://x/1.jpg", "product_type": ""},
+            {"name": "Acme Lime", "sku": "", "image_url": "https://x/2.jpg", "product_type": ""},
+        ]
+
+    def test_csv_headers_in_other_spellings_and_spreadsheet_paste(self):
+        # Pasted from a spreadsheet: tabs, a BOM, and friendlier header names.
+        rows, errors = parse_catalog_csv(
+            "\ufeffProduct Name\tSKU\tImage URL\nAcme Cola\tACME-1\thttps://x/1.jpg\n"
+        )
+        assert errors == []
+        assert rows == [
+            {"name": "Acme Cola", "sku": "ACME-1", "image_url": "https://x/1.jpg", "product_type": ""}
+        ]
+        rows, _ = parse_catalog_csv("sku,product_name,image_url\nACME-2,Acme Lime,\n")
+        assert rows[0]["name"] == "Acme Lime" and rows[0]["sku"] == "ACME-2"
+        # A header row with a blank product name is still reported.
+        _, errors = parse_catalog_csv("name,sku\n,ACME-9\n")
+        assert errors == ["Line 2: missing product name — skipped."]
+
     def test_shopify_json_parse(self):
         rows, errors = parse_shopify_collection_json(
             '{"products": [{"title": "Cola 12-Pack", "product_type": "Cola",'
