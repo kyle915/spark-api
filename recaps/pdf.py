@@ -787,6 +787,14 @@ def _long_date(value) -> str:
         return ""
 
 
+def _engagements_text(recap) -> str:
+    try:
+        n = int(getattr(recap, "total_engagements", None) or 0)
+    except (TypeError, ValueError):
+        return ""
+    return f"{n:,}" if n > 0 else ""
+
+
 def _headline_metrics(recap) -> list[tuple[str, str]]:
     """Sampled / sold / conversion for the strip under the title. Uses the
     same field matchers as the recap cards so the numbers agree."""
@@ -1019,6 +1027,7 @@ def build_recap_pdf_html(
                 _cell("City", location),
                 _cell("Address", address),
                 _cell("Ambassador", ambassador_name),
+                _cell("Total Engagements", _engagements_text(recap)),
             ]
         )
         metrics = _headline_metrics(recap)
