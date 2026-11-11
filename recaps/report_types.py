@@ -3903,8 +3903,77 @@ class MyReportSubscriptionResponse:
     client_mutation_id: strawberry.ID | None = None
 
 
+@strawberry.input
+class SetProgramShareEnabledInput(SparkGraphQLInput):
+    """Turn a brand's public program link on or off. ``tenantId`` is
+    overridden server-side for clients (own brand only)."""
+
+    tenant_id: strawberry.ID
+    enabled: bool
+
+
+@strawberry.type
+class ProgramShareLink:
+    """State of a brand's public program link. ``token`` is only present
+    while the link is on."""
+
+    enabled: bool
+    token: str | None = None
+
+
+@strawberry.type
+class SetProgramShareEnabledResponse:
+    success: bool
+    message: str
+    enabled: bool
+    token: str | None = None
+    client_mutation_id: strawberry.ID | None = None
+
+
+async def _program_share_state(info, requested_tenant_id) -> ProgramShareLink | None:
+    """The caller's view of a brand's link, or None when out of scope."""
+    service = _CampaignReportService()
+    try:
+        tenant_id = await service.resolve_target_tenant_id(info, requested_tenant_id)
+    except Exception:  # noqa: BLE001
+        return None
+    if tenant_id is None:
+        return None
+
+    def _read():
+        from tenants.models import Tenant
+
+        return (
+            Tenant.objects.filter(id=tenant_id)
+            .values_list("program_share_enabled", flat=True)
+            .first()
+        )
+
+    enabled = await sync_to_async(_read, thread_sensitive=True)()
+    if enabled is None:
+        return None
+    from recaps.program_tokens import make_program_token
+
+    return ProgramShareLink(
+        enabled=bool(enabled),
+        token=make_program_token(tenant_id) if enabled else None,
+    )
+
+
 @strawberry.type
 class ReportSubscriptionQueries:
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def program_share_link(
+        self, info: strawberry.Info, tenant_id: strawberry.ID | None = None
+    ) -> ProgramShareLink:
+        """Whether this brand's public program link is on, and its token.
+        Never raises; out of scope reads as off."""
+        try:
+            state = await _program_share_state(info, tenant_id)
+        except Exception:  # noqa: BLE001
+            state = None
+        return state or ProgramShareLink(enabled=False, token=None)
+
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def my_report_subscription(
         self, info: strawberry.Info, tenant_id: strawberry.ID | None = None
@@ -3939,6 +4008,64 @@ class ScheduledReportMutations:
     (the clients schema). The write side of the #698 feature; tenant scoping
     matches the read resolvers + ``TenantGoalsMutations`` exactly
     (:meth:`_CampaignReportService.resolve_target_tenant_id`)."""
+
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def set_program_share_enabled(
+        self,
+        info: strawberry.Info,
+        input: SetProgramShareEnabledInput,
+    ) -> SetProgramShareEnabledResponse:
+        """Switch a brand's public program link on or off. Off revokes every
+        link shared so far. Client → own brand only; admins → any."""
+        desired = bool(input.enabled)
+
+        def _fail(message: str) -> SetProgramShareEnabledResponse:
+            return SetProgramShareEnabledResponse(
+                success=False,
+                message=message,
+                enabled=not desired,
+                client_mutation_id=input.client_mutation_id,
+            )
+
+        service = _CampaignReportService()
+        try:
+            tenant_id = await service.resolve_target_tenant_id(info, input.tenant_id)
+        except Exception:  # noqa: BLE001
+            tenant_id = None
+        if tenant_id is None:
+            return _fail("You do not have access to this brand.")
+
+        def _write():
+            from tenants.models import Tenant
+
+            tenant = Tenant.objects.filter(id=tenant_id).first()
+            if tenant is None:
+                return None
+            if tenant.program_share_enabled != desired:
+                tenant.program_share_enabled = desired
+                tenant.save(update_fields=["program_share_enabled", "updated_at"])
+            return tenant.program_share_enabled
+
+        try:
+            state = await sync_to_async(_write, thread_sensitive=True)()
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("setProgramShareEnabled failed tenant=%s: %s", tenant_id, exc)
+            return _fail("Could not update the program link.")
+        if state is None:
+            return _fail("Brand not found.")
+        from recaps.program_tokens import make_program_token
+
+        return SetProgramShareEnabledResponse(
+            success=True,
+            message=(
+                "Program link is on. Anyone with the link can view it."
+                if state
+                else "Program link is off. Shared links no longer work."
+            ),
+            enabled=bool(state),
+            token=make_program_token(tenant_id) if state else None,
+            client_mutation_id=input.client_mutation_id,
+        )
 
     @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
     async def set_my_report_subscription(

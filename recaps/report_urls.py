@@ -18,9 +18,14 @@ Shared recap (``recaps.share.v1`` token) — both paths must hit
 
 from django.urls import path
 
-from recaps import report_views, share_views
+from recaps import program_views, report_views, share_views
 
 urlpatterns = [
+    path(
+        "program/<str:token>",
+        program_views.public_program_view,
+        name="recaps.public_program",
+    ),
     # NOTE: the `/pdf` path is registered FIRST so it wins the match — a
     # bare `<str:token>` would otherwise greedily swallow "token/pdf".
     path(
