@@ -1546,3 +1546,59 @@ def public_checkin_payable_mileage(request: HttpRequest, code: str) -> HttpRespo
             "claim": payload,
         }
     )
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def public_checkin_client_event(request: HttpRequest, code: str) -> HttpResponse:
+    """A phone reporting that something failed on the check-in page.
+
+    Fire-and-forget from the browser: always answers 204 so a reporting
+    failure can never become a second problem for the ambassador. Unknown
+    kinds and unknown links are dropped. Stores no personal data.
+    """
+    ok = HttpResponse(status=204)
+    if _over_limit("client-event-ip", _client_ip(request), limit=120, window=300):
+        return ok
+    try:
+        from recaps.models import CheckinFieldIssue
+
+        data = _body(request)
+        kind = str(data.get("kind") or "").strip()
+        if kind not in CheckinFieldIssue.KINDS:
+            return ok
+        target_kind, target = checkin_web.resolve_checkin_target(code)
+        if target_kind is None:
+            return ok
+        tenant_id = None
+        event_id = None
+        token = str(data.get("session") or "")
+        if token:
+            loaded, err = _load_session(code, token)
+            if err is None and loaded:
+                event = loaded[0]
+                event_id = event.id
+                tenant_id = event.tenant_id
+        if tenant_id is None:
+            tenant_id = getattr(target, "tenant_id", None) or (
+                target.id if target_kind == "tenant" else None
+            )
+        detail = " ".join(str(data.get("detail") or "").split())[:200]
+        CheckinFieldIssue.objects.create(
+            kind=kind,
+            detail=detail,
+            code=str(code)[:64],
+            tenant_id=tenant_id,
+            event_id=event_id,
+        )
+        logger.warning(
+            "checkin field issue kind=%s code=%s tenant=%s event=%s detail=%s",
+            kind,
+            code,
+            tenant_id,
+            event_id,
+            detail,
+        )
+    except Exception:  # noqa: BLE001 - reporting must never fail loudly
+        logger.exception("checkin client-event failed")
+    return ok
