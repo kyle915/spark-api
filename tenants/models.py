@@ -474,6 +474,10 @@ class Tenant(Asyncable, models.Model):
     # flips this on, so deploying the feature mails nobody. The report's
     # recipients reuse `recap_recipient_emails` (the same client contacts
     # the recap-approval emails go to); see `scheduled_report_recipients()`.
+    # Public program page (``/program/<token>``). OFF by default: the signed
+    # link only resolves while this is on, so switching it off revokes every
+    # link that was ever shared for this brand.
+    program_share_enabled = models.BooleanField(default=False)
     scheduled_report_enabled = models.BooleanField(
         default=False,
         help_text="When ON, this brand receives an automated monthly performance-report PDF by email (sent to recap_recipient_emails). OFF by default — opt-in only.",
