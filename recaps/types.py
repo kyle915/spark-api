@@ -457,6 +457,30 @@ def _ba_name_from_fields(
     return None
 
 
+# Money / paperwork photo buckets: never the picture of the activation.
+# Mirrors NOT_A_FIELD_PHOTO_RE in the web client (src/utils/fieldPhoto.ts).
+_PAPERWORK_CATEGORY_RE = re.compile(
+    r"receipt|spend|expense|invoice|mileage|odometer|paperwork|signature",
+    re.IGNORECASE,
+)
+
+
+def _is_paperwork_file(f) -> bool:
+    """True when a recap file sits in a receipts/paperwork bucket.
+
+    Reads only an ALREADY-LOADED category (the list prefetch select_relates
+    it). Never triggers a query: this runs inside async resolvers, where a
+    lazy FK load would raise, and an unknown category is treated as a normal
+    photo."""
+    state = getattr(f, "_state", None)
+    cache = getattr(state, "fields_cache", None) or {}
+    category = cache.get("file_recap_category")
+    if category is None:
+        category = f.__dict__.get("file_recap_category")
+    name = getattr(category, "name", None) if category is not None else None
+    return bool(name and _PAPERWORK_CATEGORY_RE.search(name))
+
+
 def _is_image_url(url: str | None) -> bool:
     """True when the resolved URL ends in a browser-renderable image
     extension (jpg/jpeg/png/webp/gif). Mirrors the frontend isImage."""
@@ -1502,24 +1526,39 @@ class CustomRecap(Node):
         phone-only photo gallery still gets a hero instead of None.
         """
 
-        def _compute(files):
-            for f in files:
-                field_file = f.__dict__.get("url")
-                if not field_file:
-                    continue
-                try:
-                    blob = field_file.name
-                except Exception:
-                    blob = str(field_file)
-                blob_name = extract_blob_name_from_url(blob)
-                if not blob_name:
-                    continue
-                url = public_url(blob_name)
-                if _is_image_url(url):
-                    return url
-                if is_heic_blob(blob_name):
-                    return public_url(display_blob_name(blob_name))
+        def _image_url(f):
+            field_file = f.__dict__.get("url")
+            if not field_file:
+                return None
+            try:
+                blob = field_file.name
+            except Exception:
+                blob = str(field_file)
+            blob_name = extract_blob_name_from_url(blob)
+            if not blob_name:
+                return None
+            url = public_url(blob_name)
+            if _is_image_url(url):
+                return url
+            if is_heic_blob(blob_name):
+                return public_url(display_blob_name(blob_name))
             return None
+
+        def _compute(files):
+            # A receipt is often the first file on a recap, and a receipt is
+            # not the picture of the activation. Take the first image from a
+            # field-photo bucket; only if every image is paperwork fall back
+            # to the first image at all, so a card never loses its thumbnail.
+            fallback = None
+            for f in files:
+                url = _image_url(f)
+                if not url:
+                    continue
+                if not _is_paperwork_file(f):
+                    return url
+                if fallback is None:
+                    fallback = url
+            return fallback
 
         cached = _prefetched(self, "custom_recap_files")
         if cached is not None:
