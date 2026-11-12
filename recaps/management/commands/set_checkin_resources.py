@@ -49,6 +49,9 @@ _NICKNAME_TO_SLUG = {
     "treasury": "treasury-wine-estates",
     "famus": "famus-energy",
     "famus energy": "famus-energy",
+    "alcohol armor": "alcohol-armor",
+    "alcohol armour": "alcohol-armor",
+    "aa": "alcohol-armor",
     "pivot": "pivot-energy-drink",
     "pivot energy": "pivot-energy-drink",
     "pivot energy drink": "pivot-energy-drink",
@@ -306,6 +309,32 @@ def _presets() -> dict[str, list[dict]]:
                 "note": "Logo, colors, and how to represent Famus",
             },
         ],
+        # Alcohol Armor standing walk-up (AA-RPP85E). Field activation /
+        # sampling guide on the check-in page and in confirmation emails
+        # (brand-group sheet + standard event confirmation). Do not attach
+        # Famus materials here. Do not remint AA-RPP85E.
+        "alcohol-armor": [
+            {
+                "label": "BA Sampling Guide",
+                "kind": "pdf",
+                "url": (
+                    f"{base}/training/alcohol-armor/"
+                    "field-activation-and-sampling-guide.pdf"
+                ),
+                "note": "Field activation and sampling guide",
+            },
+        ],
+        "alcohol armor": [
+            {
+                "label": "BA Sampling Guide",
+                "kind": "pdf",
+                "url": (
+                    f"{base}/training/alcohol-armor/"
+                    "field-activation-and-sampling-guide.pdf"
+                ),
+                "note": "Field activation and sampling guide",
+            },
+        ],
         # Mark Anthony Brands · Total Wine Long Drink (standing MAB-V696HM).
         # Do not remint MAB-V696HM.
         "mark-anthony-brands": [
@@ -475,6 +504,10 @@ class Command(BaseCommand):
             "famus": "famus-energy",
             "famus energy": "famus-energy",
             "famus-energy": "famus-energy",
+            "alcohol-armor": "alcohol-armor",
+            "alcohol armor": "alcohol-armor",
+            "alcohol armour": "alcohol-armor",
+            "aa": "alcohol-armor",
             "pivot": "pivot-energy-drink",
             "pivot energy": "pivot-energy-drink",
             "pivot energy drink": "pivot-energy-drink",

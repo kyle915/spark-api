@@ -472,6 +472,7 @@ class TestSetCheckinResourcesCommand(AmbassadorsGraphQLTestCase):
         assert famus.checkin_code == "FM-PAG4TX"
         assert wook.checkin_resources is None
         assert wook.checkin_code == "WW-36DJAJ"
+        # Applying Famus must not seed Alcohol Armor — AA has its own preset.
         assert armor.checkin_resources is None
         assert armor.checkin_code == "AA-RPP85E"
         for row in famus.checkin_resources:
@@ -480,8 +481,47 @@ class TestSetCheckinResourcesCommand(AmbassadorsGraphQLTestCase):
 
         with pytest.raises(CommandError):
             self._run(tenant="wook-water")
-        with pytest.raises(CommandError):
-            self._run(tenant="alcohol-armor")
+
+    def test_apply_seeds_alcohol_armor_sampling_guide_without_reminting(self):
+        armor = self.create_tenant(
+            name="Alcohol Armor",
+            slug="alcohol-armor",
+            checkin_code="AA-RPP85E",
+        )
+        famus = self.create_tenant(
+            name="FAMUS Energy",
+            slug="famus-energy",
+            checkin_code="FM-PAG4TX",
+        )
+        wook = self.create_tenant(
+            name="Wook Water",
+            slug="wook-water",
+            checkin_code="WW-36DJAJ",
+        )
+        self._run(tenant="alcohol-armor", apply=True)
+        armor.refresh_from_db()
+        famus.refresh_from_db()
+        wook.refresh_from_db()
+        assert [r["label"] for r in armor.checkin_resources] == [
+            "BA Sampling Guide",
+        ]
+        assert [r["kind"] for r in armor.checkin_resources] == ["pdf"]
+        assert armor.checkin_resources[0]["url"] == (
+            "https://client.igniteproductions.co/training/alcohol-armor/"
+            "field-activation-and-sampling-guide.pdf"
+        )
+        assert armor.checkin_training_url == (
+            "https://client.igniteproductions.co/training/alcohol-armor/"
+            "field-activation-and-sampling-guide.pdf"
+        )
+        assert armor.checkin_code == "AA-RPP85E"
+        assert famus.checkin_resources is None
+        assert famus.checkin_code == "FM-PAG4TX"
+        assert wook.checkin_resources is None
+        assert wook.checkin_code == "WW-36DJAJ"
+        for row in armor.checkin_resources:
+            assert "admin.igniteproductions.co" not in row["url"]
+            assert "spark.igniteproductions.co" not in row["url"]
 
     def test_apply_adds_pivot_retail_faq_without_touching_famus(self):
         pivot = self.create_tenant(
