@@ -350,19 +350,19 @@ def email_training_resources(
             }
         )
     if out or not include_legacy:
-        return _with_pivot_training(tenant, out)
+        return _with_sheet_training_extras(tenant, out)
 
     # Avoid recursion through training_url_for → this helper.
     stored = absolute_public_url(
         getattr(tenant, "checkin_training_url", "") or ""
     )
     if stored:
-        return _with_pivot_training(
+        return _with_sheet_training_extras(
             tenant, [{"label": "Review Training Site", "url": stored, "note": ""}]
         )
     code = _training_hub_code(tenant)
     if code:
-        return _with_pivot_training(
+        return _with_sheet_training_extras(
             tenant,
             [
                 {
@@ -372,31 +372,49 @@ def email_training_resources(
                 }
             ],
         )
-    return _with_pivot_training(tenant, [])
+    return _with_sheet_training_extras(tenant, [])
 
 
-def _with_pivot_training(tenant, resources: list[dict]) -> list[dict]:
-    """Append Pivot's FAQ and product comparison when the walk-up lacks them.
+def _with_sheet_training_extras(tenant, resources: list[dict]) -> list[dict]:
+    """Append brand-specific confirmation PDFs when the walk-up lacks them.
 
-    Existing buttons, including BA Guide, stay in their current order. A URL
-    already on the tenant is not added again.
+    Pivot keeps BA Guide order and always adds Retail Sampling FAQ + Product
+    Comparison. Mark Anthony Brands always gets the Long Drink BA Sampling
+    Guide (same asset as the walk-up preset) so Long Drink sheet emails and
+    admin-tab MAB confirmations share one training CTA.
     """
     from events.brand_group_sheet import PIVOT_EMAIL_BUTTONS, PIVOT_TENANT_SLUG
 
     slug = (getattr(tenant, "slug", "") or "").strip()
-    if slug != PIVOT_TENANT_SLUG:
+    extras: tuple[tuple[str, str, str], ...] = ()
+    if slug == PIVOT_TENANT_SLUG:
+        extras = PIVOT_EMAIL_BUTTONS
+    elif is_mab_tenant(tenant):
+        extras = (
+            (
+                "Long Drink BA Sampling Guide",
+                "/training/mark-anthony-brands/ba-training-guide.pdf",
+                "Shopper sampling guide — story, SKUs, dos and don'ts",
+            ),
+        )
+    if not extras:
         return resources
     have = {(row.get("url") or "") for row in resources}
-    extra: list[dict] = []
-    for label, path, note in PIVOT_EMAIL_BUTTONS:
+    extra_rows: list[dict] = []
+    for label, path, note in extras:
         url = absolute_public_url(path)
         if not url or url in have:
             continue
         have.add(url)
-        extra.append({"label": label, "url": url, "note": note})
-    if not extra:
+        extra_rows.append({"label": label, "url": url, "note": note})
+    if not extra_rows:
         return resources
-    return [*resources, *extra]
+    return [*resources, *extra_rows]
+
+
+def _with_pivot_training(tenant, resources: list[dict]) -> list[dict]:
+    """Back-compat alias — callers should use ``_with_sheet_training_extras``."""
+    return _with_sheet_training_extras(tenant, resources)
 
 
 def _training_hub_code(tenant) -> str:

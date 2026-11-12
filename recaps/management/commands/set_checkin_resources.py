@@ -261,6 +261,25 @@ def _presets() -> dict[str, list[dict]]:
         # Alcohol Armor. Do not remint PE-Y7VPYC.
         "pivot": _pivot_resources(base),
         "pivot-energy-drink": _pivot_resources(base),
+        # Mark Anthony Brands standing walk-up (MAB-V696HM). Long Drink BA
+        # Sampling Guide (shopper 2026) — same PDF confirmation emails
+        # inject when checkin_resources is empty. Do not remint MAB-V696HM.
+        "mark-anthony-brands": [
+            {
+                "label": "Long Drink BA Sampling Guide",
+                "kind": "pdf",
+                "url": f"{base}/training/mark-anthony-brands/ba-training-guide.pdf",
+                "note": "Shopper sampling guide — story, SKUs, dos and don'ts",
+            },
+        ],
+        "mab": [
+            {
+                "label": "Long Drink BA Sampling Guide",
+                "kind": "pdf",
+                "url": f"{base}/training/mark-anthony-brands/ba-training-guide.pdf",
+                "note": "Shopper sampling guide — story, SKUs, dos and don'ts",
+            },
+        ],
         # Famus Energy standing walk-up (FM-PAG4TX). Buttons show on the
         # check-in page, including while the BA files the recap. Video is
         # kind=link (opens in a new tab — browsers play the MP4). Email

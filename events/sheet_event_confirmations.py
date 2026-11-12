@@ -9,6 +9,7 @@ Supported sheets (allowlist by spreadsheet id):
   - Liquid Death retail market schedules (Retail Sampling only)
   - Famus Energy / Alcohol Armor / Wook Water (column H picks the brands)
   - Pivot Energy Drink (its own workbook; every row is Pivot)
+  - Long Drink tab on the Ignite EVENT CALENDAR workbook (MAB walk-up)
 
 Trigger columns are separate checkboxes so unchecking Send is a no-op.
 """
@@ -35,7 +36,11 @@ from events.brand_group_sheet import (
     retail_sheet_id_for_tenant,
     tenants_for_slugs,
 )
-from events.event_confirmations import checkin_url_for, is_liquid_death_tenant
+from events.event_confirmations import (
+    checkin_url_for,
+    is_liquid_death_tenant,
+    is_mab_tenant,
+)
 from events.routing import extract_state_code
 from events.torch_portal import is_torch_tenant
 from events.us_states import US_STATE_NAME_TO_CODE
@@ -55,6 +60,15 @@ logger = logging.getLogger(__name__)
 TORCH_TENANT_SLUG = "keee-torch-thc"
 LIQUID_DEATH_TENANT_SLUG = "liquid-death"
 LIQUID_DEATH_SHEET_ID = "1P1k5bpGuce_qAeh1qg9kNI4QjzRYLZhHTDm2vnQQKi0"
+# Ignite EVENT CALENDAR workbook — Long Drink tab only (gid below).
+LONG_DRINK_SHEET_ID = "1eNIuGiOqkLIwgF7al5LkGvwYtmNHrKoct4qu1UnYHMc"
+LONG_DRINK_TAB_GID = 1367810944
+MAB_TENANT_SLUG = "mark-anthony-brands"
+# Standing Mark Anthony Brands walk-up. Do not remint.
+MAB_CHECKIN_CODE = "MAB-V696HM"
+# Long Drink samplings are always 3 hours. The sheet Hours column is pay /
+# rate math and often says 4 — do not use it for the confirmation window.
+LONG_DRINK_SHIFT_HOURS = 3.0
 DEFAULT_EVENT_TYPE_LABEL = "Retail Sampling"
 DEFAULT_TIMEZONE_NAME = "America/Los_Angeles"
 
@@ -102,6 +116,11 @@ class SheetConfirmationConfig:
     routes_by_brand: bool = False
     # Single-tenant workbooks (Pivot) still refuse SKUs outside that catalog.
     match_catalog_skus: bool = False
+    # When set, refuse the send if Tenant.checkin_code does not match
+    # (Long Drink → Mark Anthony Brands standing MAB- walk-up).
+    standing_checkin_code: str = ""
+    # When set, end clock = start + this many hours (ignores sheet Hours).
+    default_duration_hours: float | None = None
 
 
 TORCH_CONFIG = SheetConfirmationConfig(
@@ -191,11 +210,34 @@ PIVOT_CONFIG = SheetConfirmationConfig(
     match_catalog_skus=True,
 )
 
+# EVENT CALENDAR → Long Drink tab (gid 1367810944). Headers A–Q end at
+# Hours (read 2026-11-12). City stands in for Store Name; Time + a fixed
+# 3-hour window (not the Hours pay column). Append confirmation columns
+# at R–Y. Apps Script must ignore every other tab on this workbook.
+LONG_DRINK_CONFIG = SheetConfirmationConfig(
+    key="long-drink",
+    sheet_id=LONG_DRINK_SHEET_ID,
+    tenant_slug=MAB_TENANT_SLUG,
+    tab_title="Long Drink",
+    tab_gid=LONG_DRINK_TAB_GID,
+    known_status_cols={
+        "Confirmation Status": "U",
+        "Confirmation Sent At": "V",
+        "Confirmation Error": "W",
+        "Spark Confirmation UUID": "X",
+    },
+    extra_headers=tuple(CONFIRMATION_EXTRA_HEADERS),
+    tenant_checker=is_mab_tenant,
+    standing_checkin_code=MAB_CHECKIN_CODE,
+    default_duration_hours=LONG_DRINK_SHIFT_HOURS,
+)
+
 SHEET_CONFIGS: tuple[SheetConfirmationConfig, ...] = (
     TORCH_CONFIG,
     LIQUID_DEATH_CONFIG,
     BRAND_GROUP_CONFIG,
     PIVOT_CONFIG,
+    LONG_DRINK_CONFIG,
 )
 SHEET_CONFIG_BY_ID: dict[str, SheetConfirmationConfig] = {
     c.sheet_id: c for c in SHEET_CONFIGS
@@ -207,6 +249,7 @@ SHEET_AUTOMATION_LABELS: dict[str, str] = {
     "liquid-death": "Liquid Death retail schedule",
     "brand-group": "Famus / Wook / Alcohol Armor Schedule",
     "pivot": "Pivot Retail Schedule",
+    "long-drink": "Long Drink (EVENT CALENDAR)",
 }
 
 _BRAND_GROUP_TENANT_SLUGS = frozenset(
@@ -241,6 +284,8 @@ def sheet_automation_for_tenant(tenant) -> SheetConfirmationConfig | None:
         if resolved != BRAND_GROUP_CONFIG.sheet_id:
             return replace(BRAND_GROUP_CONFIG, sheet_id=resolved)
         return BRAND_GROUP_CONFIG
+    if is_mab_tenant(tenant):
+        return LONG_DRINK_CONFIG
     return None
 
 
@@ -393,9 +438,21 @@ def _restore_epoch_clocks(payload: SheetRowPayload) -> None:
         )
         return
     if _is_sheets_epoch_date(payload.start_time):
-        fresh = displayed.get("start time") or ""
+        fresh = (
+            displayed.get("start time")
+            or displayed.get("time")
+            or ""
+        )
         if fresh and not _is_sheets_epoch_date(fresh):
             payload.start_time = fresh
+            # Long Drink (and any sheet with default_duration_hours) rebuilds
+            # end from the fixed shift length after Time is known.
+            if _is_sheets_epoch_date(payload.end_time) or not (
+                payload.end_time or ""
+            ).strip():
+                derived = _end_clock_for_payload(payload.sheet_id, fresh, displayed)
+                if derived:
+                    payload.end_time = derived
     if _is_sheets_epoch_date(payload.end_time):
         fresh = displayed.get("end time") or ""
         if fresh and not _is_sheets_epoch_date(fresh):
@@ -887,6 +944,15 @@ def _row_tenants(payload: SheetRowPayload) -> list:
         tenants = [_tenant_for(config)]
     for tenant in tenants:
         assert_standing_checkin(tenant)
+        expected = (config.standing_checkin_code or "").strip()
+        if not expected:
+            continue
+        actual = (getattr(tenant, "checkin_code", "") or "").strip()
+        if actual != expected:
+            raise ValueError(
+                f"Standing check-in for {getattr(tenant, 'slug', '?')} must "
+                f"be {expected!r} (got {actual!r}). Do not remint."
+            )
     return tenants
 
 
@@ -916,6 +982,51 @@ def _truthy(raw: str | bool | None) -> bool:
     return (raw or "").strip().lower() in {"true", "yes", "y", "1", "checked"}
 
 
+def _derive_end_clock(start_raw: str, hours_raw: str) -> str:
+    """Build an end clock from start + a decimal duration.
+
+    Returns ``8p`` / ``6:30p``-style text ``parse_sheet_clock`` accepts, or
+    ``""`` when either input is missing/unparseable.
+    """
+    start_text = (start_raw or "").strip()
+    hours_text = (hours_raw or "").strip().lower().rstrip("h")
+    if not start_text or not hours_text:
+        return ""
+    try:
+        start_clock = parse_sheet_clock(start_text)
+        hours = float(hours_text)
+    except (TypeError, ValueError):
+        return ""
+    if hours <= 0:
+        return ""
+    end_dt = datetime.combine(date(2000, 1, 1), start_clock) + timedelta(
+        hours=hours
+    )
+    hour = end_dt.hour
+    minute = end_dt.minute
+    ampm = "a" if hour < 12 else "p"
+    hour12 = hour % 12 or 12
+    if minute:
+        return f"{hour12}:{minute:02d}{ampm}"
+    return f"{hour12}{ampm}"
+
+
+def _end_clock_for_payload(
+    sheet_id: str,
+    start_raw: str,
+    values: dict[str, Any],
+) -> str:
+    """Prefer a sheet's fixed shift length; else the Hours cell."""
+    hours_raw = _cell(values, "Hours")
+    try:
+        cfg = config_for_sheet_id(sheet_id)
+    except ValueError:
+        cfg = None
+    if cfg is not None and cfg.default_duration_hours:
+        hours_raw = str(cfg.default_duration_hours)
+    return _derive_end_clock(start_raw, hours_raw)
+
+
 def payload_from_mapping(
     values: dict[str, Any],
     *,
@@ -924,14 +1035,22 @@ def payload_from_mapping(
     dry_run: bool = False,
 ) -> SheetRowPayload:
     """Build a payload from header→value mapping (Apps Script or sheet read)."""
+    resolved_sheet_id = (
+        (sheet_id or TORCH_PUBLIC_FORM_SHEET_ID).strip()
+        or TORCH_PUBLIC_FORM_SHEET_ID
+    )
+    start_time = _cell(values, "Start Time", "Time")
+    end_time = _cell(values, "End Time")
+    if not end_time:
+        end_time = _end_clock_for_payload(resolved_sheet_id, start_time, values)
     return SheetRowPayload(
         row_number=int(row_number),
-        sheet_id=(sheet_id or TORCH_PUBLIC_FORM_SHEET_ID).strip()
-        or TORCH_PUBLIC_FORM_SHEET_ID,
+        sheet_id=resolved_sheet_id,
         date=_cell(values, "Date"),
-        start_time=_cell(values, "Start Time"),
-        end_time=_cell(values, "End Time"),
-        store_name=_cell(values, "Store Name"),
+        start_time=start_time,
+        end_time=end_time,
+        # Long Drink EVENT CALENDAR uses City (no Store Name column).
+        store_name=_cell(values, "Store Name", "City"),
         address=_cell(values, "Address"),
         state=_cell(values, "State"),
         brand=_cell(values, "Brand"),
