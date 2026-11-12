@@ -1,17 +1,18 @@
 """HTTP entry for retail-schedule Sheet → confirmation / cancel.
 
 POST ``/internal/torch-sheet-event-confirmation``,
-``/internal/liquid-death-sheet-event-confirmation``, or
-``/internal/brand-group-sheet-event-confirmation`` with ``X-Cron-Secret``.
+``/internal/liquid-death-sheet-event-confirmation``,
+``/internal/brand-group-sheet-event-confirmation``, or
+``/internal/long-drink-sheet-event-confirmation`` with ``X-Cron-Secret``.
 Mounted outside ``/internal/cron/`` so the Apps Script URL stays short, but
 uses the same secret gate as cron jobs.
 
 Sheet id is allowlisted (Torch, Liquid Death, the Famus / Alcohol Armor /
-Wook Water workbook, and the Pivot Energy workbook). Passing an unknown id
-returns 400 even if the path is one of those endpoints. The brand-group
-endpoint accepts both the Famus workbook and the Pivot workbook; ``sheetId``
-selects which one. Omitting ``sheetId`` on that endpoint stays the Famus
-workbook.
+Wook Water workbook, the Pivot Energy workbook, and the Long Drink tab on
+the EVENT CALENDAR workbook). Passing an unknown id returns 400 even if
+the path is one of those endpoints. The brand-group endpoint accepts both
+the Famus workbook and the Pivot workbook; ``sheetId`` selects which one.
+Omitting ``sheetId`` on that endpoint stays the Famus workbook.
 """
 
 from __future__ import annotations
@@ -31,6 +32,7 @@ from events.brand_group_sheet import (
 )
 from events.sheet_event_confirmations import (
     LIQUID_DEATH_SHEET_ID,
+    LONG_DRINK_SHEET_ID,
     TORCH_PUBLIC_FORM_SHEET_ID,
     handle_action,
     validate_sheet_id,
@@ -232,3 +234,7 @@ class BrandGroupSheetEventConfirmationView(SheetEventConfirmationView):
     @property
     def default_sheet_id(self) -> str:
         return default_brand_group_sheet_id()
+
+
+class LongDrinkSheetEventConfirmationView(SheetEventConfirmationView):
+    default_sheet_id = LONG_DRINK_SHEET_ID
