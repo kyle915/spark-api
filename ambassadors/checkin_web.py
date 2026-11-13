@@ -1328,9 +1328,13 @@ def compose_shift_recap_name(event_name: str, shift_label: str) -> str:
 
 
 def is_event_activation_type(event_type) -> bool:
-    """True for an "Event Activation" program (festival / venue, not a store)."""
+    """True for a venue program (event activation or guerilla), not a store.
+
+    Guerilla shifts key on a typed or GPS address the same way an activation
+    does: no store name, no store number, and not a roaming market.
+    """
     name = (getattr(event_type, "name", None) or "").strip()
-    return bool(re.search(r"\bactivation\b", name, re.I))
+    return bool(re.search(r"\bactivation\b|\bguerr?ill?a\b", name, re.I))
 
 
 def requires_store_identity(tenant, event=None) -> bool:
