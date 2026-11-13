@@ -321,12 +321,16 @@ def _collect_recap_approved_recipients(
 
     recipients: list[tuple[str, str]] = []
     seen: set[str] = set()
+    # People who stay on the brand but opted out of its approved-recap mail.
+    skip = tenant.recap_skip_email_set() if tenant is not None else set()
 
     def _push(email: str | None, first: str | None):
         e = (email or "").strip()
         if not e or e.lower() in seen:
             return
         if is_placeholder_recipient_email(e):
+            return
+        if e.lower() in skip:
             return
         # Same choke point as Torch branch — global CC suppress + policy.
         kept = apply_outbound_policy(

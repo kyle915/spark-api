@@ -2313,6 +2313,52 @@ class LinkedSheetMutations:
 
         return await save()
 
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def set_tenant_recap_skip_emails(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID,
+        emails: str,
+    ) -> TenantType | None:
+        """Set who is left off this brand's approved-recap email.
+
+        Stored verbatim on Tenant.recap_skip_emails. The people listed keep
+        their login and everything they can see; they just stop getting this
+        brand's approved recaps by email. Pass "" to clear.
+
+        Staff only: this takes mail away from a named person, so a client
+        cannot do it to a colleague.
+        """
+        request_user = info.context.request.user
+        allowed, is_spark_admin, _is_client, error_message = (
+            await _check_client_or_spark_admin(request_user)
+        )
+        if not allowed:
+            raise GraphQLError(error_message)
+        if not is_spark_admin:
+            raise GraphQLError("Only Ignite staff can change who is skipped.")
+
+        try:
+            resolved_tenant_id = resolve_id_to_int(tenant_id)
+        except (GraphQLError, ValueError, TypeError):
+            raise GraphQLError("Invalid tenant ID.")
+
+        try:
+            tenant = await sync_to_async(Tenant.objects.get)(pk=resolved_tenant_id)
+        except Tenant.DoesNotExist:
+            raise GraphQLError("Tenant not found.")
+
+        @sync_to_async
+        def save():
+            tenant.recap_skip_emails = emails or ""
+            tenant.updated_by = request_user
+            tenant.save(
+                update_fields=["recap_skip_emails", "updated_by", "updated_at"]
+            )
+            return tenant
+
+        return await save()
+
 
 @strawberry.type
 class SparkTenantMutations(LinkedSheetMutations):
