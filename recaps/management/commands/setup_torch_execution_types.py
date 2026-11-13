@@ -1,12 +1,17 @@
 """Torch THC: four execution types on the BA walk-up.
 
 ``/checkin/TH-2HRV3D`` (never reminted) opens with "What's your execution
-type?" and four options, in this order:
+type?" and these options, in this order:
 
-    Retail    -> Retail Sampling     -> Torch THC-Retail Sampling
-    Event     -> Event Activation    -> Torch THC-Event Activation
-    Guerilla  -> Guerilla Activation -> Torch THC · Guerilla Recap
-    Seeding   -> Product Seeding     -> Torch THC · Product Seeding Recap
+    Retail    -> Retail Sampling       -> Torch THC-Retail Sampling
+    Event     -> Event Activation      -> Torch THC-Event Activation
+    Guerilla  -> Guerilla Activation   -> Torch THC · Guerilla Recap
+    Seeding   -> Product Seeding       -> Torch THC · Product Seeding Recap
+    G7        -> G7 Guerilla Sampling  -> G7 Guerilla Sampling
+
+G7's form and photo buckets are created by ``setup_torch_g7_guerilla_sampling``.
+This command only keeps that label in the picker copy, so a re-run here does
+not drop it. The option stays hidden until that program exists.
 
 The labels are display copy (``Tenant.checkin_program_picker``); the event
 type names stay descriptive because they drive the recap template, photo
@@ -70,6 +75,11 @@ from recaps.field_conditions import FIELD_CONDITIONS_KEY
 from recaps.management.commands.setup_torch_event_activation import (
     Command as EventActivationCommand,
 )
+from recaps.management.commands.setup_torch_g7_guerilla_sampling import (
+    EVENT_LABEL as G7_LABEL,
+    PICKER_DESCRIPTION as G7_PICKER_DESCRIPTION,
+    PICKER_LABEL as G7_PICKER_LABEL,
+)
 
 GUERILLA_LABEL = "Guerilla Activation"
 GUERILLA_TEMPLATE = "Torch THC · Guerilla Recap"
@@ -100,6 +110,11 @@ PICKER_OPTIONS: list[tuple[str, str, str]] = [
         SEEDING_LABEL,
         "Seeding",
         "Dropping product off at accounts — not a sampling shift.",
+    ),
+    (
+        G7_LABEL,
+        G7_PICKER_LABEL,
+        G7_PICKER_DESCRIPTION,
     ),
 ]
 

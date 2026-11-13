@@ -331,6 +331,8 @@ class Command(BaseCommand):
     activation_buckets = ACTIVATION_BUCKETS
     sample_qty_layout = SAMPLE_QTY_LAYOUT
     section_order = SECTION_ORDER
+    # Per-SKU sample counts. G7 keeps flavor counts as a written field instead.
+    include_product_samples = True
     # Show-when rules; only those whose field is in this form's spec are written.
     field_conditions: dict = {POURS_SERVED_FIELD: POURS_CONDITION}
 
@@ -604,7 +606,7 @@ class Command(BaseCommand):
                 tenant_id=tenant.id,
                 name=self.template_name,
                 event_type=event_type,
-                product_samples=True,
+                product_samples=self.include_product_samples,
                 sales_performance=False,
                 layout=dict(wanted_layout),
                 created_by=creator,
@@ -621,8 +623,8 @@ class Command(BaseCommand):
                 if template.event_type_id != event_type.id:
                     template.event_type = event_type
                     changed.append("event_type")
-                if template.product_samples is not True:
-                    template.product_samples = True
+                if template.product_samples is not self.include_product_samples:
+                    template.product_samples = self.include_product_samples
                     changed.append("product_samples")
                 if template.sales_performance:
                     template.sales_performance = False
