@@ -184,6 +184,13 @@ class TenantType(Node):
         return self.recap_recipient_emails or ""
 
     @strawberry.field
+    def recap_skip_emails(self) -> str:
+        """Raw stored list of addresses that never receive this brand's
+        approved-recap email (comma/newline/semicolon-separated). "" when
+        nobody is skipped."""
+        return self.recap_skip_emails or ""
+
+    @strawberry.field
     async def default_external_rmm(self) -> "SparkUserType | None":
         """The user all external (public-form) requests route to, if set
         on the Team page. None = fall back to territory/Ignite routing."""

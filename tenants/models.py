@@ -457,6 +457,16 @@ class Tenant(Asyncable, models.Model):
         default="",
         help_text="Extra email addresses (comma/newline/semicolon-separated) that receive recap-approval emails for this brand, in addition to the RMM, client-role users, and requestor.",
     )
+    # People who keep their login on this brand but should NOT be emailed its
+    # approved recaps (e.g. a contact who sits on two sister brands and only
+    # wants one brand's mail). Applied to every address on the approved-recap
+    # email for this brand, however it got there: client user, RMM, the list
+    # above or the requestor. Their Spark access is unchanged.
+    recap_skip_emails = models.TextField(
+        blank=True,
+        default="",
+        help_text="Emails (comma/newline/semicolon-separated) that never receive this brand's approved-recap email, even if they are a client user, RMM or requestor on it.",
+    )
     # Brand-submitted requests (public spark-form + client portal login) land
     # approved — Event materialized like an Approvals click — instead of
     # waiting in Approvals. The approval email then goes to the requestor with
@@ -561,6 +571,10 @@ class Tenant(Asyncable, models.Model):
         is what makes the feature mail nobody until it is explicitly set up.
         """
         return parse_recipient_emails(self.recap_recipient_emails)
+
+    def recap_skip_email_set(self) -> set[str]:
+        """Lower-cased addresses left off this brand's approved-recap email."""
+        return {e.lower() for e in parse_recipient_emails(self.recap_skip_emails)}
 
 
 class ClientReportSubscription(models.Model):
