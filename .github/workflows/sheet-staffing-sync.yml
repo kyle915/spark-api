@@ -1,0 +1,36 @@
+name: Sheet staffing sync
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Read and match the sheets, but store nothing"
+        required: false
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+jobs:
+  fire-sheet-staffing-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire sheet staffing sync cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/sync-sheet-staffing
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' -X POST "$CRON_URL?dry_run=$DRY_RUN" -H "X-Cron-Secret: $CRON_SECRET")
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS"
+            exit 1
+          fi
