@@ -296,10 +296,15 @@ class TestAdminAttendanceMutations(AmbassadorsGraphQLTestCase):
                 }
             }
         """
+        staff = await sync_to_async(self.create_user)(
+            username="attendance-staff@test.com",
+            email="attendance-staff@test.com",
+            role=self.roles["spark_admin"],
+        )
         res = await self._execute_query_authenticated(
             q,
             {"eventUuid": str(self.event.uuid)},
-            self.client_user,
+            staff,
             self.endpoint,
         )
         assert res.errors is None, res.errors
@@ -307,3 +312,22 @@ class TestAdminAttendanceMutations(AmbassadorsGraphQLTestCase):
         assert len(rows) == 1
         assert rows[0]["clockInAttendanceUuid"] == str(att.uuid)
         assert rows[0]["clockOutAttendanceUuid"] is None
+
+        # A brand user, even of this event's own brand, gets no attendance
+        # rows and no GPS trail: names, punch times and coordinates are for
+        # Ignite staff.
+        for query, field in (
+            (q, "eventAttendance"),
+            (
+                "query T($eventUuid: ID!) { eventLocationTrail(eventUuid: $eventUuid) { uuid } }",
+                "eventLocationTrail",
+            ),
+        ):
+            hidden = await self._execute_query_authenticated(
+                query,
+                {"eventUuid": str(self.event.uuid)},
+                self.client_user,
+                self.endpoint,
+            )
+            assert hidden.errors is None, hidden.errors
+            assert hidden.data[field] == []

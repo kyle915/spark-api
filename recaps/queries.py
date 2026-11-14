@@ -2181,6 +2181,14 @@ class RecapQueries:
         except (TypeError, ValueError, GraphQLError):
             raise GraphQLError("Invalid tenant id.")
 
+        # A brand's numbers go only to Ignite staff and that brand's own
+        # users. Being logged in is not enough.
+        from events.staffing_board import _accessible_tenants
+
+        is_admin, allowed = await _accessible_tenants(info.context.request.user)
+        if not is_admin and resolved_id not in (allowed or set()):
+            raise GraphQLError("Not allowed for this tenant.")
+
         days = max(1, min(int(window_days or 7), 365))
 
         def _build() -> types.ExecutiveSummaryType | None:
@@ -2258,6 +2266,20 @@ class RecapQueries:
             except (TypeError, ValueError, GraphQLError):
                 raise GraphQLError("Invalid tenant id.")
 
+        # Only Ignite staff may read across brands. Anyone else is held to
+        # the brands they belong to: no tenant id means "my brands", never
+        # "every brand", and another brand's id is refused.
+        from events.staffing_board import _accessible_tenants
+
+        is_admin, allowed = await _accessible_tenants(info.context.request.user)
+        allowed_ids = None if is_admin else (allowed or set())
+        if (
+            allowed_ids is not None
+            and resolved_tenant_id is not None
+            and resolved_tenant_id not in allowed_ids
+        ):
+            raise GraphQLError("Not allowed for this tenant.")
+
         def _fetch() -> List[types.MissingRecapEventType]:
             from events.missing_recaps_gate import (
                 missing_recaps_disabled_for_tenant_id,
@@ -2311,6 +2333,8 @@ class RecapQueries:
             )
             if resolved_tenant_id is not None:
                 qs = qs.filter(tenant_id=resolved_tenant_id)
+            elif allowed_ids is not None:
+                qs = qs.filter(tenant_id__in=allowed_ids)
 
             # Prefetch ambassador assignments so the per-event loop
             # below doesn't do N+1. Event → AmbassadorEvent reverse
