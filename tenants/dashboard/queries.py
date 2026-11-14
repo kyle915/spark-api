@@ -489,7 +489,14 @@ class DashboardQueries:
             total_willing_to_purchase = 0
             brand_awareness = None
             purchase_intent = None
+            brand_awareness_base = None
+            purchase_intent_base = None
             custom_consumers = custom_brand_aware_n = custom_willing_n = 0
+            # Consumers sampled on the custom recaps that actually ASKED the
+            # awareness / intent question. Different event types use different
+            # recap forms; dividing by everyone sampled, including at events
+            # whose form never asked, dilutes the percentage.
+            custom_brand_base = custom_willing_base = 0
             custom_single_cans = custom_packs = 0
             custom_brand_rows = custom_willing_rows = custom_pack_cans = 0
             custom_products_sold = 0
@@ -557,6 +564,8 @@ class DashboardQueries:
                                 "pack_cans": 0,       # packs × label-parsed size
                                 "brand_rows": 0,      # matched awareness fields
                                 "willing_rows": 0,    # matched intent fields
+                                "brand_base": 0,      # consumers on recaps that asked awareness
+                                "willing_base": 0,    # consumers on recaps that asked intent
                                 "products_sold": 0}   # two-tier SOLD (shared helper)
                         rows = recap_models.CustomFieldValue.objects.filter(
                             custom_recap__event__in=base_queryset,
@@ -569,6 +578,8 @@ class DashboardQueries:
                         # sold/bought/purchased fallback minus intent) — one source
                         # of truth with the recap list's soldUnits.
                         by_recap: dict = {}
+                        asked_brand: set = set()
+                        asked_willing: set = set()
                         for recap_id, name, value in rows:
                             by_recap.setdefault(recap_id, []).append((name, value))
                             low = (name or "").lower()
@@ -582,9 +593,11 @@ class DashboardQueries:
                             if "knew about" in low:
                                 sums["brand"] += num
                                 sums["brand_rows"] += 1
+                                asked_brand.add(recap_id)
                             elif "willing to purchase" in low and "not" not in low:
                                 sums["willing"] += num
                                 sums["willing_rows"] += 1
+                                asked_willing.add(recap_id)
                             elif "single can" in low:
                                 sums["cans"] += num
                             elif "pack" in low:
@@ -601,13 +614,17 @@ class DashboardQueries:
                         # otherwise digit-strip into a phantom 1960 and inflate the
                         # headline (the recurring duplicate-matcher class — see the
                         # SOLD note above; this is the same trap for consumers).
-                        for pairs in by_recap.values():
+                        for recap_id, pairs in by_recap.items():
                             sold = _sold_units_from_fields(pairs)
                             if sold is not None:
                                 sums["products_sold"] += sold
                             cs = _consumers_sampled_from_fields(pairs)
                             if cs is not None:
                                 sums["consumers"] += cs
+                                if recap_id in asked_brand:
+                                    sums["brand_base"] += cs
+                                if recap_id in asked_willing:
+                                    sums["willing_base"] += cs
                         return sums
 
                     _cm = await sync_to_async(_sum_custom_recap_metrics)()
@@ -618,6 +635,8 @@ class DashboardQueries:
                     custom_packs = _cm["packs"]
                     custom_brand_rows = _cm["brand_rows"]
                     custom_willing_rows = _cm["willing_rows"]
+                    custom_brand_base = _cm["brand_base"]
+                    custom_willing_base = _cm["willing_base"]
                     custom_pack_cans = _cm["pack_cans"]
                     custom_products_sold = _cm["products_sold"]
                 except Exception:
@@ -647,16 +666,30 @@ class DashboardQueries:
                 has_brand_signal = legacy_ce_exists or custom_brand_rows > 0
                 has_willing_signal = legacy_ce_exists or custom_willing_rows > 0
 
+                # The base for each percentage is the consumers sampled where
+                # the question was asked: every legacy recap (its form always
+                # carries both counts) plus the custom recaps with a matching
+                # field. When no base can be told apart (answers present but no
+                # sampled count on those recaps), fall back to everyone sampled,
+                # which is what this used to do for every tenant.
+                legacy_consumers = consumer_data['total_consumers'] or 0
+                brand_base = (legacy_consumers + custom_brand_base) or consumers_sampled
+                willing_base = (
+                    legacy_consumers + custom_willing_base
+                ) or consumers_sampled
+
                 # Calculate percentages (always clamp to 0-100); None = no data
                 brand_awareness = clamp_percentage(
-                    (total_brand_aware / consumers_sampled * 100)
-                    if consumers_sampled > 0 else 0.0
+                    (total_brand_aware / brand_base * 100)
+                    if brand_base > 0 else 0.0
                 ) if has_brand_signal else None
 
                 purchase_intent = clamp_percentage(
-                    (total_willing_to_purchase / consumers_sampled * 100)
-                    if consumers_sampled > 0 else 0.0
+                    (total_willing_to_purchase / willing_base * 100)
+                    if willing_base > 0 else 0.0
                 ) if has_willing_signal else None
+                brand_awareness_base = brand_base if has_brand_signal else None
+                purchase_intent_base = willing_base if has_willing_signal else None
 
             if want_metrics:
                 # Comparison period (same period previous year)
@@ -748,7 +781,9 @@ class DashboardQueries:
                         if purchase_intent is not None else None
                     ),
                     comparison_period=comparison_period,
-                    comparison_values=comparison_values
+                    comparison_values=comparison_values,
+                    brand_awareness_base=brand_awareness_base,
+                    purchase_intent_base=purchase_intent_base,
                 )
 
             if need_monthly:

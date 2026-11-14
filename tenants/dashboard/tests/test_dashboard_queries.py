@@ -239,6 +239,94 @@ class TestEventDashboardQueries(DashboardGraphQLTestCase):
         assert kpis["multiPacksSold"] == 36
 
     @pytest.mark.asyncio
+    async def test_purchase_intent_is_out_of_the_consumers_who_were_asked(self):
+        """Different event types use different recap forms. A form that never
+        asks about purchase intent adds to consumers sampled, but must not
+        dilute the intent percentage (Liquid Death read 11% after a month of
+        event activations whose form doesn't ask)."""
+        from recaps import models as recap_models
+
+        query = """
+        query {
+            eventDashboard {
+                metrics {
+                    consumersSampled
+                    purchaseIntent
+                    purchaseIntentBase
+                    brandAwarenessBase
+                }
+            }
+        }
+        """
+
+        async def metrics():
+            cache.clear()
+            result = await self._execute_query_authenticated(
+                query, {}, self.client_user
+            )
+            assert result.errors is None, result.errors
+            return result.data["eventDashboard"]["metrics"]
+
+        before = await metrics()
+        # Legacy recaps always carry the question: everyone sampled is the base.
+        assert before["purchaseIntentBase"] == before["consumersSampled"]
+        assert before["brandAwarenessBase"] == before["consumersSampled"]
+
+        @sync_to_async
+        def add_two_forms():
+            user = self.get_system_user()
+            field_type = recap_models.CustomRecapFieldType.objects.create(
+                name="Number", created_by=user,
+            )
+            section = recap_models.RecapSection.objects.create(
+                name="Sampling", tenant=self.tenant, created_by=user,
+            )
+
+            def recap(name, answers):
+                template = recap_models.CustomRecapTemplate.objects.create(
+                    name=f"{name} template", event_type=self.event_type,
+                    tenant=self.tenant, created_by=user,
+                )
+                custom_recap = recap_models.CustomRecap.objects.create(
+                    name=name, approved=True, event=self.event1,
+                    tenant=self.tenant, custom_recap_template=template,
+                    ambassador=self.ambassador, created_by=user,
+                )
+                for label, value in answers:
+                    field = recap_models.CustomField.objects.create(
+                        name=label, required=False,
+                        custom_recap_template=template,
+                        custom_field_type=field_type, recap_section=section,
+                        created_by=user,
+                    )
+                    recap_models.CustomFieldValue.objects.create(
+                        custom_recap=custom_recap, custom_field=field,
+                        value=value, created_by=user,
+                    )
+
+            # Retail form: asks intent.
+            recap("Retail demo", [
+                ("Total number of consumers sampled", "40"),
+                ("How many consumers would be willing to purchase the product?", "10"),
+            ])
+            # Event form: big crowd, never asks.
+            recap("Festival", [("Total number of consumers sampled", "1000")])
+
+        await add_two_forms()
+        after = await metrics()
+
+        assert after["consumersSampled"] == before["consumersSampled"] + 1040
+        # Only the 40 who were asked join the base, not the festival's 1,000.
+        assert after["purchaseIntentBase"] == before["purchaseIntentBase"] + 40
+        # Neither form asked about awareness, so its base is unchanged.
+        assert after["brandAwarenessBase"] == before["brandAwarenessBase"]
+        willing_before = before["purchaseIntent"] * before["purchaseIntentBase"] / 100
+        expected = (willing_before + 10) / after["purchaseIntentBase"] * 100
+        assert abs(after["purchaseIntent"] - expected) < 0.2
+        diluted = (willing_before + 10) / after["consumersSampled"] * 100
+        assert after["purchaseIntent"] > diluted + 1
+
+    @pytest.mark.asyncio
     async def test_event_dashboard_skips_third_party_recaps_excluded_from_aggregates(self):
         """A 3rd-party recap flagged exclude_from_aggregates adds nothing to
         globalKpis even when it shares an event with counted recaps."""
