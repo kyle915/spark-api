@@ -949,6 +949,14 @@ class EventQueries:
         from ambassadors.types import LocationPingType
         from events.models import Event as EventModel
 
+        # An ambassador's route is for Ignite staff. A brand user, even of
+        # the brand that booked the event, gets nothing.
+        from events.staffing_board import _accessible_tenants
+
+        is_admin, _allowed = await _accessible_tenants(info.context.request.user)
+        if not is_admin:
+            return []
+
         service = EventQueriesService()
         tenant_id = await service.resolve_tenant_id(info)
 
@@ -1007,6 +1015,13 @@ class EventQueries:
         Tenant-scoped like event_location_trail."""
         from ambassadors.models import Attendance as AttendanceModel
         from events.models import Event as EventModel
+
+        # Full names, punch times and punch coordinates: Ignite staff only.
+        from events.staffing_board import _accessible_tenants
+
+        is_admin, _allowed = await _accessible_tenants(info.context.request.user)
+        if not is_admin:
+            return []
 
         service = EventQueriesService()
         tenant_id = await service.resolve_tenant_id(info)

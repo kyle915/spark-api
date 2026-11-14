@@ -132,6 +132,68 @@ class TestMissingRecapEvents(AmbassadorsGraphQLTestCase):
         assert ba_rows[0]["isApproved"] is True
 
     @pytest.mark.asyncio
+    async def test_a_brand_user_only_ever_sees_their_own_brands_events(self):
+        """Being logged in is not enough. With no tenant id a brand user gets
+        their own brands, never every brand; another brand's id is refused."""
+        scoped_query = """
+        query Missing($tenantId: ID) {
+          missingRecapEvents(lookbackDays: 30, tenantId: $tenantId) {
+            eventName
+            assignedAmbassadors { name }
+          }
+        }
+        """
+
+        def seed():
+            other = self.create_tenant(name="Somebody Else's Brand")
+            mine = self._past_event(hours_ago=2, name="Mine")
+            self._ba_event(mine)
+            end = datetime.now(_tz.utc) - timedelta(hours=3)
+            theirs = self.create_event(
+                name="Theirs", tenant=other, date=end,
+                start_time=end - timedelta(hours=4), end_time=end,
+            )
+            AmbassadorEvent.objects.create(
+                ambassador=self.ambassador, event=theirs, tenant=other,
+                is_approved=True, created_by=self.admin,
+            )
+            client = self.create_user(
+                username="client-missing", email="client-missing@test.com",
+                role=self.roles["client"],
+            )
+            self.create_tenanted_user(client, self.tenant)
+            return client, other
+
+        client, other = await sync_to_async(seed)()
+
+        # Staff still see every brand.
+        staff = await self._execute_mutation(
+            scoped_query, {"tenantId": None}, self.endpoint_path, user=self.admin
+        )
+        assert {r["eventName"] for r in staff.data["missingRecapEvents"]} == {"Mine", "Theirs"}
+
+        # The brand user sees only their own, with or without an id.
+        own = await self._execute_mutation(
+            scoped_query, {"tenantId": None}, self.endpoint_path, user=client
+        )
+        assert own.errors is None, own.errors
+        assert [r["eventName"] for r in own.data["missingRecapEvents"]] == ["Mine"]
+
+        refused = await self._execute_mutation(
+            scoped_query, {"tenantId": str(other.id)}, self.endpoint_path, user=client
+        )
+        assert refused.errors is not None
+        assert "Not allowed" in str(refused.errors[0])
+
+        # And another brand's summary numbers are refused the same way.
+        summary = await self._execute_mutation(
+            "query($t: ID){ executiveSummary(tenantId: $t){ tenantName recapCount } }",
+            {"t": str(other.id)}, self.endpoint_path, user=client,
+        )
+        assert summary.errors is not None
+        assert "Not allowed" in str(summary.errors[0])
+
+    @pytest.mark.asyncio
     async def test_excludes_events_with_a_recap(self):
         ev = await sync_to_async(self._past_event)(name="Already filed")
         await sync_to_async(self._ba_event)(ev)
