@@ -30,8 +30,10 @@ from __future__ import annotations
 import logging
 import re
 
+from django.db.models import Q
 from googleapiclient.errors import HttpError
 
+from recaps.filed import custom_filed_q
 from recaps.models import CustomField, CustomRecap
 from recaps.pdf import (
     _event_date,
@@ -234,8 +236,20 @@ def _recap_meta(recap, infer_retailer=None) -> dict:
 
 
 def _tenant_recaps(tenant):
+    """The recaps a client should see in their sheet.
+
+    Left out: archived recaps (hidden from the client everywhere else),
+    recaps on a deleted request (a standalone event has no request and
+    stays), and the empty stub a clock-out leaves behind before anyone has
+    filed anything. Unapproved recaps stay in: the Status column says so.
+    """
     return (
-        CustomRecap.objects.filter(tenant=tenant)
+        CustomRecap.objects.filter(tenant=tenant, archived_at__isnull=True)
+        .filter(
+            Q(event__request__isnull=True)
+            | Q(event__request__deleted_at__isnull=True)
+        )
+        .filter(custom_filed_q())
         .select_related("event", "ambassador")
         .prefetch_related("custom_field_value__custom_field")
         .order_by("submitted_at", "id")

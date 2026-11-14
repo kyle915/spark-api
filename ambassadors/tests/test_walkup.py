@@ -218,3 +218,25 @@ class TestWalkupFlow(AmbassadorsGraphQLTestCase):
         )
         assert res.errors is None, res.errors
         assert res.data["startWalkupShift"]["success"] is False
+
+    def test_queue_row_shows_the_phone_the_ba_gave_at_web_check_in(self):
+        # Web check-in stores the number on Ambassador.phone; the walk-ups
+        # queue is how staff call a BA they have never met.
+        from ambassadors.walkup import _build_walkup_row
+
+        self.new_amb.phone = "(606) 448-9015"
+        self.new_amb.save(update_fields=["phone"])
+        amb_event = AmbassadorEvent.objects.create(
+            ambassador=self.new_amb,
+            event=self.event,
+            tenant=self.tenant,
+            is_approved=False,
+            created_by=self.system_user,
+        )
+        row = _build_walkup_row(amb_event)
+        assert row.ambassador_phone == "(606) 448-9015"
+
+        self.new_amb.phone = None
+        self.new_amb.save(update_fields=["phone"])
+        amb_event.refresh_from_db()
+        assert _build_walkup_row(amb_event).ambassador_phone is None

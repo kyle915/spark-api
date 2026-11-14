@@ -444,7 +444,8 @@ def _build_walkup_row(amb_event) -> WalkupShiftType:
         brand_name=event.tenant.name if event.tenant_id else "",
         ambassador_name=name,
         ambassador_email=(user.email if user else None),
-        ambassador_phone=getattr(amb, "phone_number", None)
+        ambassador_phone=getattr(amb, "phone", None)
+        or getattr(amb, "phone_number", None)
         or getattr(user, "phone", None),
         is_new_account=not bool(getattr(amb, "is_active", False)),
         is_approved=amb_event.is_approved,
