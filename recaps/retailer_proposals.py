@@ -244,6 +244,35 @@ def places_lookup(address: str, *, timeout: float = 6.0) -> Suggestion | None:
     return None
 
 
+def places_status(*, timeout: float = 6.0) -> str:
+    """One plain sentence on whether the Maps key can look places up, for the
+    command's output. Never raises and never prints the key."""
+    from utils.map_matching import _google_maps_api_key
+
+    key = _google_maps_api_key()
+    if not key:
+        return "Google Maps lookup: off (no GOOGLE_MAPS_API_KEY set)."
+    try:
+        import requests
+
+        resp = requests.post(
+            _PLACES_URL,
+            json={"textQuery": "Walmart Supercenter Bentonville AR", "maxResultCount": 1},
+            headers={"X-Goog-Api-Key": key, "X-Goog-FieldMask": "places.displayName"},
+            timeout=timeout,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return f"Google Maps lookup: could not reach Google ({type(exc).__name__})."
+    if resp.status_code == 200:
+        return "Google Maps lookup: working."
+    try:
+        detail = ((resp.json() or {}).get("error") or {}).get("message") or ""
+    except Exception:  # noqa: BLE001
+        detail = ""
+    detail = detail.replace(key, "[key]")[:240]
+    return f"Google Maps lookup: not available (HTTP {resp.status_code}). {detail}".strip()
+
+
 _AI_SCHEMA = {
     "type": "object",
     "additionalProperties": False,

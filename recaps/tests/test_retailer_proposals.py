@@ -135,6 +135,19 @@ class TestRetailerProposals(AmbassadorsGraphQLTestCase):
         assert row.proposed_name == "Kroger" and row.retailer_id == self.kroger.id
         assert row.confidence == "medium"
 
+    def test_places_status_reports_a_refused_key_without_printing_it(self):
+        class _Resp:
+            status_code = 403
+
+            def json(self):
+                return {"error": {"message": "Places API (New) has not been used; key SECRETKEY"}}
+
+        with mock.patch("utils.map_matching._google_maps_api_key", return_value="SECRETKEY"), mock.patch(
+            "requests.post", return_value=_Resp()
+        ):
+            line = rp.places_status()
+        assert "not available (HTTP 403)" in line and "SECRETKEY" not in line
+
     def test_event_that_already_has_a_retailer_is_skipped(self):
         self._recap()
         self._sheet("Kroger")

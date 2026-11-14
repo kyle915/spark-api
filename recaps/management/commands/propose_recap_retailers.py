@@ -18,7 +18,7 @@ from django.utils import timezone
 from events.models import Event
 from recaps.filed import custom_filed_q, legacy_filed_q
 from recaps.models import CustomRecap, Recap
-from recaps.retailer_proposals import SOURCE_LABELS, propose_for_event
+from recaps.retailer_proposals import SOURCE_LABELS, places_status, propose_for_event
 
 
 def events_needing_a_proposal(*, tenant_id=None, days=120):
@@ -60,6 +60,8 @@ class Command(BaseCommand):
 
     def handle(self, *args, **opts):
         dry = opts["dry_run"]
+        if not opts["no_network"]:
+            self.stdout.write(places_status())
         events = list(
             events_needing_a_proposal(tenant_id=opts["tenant"], days=opts["days"])[: opts["limit"]]
         )
