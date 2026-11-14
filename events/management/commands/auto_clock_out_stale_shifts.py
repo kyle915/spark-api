@@ -115,18 +115,36 @@ class Command(BaseCommand):
             )
             .select_related("source")
             .order_by("clock_time", "id")
-            .values("ambassador_id", "event_id", "source__name")
+            .values("id", "ambassador_id", "event_id", "source__name", "clock_time")
         )
+        end_by_event = {r.event_id: r.event.end_time for r in rosters}
         latest_kind: dict[tuple[int, int], str] = {}
+        latest_in_id: dict[tuple[int, int], int] = {}
+        outs_at_end: dict[tuple[int, int], list[int]] = {}
         for row in clock_rows:
             key = (row["ambassador_id"], row["event_id"])
-            if key in pairs:
-                latest_kind[key] = row["source__name"]
+            if key not in pairs:
+                continue
+            latest_kind[key] = row["source__name"]
+            if row["source__name"] == "clock_in":
+                latest_in_id[key] = row["id"]
+            elif row["clock_time"] == end_by_event.get(row["event_id"]):
+                outs_at_end.setdefault(key, []).append(row["id"])
+
+        def _already_auto_closed(key) -> bool:
+            # Someone who clocked in AFTER the scheduled end still reads as
+            # "latest punch is a clock-in" once we stamp their clock-out at
+            # the scheduled end, so every hourly run closed them again and
+            # pushed again. A clock-out at the scheduled end that was written
+            # after their last clock-in means this job already ran for them.
+            last_in = latest_in_id.get(key, 0)
+            return any(out_id > last_in for out_id in outs_at_end.get(key, []))
 
         # "Still on the clock" = latest attendance event is a clock-in.
         stale = [
             r for r in rosters
             if latest_kind.get((r.ambassador_id, r.event_id)) == "clock_in"
+            and not _already_auto_closed((r.ambassador_id, r.event_id))
         ]
         if not stale:
             self.stdout.write(
