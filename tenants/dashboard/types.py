@@ -70,6 +70,11 @@ class EventDashboardMetrics:
     purchase_intent: float | None
     comparison_period: str | None = None  # e.g., "Q4 2024"
     comparison_values: ComparisonValues | None = None
+    # How many consumers each percentage is out of: those sampled on recaps
+    # whose form asked the question. Smaller than consumers_sampled when some
+    # event types use a form that doesn't ask. None when there is no data.
+    brand_awareness_base: int | None = None
+    purchase_intent_base: int | None = None
 
 
 @strawberry.type
