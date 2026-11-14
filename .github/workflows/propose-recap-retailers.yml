@@ -1,0 +1,51 @@
+name: Suggest retailers for recaps
+on:
+  schedule:
+    - cron: "20 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Work out suggestions and print them, but store nothing"
+        required: false
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+      tenant:
+        description: "Tenant id (blank = all brands)"
+        required: false
+        default: ""
+      days:
+        description: "How far back to look, in days"
+        required: false
+        default: "120"
+      limit:
+        description: "Most events to look at in one run"
+        required: false
+        default: "150"
+jobs:
+  fire-propose-recap-retailers:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire retailer suggestion cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/propose-recap-retailers
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+          TENANT: ${{ github.event.inputs.tenant || '' }}
+          DAYS: ${{ github.event.inputs.days || '120' }}
+          LIMIT: ${{ github.event.inputs.limit || '150' }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS --max-time 840 -o /tmp/cron-response.json -w '%{http_code}' -X POST "$CRON_URL?dry_run=$DRY_RUN&tenant=$TENANT&days=$DAYS&limit=$LIMIT" -H "X-Cron-Secret: $CRON_SECRET")
+          echo "HTTP $STATUS"
+          python3 -c "import json;d=json.load(open('/tmp/cron-response.json'));print(d.get('log') or d)"
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS"
+            exit 1
+          fi
