@@ -56,6 +56,11 @@ class StaffingBoardShift:
     assigned: list[StaffingBoardBA] = strawberry.field(default_factory=list)
     # True once at least one BA is firmly booked (approved) on the shift.
     is_staffed: bool = False
+    # Where the event is, for a map: its own coordinates ("event") or a
+    # position looked up from the address ("geocoded"). Null when neither.
+    lat: float | None = None
+    lng: float | None = None
+    location_source: str | None = None
 
 
 async def _accessible_tenants(user):
@@ -139,8 +144,14 @@ class StaffingBoardQueries:
             elif resolved_tid is not None:
                 qs = qs.filter(tenant_id=resolved_tid)
 
+            from events.map_points import event_map_points
+
+            events = list(qs[:600])
+            points = event_map_points(events)  # one query for the board
+
             shifts: list[StaffingBoardShift] = []
-            for ev in qs[:600]:
+            for ev in events:
+                point = points.get(ev.id)
                 assigned: list[StaffingBoardBA] = []
                 approved_count = 0
                 for ae in ev.ambassadors_events.all():
@@ -194,6 +205,9 @@ class StaffingBoardQueries:
                         ),
                         assigned=assigned,
                         is_staffed=approved_count > 0,
+                        lat=point[0] if point else None,
+                        lng=point[1] if point else None,
+                        location_source=point[2] if point else None,
                     )
                 )
             return shifts

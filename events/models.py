@@ -1836,3 +1836,40 @@ class SheetShift(models.Model):
         indexes = [
             models.Index(fields=["tenant", "day"], name="ev_sheetshift_tenant_day_idx"),
         ]
+
+
+class EventMapPoint(models.Model):
+    """Where to draw an event on the staff maps when the event itself has no
+    ``coordinates`` — a position LOOKED UP from its address.
+
+    Kept apart from ``Event.coordinates`` on purpose. That column is read by
+    the clock-in distance checks on recap review, the walk-up queue, the
+    nearby-gig and open-shift pushes, the job-board distance filters and the
+    recap booth-day roll-up; filling it with a geocoder's guess would change
+    all of them. Only the maps read this table (``events.map_points``).
+
+    ``address_hash`` is the hash of the normalised address that was looked
+    up. A ``not_found`` row stops the same bad address being retried every
+    run; when the address text changes the hash no longer matches and it is
+    looked up again.
+    """
+
+    SOURCE_EVENT = "event"
+    SOURCE_GEOCODED = "geocoded"
+    STATUS_OK = "ok"
+    STATUS_NOT_FOUND = "not_found"
+
+    id = models.BigAutoField(primary_key=True)
+    event = models.OneToOneField(
+        Event, on_delete=models.CASCADE, related_name="map_point"
+    )
+    lat = models.FloatField(null=True, blank=True)
+    lng = models.FloatField(null=True, blank=True)
+    source = models.CharField(max_length=16, default=SOURCE_GEOCODED)
+    address_hash = models.CharField(max_length=64, db_index=True)
+    status = models.CharField(max_length=12, default=STATUS_OK)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self) -> str:
+        return f"EventMapPoint(event={self.event_id}, {self.status})"
