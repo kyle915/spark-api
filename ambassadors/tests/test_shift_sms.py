@@ -22,7 +22,10 @@ from events.models import TimeZone
 CRON_URL = "/internal/cron/shift-sms"
 VALID_SECRET = "test-cron-secret-value-only-for-tests"
 LIVE = dict(
-    SHIFT_SMS_ENABLED=True, QUO_API_KEY="test-key", QUO_FROM_NUMBER="+17755550100"
+    SHIFT_SMS_ENABLED=True,
+    QUO_API_KEY="test-key",
+    QUO_FROM_NUMBER="+17755550100",
+    SHIFT_SMS_EVENTS_FROM="",
 )
 CHICAGO = ZoneInfo("America/Chicago")
 
@@ -262,6 +265,24 @@ class TestShiftSms(AmbassadorsGraphQLTestCase):
         assert row.status == "failed" and "402" in row.error
         assert self._run()["sent"] == 0 and self.sent == []
 
+    @override_settings(**{**LIVE, "SHIFT_SMS_EVENTS_FROM": "2026-11-10T14:00:00-06:00"})
+    def test_events_that_started_before_the_go_live_instant_are_left_alone(self):
+        # Started 10 AM Chicago, before the 2 PM floor: no recap text.
+        early = self._event(
+            start=self.now - timedelta(hours=5), end=self.now - timedelta(hours=1)
+        )
+        self._punch(early, "clock_in", self.now - timedelta(hours=5))
+        self._punch(early, "clock_out", self.now - timedelta(hours=1))
+        # Starts 4 PM, after the floor: pre-shift text goes.
+        later = self._event(
+            start=self.now + timedelta(minutes=60), end=self.now + timedelta(hours=4)
+        )
+        self._book(later)
+        result = self._run()
+        assert result["sent"] == 1
+        assert ShiftSms.objects.get().kind == "pre_shift"
+
+    @override_settings(SHIFT_SMS_EVENTS_FROM="")
     def test_off_by_default_but_dry_run_still_previews(self):
         event = self._event(
             start=self.now + timedelta(minutes=60), end=self.now + timedelta(hours=4)

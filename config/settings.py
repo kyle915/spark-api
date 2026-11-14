@@ -437,11 +437,18 @@ PUBLIC_CHECKIN_BASE_URL = env(
 )
 # Shift texts to ambassadors, sent through Quo (formerly OpenPhone).
 # Nothing is sent unless SHIFT_SMS_ENABLED is true AND both the key and the
-# sending number are set. QUO_FROM_NUMBER is E.164 ("+17755550100") or a Quo
-# phone number id ("PN...").
+# key are set. QUO_FROM_NUMBER is E.164 ("+17755550100") or a Quo phone
+# number id ("PN...").
 SHIFT_SMS_ENABLED = env.bool("SHIFT_SMS_ENABLED", default=False)
 QUO_API_KEY = env("QUO_API_KEY", default="")
-QUO_FROM_NUMBER = env("QUO_FROM_NUMBER", default="")
+# Defaults to the main Ignite line.
+QUO_FROM_NUMBER = env("QUO_FROM_NUMBER", default="+17754060435")
+# Only events starting at or after this instant are texted about, so turning
+# texts on never reaches back to shifts that already happened. ISO 8601 with
+# an offset. Default: 8:00 AM Pacific on 14 Nov 2026, when texts went live.
+SHIFT_SMS_EVENTS_FROM = env(
+    "SHIFT_SMS_EVENTS_FROM", default="2026-11-14T08:00:00-08:00"
+)
 QUO_API_BASE_URL = env("QUO_API_BASE_URL", default="https://api.quo.com")
 # Absolute base for backend-rendered public pages linked from emails (e.g. the
 # one-click shift-extension approval page under /api/public/). Falls back to the

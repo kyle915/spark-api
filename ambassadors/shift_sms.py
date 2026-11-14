@@ -154,6 +154,17 @@ def message_for(*, kind: str, ambassador, event, url: str) -> str:
     )
 
 
+def events_from():
+    """Events starting before this are never texted about (None = no floor)."""
+    from django.utils.dateparse import parse_datetime
+
+    raw = (getattr(settings, "SHIFT_SMS_EVENTS_FROM", "") or "").strip()
+    floor = parse_datetime(raw) if raw else None
+    if floor is not None and timezone.is_naive(floor):
+        floor = timezone.make_aware(floor)
+    return floor
+
+
 def _live_event_q(prefix: str = "event__") -> Q:
     """Events whose request was not deleted (standalone events always pass)."""
     return Q(**{f"{prefix}request__isnull": True}) | Q(
@@ -177,7 +188,10 @@ def _pre_shift_candidates(now):
         )
         .order_by("event__start_time")
     )
+    floor = events_from()
     for roster in rosters:
+        if floor is not None and roster.event.start_time < floor:
+            continue
         state = clock_state(ambassador_id=roster.ambassador_id, event_id=roster.event_id)
         if state.get("state") != "not_started":
             continue  # already there
@@ -218,12 +232,23 @@ def _recap_candidates(now):
         )
     }
 
+    floor = events_from()
     for ambassador_id, event_id in pairs:
         event = events.get(event_id)
         ambassador = ambassadors.get(ambassador_id)
         if event is None or ambassador is None:
             continue
         state = clock_state(ambassador_id=ambassador_id, event_id=event_id)
+        if floor is not None:
+            # A walk-up event may carry no start time: its first clock-in is
+            # when it began.
+            from django.utils.dateparse import parse_datetime as _parse
+
+            began = getattr(event, "start_time", None) or (
+                _parse(state["clockInAt"]) if state.get("clockInAt") else None
+            )
+            if began is None or began < floor:
+                continue
         if state.get("state") == "clocked_out" and state.get("clockOutAt"):
             from django.utils.dateparse import parse_datetime
 
