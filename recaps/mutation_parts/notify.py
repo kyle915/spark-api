@@ -410,6 +410,7 @@ async def _notify_recap_approved_to_rmm_or_clients(
         None if html_only else await _resolve_recap_pdf_attachment(recap)
     )
 
+    delivered = 0
     for email, first_name in recipients:
         mailer = RecapApprovedNotificationMailer(
             recap=recap,
@@ -420,6 +421,7 @@ async def _notify_recap_approved_to_rmm_or_clients(
         )
         try:
             await sync_to_async(mailer.send)()
+            delivered += 1
         except Exception:
             logger.exception(
                 "Failed to send recap-approved email to %s for recap=%s",
@@ -427,8 +429,22 @@ async def _notify_recap_approved_to_rmm_or_clients(
                 getattr(recap, "id", None),
             )
 
-    # Stamp even if some recipients failed so a catch-up cannot re-spam
-    # the ones that already got mail.
+    if not delivered:
+        # Nobody got the mail (provider outage, bad credentials). Leave
+        # client_notified_at empty: every other path short-circuits on the
+        # stamp, so stamping here would mean the client never hears about
+        # this recap and nothing retries.
+        logger.error(
+            "Recap-approved email reached none of %d recipient(s) for "
+            "recap=%s model=%s; left unstamped so a retry can send it",
+            len(recipients),
+            getattr(recap, "id", None),
+            type(recap).__name__,
+        )
+        return
+
+    # Stamp once anyone got it, even if some recipients failed, so a
+    # catch-up cannot re-spam the ones that already got mail.
     await sync_to_async(stamp_client_notified)(recap, reason="sent")
 
 

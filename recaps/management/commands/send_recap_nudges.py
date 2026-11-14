@@ -19,8 +19,9 @@ even on a day they overlap a BA gets one timely nudge here plus the daily
 sweep — by design, not a bug.
 
 What it does each run: find approved AmbassadorEvent rows whose event ENDED
-a short while ago (default 1-24h), whose event has NO recap at all (no
-legacy Recap rows AND no CustomRecap rows), and that have NOT been nudged,
+a short while ago (default 1-24h), whose BA has not FILED a recap for that
+event (legacy Recap or CustomRecap, per recaps/filed.py — an empty clock-out
+stub or a teammate's recap does not count), and that have NOT been nudged,
 push "don't forget to file your recap for {venue}" inline once, then stamp
 `recap_nudge_sent_at`.
 
@@ -105,21 +106,28 @@ class Command(BaseCommand):
             self.stdout.write("No recently-ended shifts in window; nothing to send.")
             return
 
-        # Which events already have ANY recap — legacy Recap OR CustomRecap.
-        # If the event has a recap on file we don't nudge anyone on it. This
-        # is event-level (the recap is filed per-event), matching the recap
-        # state the old scheduled nudge re-checked at fire time.
+        # Which (event, ambassador) pairs have FILED a recap — legacy Recap
+        # or CustomRecap, by the shared definition in recaps/filed.py. Per
+        # BA, not per event: a teammate filing does not excuse this BA, and
+        # the empty stub a clock-out leaves behind is not a filing. Two
+        # queries for the whole run.
+        from recaps.filed import custom_filed_q, legacy_filed_q
         from recaps.models import CustomRecap, Recap
 
         event_ids = {r.event_id for r in rosters}
-        evented_with_recap = set(
-            Recap.objects.filter(event_id__in=event_ids).values_list(
-                "event_id", flat=True
+        amb_ids = {r.ambassador_id for r in rosters}
+        filed = set(
+            Recap.objects.filter(
+                event_id__in=event_ids, ambassador_id__in=amb_ids
             )
+            .filter(legacy_filed_q())
+            .values_list("event_id", "ambassador_id")
         ) | set(
-            CustomRecap.objects.filter(event_id__in=event_ids).values_list(
-                "event_id", flat=True
+            CustomRecap.objects.filter(
+                event_id__in=event_ids, ambassador_id__in=amb_ids
             )
+            .filter(custom_filed_q())
+            .values_list("event_id", "ambassador_id")
         )
 
         # Reachable BAs (active push device) by user id.
@@ -134,7 +142,7 @@ class Command(BaseCommand):
         skipped_filed = 0
         unreachable = 0
         for r in rosters:
-            if r.event_id in evented_with_recap:
+            if (r.event_id, r.ambassador_id) in filed:
                 skipped_filed += 1
                 continue
             user_id = getattr(r.ambassador, "user_id", None)

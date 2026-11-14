@@ -62,7 +62,8 @@ class Command(BaseCommand):
     def handle(self, *args, **opts):
         from ambassadors.models import AmbassadorEvent, PushDevice
         from ambassadors.push import _send_push_to_user_sync
-        from recaps.models import Recap
+        from recaps.filed import custom_filed_q, legacy_filed_q
+        from recaps.models import CustomRecap, Recap
 
         max_age_days = max(1, int(opts["max_age_days"]))
         grace_hours = max(0, int(opts["grace_hours"]))
@@ -92,13 +93,23 @@ class Command(BaseCommand):
         event_ids = {r.event_id for r in rosters}
         amb_ids = {r.ambassador_id for r in rosters}
 
-        # Which (event, ambassador) pairs already have a filed recap.
+        # Which (event, ambassador) pairs already have a filed recap, legacy
+        # or custom, by the shared definition in recaps/filed.py (an empty
+        # clock-out stub is not a filing). Two queries for the whole sweep.
         filed = set(
             Recap.objects.filter(
-                submited_at__isnull=False,
                 event_id__in=event_ids,
                 ambassador_id__in=amb_ids,
-            ).values_list("event_id", "ambassador_id")
+            )
+            .filter(legacy_filed_q())
+            .values_list("event_id", "ambassador_id")
+        ) | set(
+            CustomRecap.objects.filter(
+                event_id__in=event_ids,
+                ambassador_id__in=amb_ids,
+            )
+            .filter(custom_filed_q())
+            .values_list("event_id", "ambassador_id")
         )
 
         # Reachable BAs (active push device) by user id.

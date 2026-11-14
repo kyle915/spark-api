@@ -172,6 +172,20 @@ def _live_event_q(prefix: str = "event__") -> Q:
     )
 
 
+# What events/demo_cancel.py moves a cancelled demo to: the request to the
+# tenant's declined/cancelled status, each linked event to its
+# suspended/declined/cancelled one.
+_CANCELLED_REQUEST_SLUGS = ("declined", "cancelled", "canceled")
+_CANCELLED_EVENT_SLUGS = ("suspended", "declined", "cancelled", "canceled")
+
+
+def _not_cancelled_q(prefix: str = "event__") -> Q:
+    """Events that were not cancelled, directly or through their request."""
+    return ~Q(**{f"{prefix}status__slug__in": _CANCELLED_EVENT_SLUGS}) & ~Q(
+        **{f"{prefix}request__status__slug__in": _CANCELLED_REQUEST_SLUGS}
+    )
+
+
 def _pre_shift_candidates(now):
     from ambassadors.checkin_web import clock_state
     from ambassadors.models import AmbassadorEvent, ShiftSms
@@ -182,6 +196,7 @@ def _pre_shift_candidates(now):
         )
         .filter(
             _live_event_q(),
+            _not_cancelled_q(),
             is_approved=True,
             event__start_time__gt=now,
             event__start_time__lte=now + PRE_SHIFT_LEAD,
@@ -209,6 +224,7 @@ def _recap_candidates(now):
     pairs = list(
         Attendance.objects.filter(
             _live_event_q(),
+            _not_cancelled_q(),
             source__name="clock_in",
             clock_time__gte=now - RECAP_MORNING_MAX_AGE - timedelta(hours=12),
             ambassador__isnull=False,

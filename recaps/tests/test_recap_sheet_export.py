@@ -193,6 +193,7 @@ class TestRecapSheetExportGrid(AmbassadorsGraphQLTestCase):
             name="wf recap", approved=True, event=event, tenant=self.tenant,
             custom_recap_template=self.template,
             created_by=self.system_user, updated_by=self.system_user,
+            submitted_at=self.now,
         )
         rows = rows_for_header(self.tenant, ["Retailer", "Store/Location"])
         assert rows[0][0] == "Whole Foods"
@@ -209,6 +210,7 @@ class TestRecapSheetExportGrid(AmbassadorsGraphQLTestCase):
             name="fk recap", approved=True, event=event, tenant=self.tenant,
             custom_recap_template=self.template,
             created_by=self.system_user, updated_by=self.system_user,
+            submitted_at=self.now,
         )
         recap.retailer = vons
         recap.save(update_fields=["retailer"])
@@ -228,6 +230,71 @@ class TestRecapSheetExportGrid(AmbassadorsGraphQLTestCase):
             name="city recap", approved=True, event=event, tenant=self.tenant,
             custom_recap_template=self.template,
             created_by=self.system_user, updated_by=self.system_user,
+            submitted_at=self.now,
         )
         rows = rows_for_header(self.tenant, ["Retailer"])
         assert rows[0][0] == ""
+
+    # ── Which recaps belong in the client's sheet ───────────────────────
+
+    def _names(self):
+        header, rows = build_export_grid(self.tenant)
+        col = header.index("Event")
+        grid = sorted(row[col] for row in rows)
+        mapped = sorted(row[0] for row in rows_for_header(self.tenant, ["Store/Location"]))
+        assert len(mapped) == len(grid)  # both builders read the same recaps
+        return grid
+
+    def test_archived_recaps_are_left_out(self):
+        self._recap(1, [(self.samples, "10")])
+        hidden = self._recap(2, [(self.samples, "20")])
+        hidden.archived_at = self.now
+        hidden.save(update_fields=["archived_at"])
+        assert self._names() == ["Event 001"]
+
+    def test_empty_clock_out_stub_is_left_out(self):
+        self._recap(1, [(self.samples, "10")])
+        self._recap(2, [])  # the blank row a clock-out creates
+        assert self._names() == ["Event 001"]
+
+    def test_recap_on_a_deleted_request_is_left_out_but_live_and_standalone_stay(self):
+        from events import models as event_models
+
+        status = self.create_request_status(name="Approved", tenant=self.tenant)
+        request_type = self.create_request_type(name="Retail", tenant=self.tenant)
+
+        def _request(name, deleted):
+            return event_models.Request.objects.create(
+                name=name,
+                address="1 Main St",
+                tenant=self.tenant,
+                status=status,
+                request_type=request_type,
+                deleted_at=self.now if deleted else None,
+                created_by=None,
+            )
+
+        standalone = self._recap(1, [(self.samples, "10")])
+        assert standalone.event.request_id is None
+        live = self._recap(2, [(self.samples, "20")])
+        gone = self._recap(3, [(self.samples, "30")])
+        event_models.Event.objects.filter(id=live.event_id).update(
+            request=_request("Live demo", deleted=False)
+        )
+        event_models.Event.objects.filter(id=gone.event_id).update(
+            request=_request("Deleted demo", deleted=True)
+        )
+        assert self._names() == ["Event 001", "Event 002"]
+
+    def test_unapproved_and_excluded_from_aggregates_recaps_stay(self):
+        # The sheet has a Status column, so a submitted-but-unapproved recap
+        # is meant to be there; exclude_from_aggregates only affects KPIs.
+        pending = self._recap(1, [(self.samples, "10")])
+        recap_models.CustomRecap.objects.filter(id=pending.id).update(approved=False)
+        flagged = self._recap(2, [(self.samples, "20")])
+        recap_models.CustomRecap.objects.filter(id=flagged.id).update(
+            exclude_from_aggregates=True
+        )
+        header, rows = build_export_grid(self.tenant)
+        by_event = {row[header.index("Event")]: row[header.index("Status")] for row in rows}
+        assert by_event == {"Event 001": "Submitted", "Event 002": "Approved"}
