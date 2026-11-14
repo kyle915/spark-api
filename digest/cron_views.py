@@ -11460,6 +11460,48 @@ class SetRequestAutoApproveView(View):
         return JsonResponse({"ok": True, "apply": apply_it, "log": out.getvalue()})
 
 
+@method_decorator(csrf_exempt, name="dispatch")
+class SendShiftSmsView(View):
+    """POST `/internal/cron/shift-sms`.
+
+    Fires `send_shift_sms` — texts ambassadors from Ignite's Quo number: a
+    pre-shift reminder two hours ahead, a missing-recap reminder 30 minutes
+    after the shift, and one follow-up the next morning. Each is sent at
+    most once per ambassador per event (`ShiftSms`). Sends nothing unless
+    SHIFT_SMS_ENABLED and the Quo settings are present. Every-10-minutes
+    GHA cron.
+
+    Params: dry_run ("1"/"true"/"yes") — list who is due, send nothing.
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        dry_run = (
+            request.GET.get("dry_run") or request.POST.get("dry_run") or ""
+        ).lower() in ("1", "true", "yes", "on")
+        out = io.StringIO()
+        try:
+            call_command(
+                "send_shift_sms", *(["--dry-run"] if dry_run else []), stdout=out
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Shift SMS cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc),
+                 "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse({"ok": True, "dry_run": dry_run, "log": out.getvalue()})
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        return JsonResponse({"ok": True, "endpoint": "shift-sms"})
+
+
 def _registered_views() -> dict[str, Any]:
     """Map URL path → view class. Lets `digest/urls.py` mount these
     without each one being re-exported explicitly.
@@ -11480,6 +11522,7 @@ def _registered_views() -> dict[str, Any]:
         "ambassador-job-reminders": SendAmbassadorJobRemindersView,
         "recap-nudges": SendRecapNudgesView,
         "walkup-draft-reminders": SendWalkupDraftRemindersView,
+        "shift-sms": SendShiftSmsView,
         "send-payment-notifications": SendPaymentNotificationsView,
         "send-document-expiry-reminders": SendDocumentExpiryRemindersView,
         "send-scheduled-client-reports": SendScheduledClientReportsView,
