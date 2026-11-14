@@ -143,6 +143,108 @@ class TestShiftSms(AmbassadorsGraphQLTestCase):
         assert self._run()["sent"] == 0
         assert self.sent == []
 
+    def _cancel(self, event):
+        """Cancel the demo the way the product does (events/demo_cancel.py)."""
+        from unittest.mock import AsyncMock, patch
+
+        from events import models as event_models
+        from events.demo_cancel import request_demo_cancellation
+
+        self.create_request_status(name="Declined", tenant=self.tenant, slug="declined")
+        self.create_event_status(name="Suspended", tenant=self.tenant, slug="suspended")
+        request = event_models.Request.objects.create(
+            name="Plano Country Store demo",
+            address="3205 Plano Rd",
+            tenant=self.tenant,
+            status=self.create_request_status(
+                name="Approved", tenant=self.tenant, slug="approved"
+            ),
+            request_type=self.create_request_type(name="Retail", tenant=self.tenant),
+            created_by=None,
+        )
+        event_models.Event.objects.filter(id=event.id).update(request=request)
+        with (
+            patch("events.demo_cancel._cancel_recipients", return_value=["ops@test.com"]),
+            patch("events.demo_cancel.DemoCancelRequestedMailer.send"),
+            patch(
+                "events.mutations._notify_assigned_ambassadors_for_suspended_event",
+                new_callable=AsyncMock,
+            ),
+        ):
+            request_demo_cancellation(
+                request_id=request.id,
+                lookup=None,
+                reason="Store pulled the demo",
+                tenant_id=None,
+                actor=self.get_system_user(),
+            )
+        event.refresh_from_db()
+        request.refresh_from_db()
+        assert event.status.slug == "suspended"
+        assert request.status.slug == "declined"
+        return request
+
+    @override_settings(**LIVE)
+    def test_a_cancelled_demo_gets_no_pre_shift_text(self):
+        event = self._event(
+            start=self.now + timedelta(minutes=90), end=self.now + timedelta(hours=5)
+        )
+        self._book(event)
+        still_on = self._event(
+            start=self.now + timedelta(minutes=100),
+            end=self.now + timedelta(hours=5),
+            name="11/10/2026 - Garland Market · Retail Sampling",
+        )
+        self._book(still_on)
+        self._cancel(event)
+
+        result = self._run()
+        assert result["sent"] == 1
+        assert "Garland Market" in self.sent[0]["body"]
+        assert ShiftSms.objects.get().event_id == still_on.id
+
+    @override_settings(**LIVE)
+    def test_cancelled_by_event_status_or_by_request_status_alone(self):
+        from events import models as event_models
+
+        # Only the event carries the cancelled status.
+        by_event = self._event(
+            start=self.now + timedelta(minutes=60), end=self.now + timedelta(hours=4)
+        )
+        self._book(by_event)
+        event_models.Event.objects.filter(id=by_event.id).update(
+            status=self.create_event_status(
+                name="Cancelled", tenant=self.tenant, slug="cancelled"
+            )
+        )
+        # Only the request does.
+        by_request = self._event(
+            start=self.now + timedelta(minutes=70), end=self.now + timedelta(hours=4)
+        )
+        self._book(by_request)
+        request = event_models.Request.objects.create(
+            name="Declined demo",
+            address="3205 Plano Rd",
+            tenant=self.tenant,
+            status=self.create_request_status(
+                name="Canceled", tenant=self.tenant, slug="canceled"
+            ),
+            request_type=self.create_request_type(name="Retail", tenant=self.tenant),
+            created_by=None,
+        )
+        event_models.Event.objects.filter(id=by_request.id).update(request=request)
+        assert self._run()["sent"] == 0 and self.sent == []
+
+    @override_settings(**LIVE)
+    def test_a_cancelled_demo_gets_no_recap_text(self):
+        event = self._event(
+            start=self.now - timedelta(hours=5), end=self.now - timedelta(hours=1)
+        )
+        self._punch(event, "clock_in", self.now - timedelta(hours=5))
+        self._punch(event, "clock_out", self.now - timedelta(hours=1))
+        self._cancel(event)
+        assert self._run()["sent"] == 0 and self.sent == []
+
     # --- recap due -------------------------------------------------------
 
     @override_settings(**LIVE)

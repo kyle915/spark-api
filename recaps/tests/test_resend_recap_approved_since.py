@@ -20,6 +20,7 @@ from recaps.management.commands.resend_recap_approved_since import (
 )
 from recaps.mutation_parts.notify import (
     _kick_recap_approved_notify,
+    _notify_recap_approved_to_rmm_or_clients,
     _thread_recap_approved_notify,
 )
 
@@ -485,3 +486,69 @@ class TestResendRecapApprovedSince(JobsGraphQLTestCase):
         ):
             async_to_sync(_kick_recap_approved_notify)(recap, "custom")
         assert mock_send.called
+
+    # --- client_notified_at means "someone actually got the email" --------
+
+    def _notify(self, recap, *, recipients, send):
+        with (
+            patch(
+                "recaps.mutation_parts.notify._collect_recap_approved_recipients",
+                return_value=(recipients, None),
+            ),
+            patch(
+                "recaps.mutation_parts.notify.RecapApprovedNotificationMailer.send",
+                side_effect=send,
+            ) as mock_send,
+        ):
+            async_to_sync(_notify_recap_approved_to_rmm_or_clients)(
+                recap, html_only=True
+            )
+        recap.refresh_from_db()
+        return mock_send
+
+    def test_every_send_failing_leaves_the_recap_unstamped_for_a_retry(self):
+        recap = self._make_recap(
+            approved=True, updated_at=timezone.now(), name="Outage"
+        )
+        recipients = [("a@client.com", "A"), ("b@client.com", "B")]
+
+        def outage():
+            raise RuntimeError("mail provider is down")
+
+        with patch("recaps.mutation_parts.notify.logger") as log:
+            mock_send = self._notify(recap, recipients=recipients, send=outage)
+        assert mock_send.call_count == 2
+        assert recap.client_notified_at is None
+        assert log.error.called
+
+        # The provider is back: the same recap now goes out and is stamped.
+        mock_send = self._notify(recap, recipients=recipients, send=None)
+        assert mock_send.call_count == 2
+        assert recap.client_notified_at is not None
+
+    def test_one_send_succeeding_stamps_so_nobody_is_mailed_twice(self):
+        recap = self._make_recap(
+            approved=True, updated_at=timezone.now(), name="Partial"
+        )
+        outcomes = iter([RuntimeError("bounced"), None])
+
+        def flaky():
+            outcome = next(outcomes)
+            if outcome is not None:
+                raise outcome
+
+        mock_send = self._notify(
+            recap,
+            recipients=[("a@client.com", "A"), ("b@client.com", "B")],
+            send=flaky,
+        )
+        assert mock_send.call_count == 2
+        assert recap.client_notified_at is not None
+
+    def test_no_recipients_is_still_stamped_without_sending(self):
+        recap = self._make_recap(
+            approved=True, updated_at=timezone.now(), name="Nobody"
+        )
+        mock_send = self._notify(recap, recipients=[], send=None)
+        mock_send.assert_not_called()
+        assert recap.client_notified_at is not None

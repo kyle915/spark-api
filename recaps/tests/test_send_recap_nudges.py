@@ -4,8 +4,9 @@ Tests for the `send_recap_nudges` management command + the
 
 The command is the cron-driven replacement for the dead django-rq recap
 nudge. It pushes a single, timely "don't forget your recap" to BAs whose
-approved shift ended a few hours ago with NO recap on file (legacy Recap
-OR CustomRecap), once per shift (deduped via
+approved shift ended a few hours ago and who have not FILED a recap for it
+(legacy Recap OR CustomRecap, per recaps/filed.py — an empty clock-out stub
+or a teammate's recap does not count), once per shift (deduped via
 AmbassadorEvent.recap_nudge_sent_at).
 
 The push sender is stubbed for the whole test (via an autouse fixture) so
@@ -105,6 +106,7 @@ class TestSendRecapNudges(AmbassadorsGraphQLTestCase):
             name="filed",
             event=event,
             ambassador=self.ambassador,
+            submited_at=datetime.now(_tz.utc),
             created_by=self.admin,
         )
         self._run()
@@ -112,26 +114,79 @@ class TestSendRecapNudges(AmbassadorsGraphQLTestCase):
         ae.refresh_from_db()
         assert ae.recap_nudge_sent_at is None
 
-    def test_shift_with_custom_recap_is_not_nudged(self):
-        event, ae = self._shift_ended_hours_ago(2, name="Filed custom")
-        event_type = self.create_event_type("Sampling", self.tenant)
+    def _custom_recap(self, event, ambassador, **kwargs):
         template = CustomRecapTemplate.objects.create(
-            name="Tmpl",
-            event_type=event_type,
+            name=f"Tmpl {event.id}-{ambassador.id}",
+            event_type=self.create_event_type(
+                f"Sampling {event.id}-{ambassador.id}", self.tenant
+            ),
             tenant=self.tenant,
             created_by=self.admin,
         )
-        CustomRecap.objects.create(
-            name="custom filed",
+        return CustomRecap.objects.create(
+            name="custom recap",
             event=event,
+            ambassador=ambassador,
             tenant=self.tenant,
             custom_recap_template=template,
             created_by=self.admin,
+            **kwargs,
+        )
+
+    def test_shift_with_custom_recap_is_not_nudged(self):
+        event, ae = self._shift_ended_hours_ago(2, name="Filed custom")
+        self._custom_recap(
+            event, self.ambassador, submitted_at=datetime.now(_tz.utc)
         )
         self._run()
         self.mock_send.assert_not_called()
         ae.refresh_from_db()
         assert ae.recap_nudge_sent_at is None
+
+    def test_empty_clock_out_stub_does_not_silence_the_nudge(self):
+        # Clocking out leaves a blank recap row behind so the BA can keep
+        # typing. That is not a filed recap, in either family.
+        event, ae = self._shift_ended_hours_ago(2, name="Stub only")
+        self._custom_recap(event, self.ambassador)
+        Recap.objects.create(
+            name="stub",
+            event=event,
+            ambassador=self.ambassador,
+            created_by=self.admin,
+        )
+        self._run()
+        self.mock_send.assert_called_once()
+        ae.refresh_from_db()
+        assert ae.recap_nudge_sent_at is not None
+
+    def test_a_teammates_filing_does_not_silence_the_other_ba(self):
+        event, ae = self._shift_ended_hours_ago(2, name="Two BAs")
+        mate_user = self.create_user(
+            username="ba-nudgecron-mate",
+            email="ba-nudgecron-mate@test.com",
+            role=self.roles["ambassador"],
+        )
+        mate = self.create_ambassador(mate_user)
+        PushDevice.objects.create(
+            user=mate_user,
+            token="ExponentPushToken[nudge-bbb]",
+            platform="android",
+        )
+        mate_ae = AmbassadorEvent.objects.create(
+            ambassador=mate,
+            event=event,
+            tenant=self.tenant,
+            is_approved=True,
+            created_by=self.admin,
+        )
+        self._custom_recap(event, mate, submitted_at=datetime.now(_tz.utc))
+        self._run()
+        self.mock_send.assert_called_once()
+        assert self.mock_send.call_args.args[0] == self.ba_user.id
+        ae.refresh_from_db()
+        mate_ae.refresh_from_db()
+        assert ae.recap_nudge_sent_at is not None
+        assert mate_ae.recap_nudge_sent_at is None
 
     def test_already_nudged_shift_is_not_renudged(self):
         _event, ae = self._shift_ended_hours_ago(2)
