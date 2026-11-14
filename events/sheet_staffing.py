@@ -84,6 +84,8 @@ def _parse_day(raw: str, today: date) -> date | None:
     text = (raw or "").strip()
     if not text:
         return None
+    # "Sept 26" is how people write it; the parser knows "Sep".
+    text = re.sub(r"^sept\b\.?", "Sep", text, flags=re.IGNORECASE)
     try:
         return parse_sheet_date_iso(text)
     except ValueError:
@@ -126,10 +128,32 @@ def parse_rows(
     earliest = today - timedelta(days=DAYS_BACK)
     latest = today + timedelta(days=DAYS_AHEAD)
     out: list[ParsedRow] = []
+    # An event with several ambassadors is written once, then one line per
+    # extra person with only their own columns filled. Those lines belong to
+    # the event above them.
+    carried: dict[str, str] | None = None
     for offset, raw in enumerate(values[1:], start=2):
         cells = list(raw) + [""] * (len(header) - len(raw))
         mapping = {h: cells[i] for i, h in enumerate(header) if h}
         payload = payload_from_mapping(mapping, row_number=offset, sheet_id=sheet_id)
+        own_store = (payload.store_name or _cell(mapping, "EVENT", "Account")).strip()
+        own_address = (payload.address or _cell(mapping, "Account Address")).strip()
+        own_start = (payload.start_time or _cell(mapping, "Time Scheduled")).strip()
+        if payload.date.strip() or own_store or own_address:
+            carried = {
+                "date": payload.date,
+                "start": own_start,
+                "end": payload.end_time,
+                "store": own_store,
+                "address": own_address,
+                "brand": payload.brand,
+            }
+        elif carried is not None and payload.ba_name.strip():
+            payload.date = carried["date"]
+            own_start = own_start or carried["start"]
+            payload.end_time = payload.end_time or carried["end"]
+            payload.brand = payload.brand or carried["brand"]
+            own_store, own_address = carried["store"], carried["address"]
         ba_name = payload.ba_name.strip()
         if not ba_name:
             continue
@@ -149,12 +173,10 @@ def parse_rows(
             ParsedRow(
                 row_number=offset,
                 day=day,
-                start_text=payload.start_time.strip(),
+                start_text=own_start,
                 end_text=payload.end_time.strip(),
-                store_name=(
-                    payload.store_name or _cell(mapping, "EVENT", "Account")
-                ).strip(),
-                address=(payload.address or _cell(mapping, "Account Address")).strip(),
+                store_name=own_store,
+                address=own_address,
                 ba_name=ba_name,
                 ba_email=payload.ba_email.strip(),
                 ba_phone=_cell(mapping, "Cell Phone #", "Phone"),
@@ -166,7 +188,10 @@ def parse_rows(
 
 
 def _street_number(address: str | None) -> str:
-    match = re.match(r"\s*(\d{2,6})\b", address or "")
+    """The first house number in an address, wherever it sits: "Hard Rock
+    Stadium / 347 Don Shula Dr" is 347. A number is a house number when a
+    street word follows it, which rules out suite numbers and ZIP codes."""
+    match = re.search(r"(?<![\w#])(\d{2,6})\s+(?:[NSEW]\.?\s+)?[A-Za-z]{2,}", address or "")
     return match.group(1) if match else ""
 
 
@@ -176,6 +201,10 @@ def match_event(row: ParsedRow, events: list) -> tuple[Any | None, str]:
     one store name contained in the other — not just the day."""
     store = _key(row.store_name)
     number = _street_number(row.address)
+    # "Total Wine, 7400 Carson Blvd" / "Hard Rock Stadium / 347 Don Shula Dr":
+    # the place name people put in front of the street address.
+    lead = re.split(r"[,/]", row.address or "", maxsplit=1)[0].strip()
+    venue = _key(lead) if lead and not lead[0].isdigit() else ""
     hits = []
     for event in events:
         haystack = _key(f"{getattr(event, 'name', '')} {getattr(event, 'address', '')}")
@@ -183,6 +212,8 @@ def match_event(row: ParsedRow, events: list) -> tuple[Any | None, str]:
         if number and event_number and number == event_number:
             hits.append(event)
         elif store and len(store) >= 4 and store in haystack:
+            hits.append(event)
+        elif venue and len(venue) >= 5 and venue in haystack:
             hits.append(event)
     if len(hits) == 1:
         return hits[0], MATCH_MATCHED

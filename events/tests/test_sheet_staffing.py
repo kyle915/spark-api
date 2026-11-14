@@ -78,6 +78,54 @@ def test_a_brand_column_routes_the_row_and_an_unknown_brand_drops_it():
     assert [r.tenant_ids for r in rows] == [[3, 4]]
 
 
+CALENDAR_HEADER = [
+    "BRAND", "EVENT", "Date", "Time Scheduled", "Account Address",
+    "Parking info / Notes from Store Manager", "Confirmed BA Name ", "BA Rate",
+    "Email", "Cell Phone #",
+]
+
+
+def test_calendar_tabs_extra_ambassador_lines_belong_to_the_event_above():
+    rows = _parse([
+        CALENDAR_HEADER,
+        ["Pivot", "Tailgate sampling", "11/14", "1p - 7:30p",
+         "Hard Rock Stadium / 347 Don Shula Dr Suite 102, Miami Gardens, FL 33056",
+         "", "Yoselin Gutierrez", "28/HR", "", "9545169300"],
+        ["", "", "", "", "", "", "Paola Iturbide", "$150", "", "7244691476"],
+        # A new event starts a new group: this line must not inherit above.
+        ["Pivot", "Campus drop", "Sept 26", "9a - 11a", "1 Old St", "", "Old Timer", "", "", ""],
+        ["", "", "", "", "", "", "", "", "", ""],
+    ])
+    assert [(r.ba_name, r.day, r.store_name, r.start_text) for r in rows] == [
+        ("Yoselin Gutierrez", date(2026, 11, 14), "Tailgate sampling", "1p - 7:30p"),
+        ("Paola Iturbide", date(2026, 11, 14), "Tailgate sampling", "1p - 7:30p"),
+    ]
+    assert rows[1].address.startswith("Hard Rock Stadium")
+
+
+def test_a_house_number_is_found_wherever_it_sits_in_the_address():
+    from events.sheet_staffing import _street_number
+
+    assert _street_number("Hard Rock Stadium / 347 Don Shula Dr Suite 102, Miami Gardens, FL 33056") == "347"
+    assert _street_number("Total Wine, 7400 Carson Blvd, Long Beach, CA 90808") == "7400"
+    assert _street_number("3205 Plano Rd, Bowling Green, KY 42104") == "3205"
+    assert _street_number("1315 N Elkhorn Rd") == "1315"
+    assert _street_number("Golden Gate Golf Course") == ""
+    assert _street_number("Suite #200, Miami FL 33056") == ""
+    row = _parsed("Tailgate sampling", "Hard Rock Stadium / 347 Don Shula Dr Suite 102")
+    stadium = _Event("Hard Rock Stadium", "347 Don Shula Drive, Miami Gardens, FL")
+    assert match_event(row, [stadium]) == (stadium, MATCH_MATCHED)
+
+    # Spark has only the venue's name; the sheet has "Venue, street address".
+    row = _parsed("Francesca1993 Dry Sampling", "Total Wine, 7400 Carson Blvd, Long Beach, CA 90808")
+    carson = _Event("11/13/2026 - Total Wine (Carson Blvd)", "Total Wine")
+    other = _Event("11/13/2026 - Bevmo (Main St)", "Bevmo")
+    assert match_event(row, [carson, other]) == (carson, MATCH_MATCHED)
+    # Two Total Wine events that day: say so, don't pick one.
+    second = _Event("11/13/2026 - Total Wine (Bellflower)", "Total Wine")
+    assert match_event(row, [carson, second]) == (None, MATCH_AMBIGUOUS)
+
+
 class _Event:
     def __init__(self, name, address):
         self.name, self.address = name, address
