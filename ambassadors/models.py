@@ -47,6 +47,9 @@ class Ambassador(Asyncable, models.Model):
     rating = models.IntegerField(default=0)
     address = models.TextField(null=True)
     phone = models.CharField(max_length=100, null=True)
+    # Shift texts (pre-shift reminder, missing-recap reminders). True once
+    # the person asked not to be texted; no shift text is sent after that.
+    sms_opt_out = models.BooleanField(default=False)
     about_me = models.TextField(null=True)
     # BA TALENT profile fields (#talent). `bio` is the BA-authored
     # free-text blurb shown on the admin profile pop-up + mobile "You"
@@ -1821,3 +1824,56 @@ class WalkupRecapDraft(models.Model):
 
     def __str__(self):
         return f"walkup-draft {self.ambassador_id}@{self.event_id} {self.scope}"
+
+
+class ShiftSms(models.Model):
+    """One shift text to one ambassador about one event.
+
+    The row is written BEFORE the provider call and is unique per
+    (kind, ambassador, event), so a cron run that overlaps another, or
+    retries after a timeout, can never text the same person twice about the
+    same thing. A failed send keeps its row: it is not retried.
+    """
+
+    KIND_PRE_SHIFT = "pre_shift"
+    KIND_RECAP_DUE = "recap_due"
+    KIND_RECAP_MORNING = "recap_morning"
+    KIND_CHOICES = (
+        (KIND_PRE_SHIFT, "Shift starts soon"),
+        (KIND_RECAP_DUE, "Recap not in after the shift"),
+        (KIND_RECAP_MORNING, "Recap still missing next morning"),
+    )
+
+    STATUS_PENDING = "pending"
+    STATUS_SENT = "sent"
+    STATUS_FAILED = "failed"
+
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    kind = models.CharField(max_length=20, choices=KIND_CHOICES)
+    ambassador = models.ForeignKey(
+        Ambassador, on_delete=models.CASCADE, related_name="shift_sms"
+    )
+    event = models.ForeignKey(
+        Event, on_delete=models.CASCADE, related_name="shift_sms"
+    )
+    tenant = models.ForeignKey(
+        Tenant, on_delete=models.CASCADE, related_name="shift_sms"
+    )
+    to_number = models.CharField(max_length=20)
+    body = models.TextField()
+    status = models.CharField(max_length=10, default=STATUS_PENDING)
+    provider_id = models.CharField(max_length=64, blank=True, default="")
+    error = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    sent_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["kind", "ambassador", "event"],
+                name="uq_shift_sms_kind_ambassador_event",
+            ),
+        ]
+        indexes = [models.Index(fields=["created_at"])]
+

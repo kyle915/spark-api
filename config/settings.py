@@ -435,6 +435,14 @@ PUBLIC_CHECKIN_BASE_URL = env(
     "PUBLIC_CHECKIN_BASE_URL",
     default="https://client.igniteproductions.co",
 )
+# Shift texts to ambassadors, sent through Quo (formerly OpenPhone).
+# Nothing is sent unless SHIFT_SMS_ENABLED is true AND both the key and the
+# sending number are set. QUO_FROM_NUMBER is E.164 ("+17755550100") or a Quo
+# phone number id ("PN...").
+SHIFT_SMS_ENABLED = env.bool("SHIFT_SMS_ENABLED", default=False)
+QUO_API_KEY = env("QUO_API_KEY", default="")
+QUO_FROM_NUMBER = env("QUO_FROM_NUMBER", default="")
+QUO_API_BASE_URL = env("QUO_API_BASE_URL", default="https://api.quo.com")
 # Absolute base for backend-rendered public pages linked from emails (e.g. the
 # one-click shift-extension approval page under /api/public/). Falls back to the
 # Cloud Run service URL so prod emails work without extra config.
