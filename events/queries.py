@@ -1774,14 +1774,22 @@ class RequestQueries:
         tenant_id: strawberry.ID | None = None,
     ) -> types.SidebarRequestCounts:
         """Tracker / approvals / recaps-due badges without downloading requests."""
-        qs = await _scoped_requests(info, tenant_id)
+        # Resolved once and used for both the Request-based badges and the
+        # event-based "Recaps due" count, so they share one tenant scope.
+        resolved_tenant_id = await RequestQueriesService().resolve_tenant_id(
+            info,
+            tenant_id=tenant_id,
+        )
+        qs = admin_payloads.scoped_requests(resolved_tenant_id)
 
         def _go():
             from events.missing_recaps_gate import (
                 missing_recaps_disabled_for_tenant_id,
             )
 
-            data = admin_payloads.compute_sidebar_request_counts(qs)
+            data = admin_payloads.compute_sidebar_request_counts(
+                qs, tenant_id=resolved_tenant_id
+            )
             recaps_due = data.recaps_due
             # Per-tenant Missing Recaps gate (empty by default). Zero the
             # sidebar badge only when a slug is re-added to the disabled set.

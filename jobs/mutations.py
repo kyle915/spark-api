@@ -297,17 +297,40 @@ async def _notify_assigned_ambassador_by_email(
     await sync_to_async(mailer.send)()
 
 
+def _event_local(event, value):
+    """``value`` as wall-clock in the event's own time zone.
+
+    Shift times are stored as UTC instants, so formatting them raw prints
+    tomorrow's date for an evening shift in any US zone (6 PM Pacific is
+    1 AM UTC). Reads the event's ``timezone`` row, which may be a lazy
+    lookup — call from sync code. Falls back to the value as stored when
+    the event has no usable zone.
+    """
+    if value is None or event is None:
+        return value
+    try:
+        from events.envelopes import _apply_request_tz
+
+        return _apply_request_tz(value, event) or value
+    except Exception:  # noqa: BLE001 — a date label must never break a booking
+        return value
+
+
 def _booking_push_body(job: "models.Job") -> str:
     """Push body for a marketplace booking. Enriches with venue + date
     when available ("You're booked: {venue} {date}"), else falls back to
-    the job name so the BA always gets a meaningful nudge."""
+    the job name so the BA always gets a meaningful nudge. The date is the
+    shift's date where the shift is, not the UTC date. Sync (may read the
+    event's time zone) — wrap in ``sync_to_async`` from a resolver."""
     event = getattr(job, "event", None)
     venue = (
         getattr(event, "name", None)
         or getattr(getattr(event, "retailer", None), "name", None)
         or job.name
     )
-    when = getattr(event, "start_time", None) or getattr(event, "date", None)
+    when = _event_local(
+        event, getattr(event, "start_time", None) or getattr(event, "date", None)
+    )
     date_str = ""
     if when is not None:
         try:
@@ -340,6 +363,7 @@ def _notify_admins_of_application(application_id: int) -> None:
                 "job",
                 "job__event",
                 "job__event__rmm_asigned",
+                "job__event__timezone",
                 "job__created_by",
                 "job__tenant",
                 "ambassador",
@@ -392,7 +416,10 @@ def _notify_admins_of_application(application_id: int) -> None:
             ).strip()
 
         when = (
-            (getattr(event, "start_time", None) or getattr(event, "date", None))
+            _event_local(
+                event,
+                getattr(event, "start_time", None) or getattr(event, "date", None),
+            )
             if event
             else None
         )
@@ -1209,7 +1236,7 @@ class AmbassadorJobMutationService(BaseMutationService):
                 enqueue_push(
                     ba_user_id,
                     title="You got the gig",
-                    body=_booking_push_body(assigned_job),
+                    body=await sync_to_async(_booking_push_body)(assigned_job),
                     data={
                         "kind": "job_assigned",
                         "jobUuid": str(assigned_job.uuid),
@@ -2570,7 +2597,7 @@ class JobLifecycleMutations:
                     enqueue_push(
                         ba_user_id,
                         title="You got the gig",
-                        body=_booking_push_body(job),
+                        body=await sync_to_async(_booking_push_body)(job),
                         data={
                             "kind": "job_assigned",
                             "jobUuid": str(job.uuid),

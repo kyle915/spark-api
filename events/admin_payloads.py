@@ -11,14 +11,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import timedelta
 
-from django.db.models import Count, Exists, F, OuterRef, Q, QuerySet
+from django.db.models import Count, F, Q, QuerySet
 from django.db.models.functions import Coalesce
 from django.utils import timezone
 from strawberry.relay import to_base64
 
 from events.models import Event, Request, Retailer
 from events.types import _serialize_dt
-from recaps.filed import custom_filed_q, legacy_filed_q
+from recaps.filed import (
+    custom_filed_q,
+    legacy_filed_q,
+    missing_recap_events_queryset,
+)
 from recaps.models import CustomRecap, Recap
 
 DONE_SLUGS = ("done", "completed")
@@ -57,8 +61,17 @@ def compute_sidebar_request_counts(
     qs: QuerySet[Request],
     *,
     now=None,
+    tenant_id: int | None = None,
 ) -> SidebarRequestCountsData:
     """Badge integers that used to be tallied client-side off 2,000 rows.
+
+    ``recaps_due`` is the number of rows on the /recaps/missing page the
+    badge links to — it counts the SAME queryset the list resolver renders
+    (``recaps.filed.missing_recap_events_queryset``), scoped by ``tenant_id``
+    (None = every tenant, matching an unscoped ``qs``). It used to be its own
+    Request-based tally and disagreed with the page: it never saw walk-in
+    shifts (no request), missed a shift that ended earlier today, and
+    counted requests whose event had not wrapped.
 
     ``done_30d`` is filed (submitted) recaps in the last 30 days — legacy +
     custom, empty clock-out shells excluded — not Request rows with a Done
@@ -74,22 +87,9 @@ def compute_sidebar_request_counts(
     approval_q = _status_q(*APPROVAL_SLUGS)
     upcoming_q = _status_q(*UPCOMING_SLUGS)
 
-    has_event = Exists(Event.objects.filter(request_id=OuterRef("pk")))
-    has_filed_legacy = Exists(
-        Recap.objects.filter(event__request_id=OuterRef("pk")).filter(legacy_filed_q())
-    )
-    has_filed_custom = Exists(
-        CustomRecap.objects.filter(event__request_id=OuterRef("pk")).filter(
-            custom_filed_q()
-        )
-    )
-
-    recaps_due = (
-        qs.filter(date__date__gte=lookback30, date__date__lt=today)
-        .filter(has_event)
-        .filter(~has_filed_legacy, ~has_filed_custom)
-        .count()
-    )
+    recaps_due = missing_recap_events_queryset(
+        now=now, lookback_days=30, tenant_id=tenant_id
+    ).count()
 
     req_ids = qs.values("pk")
     # Event.date window = program activity in the last 30 calendar days.

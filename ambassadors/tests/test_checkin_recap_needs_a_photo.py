@@ -269,3 +269,86 @@ class TestCheckinRecapNeedsAPhoto(AmbassadorsGraphQLTestCase):
         assert res.status_code == 200
         assert res.json()["success"] is True
         assert self._recaps().count() == 1
+
+    # -- an approved recap is closed to the public link --------------------
+
+    def _approve(self, recap):
+        from recaps.models import CustomRecap
+
+        CustomRecap.objects.filter(id=recap.id).update(
+            approved=True, approved_at=timezone.now(), approved_by=self.actor
+        )
+
+    def test_an_approved_recap_cannot_be_rewritten_through_the_link(self):
+        """Staff approved it; a BA reopening the link must not change what the
+        client now sees. Nothing on the recap moves — values, photos, counts."""
+        from recaps.models import CustomFieldValue, CustomRecap
+
+        field = self._a_field()
+        recap = self._submit(
+            [{"blobName": self._blob("a")}],
+            field_values=[{"customFieldId": str(field.id), "value": "approved value"}],
+        )
+        self._approve(recap)
+        before = CustomRecap.objects.get(id=recap.id)
+
+        with pytest.raises(checkin_web.RecapAlreadyApproved):
+            checkin_web.submit_checkin_recap(
+                event=self.event,
+                ambassador=self.ba,
+                template=self.template,
+                field_values=[{"customFieldId": str(field.id), "value": "rewritten"}],
+                files=[{"blobName": self._blob("b")}],
+                total_engagements=999,
+            )
+
+        after = CustomRecap.objects.get(id=recap.id)
+        assert after.approved is True
+        assert after.submitted_at == before.submitted_at
+        assert after.total_engagements == before.total_engagements
+        assert after.updated_at == before.updated_at
+        values = CustomFieldValue.objects.filter(custom_recap=recap)
+        assert [v.value for v in values] == ["approved value"]
+        assert self._photo_count(after) == 1
+        assert self._recaps().count() == 1
+
+    def test_an_unapproved_recap_stays_editable(self):
+        field = self._a_field()
+        recap = self._submit(
+            [{"blobName": self._blob("a")}],
+            field_values=[{"customFieldId": str(field.id), "value": "first"}],
+        )
+        again = self._submit(
+            [], field_values=[{"customFieldId": str(field.id), "value": "second"}]
+        )
+        assert again.id == recap.id
+
+    def test_the_endpoint_refuses_an_approved_recap_with_a_clear_message(self):
+        from events.checkin_tokens import make_checkin_session_token
+
+        recap = self._submit([{"blobName": self._blob("a")}])
+        self._approve(recap)
+        self.event.walkup_code = "LD-APPROVED"
+        self.event.save(update_fields=["walkup_code"])
+        token = make_checkin_session_token(self.event.id, self.ba.id)
+
+        res = self.http.post(
+            reverse(
+                "events.public_checkin_recap", kwargs={"code": self.event.walkup_code}
+            ),
+            data={
+                "session": token,
+                "fieldValues": [],
+                "files": [{"blobName": self._blob("b")}],
+            },
+            content_type="application/json",
+        )
+
+        assert res.status_code == 400
+        body = res.json()
+        assert body["error"] == "recap_approved"
+        assert (
+            body["message"]
+            == "This recap was already approved. Contact Ignite to change it."
+        )
+        assert self._photo_count(recap) == 1

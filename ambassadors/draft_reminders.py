@@ -127,6 +127,11 @@ def send_walkup_draft_reminders(
         "skipped_empty": 0,
         "skipped_open_shift": 0,
         "skipped_no_contact": 0,
+        # Subset of skipped_no_contact: the BA has no address that can
+        # receive mail. Web check-in BAs are phone-keyed stubs whose
+        # User.email is a @walkup.spark placeholder, so every one of them
+        # lands here — this reminder is email-only and cannot reach them.
+        "skipped_no_email": 0,
         "failed": 0,
     }
 
@@ -157,6 +162,8 @@ def send_walkup_draft_reminders(
         emails = valid_recipient_emails([getattr(user, "email", "") or ""])
         if not url or not emails:
             counts["skipped_no_contact"] += 1
+            if not emails:
+                counts["skipped_no_email"] += 1
             continue
 
         event = draft.event

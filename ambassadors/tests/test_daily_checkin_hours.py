@@ -103,3 +103,46 @@ class TestDailyCheckinHours(AmbassadorsGraphQLTestCase):
         self._punch("clock_out", noon - _dt.timedelta(hours=1))
         out = self._run()
         assert "1 shift(s)" in out
+
+    def _sent_html(self, **kw) -> str:
+        from io import StringIO
+        from unittest.mock import patch
+
+        from django.test import override_settings
+
+        captured: dict = {}
+
+        def capture(mailer, *args, **kwargs):
+            captured["html"] = mailer.envelope().html
+
+        with override_settings(
+            CHECKIN_HOURS_NOTIFY_EMAILS=["ops@igniteproductions.co"]
+        ), patch("utils.mailer.Mailer.send_now", capture):
+            call_command("email_daily_checkin_hours", stdout=StringIO(), **kw)
+        return captured["html"]
+
+    def test_clock_times_print_in_the_stores_own_time_zone(self):
+        """A New York shift from 9 AM to 5 PM read "6:00 AM – 2:00 PM": every
+        punch was printed in Pacific wherever the store was."""
+        from events.models import TimeZone
+
+        eastern = TimeZone.objects.create(
+            name="America/New_York", code="", offset=-300
+        )
+        Event.objects.filter(id=self.event.id).update(timezone=eastern)
+        ny = zoneinfo.ZoneInfo("America/New_York")
+        self._punch("clock_in", _dt.datetime(2026, 8, 1, 9, 0, tzinfo=ny))
+        self._punch("clock_out", _dt.datetime(2026, 8, 1, 17, 0, tzinfo=ny))
+
+        html = self._sent_html(date="2026-08-01")
+
+        assert "9:00 AM – 5:00 PM EDT" in html
+        assert "6:00 AM" not in html
+
+    def test_a_shift_with_no_time_zone_keeps_the_house_zone(self):
+        self._punch("clock_in", _dt.datetime(2026, 8, 1, 10, 0, tzinfo=PT))
+        self._punch("clock_out", _dt.datetime(2026, 8, 1, 14, 30, tzinfo=PT))
+
+        html = self._sent_html(date="2026-08-01")
+
+        assert "10:00 AM – 2:30 PM<" in html

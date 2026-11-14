@@ -1346,10 +1346,9 @@ async def _assert_caller_authorized_to_read_recap_tenant(
         raise GraphQLError("Recap not found.")
 
 
-# How long after a walk-in BA's LAST clock punch we consider the shift
-# wrapped and the recap genuinely overdue. Long enough that a BA taking a
-# break, or one whose clock-out failed, isn't chased while still on site.
-WALKIN_WRAP_GRACE_HOURS = 4
+# Defined beside the shared "recap due" queryset; re-exported here because
+# callers and tests import it from this module.
+from recaps.filed import WALKIN_WRAP_GRACE_HOURS  # noqa: E402,F401
 
 
 def _id_or_none(raw) -> int | None:
@@ -2250,14 +2249,10 @@ class RecapQueries:
         "Nudge BA" / "File for them" action without an N+1 round
         trip per ambassador.
         """
-        from datetime import timedelta
         from django.utils import timezone
-        from events import models as event_models
-        from ambassadors import models as a_models
 
         days = max(1, min(int(lookback_days or 30), 365))
         now = timezone.now()
-        cutoff = now - timedelta(days=days)
 
         resolved_tenant_id: int | None = None
         if tenant_id not in (None, ""):
@@ -2284,51 +2279,28 @@ class RecapQueries:
             from events.missing_recaps_gate import (
                 missing_recaps_disabled_for_tenant_id,
             )
-            from recaps.filed import events_missing_filed_recap
+            from recaps.filed import missing_recap_events_queryset
 
             if missing_recaps_disabled_for_tenant_id(resolved_tenant_id):
                 return []
 
+            # One definition of "recap due", shared with the sidebar badge
+            # that links here (events.admin_payloads): wrapped scheduled
+            # events and walk-ins, neither recap family filed (an empty
+            # clock-out stub does not count), soft-deleted requests out.
             qs = (
-                event_models.Event.objects.select_related(
+                missing_recap_events_queryset(
+                    now=now,
+                    lookback_days=days,
+                    tenant_id=resolved_tenant_id,
+                )
+                .select_related(
                     "retailer",
                     "state",
                     "tenant",
                     "request",
                 )
-                # "Wrapped" has TWO shapes and only one was handled.
-                #
-                # A scheduled event wraps at end_time. A WALK-IN event — one a
-                # BA conjured through the check-in link or a walk-up code — has
-                # NO end_time at all, and a NULL satisfies neither comparison,
-                # so every one of them was invisible here. /recaps/missing said
-                # "All clear" for Total Wireless no matter how many check-in
-                # shifts owed a recap: not a stale count, a whole class of
-                # shift the query could never return.
-                #
-                # A walk-in counts as wrapped once its LAST clock punch is far
-                # enough back that the BA is plainly done. Anything more recent
-                # is someone still working, and nagging them mid-shift is how
-                # this page loses its credibility.
-                .annotate(last_punch=Max("attendance__clock_time"))
-                .filter(
-                    Q(end_time__lt=now, end_time__gte=cutoff)
-                    | Q(
-                        end_time__isnull=True,
-                        last_punch__lt=now - timedelta(hours=WALKIN_WRAP_GRACE_HOURS),
-                        last_punch__gte=cutoff,
-                    )
-                )
-                # An event is missing a recap if neither family has a
-                # *filed* row (photos / metrics / submitted_at). An empty
-                # clock-out stub must still show here — existence-only
-                # hid those shifts from /recaps/missing.
-                # Borjomi-style tenants file via custom_recap; both
-                # families go through recaps.filed.events_missing_filed_recap.
-            )
-            qs = events_missing_filed_recap(qs)
-            qs = (
-                qs.annotate(wrapped_at=Coalesce("end_time", "last_punch"))
+                .annotate(wrapped_at=Coalesce("end_time", "last_punch"))
                 .order_by("-wrapped_at")
             )
             if resolved_tenant_id is not None:

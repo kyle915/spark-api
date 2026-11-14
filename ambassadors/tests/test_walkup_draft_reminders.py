@@ -125,6 +125,40 @@ class TestWalkupDraftReminders(AmbassadorsGraphQLTestCase):
         draft.refresh_from_db()
         assert draft.reminder_sent_at is None
 
+    def test_web_checkin_stub_is_never_emailed_and_is_counted(self):
+        """A web check-in BA is a phone-keyed stub whose email is a
+        placeholder that cannot receive mail. Nothing is sent to it, the
+        draft is not stamped as reminded, and the run says how many BAs it
+        could not reach."""
+        from ambassadors import checkin_web
+
+        stub, _ = checkin_web.get_or_create_checkin_ambassador(
+            first_name="Walk", last_name="Up", phone="305-555-0100", email=None
+        )
+        assert stub.user.email.endswith("@walkup.spark")
+        draft = WalkupRecapDraft.objects.create(
+            event=self.event,
+            ambassador=stub,
+            scope="shift",
+            payload={"v": 1, "values": {"notes": "Busy aisle"}},
+        )
+        WalkupRecapDraft.objects.filter(id=draft.id).update(
+            updated_at=timezone.now() - timedelta(hours=5)
+        )
+
+        counts = self._run()
+
+        assert self.sent == []
+        assert counts["sent"] == 0
+        assert counts["skipped_no_email"] == 1
+        assert counts["skipped_no_contact"] == 1
+        draft.refresh_from_db()
+        assert draft.reminder_sent_at is None
+
+        out = io.StringIO()
+        call_command("send_walkup_draft_reminders", "--dry-run", stdout=out)
+        assert "(1 no reachable email)" in out.getvalue()
+
     def test_dry_run_sends_and_stamps_nothing(self):
         draft = self._draft()
         out = io.StringIO()

@@ -165,3 +165,53 @@ class TestApplyNotifiesAdmins(JobsGraphQLTestCase):
             res = await self._apply()
         assert res.data["applyToJob"]["success"] is False
         assert not MockMailer.called
+
+    # --- shift date is the venue's date, not the UTC date -----------------
+
+    def _evening_pacific_shift(self):
+        """6 PM Pacific on Nov 13 is 2 AM UTC on Nov 14."""
+        import datetime as _dt
+
+        from events.models import Event, TimeZone
+
+        zone = TimeZone.objects.create(
+            name="America/Los_Angeles", code="", offset=-480
+        )
+        Event.objects.filter(id=self.event.id).update(
+            start_time=_dt.datetime(2026, 11, 14, 2, 0, tzinfo=_dt.timezone.utc),
+            timezone=zone,
+        )
+
+    @pytest.mark.asyncio
+    async def test_applicant_email_prints_the_shift_date_where_the_shift_is(self):
+        await sync_to_async(self._evening_pacific_shift)()
+        with patch(MAILER_PATH) as MockMailer:
+            MockMailer.return_value = MagicMock()
+            res = await self._apply()
+
+        assert res.errors is None, res.errors
+        assert MockMailer.call_args.kwargs["when_label"] == "Nov 13, 2026"
+
+    def test_booking_push_prints_the_shift_date_where_the_shift_is(self):
+        from jobs.mutations import _booking_push_body
+
+        self._evening_pacific_shift()
+        job = models.Job.objects.select_related("event").get(id=self.job.id)
+
+        assert _booking_push_body(job) == (
+            "You're booked: Tasting Nov 13. Tap to see details."
+        )
+
+    def test_booking_push_without_a_time_zone_keeps_the_stored_date(self):
+        import datetime as _dt
+
+        from events.models import Event
+        from jobs.mutations import _booking_push_body
+
+        Event.objects.filter(id=self.event.id).update(
+            start_time=_dt.datetime(2026, 11, 14, 2, 0, tzinfo=_dt.timezone.utc),
+            timezone=None,
+        )
+        job = models.Job.objects.select_related("event").get(id=self.job.id)
+
+        assert "Nov 14" in _booking_push_body(job)
