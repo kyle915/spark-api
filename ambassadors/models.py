@@ -1832,7 +1832,10 @@ class ShiftSms(models.Model):
     The row is written BEFORE the provider call and is unique per
     (kind, ambassador, event), so a cron run that overlaps another, or
     retries after a timeout, can never text the same person twice about the
-    same thing. A failed send keeps its row: it is not retried.
+    same thing. A failed send keeps its row. ``failed`` is final; ``retry``
+    is a failure that looked temporary (network, 5xx, 429) and a later run
+    may try again while the text is still due, ``attempts`` counting every
+    try (see ``ambassadors.shift_sms.MAX_SEND_ATTEMPTS``).
     """
 
     KIND_PRE_SHIFT = "pre_shift"
@@ -1847,6 +1850,7 @@ class ShiftSms(models.Model):
     STATUS_PENDING = "pending"
     STATUS_SENT = "sent"
     STATUS_FAILED = "failed"
+    STATUS_RETRY = "retry"
 
     id = models.BigAutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
@@ -1865,6 +1869,7 @@ class ShiftSms(models.Model):
     status = models.CharField(max_length=10, default=STATUS_PENDING)
     provider_id = models.CharField(max_length=64, blank=True, default="")
     error = models.TextField(blank=True, default="")
+    attempts = models.PositiveSmallIntegerField(default=1)
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
     sent_at = models.DateTimeField(null=True, blank=True)
 

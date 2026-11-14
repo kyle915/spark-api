@@ -195,12 +195,66 @@ def _street_number(address: str | None) -> str:
     return match.group(1) if match else ""
 
 
+_UNIT_WORDS = {"suite", "ste", "unit", "apt", "bldg", "building", "fl", "floor"}
+
+
+def _street_name_tokens(address: str | None) -> set[str]:
+    """The words of the street that follows the house number, spelled one
+    way: "347 N. Don Shula Drive Suite 102, Miami" is {"don", "shula"}.
+
+    Street types (Rd/Road, St/Street) and directions (N/North) are dropped,
+    because they are what two different streets have in common. A street that
+    is nothing but those ("100 North St") keeps them, folded to one spelling,
+    so it can still be told apart from "100 South St".
+    """
+    from ambassadors.checkin_web import (
+        _DIRECTIONAL_ABBREVS,
+        _DIRECTIONALS,
+        _SUFFIX_CANON,
+    )
+
+    match = re.search(
+        r"(?<![\w#])\d{2,6}\s+((?:[NSEW]\.?\s+)?[A-Za-z][^,/]*)", address or ""
+    )
+    if not match:
+        return set()
+    names: set[str] = set()
+    generic: set[str] = set()
+    for token in re.findall(r"[a-z0-9]+", match.group(1).lower()):
+        if token in _UNIT_WORDS:
+            break
+        if token in _DIRECTIONALS:
+            generic.add(_DIRECTIONALS[token])
+        elif token in _DIRECTIONAL_ABBREVS:
+            generic.add(token)
+        elif token in _SUFFIX_CANON:
+            generic.add(_SUFFIX_CANON[token])
+        else:
+            names.add(token)
+    if names:
+        return names
+    # One combined token, so "North St" and "South St" do not meet on "st".
+    return {" ".join(sorted(generic))} if generic else set()
+
+
+def _same_street_address(a: str | None, b: str | None) -> bool:
+    """Same house number AND at least one street-name word in common.
+
+    The number alone is not a place: "347 Don Shula Dr" and "347 Main St"
+    are different buildings that happen to share a number.
+    """
+    number = _street_number(a)
+    if not number or number != _street_number(b):
+        return False
+    return bool(_street_name_tokens(a) & _street_name_tokens(b))
+
+
 def match_event(row: ParsedRow, events: list) -> tuple[Any | None, str]:
     """The Spark event this sheet row is about, among same-brand same-day
-    events. A match needs the place to agree — the same street number, or
-    one store name contained in the other — not just the day."""
+    events. A match needs the place to agree — the same street address
+    (house number and street name), or one store name contained in the
+    other — not just the day, and not just the house number."""
     store = _key(row.store_name)
-    number = _street_number(row.address)
     # "Total Wine, 7400 Carson Blvd" / "Hard Rock Stadium / 347 Don Shula Dr":
     # the place name people put in front of the street address.
     lead = re.split(r"[,/]", row.address or "", maxsplit=1)[0].strip()
@@ -208,8 +262,7 @@ def match_event(row: ParsedRow, events: list) -> tuple[Any | None, str]:
     hits = []
     for event in events:
         haystack = _key(f"{getattr(event, 'name', '')} {getattr(event, 'address', '')}")
-        event_number = _street_number(getattr(event, "address", ""))
-        if number and event_number and number == event_number:
+        if _same_street_address(row.address, getattr(event, "address", "")):
             hits.append(event)
         elif store and len(store) >= 4 and store in haystack:
             hits.append(event)

@@ -1488,6 +1488,20 @@ class RecapNeedsAPhoto(ValueError):
     """
 
 
+class RecapAlreadyApproved(ValueError):
+    """A resubmission would overwrite a recap staff have already approved.
+
+    An approved recap is what the client sees and what hours were approved
+    against; the public link must not be able to change it afterwards. Raised
+    inside the write transaction, before anything is modified.
+    """
+
+
+RECAP_ALREADY_APPROVED_MESSAGE = (
+    "This recap was already approved. Contact Ignite to change it."
+)
+
+
 def submit_checkin_recap(
     *,
     event,
@@ -1668,6 +1682,11 @@ def submit_checkin_recap(
                 used_corpo_card=bool(used_corpo_card),
             )
         else:
+            # Staff approved this recap: the public link can no longer rewrite
+            # it. (A standing link's force_new never lands here for a filed
+            # recap — it files a new row above instead of touching this one.)
+            if recap.approved:
+                raise RecapAlreadyApproved(RECAP_ALREADY_APPROVED_MESSAGE)
             recap.submitted_at = dj_tz.now()
             recap.total_engagements = total_engagements
             recap.custom_recap_template = template

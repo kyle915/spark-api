@@ -22,6 +22,12 @@ Scope and the reasoning behind it:
 the house timezone — see the other daily crons), NOT UTC, or a 10pm PT run
 would report a day that ended at 5pm.
 
+Clock times print in the time zone of the store the shift was at, the way
+every other Spark screen shows them — a 9 AM start in New York reads 9:00 AM,
+not 6:00 AM Pacific. A shift outside the house zone carries its zone's
+abbreviation ("9:00 AM – 5:00 PM EDT"); a shift whose event has no usable
+zone falls back to the house zone.
+
 Usage:
     python manage.py email_daily_checkin_hours                 # today, PT
     python manage.py email_daily_checkin_hours --date 2026-08-01
@@ -44,6 +50,27 @@ def _fmt_clock(dt, tz) -> str:
         return "—"
     local = dt.astimezone(tz)
     return local.strftime("%-I:%M %p")
+
+
+def _venue_zone(event, house_tz):
+    """The event's own zone, or the house zone when it has none we can use."""
+    from utils.tz import resolve_zoneinfo
+
+    tz_row = getattr(event, "timezone", None) if getattr(event, "timezone_id", None) else None
+    return resolve_zoneinfo(tz_row) or house_tz
+
+
+def _fmt_shift_range(clock_in, clock_out, event, house_tz) -> str:
+    """"9:00 AM – 5:00 PM" in the venue's zone, tagged with the zone's
+    abbreviation when that is not the house zone's wall clock."""
+    zone = _venue_zone(event, house_tz)
+    label = f"{_fmt_clock(clock_in, zone)} – {_fmt_clock(clock_out, zone)}"
+    anchor = clock_in or clock_out
+    if anchor is not None and anchor.astimezone(zone).utcoffset() != anchor.astimezone(
+        house_tz
+    ).utcoffset():
+        label += f" {anchor.astimezone(zone).strftime('%Z')}"
+    return label
 
 
 def _fmt_hours(delta) -> str:
@@ -89,7 +116,7 @@ class Command(BaseCommand):
 
         punches = list(
             Attendance.objects.select_related(
-                "ambassador__user", "event__tenant", "source"
+                "ambassador__user", "event__tenant", "event__timezone", "source"
             )
             .filter(clock_time__gte=start, clock_time__lt=end)
             .order_by("clock_time", "id")
@@ -160,7 +187,7 @@ class Command(BaseCommand):
                     f"<td style='padding:6px 10px 6px 0;color:#555'>"
                     f"{escape((getattr(r['event'], 'name', '') or '—')[:60])}</td>"
                     f"<td style='padding:6px 10px 6px 0;white-space:nowrap'>"
-                    f"{_fmt_clock(r['in'], tz)} – {_fmt_clock(r['out'], tz)}{flag}</td>"
+                    f"{escape(_fmt_shift_range(r['in'], r['out'], r['event'], tz))}{flag}</td>"
                     f"<td style='padding:6px 0;white-space:nowrap;font-weight:600'>"
                     f"{_fmt_hours(r['worked'])}</td>"
                     "</tr>"

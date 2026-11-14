@@ -126,12 +126,16 @@ class TestSidebarAndAccountMapPayloads(EventsGraphQLTestCase):
             date=yesterday,
             coordinates=[41.9103, -87.6533],
         )
+        # "Recaps due" counts shifts that have WRAPPED (the same rows as the
+        # /recaps/missing list), so the shift carries its start and end.
         self.create_event(
             name="Yesterday shift",
             tenant=self.tenant,
             address=self.retailer.address,
             request=self.due,
             date=yesterday,
+            start_time=yesterday - timedelta(hours=4),
+            end_time=yesterday,
         )
         # Empty clock-out stub — must NOT clear recapsDue.
         rm.Recap.objects.create(
@@ -202,7 +206,7 @@ class TestSidebarAndAccountMapPayloads(EventsGraphQLTestCase):
 
     def test_compute_counts_match_sidebar_rules(self):
         data = compute_sidebar_request_counts(
-            scoped_requests(self.tenant.id)
+            scoped_requests(self.tenant.id), tenant_id=self.tenant.id
         )
         # pending + approved-due + approved-future (done is excluded)
         assert data.tracker == 3

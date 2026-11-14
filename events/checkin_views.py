@@ -1217,6 +1217,15 @@ def public_checkin_recap(request: HttpRequest, code: str) -> HttpResponse:
             status=400,
             code="needs_photo",
         )
+    except checkin_web.RecapAlreadyApproved:
+        # Not a fault and not retryable: staff approved this recap, so the
+        # public link may no longer change it.
+        logger.warning("checkin recap refused, already approved, code=%s", code)
+        return _err(
+            checkin_web.RECAP_ALREADY_APPROVED_MESSAGE,
+            status=400,
+            code="recap_approved",
+        )
     except NeedsPayableMileage as exc:
         logger.warning("checkin recap refused, mileage, code=%s: %s", code, exc)
         return _err(

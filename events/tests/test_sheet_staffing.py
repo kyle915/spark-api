@@ -147,6 +147,38 @@ def test_a_row_matches_on_the_place_not_just_the_day():
     assert match_event(row, [plano, renamed]) == (None, MATCH_AMBIGUOUS)
 
 
+def test_a_shared_house_number_on_a_different_street_is_not_a_match():
+    """347 Don Shula Dr and 347 Main St are two buildings. The mirror used to
+    pair them on the number alone and show the wrong event's staffing."""
+    row = _parsed("Tailgate sampling", "347 Don Shula Dr, Miami Gardens, FL 33056")
+    wrong_street = _Event("Corner Market", "347 Main St, Miami, FL 33101")
+    assert match_event(row, [wrong_street]) == (None, MATCH_NO_EVENT)
+    # The right street still matches however it is abbreviated, and the
+    # same-number stranger no longer makes it ambiguous.
+    right = _Event("Stadium demo", "347 North Don Shula Drive, Miami Gardens")
+    assert match_event(row, [right, wrong_street]) == (right, MATCH_MATCHED)
+    # A shared street TYPE or direction is not a shared street.
+    row = _parsed("Demo", "1200 N Oak St, Dallas, TX")
+    assert match_event(row, [_Event("Other", "1200 N Elm St, Dallas, TX")]) == (
+        None, MATCH_NO_EVENT,
+    )
+    assert match_event(row, [_Event("Other", "1200 North Oak Street")])[1] == MATCH_MATCHED
+    # A store name that agrees still matches when the street does not.
+    row = _parsed("Plano Country Store", "3205 Plano Rd, Bowling Green, KY")
+    moved = _Event("Plano Country Store", "3205 Scottsville Rd")
+    assert match_event(row, [moved]) == (moved, MATCH_MATCHED)
+
+
+def test_street_names_fold_abbreviations_and_ignore_units():
+    from events.sheet_staffing import _street_name_tokens
+
+    assert _street_name_tokens("Hard Rock Stadium / 347 Don Shula Dr Suite 102, Miami") == {"don", "shula"}
+    assert _street_name_tokens("347 N. Don Shula Drive") == {"don", "shula"}
+    assert _street_name_tokens("100 North St, Austin") == _street_name_tokens("100 N Street")
+    assert not (_street_name_tokens("100 North St") & _street_name_tokens("100 South St"))
+    assert _street_name_tokens("Golden Gate Golf Course") == set()
+
+
 def test_names_compare_without_case_or_punctuation():
     assert name_key("Viri  Ortega") == name_key("viri ortega")
     assert name_key("O'Neil, Sam") != name_key("Sam O'Neil")

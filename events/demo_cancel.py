@@ -335,10 +335,20 @@ def _store_label(request: models.Request) -> str:
 
 
 def _when_label(request: models.Request) -> str:
-    local = _apply_request_tz(request.date, request)
-    if not local:
+    """When the demo was, in the request's own time zone.
+
+    ``Request.date`` carries the DAY (midnight), the hour lives on
+    ``start_time`` — every other request email reads them that way. Reading
+    the time off ``date`` printed "12:00 AM" on every cancellation.
+    """
+    start = _apply_request_tz(request.start_time, request)
+    if start:
+        return start.strftime("%b %-d, %Y · %-I:%M %p")
+    day = _apply_request_tz(request.date, request)
+    if not day:
         return "Date not set"
-    return local.strftime("%b %-d, %Y · %-I:%M %p")
+    # No start time on file: say the day and do not invent an hour.
+    return day.strftime("%b %-d, %Y")
 
 
 def _ignite_recipients(tenant=None) -> list[str]:

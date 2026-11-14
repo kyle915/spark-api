@@ -226,3 +226,30 @@ class TestDemoCancel(EventsGraphQLTestCase):
         note = em.RequestActivityLog.objects.get(request=req)
         assert note.kind == em.RequestActivityLog.KIND_NOTE_ADDED
         assert "Demo cancelled" in note.summary
+
+    def test_when_label_reads_the_hour_from_start_time_in_the_request_zone(self):
+        """The cancel email printed "12:00 AM" for every demo: it read the
+        hour off Request.date, which only carries the day."""
+        import datetime as dt
+
+        from events.demo_cancel import _when_label
+
+        zone = em.TimeZone.objects.create(
+            name="America/Los_Angeles", code="", offset=-480
+        )
+        # Nov 13, 6:00 PM Pacific = Nov 14, 2:00 AM UTC. The day is stored as
+        # Pacific midnight.
+        req = self._req(pk=737373, tenant=self.tenant, rt=self.rt)
+        em.Request.objects.filter(id=req.id).update(
+            date=dt.datetime(2026, 11, 13, 8, 0, tzinfo=dt.timezone.utc),
+            start_time=dt.datetime(2026, 11, 14, 2, 0, tzinfo=dt.timezone.utc),
+            timezone=zone,
+        )
+        req = em.Request.objects.select_related("timezone").get(id=req.id)
+
+        assert _when_label(req) == "Nov 13, 2026 · 6:00 PM"
+
+        # No start time on file: the day alone, no made-up hour.
+        em.Request.objects.filter(id=req.id).update(start_time=None)
+        req = em.Request.objects.select_related("timezone").get(id=req.id)
+        assert _when_label(req) == "Nov 13, 2026"

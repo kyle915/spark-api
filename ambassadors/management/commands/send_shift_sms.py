@@ -39,7 +39,8 @@ class Command(BaseCommand):
             + (
                 f"would send {result['would_send']}"
                 if dry_run
-                else f"sent {result['sent']}, failed {result['failed']}"
+                else f"sent {result['sent']}, failed {result['failed']} "
+                f"({result['will_retry']} will retry)"
             )
             + f", already sent {result['already_sent']}, skipped "
             f"{result['skipped_opt_out']} opted out, "

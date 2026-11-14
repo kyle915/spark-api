@@ -41,7 +41,8 @@ class Command(BaseCommand):
             f"skipped {counts['skipped_filed']} filed, "
             f"{counts['skipped_empty']} empty, "
             f"{counts['skipped_open_shift']} still on shift, "
-            f"{counts['skipped_no_contact']} no contact/link, "
+            f"{counts['skipped_no_contact']} no contact/link "
+            f"({counts['skipped_no_email']} no reachable email), "
             f"failed {counts['failed']}"
             + (" (dry-run)" if opts["dry_run"] else "")
         )

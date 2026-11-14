@@ -17,6 +17,12 @@ Nothing is sent unless ``SHIFT_SMS_ENABLED`` is on and Quo is configured;
 ``dry_run`` reports who would be texted, and what, without sending or
 recording anything. Every send is reserved in ``ShiftSms`` first, so
 overlapping cron runs cannot double-text.
+
+A send that fails for a reason that looks temporary (Quo unreachable, a 5xx
+or a 429) is tried again on a later run, up to ``MAX_SEND_ATTEMPTS`` in all,
+and only while the text is still due. Anything else — a 4xx such as a
+rejected number or no credits, or a timeout where Quo may already have taken
+the message — is final.
 """
 
 from __future__ import annotations
@@ -31,7 +37,7 @@ from zoneinfo import ZoneInfo
 
 from django.conf import settings
 from django.db import IntegrityError
-from django.db.models import Q
+from django.db.models import F, Q
 from django.utils import timezone
 
 logger = logging.getLogger(__name__)
@@ -47,6 +53,38 @@ MORNING_HOURS = range(9, 18)
 _FALLBACK_TZ = "America/Chicago"
 
 _OPT_OUT = "Reply STOP to opt out."
+
+# First try plus retries, for one (kind, ambassador, event).
+MAX_SEND_ATTEMPTS = 3
+
+
+class QuoSendError(RuntimeError):
+    """Quo answered with an HTTP error. ``status`` is the HTTP status code."""
+
+    def __init__(self, message: str, *, status: int | None = None):
+        super().__init__(message)
+        self.status = status
+
+
+def is_transient_send_error(exc: BaseException) -> bool:
+    """Worth trying again later? Only when the provider did not take the
+    message: it could not be reached at all, it was overloaded (5xx), or it
+    asked us to slow down (429).
+
+    Any other 4xx is Quo saying no to this message. A timeout, or a
+    connection that dropped while we waited for the answer, is NOT retried:
+    Quo may already have accepted the text, and sending it again would text
+    the same person twice. An error we do not recognise is final too —
+    never re-text on a guess."""
+    if isinstance(exc, QuoSendError):
+        return exc.status == 429 or (exc.status is not None and 500 <= exc.status < 600)
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code == 429 or 500 <= exc.code < 600
+    if isinstance(exc, urllib.error.URLError):
+        # urllib wraps failures to CONNECT (refused, DNS, unreachable) in
+        # URLError — nothing was sent. A connect timeout is the exception.
+        return not isinstance(exc.reason, TimeoutError)
+    return False
 
 
 def normalize_us_phone(raw: str | None) -> str | None:
@@ -97,7 +135,7 @@ def send_quo_sms(*, to: str, body: str) -> str:
             data = json.loads(response.read().decode() or "{}")
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode(errors="replace")[:300]
-        raise RuntimeError(f"Quo returned {exc.code}: {detail}") from exc
+        raise QuoSendError(f"Quo returned {exc.code}: {detail}", status=exc.code) from exc
     return str((data.get("data") or {}).get("id") or "")
 
 
@@ -311,6 +349,8 @@ def send_shift_sms(*, now=None, dry_run: bool = False, send=None) -> dict:
         "skipped_no_phone": 0,
         "skipped_no_link": 0,
         "failed": 0,
+        # Of ``failed``: temporary failures a later run will try again.
+        "will_retry": 0,
     }
     preview: list[str] = []
     live = sms_configured()
@@ -319,9 +359,19 @@ def send_shift_sms(*, now=None, dry_run: bool = False, send=None) -> dict:
 
     candidates = [*_pre_shift_candidates(now), *_recap_candidates(now)]
     for kind, ambassador, event in candidates:
-        if ShiftSms.objects.filter(
+        existing = ShiftSms.objects.filter(
             kind=kind, ambassador_id=ambassador.id, event_id=event.id
-        ).exists():
+        ).first()
+        # Only a send that failed for a temporary reason, with attempts left,
+        # is picked up again. Sent, pending and finally-failed rows are done.
+        retry_row = (
+            existing
+            if existing is not None
+            and existing.status == ShiftSms.STATUS_RETRY
+            and existing.attempts < MAX_SEND_ATTEMPTS
+            else None
+        )
+        if existing is not None and retry_row is None:
             counts["already_sent"] += 1
             continue
         if getattr(ambassador, "sms_opt_out", False):
@@ -342,32 +392,67 @@ def send_shift_sms(*, now=None, dry_run: bool = False, send=None) -> dict:
             preview.append(f"{kind} → {_first_name(ambassador)} (…{to[-4:]}): {body}")
             continue
 
-        try:
-            row = ShiftSms.objects.create(
-                kind=kind,
-                ambassador=ambassador,
-                event=event,
-                tenant_id=event.tenant_id,
+        if retry_row is not None:
+            # Claim the retry atomically: the row goes back to pending with
+            # one more attempt counted, and only if no other run got there
+            # first — so an overlapping run cannot send it a second time.
+            claimed = ShiftSms.objects.filter(
+                id=retry_row.id,
+                status=ShiftSms.STATUS_RETRY,
+                attempts=retry_row.attempts,
+            ).update(
+                status=ShiftSms.STATUS_PENDING,
+                attempts=F("attempts") + 1,
                 to_number=to,
                 body=body,
             )
-        except IntegrityError:
-            counts["already_sent"] += 1  # another run reserved it first
-            continue
+            if not claimed:
+                counts["already_sent"] += 1
+                continue
+            row = retry_row
+            attempts = retry_row.attempts + 1
+        else:
+            try:
+                row = ShiftSms.objects.create(
+                    kind=kind,
+                    ambassador=ambassador,
+                    event=event,
+                    tenant_id=event.tenant_id,
+                    to_number=to,
+                    body=body,
+                )
+            except IntegrityError:
+                counts["already_sent"] += 1  # another run reserved it first
+                continue
+            attempts = 1
         try:
             provider_id = send(to=to, body=body)
         except Exception as exc:  # noqa: BLE001 — one number must not stop the run
+            will_retry = (
+                is_transient_send_error(exc) and attempts < MAX_SEND_ATTEMPTS
+            )
             logger.warning(
-                "shift sms failed kind=%s event=%s", kind, event.id, exc_info=True
+                "shift sms failed kind=%s event=%s attempt=%s will_retry=%s",
+                kind,
+                event.id,
+                attempts,
+                will_retry,
+                exc_info=True,
             )
             ShiftSms.objects.filter(id=row.id).update(
-                status=ShiftSms.STATUS_FAILED, error=str(exc)[:500]
+                status=(
+                    ShiftSms.STATUS_RETRY if will_retry else ShiftSms.STATUS_FAILED
+                ),
+                error=str(exc)[:500],
             )
             counts["failed"] += 1
+            if will_retry:
+                counts["will_retry"] += 1
             continue
         ShiftSms.objects.filter(id=row.id).update(
             status=ShiftSms.STATUS_SENT,
             provider_id=provider_id or "",
+            error="",
             sent_at=timezone.now(),
         )
         counts["sent"] += 1

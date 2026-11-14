@@ -216,6 +216,138 @@ class TestMissingRecapEvents(AmbassadorsGraphQLTestCase):
         assert result.data["missingRecapEvents"] == []
 
     @pytest.mark.asyncio
+    async def test_sidebar_recaps_due_badge_agrees_with_this_list(self):
+        """The sidebar "Recaps due" badge links to this list, so it must be
+        the number of rows on it. One fixture, every case the two used to
+        disagree on."""
+        from ambassadors.models import Attendance, Source
+        from events import models as em
+        from events.admin_payloads import (
+            compute_sidebar_request_counts,
+            scoped_requests,
+        )
+        from recaps.models import CustomRecap, CustomRecapTemplate
+
+        def _build():
+            now = datetime.now(_tz.utc)
+            rt = em.RequestType.objects.create(
+                name="Retail Sampling", tenant=self.tenant, created_by=self.admin
+            )
+
+            def _request(name, **kwargs):
+                return em.Request.objects.create(
+                    name=name,
+                    address="1 Main St",
+                    request_type=rt,
+                    tenant=self.tenant,
+                    created_by=self.admin,
+                    date=now - timedelta(days=1),
+                    **kwargs,
+                )
+
+            # DUE: wrapped, and all it has is an empty clock-out stub.
+            stub_ev = self._past_event(hours_ago=20, name="Stub only")
+            em.Event.objects.filter(id=stub_ev.id).update(
+                request=_request("Stub only")
+            )
+            Recap.objects.create(
+                name="stub",
+                event=stub_ev,
+                ambassador=self.ambassador,
+                created_by=self.admin,
+            )
+            # DUE: ended two hours ago, today. The old count only looked at
+            # request dates before today.
+            self._past_event(hours_ago=2, name="Ended today")
+            # DUE: a walk-in. No request, no end_time; last punch long ago.
+            walkin = self.create_event(
+                name="Walk-in", tenant=self.tenant, date=now - timedelta(hours=9)
+            )
+            source, _ = Source.objects.get_or_create(name="clock_out")
+            Attendance.objects.create(
+                ambassador=self.ambassador,
+                event=walkin,
+                source=source,
+                clock_time=now - timedelta(hours=8),
+            )
+            # NOT due: a filed custom recap.
+            filed_ev = self._past_event(hours_ago=30, name="Filed")
+            em.Event.objects.filter(id=filed_ev.id).update(request=_request("Filed"))
+            etype = self.create_event_type("Retail Sampling", self.tenant)
+            template = CustomRecapTemplate.objects.create(
+                tenant=self.tenant, name="T", event_type=etype, created_by=self.admin
+            )
+            CustomRecap.objects.create(
+                name="Filed",
+                event=filed_ev,
+                ambassador=self.ambassador,
+                tenant=self.tenant,
+                custom_recap_template=template,
+                created_by=self.admin,
+                updated_by=self.admin,
+                submitted_at=now,
+            )
+            # NOT due: the gig was deleted.
+            deleted_ev = self._past_event(hours_ago=26, name="Deleted gig")
+            em.Event.objects.filter(id=deleted_ev.id).update(
+                request=_request("Deleted gig", deleted_at=now)
+            )
+            # NOT due: wrapped 40 days ago, outside the 30-day window.
+            old_end = now - timedelta(days=40)
+            self.create_event(
+                name="Way old",
+                tenant=self.tenant,
+                date=old_end,
+                start_time=old_end - timedelta(hours=4),
+                end_time=old_end,
+            )
+            # NOT due: scheduled for yesterday but never wrapped (no end
+            # time, nobody clocked in). The old count included it.
+            never_ev = self.create_event(
+                name="Never wrapped",
+                tenant=self.tenant,
+                date=now - timedelta(days=1),
+            )
+            em.Event.objects.filter(id=never_ev.id).update(
+                request=_request("Never wrapped")
+            )
+            # Another brand's due shift is not this brand's.
+            other = self.create_tenant(name="Other Brand")
+            end = now - timedelta(hours=5)
+            self.create_event(
+                name="Other brand shift",
+                tenant=other,
+                date=end,
+                start_time=end - timedelta(hours=4),
+                end_time=end,
+            )
+
+        await sync_to_async(_build)()
+
+        result = await self._execute_mutation(
+            """
+            query Missing($tenantId: ID) {
+              missingRecapEvents(lookbackDays: 30, tenantId: $tenantId) {
+                eventName
+              }
+            }
+            """,
+            {"tenantId": str(self.tenant.id)},
+            self.endpoint_path,
+            user=self.admin,
+        )
+        assert result.errors is None, result.errors
+        names = sorted(r["eventName"] for r in result.data["missingRecapEvents"])
+        assert names == ["Ended today", "Stub only", "Walk-in"]
+
+        badge = await sync_to_async(
+            lambda: compute_sidebar_request_counts(
+                scoped_requests(self.tenant.id), tenant_id=self.tenant.id
+            ).recaps_due
+        )()
+        assert badge == len(names) == 3
+
+    @pytest.mark.asyncio
     async def test_respects_lookback_days_window(self):
         # 40 days in the past — outside the 30-day window.
         long_ago_end = datetime.now(_tz.utc) - timedelta(days=40)

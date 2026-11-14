@@ -108,6 +108,66 @@ def events_missing_filed_recap(qs: QuerySet) -> QuerySet:
     )
 
 
+# How long after a walk-in BA's LAST clock punch we consider the shift
+# wrapped and the recap genuinely overdue. Long enough that a BA taking a
+# break, or one whose clock-out failed, isn't chased while still on site.
+WALKIN_WRAP_GRACE_HOURS = 4
+
+MISSING_RECAPS_MAX_LOOKBACK_DAYS = 365
+
+
+def missing_recap_events_queryset(
+    *,
+    now=None,
+    lookback_days: int = 30,
+    tenant_id: int | None = None,
+) -> QuerySet:
+    """Events that wrapped inside the lookback window and owe a recap.
+
+    THE definition of "recap due" — the /recaps/missing list and the sidebar
+    "Recaps due" badge that links to it both read this queryset, so the
+    number on the badge is the number of rows on the page.
+
+    "Wrapped" has two shapes. A scheduled event wraps at ``end_time``. A
+    walk-in event — one a BA conjured through the check-in link or a walk-up
+    code — has NO ``end_time``; it counts as wrapped once its LAST clock
+    punch is ``WALKIN_WRAP_GRACE_HOURS`` back, so nobody is chased mid-shift.
+
+    Left out: events with a filed recap in either family (an empty clock-out
+    stub is not one, see ``events_missing_filed_recap``), and events whose
+    request was soft-deleted — a deleted gig owes nothing. Events with no
+    request (walk-ins, bulk imports) stay in.
+
+    Annotates ``last_punch``. ``tenant_id`` None means every tenant.
+    """
+    from datetime import timedelta
+
+    from django.db.models import Max
+    from django.utils import timezone
+
+    from events.models import Event
+
+    now = now or timezone.now()
+    days = max(1, min(int(lookback_days or 30), MISSING_RECAPS_MAX_LOOKBACK_DAYS))
+    cutoff = now - timedelta(days=days)
+    qs = (
+        Event.objects.exclude(request__deleted_at__isnull=False)
+        .annotate(last_punch=Max("attendance__clock_time"))
+        .filter(
+            Q(end_time__lt=now, end_time__gte=cutoff)
+            | Q(
+                end_time__isnull=True,
+                last_punch__lt=now - timedelta(hours=WALKIN_WRAP_GRACE_HOURS),
+                last_punch__gte=cutoff,
+            )
+        )
+    )
+    qs = events_missing_filed_recap(qs)
+    if tenant_id is not None:
+        qs = qs.filter(tenant_id=tenant_id)
+    return qs
+
+
 def recap_instance_is_filed(obj, *, is_custom: bool = False) -> bool:
     """In-memory check for a loaded Recap / CustomRecap.
 

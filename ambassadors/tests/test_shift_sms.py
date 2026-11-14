@@ -367,6 +367,107 @@ class TestShiftSms(AmbassadorsGraphQLTestCase):
         assert row.status == "failed" and "402" in row.error
         assert self._run()["sent"] == 0 and self.sent == []
 
+    @override_settings(**LIVE)
+    def test_a_temporary_failure_is_retried_on_a_later_run_and_sends_once(self):
+        """Quo was down for one cron tick. The BA still gets the text on the
+        next run — once — instead of never."""
+        from ambassadors.shift_sms import QuoSendError
+
+        event = self._event(
+            start=self.now + timedelta(minutes=60), end=self.now + timedelta(hours=4)
+        )
+        self._book(event)
+
+        def down(**kwargs):
+            raise QuoSendError("Quo returned 503: unavailable", status=503)
+
+        first = self._run(send=down)
+        assert first["failed"] == 1 and first["will_retry"] == 1
+        row = ShiftSms.objects.get()
+        assert (row.status, row.attempts) == ("retry", 1)
+
+        second = self._run(now=self.now + timedelta(minutes=10))
+        assert second["sent"] == 1
+        assert len(self.sent) == 1
+        row.refresh_from_db()
+        assert (row.status, row.attempts, row.error) == ("sent", 2, "")
+        assert ShiftSms.objects.count() == 1
+
+        third = self._run(now=self.now + timedelta(minutes=20))
+        assert third["sent"] == 0 and third["already_sent"] == 1
+        assert len(self.sent) == 1
+
+    @override_settings(**LIVE)
+    def test_retries_stop_after_three_attempts(self):
+        import urllib.error
+
+        event = self._event(
+            start=self.now + timedelta(minutes=100), end=self.now + timedelta(hours=4)
+        )
+        self._book(event)
+        calls = []
+
+        def unreachable(**kwargs):
+            calls.append(kwargs)
+            raise urllib.error.URLError("connection reset")
+
+        for minutes in (0, 10, 20, 30, 40):
+            self._run(send=unreachable, now=self.now + timedelta(minutes=minutes))
+
+        assert len(calls) == 3
+        row = ShiftSms.objects.get()
+        assert (row.status, row.attempts) == ("failed", 3)
+
+    @override_settings(**LIVE)
+    def test_a_4xx_is_final_but_a_429_is_retried(self):
+        from ambassadors.shift_sms import QuoSendError, is_transient_send_error
+
+        assert is_transient_send_error(QuoSendError("x", status=429))
+        assert is_transient_send_error(QuoSendError("x", status=502))
+        assert not is_transient_send_error(QuoSendError("x", status=400))
+        assert not is_transient_send_error(QuoSendError("x", status=402))
+        assert not is_transient_send_error(QuoSendError("x", status=404))
+        assert not is_transient_send_error(ValueError("something else"))
+        # Quo may already have taken a text whose answer timed out: sending
+        # it again could text the same person twice.
+        import urllib.error
+
+        assert is_transient_send_error(urllib.error.URLError("connection refused"))
+        assert not is_transient_send_error(TimeoutError("read timed out"))
+        assert not is_transient_send_error(urllib.error.URLError(TimeoutError()))
+        assert not is_transient_send_error(ConnectionResetError())
+
+        event = self._event(
+            start=self.now + timedelta(minutes=60), end=self.now + timedelta(hours=4)
+        )
+        self._book(event)
+
+        def rejected(**kwargs):
+            raise QuoSendError("Quo returned 400: invalid number", status=400)
+
+        result = self._run(send=rejected)
+        assert result["failed"] == 1 and result["will_retry"] == 0
+        row = ShiftSms.objects.get()
+        assert (row.status, row.attempts) == ("failed", 1)
+        assert self._run()["sent"] == 0 and self.sent == []
+
+    @override_settings(**LIVE)
+    def test_a_retry_is_only_sent_while_the_text_is_still_due(self):
+        """A pre-shift text that failed is not sent after the shift started."""
+        from ambassadors.shift_sms import QuoSendError
+
+        event = self._event(
+            start=self.now + timedelta(minutes=30), end=self.now + timedelta(hours=4)
+        )
+        self._book(event)
+
+        def down(**kwargs):
+            raise QuoSendError("Quo returned 500", status=500)
+
+        self._run(send=down)
+        later = self._run(now=self.now + timedelta(minutes=45))
+        assert later["sent"] == 0 and self.sent == []
+
     @override_settings(**{**LIVE, "SHIFT_SMS_EVENTS_FROM": "2026-11-10T14:00:00-06:00"})
     def test_events_that_started_before_the_go_live_instant_are_left_alone(self):
         # Started 10 AM Chicago, before the 2 PM floor: no recap text.
