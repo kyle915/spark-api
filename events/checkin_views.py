@@ -1611,7 +1611,13 @@ def public_checkin_client_event(request: HttpRequest, code: str) -> HttpResponse
             tenant_id=tenant_id,
             event_id=event_id,
         )
-        logger.warning(
+        # A recorded button press is routine; only real failures warn.
+        log = (
+            logger.info
+            if kind in CheckinFieldIssue.NON_ISSUE_KINDS
+            else logger.warning
+        )
+        log(
             "checkin field issue kind=%s code=%s tenant=%s event=%s detail=%s",
             kind,
             code,

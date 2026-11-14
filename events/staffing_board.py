@@ -44,6 +44,11 @@ class StaffingBoardShift:
     date: str | None = None
     start_time: str | None = None
     end_time: str | None = None
+    # The same instants as wall-clock time at the venue ("2026-11-14T16:00:00",
+    # no zone), so a board shows 4 PM for a 4 PM shift whoever is looking.
+    # Null when the event has no time zone to convert with.
+    start_local: str | None = None
+    end_local: str | None = None
     address: str | None = None
     store: str | None = None
     request_uuid: str | None = None
@@ -73,6 +78,20 @@ async def _accessible_tenants(user):
 def _iso(dt) -> str | None:
     try:
         return dt.isoformat() if dt else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _venue_local(event, dt) -> str | None:
+    """`dt` as naive wall-clock ISO in the event's own time zone, or None
+    when there is no instant or no zone to convert it with."""
+    from utils.tz import naive_local_iso, resolve_zoneinfo
+
+    tz_row = getattr(event, "timezone", None) if getattr(event, "timezone_id", None) else None
+    if not dt or tz_row is None or resolve_zoneinfo(tz_row) is None:
+        return None
+    try:
+        return naive_local_iso(dt, tz_row)
     except Exception:  # noqa: BLE001
         return None
 
@@ -109,7 +128,7 @@ class StaffingBoardQueries:
                 Event.objects.filter(
                     date__date__gte=start, date__date__lte=end
                 )
-                .select_related("tenant", "request", "retailer")
+                .select_related("tenant", "request", "retailer", "timezone")
                 .prefetch_related(
                     "ambassadors_events__ambassador__user"
                 )
@@ -159,6 +178,8 @@ class StaffingBoardQueries:
                         date=_iso(getattr(ev, "date", None)),
                         start_time=_iso(getattr(ev, "start_time", None)),
                         end_time=_iso(getattr(ev, "end_time", None)),
+                        start_local=_venue_local(ev, getattr(ev, "start_time", None)),
+                        end_local=_venue_local(ev, getattr(ev, "end_time", None)),
                         address=getattr(ev, "address", None),
                         store=store,
                         request_uuid=(

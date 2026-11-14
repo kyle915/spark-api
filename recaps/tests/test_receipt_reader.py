@@ -203,3 +203,24 @@ class TestReceiptReadingDb(AmbassadorsGraphQLTestCase):
             recap_models.CheckinFieldIssue.objects.values_list("kind", "detail", "tenant_id")
         )
         assert rows == [("photo_upload_failed", "PUT timed out after 3 tries", self.tenant.id)]
+
+    def test_a_clock_button_press_is_recorded_but_is_not_an_issue(self):
+        from recaps.checkin_issue_schema import summarize_issues
+
+        self.tenant.checkin_code = "RB-TEST12"
+        self.tenant.save(update_fields=["checkin_code"])
+        res = Client().post(
+            "/api/public/checkin/RB-TEST12/client-event",
+            data=json.dumps({"kind": "punch_tapped", "detail": "clock in 2026-11-14T16:45:00Z"}),
+            content_type="application/json",
+        )
+        assert res.status_code == 204
+        row = recap_models.CheckinFieldIssue.objects.get()
+        assert (row.kind, row.detail) == ("punch_tapped", "clock in 2026-11-14T16:45:00Z")
+        # The staff issue summary reads only real problems.
+        issues = (
+            recap_models.CheckinFieldIssue.objects.exclude(
+                kind__in=recap_models.CheckinFieldIssue.NON_ISSUE_KINDS
+            ).values_list("kind", "event_id", "created_at", "detail")
+        )
+        assert summarize_issues(issues) == []
