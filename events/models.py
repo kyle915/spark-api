@@ -1786,3 +1786,53 @@ class FieldMarketingEvent(models.Model):
                 name="ev_fm_tenant_date_idx",
             ),
         ]
+
+
+class SheetShift(models.Model):
+    """One staffed row of a Google staffing sheet, as last read.
+
+    A read-only mirror for showing "the sheet has X on this" beside Spark's
+    own bookings (events/sheet_staffing.py). Nothing here books anyone: the
+    row is whatever the sheet said at ``synced_at``, and it is removed when
+    the sheet no longer says it.
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    tenant = models.ForeignKey(
+        Tenant, on_delete=models.CASCADE, related_name="sheet_shifts"
+    )
+    sheet_id = models.CharField(max_length=80)
+    tab_gid = models.BigIntegerField(default=0)
+    row_number = models.IntegerField()
+    source_label = models.CharField(max_length=120, blank=True, default="")
+    day = models.DateField(db_index=True)
+    start_text = models.CharField(max_length=40, blank=True, default="")
+    end_text = models.CharField(max_length=40, blank=True, default="")
+    store_name = models.CharField(max_length=255, blank=True, default="")
+    address = models.CharField(max_length=500, blank=True, default="")
+    ba_name = models.CharField(max_length=255)
+    ba_email = models.CharField(max_length=254, blank=True, default="")
+    ba_phone = models.CharField(max_length=40, blank=True, default="")
+    rate = models.CharField(max_length=40, blank=True, default="")
+    # The Spark event this row is about, when exactly one fits.
+    event = models.ForeignKey(
+        Event,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="sheet_shifts",
+    )
+    match = models.CharField(max_length=12, default="no_event")
+    synced_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["sheet_id", "tab_gid", "row_number", "tenant"],
+                name="uq_sheet_shift_row_tenant",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["tenant", "day"], name="ev_sheetshift_tenant_day_idx"),
+        ]
