@@ -15,9 +15,6 @@ This command closes those out safely, once per run:
   clock-in with no matching clock-out, insert a clock-out Attendance row
   stamped at the event's SCHEDULED end time — not "now" — so the recorded
   hours reflect the shift that was booked, not the hours-late cron run.
-  (If the BA's latest clock-in is at or after the scheduled end, the
-  clock-out is stamped one minute after that clock-in instead, so it still
-  lands after it.)
 
 Idempotent by construction: once the clock-out row exists, the BA's latest
 attendance event is a clock-out, so a later run won't touch them again — no
@@ -44,9 +41,6 @@ from django.core.management.base import BaseCommand
 from django.utils import timezone
 
 logger = logging.getLogger(__name__)
-
-# How long after a late clock-in the auto clock-out is stamped.
-_AFTER_LATE_CLOCK_IN = timedelta(minutes=1)
 
 
 class Command(BaseCommand):
@@ -121,15 +115,13 @@ class Command(BaseCommand):
             )
             .select_related("source")
             .order_by("clock_time", "id")
-            .values("ambassador_id", "event_id", "source__name", "clock_time")
+            .values("ambassador_id", "event_id", "source__name")
         )
         latest_kind: dict[tuple[int, int], str] = {}
-        latest_at: dict[tuple[int, int], object] = {}
         for row in clock_rows:
             key = (row["ambassador_id"], row["event_id"])
             if key in pairs:
                 latest_kind[key] = row["source__name"]
-                latest_at[key] = row["clock_time"]
 
         # "Still on the clock" = latest attendance event is a clock-in.
         stale = [
@@ -147,17 +139,7 @@ class Command(BaseCommand):
         closed = 0
         for r in stale:
             ev = r.event
-            # Honest close: the scheduled end, not "now". But a BA who
-            # clocked in AFTER the scheduled end would get a clock-out dated
-            # before their clock-in, the clock-in would stay the latest
-            # punch, and every hourly run would close (and push) again. So
-            # never stamp earlier than just after their latest clock-in.
-            close_at = ev.end_time
-            closed_how = "at its scheduled end time"
-            last_in = latest_at.get((r.ambassador_id, r.event_id))
-            if last_in is not None and last_in >= close_at:
-                close_at = last_in + _AFTER_LATE_CLOCK_IN
-                closed_how = "right after your clock-in"
+            close_at = ev.end_time  # honest: the scheduled end, not "now"
             venue = (getattr(ev, "name", None) or "your shift")[:80]
             if dry:
                 self.stdout.write(
@@ -194,7 +176,7 @@ class Command(BaseCommand):
                         title="We clocked you out",
                         body=(
                             f"You didn't clock out of {venue}, so we closed it "
-                            f"{closed_how}. Tell your coordinator "
+                            "at its scheduled end time. Tell your coordinator "
                             "if you worked later."
                         ),
                         data={"kind": "auto_clock_out", "screen": "shifts",
