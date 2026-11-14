@@ -263,12 +263,25 @@ class SetCustomRecapFileCategoryInput(SparkGraphQLInput):
 class ApproveRecapInput(SparkGraphQLInput):
     id: strawberry.ID
     approved: bool
+    # Also accept Spark's pending retailer suggestion for this recap's event.
+    accept_retailer_proposal: bool | None = None
 
 
 @strawberry.input
 class ApproveCustomRecapInput(SparkGraphQLInput):
     id: strawberry.ID
     approved: bool
+    # Also accept Spark's pending retailer suggestion for this recap's event.
+    accept_retailer_proposal: bool | None = None
+
+
+@strawberry.input
+class DecideRetailerProposalInput(SparkGraphQLInput):
+    """Accept (optionally with a corrected name) or dismiss a suggestion."""
+
+    proposal_id: strawberry.ID
+    accept: bool
+    retailer_name: str | None = None
 
 
 @strawberry.input
