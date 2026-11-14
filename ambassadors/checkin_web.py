@@ -2971,6 +2971,25 @@ def _default_event_type(tenant):
         return None
 
 
+def _house_number(address: str | None) -> str:
+    match = re.search(r"(?<![\w#])(\d{1,6})\s+(?:[NSEW]\.?\s+)?[A-Za-z]{2,}", address or "")
+    return match.group(1) if match else ""
+
+
+def store_name_match_allowed(typed_address: str | None, event_address: str | None) -> bool:
+    """May a check-in join a scheduled event on the store's NAME alone?
+
+    The name-only tier exists for a schedule row that carries just a venue
+    ("Kroger") or a slightly different street. It must not override an
+    address that plainly says somewhere else: a person standing at 9703
+    Barker Cypress Rd who also types "Kroger" is not at the Kroger at 1440
+    Studemont St. When both addresses have a house number and the numbers
+    differ, the name is not enough.
+    """
+    typed, scheduled = _house_number(typed_address), _house_number(event_address)
+    return not (typed and scheduled and typed != scheduled)
+
+
 def find_or_create_walkin_event(
     *, tenant, store_name: str, address: str, on_date, actor, event_type=None
 ):
@@ -3079,6 +3098,8 @@ def find_or_create_walkin_event(
                 co_activation_host__isnull=True,
             ).select_related("retailer"):
                 if type_id is not None and getattr(ev, "event_type_id", None) != type_id:
+                    continue
+                if not store_name_match_allowed(address, getattr(ev, "address", "")):
                     continue
                 labels = [
                     getattr(ev, "name", "") or "",

@@ -403,6 +403,22 @@ class TestTenantCheckinLink(AmbassadorsGraphQLTestCase):
             == "1500 n clybourn chicago il"
         )
 
+    def test_a_store_name_never_overrides_a_different_street_number(self):
+        # Liquid Death, 14 Nov 2026: at the Kroger on Barker Cypress, with one
+        # scheduled "Kroger" that day at 1440 Studemont St.
+        allowed = checkin_web.store_name_match_allowed
+        assert not allowed(
+            "9703 Barker Cypress Rd, Cypress, TX 77433",
+            "1440 Studemont St, Houston, TX 77007, USA",
+        )
+        # Same number, different spelling: still the same place.
+        assert allowed("1440 Studemont Street", "1440 Studemont St, Houston, TX 77007, USA")
+        # One side has no number (a venue-only schedule row, or GPS gave a
+        # name): the name tier is exactly what that case is for.
+        assert allowed("Kroger, Houston", "1440 Studemont St, Houston, TX 77007, USA")
+        assert allowed("9703 Barker Cypress Rd", "Kroger")
+        assert allowed("", "")
+
     def test_fuzzy_match_road_rd_and_state_name(self):
         # Famus orphan 6840 → REQ 5337 Smiley's Columbia: GPS spelled Road +
         # Kentucky; Tracker stored Rd + KY.
