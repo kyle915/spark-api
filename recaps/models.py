@@ -1192,7 +1192,13 @@ class CheckinFieldIssue(models.Model):
         "punch_not_saved",
         "storage_unavailable",
         "recap_submit_failed",
+        # Not a failure: the ambassador pressed Clock in / Clock out. Kept so
+        # an attempt that never lands still leaves a trace (detail carries
+        # "clock in <tapped-at>"). Left out of the issue summary.
+        "punch_tapped",
     )
+    # Kinds that record activity, not a problem.
+    NON_ISSUE_KINDS = ("punch_tapped",)
 
     id = models.BigAutoField(primary_key=True)
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)

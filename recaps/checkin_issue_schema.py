@@ -100,6 +100,7 @@ class CheckinIssueQueries:
                     tenant_id=tenant_pk,
                     created_at__gte=timezone.now() - timedelta(days=window),
                 )
+                .exclude(kind__in=CheckinFieldIssue.NON_ISSUE_KINDS)
                 .order_by("-created_at")
                 .values_list("kind", "event_id", "created_at", "detail")[:5000]
             )

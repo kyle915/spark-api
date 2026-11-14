@@ -48,16 +48,21 @@ BOARD_QUERY = """
         date
         startTime
         endTime
+        startLocal
+        endLocal
         address
         store
         requestUuid
         onClock
         noShows
         pendingApproval
+        lastClockInTapAt
         assigned {
           ambassadorUuid
           name
           status
+          registeredAt
+          bookingSource
           clockInAt
           clockOutAt
           workedHours
@@ -370,3 +375,73 @@ class TestLiveShiftBoard(AmbassadorsGraphQLTestCase):
         await self._seed(seed)
 
         assert "Finished Tester" not in self._names(await self._board(self.tenant.id))
+
+    # ---------- venue-local shift times ----------
+
+    @pytest.mark.asyncio
+    async def test_shift_times_also_come_as_wall_clock_at_the_venue(self):
+        """A 4 PM Chicago shift is 22:00Z. The board must be able to print
+        4 PM for it whatever zone the viewer is in."""
+        from events.models import Event, TimeZone
+
+        def seed():
+            zone = TimeZone.objects.create(name="America/Chicago", code="", offset=-360)
+            day = self.noon.date()
+            start = datetime.combine(day, _time(16, 0), tzinfo=ZoneInfo("America/Chicago"))
+            Event.objects.filter(id=self.event.id).update(
+                timezone=zone, start_time=start, end_time=start + timedelta(hours=3)
+            )
+
+        await self._seed(seed)
+        await self._seed(lambda: self._book(self._ba("zoe"), approved=True))
+        (shift,) = await self._board(self.tenant.id)
+        assert shift["startLocal"].endswith("T16:00:00")
+        assert shift["endLocal"].endswith("T19:00:00")
+        # The instants are still there for anything that needs real time.
+        assert shift["startTime"].endswith("+00:00")
+
+    @pytest.mark.asyncio
+    async def test_no_venue_zone_means_no_local_time_rather_than_a_guess(self):
+        from events.models import Event
+
+        def seed():
+            Event.objects.filter(id=self.event.id).update(
+                timezone=None, start_time=self.noon, end_time=self.noon + timedelta(hours=2)
+            )
+
+        await self._seed(seed)
+        await self._seed(lambda: self._book(self._ba("yan"), approved=True))
+        (shift,) = await self._board(self.tenant.id)
+        assert shift["startLocal"] is None and shift["endLocal"] is None
+        assert shift["startTime"] is not None
+
+    @pytest.mark.asyncio
+    async def test_each_person_carries_when_and_how_they_were_booked(self):
+        """So the dashboard can say "registered 10:02, never clocked in"."""
+        await self._seed(lambda: self._book(self._ba("mel"), approved=True))
+        (shift,) = await self._board(self.tenant.id)
+        (ba,) = shift["assigned"]
+        assert ba["bookingSource"] == "admin"
+        assert ba["registeredAt"] and ba["registeredAt"].endswith("+00:00")
+        assert ba["clockInAt"] is None
+
+    @pytest.mark.asyncio
+    async def test_a_pressed_clock_in_that_never_saved_still_shows_on_the_shift(self):
+        from recaps.models import CheckinFieldIssue
+
+        def seed():
+            self._book(self._ba("mel"), approved=True)
+            CheckinFieldIssue.objects.create(
+                kind="punch_tapped", detail="clock in 2026-11-14T16:45:00Z",
+                code="BD-TEST", tenant=self.tenant, event=self.event,
+            )
+            CheckinFieldIssue.objects.create(
+                kind="punch_tapped", detail="clock out 2026-11-14T20:00:00Z",
+                code="BD-TEST", tenant=self.tenant, event=self.event,
+            )
+
+        await self._seed(seed)
+        (shift,) = await self._board(self.tenant.id)
+        assert shift["lastClockInTapAt"] is not None
+        assert shift["assigned"][0]["clockInAt"] is None
+

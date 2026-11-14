@@ -21,7 +21,7 @@ from asgiref.sync import sync_to_async
 from events.models import Event
 from utils.graphql.permissions import IsClientOrSparkAdmin
 from utils.graphql.mixins import resolve_id_to_int
-from events.staffing_board import _accessible_tenants, _iso
+from events.staffing_board import _accessible_tenants, _iso, _venue_local
 
 # Minutes after start with no clock-in before a BA counts as a no-show
 # (matches send_no_show_alerts' default threshold).
@@ -156,6 +156,29 @@ def _latest_locations(event_ids) -> dict[tuple[int, int], dict]:
     return out
 
 
+def _last_clock_in_taps(event_ids) -> dict:
+    """event id → when Clock in was last pressed on the check-in page."""
+    from django.db.models import Max
+
+    from recaps.models import CheckinFieldIssue
+
+    if not event_ids:
+        return {}
+    try:
+        rows = (
+            CheckinFieldIssue.objects.filter(
+                kind="punch_tapped",
+                event_id__in=event_ids,
+                detail__startswith="clock in",
+            )
+            .values("event_id")
+            .annotate(last=Max("created_at"))
+        )
+        return {row["event_id"]: row["last"] for row in rows}
+    except Exception:  # noqa: BLE001 — evidence is a nicety, never a blocker
+        return {}
+
+
 @strawberry.type
 class LiveBoardBA:
     ambassador_uuid: str
@@ -181,6 +204,12 @@ class LiveBoardBA:
     # (that's why they're on this board) but their hours don't count until a
     # recap is approved — see approve_booking_for_recap.
     pending_approval: bool = False
+    # When this booking was made — for a walk-up, the moment they entered
+    # their details on the check-in page. With no clock_in_at, this is how
+    # the dashboard spots "registered, never clocked in".
+    registered_at: str | None = None
+    # "admin" (booked by staff) or "walkup" (self-registered from a link).
+    booking_source: str | None = None
 
 
 @strawberry.type
@@ -191,6 +220,11 @@ class LiveBoardShift:
     date: str | None = None
     start_time: str | None = None
     end_time: str | None = None
+    # The same instants as wall-clock time at the venue ("2026-11-14T16:00:00",
+    # no zone), so a board shows 4 PM for a 4 PM shift whoever is looking.
+    # Null when the event has no time zone to convert with.
+    start_local: str | None = None
+    end_local: str | None = None
     address: str | None = None
     store: str | None = None
     request_uuid: str | None = None
@@ -200,6 +234,9 @@ class LiveBoardShift:
     no_shows: int = 0
     # How many of `assigned` are walk-ups still awaiting recap approval.
     pending_approval: int = 0
+    # The last time someone on this shift pressed Clock in on the check-in
+    # page, whether or not the punch was saved. Null when nobody has.
+    last_clock_in_tap_at: str | None = None
 
 
 @strawberry.type
@@ -368,7 +405,7 @@ class LiveBoardQueries:
 
             qs = (
                 Event.objects.filter(Q(date__date=day) | Q(id__in=open_ids))
-                .select_related("tenant", "request", "retailer")
+                .select_related("tenant", "request", "retailer", "timezone")
                 .prefetch_related("ambassadors_events__ambassador__user")
                 .order_by("start_time", "name")
             )
@@ -381,6 +418,7 @@ class LiveBoardQueries:
             event_ids = [ev.id for ev in events]
             facts = clock_facts(event_ids)
             locs = _latest_locations(event_ids)
+            taps = _last_clock_in_taps(event_ids)
 
             grace = timedelta(minutes=NO_SHOW_GRACE_MIN)
             shifts: list[LiveBoardShift] = []
@@ -452,6 +490,8 @@ class LiveBoardQueries:
                             location_source=loc.get("source"),
                             accuracy_meters=loc.get("accuracy"),
                             pending_approval=not ae.is_approved,
+                            registered_at=_iso(getattr(ae, "created_at", None)),
+                            booking_source=getattr(ae, "source", None) or None,
                         )
                     )
 
@@ -473,6 +513,9 @@ class LiveBoardQueries:
                         date=_iso(getattr(ev, "date", None)),
                         start_time=_iso(start),
                         end_time=_iso(end),
+                        start_local=_venue_local(ev, start),
+                        end_local=_venue_local(ev, end),
+                        last_clock_in_tap_at=_iso(taps.get(ev.id)),
                         address=getattr(ev, "address", None),
                         store=store,
                         request_uuid=(
