@@ -557,6 +557,60 @@ class RecapMetricEditType:
     edited_at: str
 
 
+@strawberry.type
+class RetailerProposalType:
+    """Spark's suggested retailer for an event that has none. Staff only."""
+
+    id: strawberry.ID
+    name: str
+    confidence: str
+    source: str
+    source_label: str
+    reason: str
+    is_new_retailer: bool
+
+
+async def _retailer_proposal_for_admin(
+    info: strawberry.Info, event_id: int | None
+) -> RetailerProposalType | None:
+    """The pending suggestion for this event; None for clients, BAs and
+    anonymous share views, and once the event has a retailer."""
+    if not event_id:
+        return None
+    user = getattr(getattr(info.context, "request", None), "user", None)
+    if user is None or not getattr(user, "is_authenticated", False):
+        return None
+    role_slug, is_staff, is_super, email = await resolve_request_user_access(user)
+    if not _is_admin_access(role_slug, is_staff, is_super, email):
+        return None
+
+    def _load() -> RetailerProposalType | None:
+        from .retailer_proposals import (
+            SOURCE_LABELS,
+            event_has_retailer,
+            pending_proposal_for_event,
+        )
+
+        row = pending_proposal_for_event(event_id)
+        if row is None:
+            return None
+        from events.models import Event
+
+        event = Event.objects.select_related("request").filter(id=event_id).first()
+        if event is None or event_has_retailer(event):
+            return None
+        return RetailerProposalType(
+            id=strawberry.ID(str(row.uuid)),
+            name=row.proposed_name,
+            confidence=row.confidence,
+            source=row.source,
+            source_label=SOURCE_LABELS.get(row.source, row.source),
+            reason=row.reason,
+            is_new_retailer=row.retailer_id is None,
+        )
+
+    return await sync_to_async(_load)()
+
 async def _metric_edits_for_admin(
     info: strawberry.Info, **recap_filter
 ) -> List[RecapMetricEditType]:
@@ -1111,6 +1165,11 @@ class Recap(Node):
             return d.isoformat() if d else None
 
         return await _get()
+
+    @strawberry.field
+    async def retailer_proposal(self, info: strawberry.Info) -> RetailerProposalType | None:
+        """Spark's suggested retailer when this recap's event has none."""
+        return await _retailer_proposal_for_admin(info, getattr(self, "event_id", None))
 
     @strawberry.field
     async def event_retailer(self) -> str | None:
@@ -1703,6 +1762,11 @@ class CustomRecap(Node):
         return await _get()
 
     @strawberry.field
+    async def retailer_proposal(self, info: strawberry.Info) -> RetailerProposalType | None:
+        """Spark's suggested retailer when this recap's event has none."""
+        return await _retailer_proposal_for_admin(info, getattr(self, "event_id", None))
+
+    @strawberry.field
     async def event_retailer(self) -> str | None:
         """Retailer name for the linked event.
 
@@ -1960,6 +2024,14 @@ class CustomRecapDetailResponse:
     message: str
     client_mutation_id: strawberry.ID | None = None
     custom_recap: CustomRecap | None = None
+
+
+@strawberry.type
+class RetailerProposalResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    retailer_name: str | None = None
 
 
 @strawberry.type

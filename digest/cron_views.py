@@ -11541,6 +11541,50 @@ class SyncSheetStaffingView(View):
         return JsonResponse({"ok": True, "endpoint": "sync-sheet-staffing"})
 
 
+@method_decorator(csrf_exempt, name="dispatch")
+class ProposeRecapRetailersView(View):
+    """POST `/internal/cron/propose-recap-retailers`.
+
+    Fires `propose_recap_retailers` — suggests a retailer for recapped events
+    that have none, for staff to accept while reviewing the recap. Changes no
+    event, recap or retailer. Hourly GHA cron.
+
+    Params: dry_run ("1"/"true"/"yes"), tenant (int), days (int), limit (int).
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _param(name: str) -> str:
+            return (request.GET.get(name) or request.POST.get(name) or "").strip()
+
+        dry_run = _param("dry_run").lower() in ("1", "true", "yes", "on")
+        args: list[str] = ["--dry-run"] if dry_run else []
+        for name in ("tenant", "days", "limit"):
+            value = _param(name)
+            if value.isdigit():
+                args += [f"--{name}", value]
+        out = io.StringIO()
+        try:
+            call_command("propose_recap_retailers", *args, stdout=out, stderr=out)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Retailer proposal cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc),
+                 "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse({"ok": True, "dry_run": dry_run, "log": out.getvalue()})
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        return JsonResponse({"ok": True, "endpoint": "propose-recap-retailers"})
+
+
 def _registered_views() -> dict[str, Any]:
     """Map URL path → view class. Lets `digest/urls.py` mount these
     without each one being re-exported explicitly.
@@ -11563,6 +11607,7 @@ def _registered_views() -> dict[str, Any]:
         "walkup-draft-reminders": SendWalkupDraftRemindersView,
         "shift-sms": SendShiftSmsView,
         "sync-sheet-staffing": SyncSheetStaffingView,
+        "propose-recap-retailers": ProposeRecapRetailersView,
         "send-payment-notifications": SendPaymentNotificationsView,
         "send-document-expiry-reminders": SendDocumentExpiryRemindersView,
         "send-scheduled-client-reports": SendScheduledClientReportsView,

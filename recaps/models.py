@@ -1220,3 +1220,47 @@ class CheckinFieldIssue(models.Model):
 
     def __str__(self) -> str:  # pragma: no cover - admin/debug only
         return f"{self.kind} tenant={self.tenant_id} event={self.event_id}"
+
+
+class RetailerProposal(models.Model):
+    """A suggested retailer for an event that has none (see
+    ``recaps/retailer_proposals.py``). One row per event. ``none`` records
+    that Spark looked and found nothing, so the hourly job does not ask the
+    AI about the same event again. Only an accepted proposal changes data."""
+
+    STATUS_PENDING = "pending"
+    STATUS_ACCEPTED = "accepted"
+    STATUS_DISMISSED = "dismissed"
+    STATUS_NONE = "none"
+
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    tenant = models.ForeignKey(
+        Tenant, on_delete=models.CASCADE, related_name="retailer_proposals"
+    )
+    event = models.OneToOneField(
+        Event, on_delete=models.CASCADE, related_name="retailer_proposal"
+    )
+    proposed_name = models.CharField(max_length=255, blank=True, default="")
+    retailer = models.ForeignKey(
+        Retailer,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="proposals",
+    )
+    source = models.CharField(max_length=16, blank=True, default="")
+    confidence = models.CharField(max_length=8, blank=True, default="")
+    reason = models.CharField(max_length=500, blank=True, default="")
+    evidence = models.JSONField(blank=True, default=list)
+    status = models.CharField(max_length=12, default=STATUS_NONE, db_index=True)
+    decided_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="retailer_proposals_decided",
+    )
+    decided_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)

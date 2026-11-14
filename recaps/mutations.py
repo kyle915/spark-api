@@ -3597,6 +3597,61 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
             delete_blob(blob_name)
         return True
 
+    async def _accept_retailer_proposal_for_event(self, event_id: int | None) -> None:
+        """Apply the pending retailer suggestion for an event, if there is one.
+        Best-effort: it can never fail the approval it rides along with."""
+        if not event_id:
+            return
+        from recaps.retailer_proposals import apply_proposal, pending_proposal_for_event
+
+        def _apply():
+            proposal = pending_proposal_for_event(event_id)
+            if proposal is not None:
+                apply_proposal(proposal, actor=self.user)
+
+        try:
+            await sync_to_async(_apply)()
+        except Exception:
+            logger.exception("accepting retailer proposal failed: event=%s", event_id)
+
+    async def decide_retailer_proposal(self) -> str | None:
+        """Accept (optionally renamed) or dismiss a retailer suggestion."""
+        if not isinstance(self.input, inputs.DecideRetailerProposalInput):
+            raise GraphQLError("Invalid input type.")
+        from recaps.retailer_proposals import apply_proposal, dismiss_proposal
+
+        try:
+            proposal = await sync_to_async(
+                models.RetailerProposal.objects.select_related("retailer").get
+            )(uuid=str(self.input.proposal_id).strip())
+        except Exception:
+            raise GraphQLError("Suggestion not found.")
+
+        await self._assert_caller_authorized_for_recap_tenant(
+            proposal.tenant_id,
+            action="update",
+            block_ambassadors=True,
+            record_label="Retailer suggestion",
+        )
+        # Naming the store is Ignite's call; a brand user never sees the
+        # suggestion and cannot decide one.
+        role_slug, is_staff, is_super, email = await resolve_request_user_access(self.user)
+        if not _is_admin_access(role_slug, is_staff, is_super, email):
+            raise GraphQLError("Only Ignite staff can decide a retailer suggestion.")
+        if proposal.status != models.RetailerProposal.STATUS_PENDING:
+            raise GraphQLError("This suggestion was already decided.")
+
+        if not self.input.accept:
+            await sync_to_async(dismiss_proposal)(proposal, actor=self.user)
+            return None
+        name = (self.input.retailer_name or "").strip()
+        if len(name) > 255:
+            raise GraphQLError("That retailer name is too long.")
+        retailer = await sync_to_async(apply_proposal)(
+            proposal, actor=self.user, name_override=name or None
+        )
+        return retailer.name
+
     async def approve_recap(self) -> models.Recap:
         """Approve or decline a recap."""
         if not isinstance(self.input, inputs.ApproveRecapInput):
@@ -3627,6 +3682,12 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
                 return recap
 
         recap = await approve_recap_transaction()
+
+        # After the approval save (which writes the whole in-memory row) and
+        # before the notify below re-reads it, so the client's email names
+        # the store.
+        if self.input.approved and self.input.accept_retailer_proposal:
+            await self._accept_retailer_proposal_for_event(recap.event_id)
 
         # Same rule as the custom-recap path: approving the recap is what logs
         # the hours, so ops works one queue instead of two. See
@@ -3715,6 +3776,12 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
                 return next(r for r in siblings if r.id == custom_recap.id)
 
         custom_recap = await approve_custom_recap_transaction()
+
+        # After the approval save (which writes the whole in-memory row) and
+        # before the notify below re-reads it, so the client's email names
+        # the store.
+        if self.input.approved and self.input.accept_retailer_proposal:
+            await self._accept_retailer_proposal_for_event(custom_recap.event_id)
         slice_ids = [r.id for r in siblings if r.id != custom_recap.id]
 
         # Approving the recap is what LOGS THE HOURS. Walk-ups (mobile code,
@@ -6398,6 +6465,32 @@ class RecapMutations:
         except GraphQLError as e:
             return build_mutation_response(
                 types.CustomRecapDetailResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def decide_retailer_proposal(
+        self,
+        info: strawberry.Info,
+        input: inputs.DecideRetailerProposalInput,
+    ) -> types.RetailerProposalResponse:
+        """Accept or dismiss Spark's suggested retailer for an event."""
+        try:
+            service = RecapMutationService.with_input(input)
+            await service.set_user(info)
+            name = await service.decide_retailer_proposal()
+            return build_mutation_response(
+                types.RetailerProposalResponse,
+                success=True,
+                message=f"Retailer set to {name}." if name else "Suggestion dismissed.",
+                input_obj=input,
+                retailer_name=name,
+            )
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.RetailerProposalResponse,
                 success=False,
                 message=str(e),
                 input_obj=input,
