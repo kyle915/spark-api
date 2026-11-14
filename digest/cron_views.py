@@ -11502,6 +11502,45 @@ class SendShiftSmsView(View):
         return JsonResponse({"ok": True, "endpoint": "shift-sms"})
 
 
+@method_decorator(csrf_exempt, name="dispatch")
+class SyncSheetStaffingView(View):
+    """POST `/internal/cron/sync-sheet-staffing`.
+
+    Fires `sync_sheet_staffing` — reads who the Google staffing sheets have
+    on each shift and refreshes Spark's read-only mirror of it. Writes to no
+    sheet and books nobody. Every-15-minutes GHA cron.
+
+    Params: dry_run ("1"/"true"/"yes") — read and match, store nothing.
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        dry_run = (
+            request.GET.get("dry_run") or request.POST.get("dry_run") or ""
+        ).lower() in ("1", "true", "yes", "on")
+        out = io.StringIO()
+        try:
+            call_command(
+                "sync_sheet_staffing", *(["--dry-run"] if dry_run else []), stdout=out
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Sheet staffing sync cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc),
+                 "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse({"ok": True, "dry_run": dry_run, "log": out.getvalue()})
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        return JsonResponse({"ok": True, "endpoint": "sync-sheet-staffing"})
+
+
 def _registered_views() -> dict[str, Any]:
     """Map URL path → view class. Lets `digest/urls.py` mount these
     without each one being re-exported explicitly.
@@ -11523,6 +11562,7 @@ def _registered_views() -> dict[str, Any]:
         "recap-nudges": SendRecapNudgesView,
         "walkup-draft-reminders": SendWalkupDraftRemindersView,
         "shift-sms": SendShiftSmsView,
+        "sync-sheet-staffing": SyncSheetStaffingView,
         "send-payment-notifications": SendPaymentNotificationsView,
         "send-document-expiry-reminders": SendDocumentExpiryRemindersView,
         "send-scheduled-client-reports": SendScheduledClientReportsView,

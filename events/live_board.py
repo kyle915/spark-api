@@ -203,6 +203,31 @@ class LiveBoardShift:
 
 
 @strawberry.type
+class SheetShiftRow:
+    """One staffed row of a staffing sheet, beside what Spark has booked."""
+
+    uuid: strawberry.ID
+    day: str
+    start_text: str
+    end_text: str
+    store_name: str
+    address: str
+    ba_name: str
+    brand_name: str
+    source_label: str
+    sheet_url: str
+    # "matched" | "no_event" | "ambiguous"
+    match: str
+    event_uuid: str | None
+    # Everyone Spark has booked on the matched event.
+    booked_names: list[str]
+    # True when the sheet's ambassador is booked on the matched event;
+    # None when there is no single matched event to compare against.
+    agrees: bool | None
+    synced_at: str
+
+
+@strawberry.type
 class LiveBoardQueries:
     @strawberry.field(permission_classes=[IsClientOrSparkAdmin])
     async def client_live_token(
@@ -224,6 +249,86 @@ class LiveBoardQueries:
         from events.client_live_tokens import make_client_live_token
 
         return await sync_to_async(make_client_live_token)(tid)
+
+    @strawberry.field(permission_classes=[IsClientOrSparkAdmin])
+    async def sheet_shifts(
+        self,
+        info: strawberry.Info,
+        date: str | None = None,
+        tenant_id: strawberry.ID | None = None,
+    ) -> list[SheetShiftRow]:
+        """Who the staffing sheets have on each shift for `date` (default
+        today), beside Spark's bookings. Ignite staff only — brand users get
+        an empty list. Read-only: nothing is booked from a sheet."""
+        user = info.context.request.user
+        is_admin, _allowed = await _accessible_tenants(user)
+        if not is_admin:
+            return []
+        resolved_tid = None
+        if tenant_id is not None:
+            try:
+                resolved_tid = resolve_id_to_int(tenant_id)
+            except Exception:  # noqa: BLE001
+                resolved_tid = None
+
+        def _go():
+            from events.models import SheetShift
+            from events.sheet_staffing import name_key
+
+            try:
+                day = _date.fromisoformat(str(date)) if date else _ops_today()
+            except (TypeError, ValueError):
+                day = _ops_today()
+            qs = (
+                SheetShift.objects.filter(day=day)
+                .select_related("tenant", "event")
+                .prefetch_related("event__ambassadors_events__ambassador__user")
+                .order_by("tenant__name", "store_name", "row_number")
+            )
+            if resolved_tid is not None:
+                qs = qs.filter(tenant_id=resolved_tid)
+            rows = []
+            for shift in qs[:400]:
+                booked: list[str] = []
+                if shift.event_id:
+                    for ae in shift.event.ambassadors_events.all():
+                        u = getattr(ae.ambassador, "user", None)
+                        full = (
+                            f"{getattr(u, 'first_name', '') or ''} "
+                            f"{getattr(u, 'last_name', '') or ''}"
+                        ).strip()
+                        if full:
+                            booked.append(full)
+                agrees = None
+                if shift.event_id:
+                    want = name_key(shift.ba_name)
+                    agrees = any(name_key(n) == want for n in booked)
+                rows.append(
+                    SheetShiftRow(
+                        uuid=strawberry.ID(str(shift.uuid)),
+                        day=shift.day.isoformat(),
+                        start_text=shift.start_text,
+                        end_text=shift.end_text,
+                        store_name=shift.store_name,
+                        address=shift.address,
+                        ba_name=shift.ba_name,
+                        brand_name=shift.tenant.name or "",
+                        source_label=shift.source_label,
+                        sheet_url=(
+                            "https://docs.google.com/spreadsheets/d/"
+                            f"{shift.sheet_id}/edit#gid={shift.tab_gid}"
+                            f"&range=A{shift.row_number}"
+                        ),
+                        match=shift.match,
+                        event_uuid=str(shift.event.uuid) if shift.event_id else None,
+                        booked_names=booked,
+                        agrees=agrees,
+                        synced_at=shift.synced_at.isoformat(),
+                    )
+                )
+            return rows
+
+        return await sync_to_async(_go)()
 
     @strawberry.field(permission_classes=[IsClientOrSparkAdmin])
     async def live_shift_board(
