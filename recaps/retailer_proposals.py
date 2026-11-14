@@ -55,6 +55,10 @@ _STORE_PLACE_TYPES = {
     "stadium", "event_venue",
 }
 _MIN_NAME = 3
+_NON_ANSWERS = {
+    "null", "none", "unknown", "n a", "na", "not specified", "unspecified",
+    "not provided", "not available", "no retailer", "undefined", "tbd",
+}
 _PLACES_URL = "https://places.googleapis.com/v1/places:searchText"
 
 
@@ -178,6 +182,28 @@ def match_known_retailer(evidence: Evidence, retailers: list[tuple[int, str]]) -
     return None
 
 
+def _is_place_name(name: str, address: str) -> bool:
+    """True when `name` is just the town or state from the address. Some
+    staffing sheets keep the market ("Lansing", "Conroe") in the column that
+    holds the store on other tabs; a market is not a retailer."""
+    target = _norm(name)
+    if not target:
+        return False
+    # Everything after the street line: "…, Lansing, MI 48912".
+    parts = [p for p in (address or "").split(",")[1:] if p.strip()]
+    for part in parts:
+        cleaned = _norm(re.sub(r"\b\d{5}(?:-\d{4})?\b", " ", part))
+        if not cleaned:
+            continue
+        if target == cleaned:
+            return True
+        # "Lansing MI" as one segment, or the bare state code.
+        words = cleaned.split()
+        if target == " ".join(words[:-1]) and len(words[-1]) == 2:
+            return True
+    return False
+
+
 def unlisted_store_name(evidence: Evidence) -> Suggestion | None:
     """A store name someone wrote down that is not a known retailer yet: the
     sheet's store column, the typed store, or a store field on the recap."""
@@ -187,6 +213,10 @@ def unlisted_store_name(evidence: Evidence) -> Suggestion | None:
         name = re.sub(r"\s+", " ", text).strip(" -–,.")
         # Drop a trailing store number or address fragment: "Kroger #412".
         name = re.sub(r"\s*(#|no\.?|store)\s*\d+.*$", "", name, flags=re.I).strip()
+        if _is_place_name(name, evidence.address):
+            continue
+        if _norm(name) in _NON_ANSWERS:
+            continue
         if _MIN_NAME <= len(name) <= 60 and not re.match(r"^\d", name):
             return Suggestion(
                 name=name,
@@ -317,8 +347,9 @@ def ai_suggestion(evidence: Evidence, retailers: list[tuple[int, str]]) -> Sugge
     except Exception:  # noqa: BLE001
         logger.info("retailer proposal: AI call failed", exc_info=True)
         return None
-    name = ((out or {}).get("retailer") or "").strip()
-    if not name or len(name) > 120:
+    name = ((out or {}).get("retailer") or "").strip().strip("\"'")
+    # The model sometimes writes its "no answer" as a word instead of null.
+    if not name or len(name) > 120 or _norm(name) in _NON_ANSWERS:
         return None
     by_norm = {_norm(n): (rid, n) for rid, n in retailers}
     rid, listed = by_norm.get(_norm(name), (None, name))

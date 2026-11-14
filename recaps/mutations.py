@@ -3602,6 +3602,11 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
         Best-effort: it can never fail the approval it rides along with."""
         if not event_id:
             return
+        # Naming the store is Ignite's call, the same rule as deciding a
+        # suggestion directly: a brand user approving a recap cannot apply one.
+        role_slug, is_staff, is_super, email = await resolve_request_user_access(self.user)
+        if not _is_admin_access(role_slug, is_staff, is_super, email):
+            return
         from recaps.retailer_proposals import apply_proposal, pending_proposal_for_event
 
         def _apply():

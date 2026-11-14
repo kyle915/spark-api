@@ -148,6 +148,29 @@ class TestRetailerProposals(AmbassadorsGraphQLTestCase):
             line = rp.places_status()
         assert "not available (HTTP 403)" in line and "SECRETKEY" not in line
 
+    def test_ai_writing_null_as_a_word_is_not_a_suggestion(self):
+        self._recap()
+        with mock.patch.object(rp, "places_lookup", return_value=None), mock.patch(
+            "utils.ai_text.generate_json",
+            return_value={"retailer": "null", "confidence": "low", "reason": "Not stated."},
+        ):
+            call_command("propose_recap_retailers")
+        assert recap_models.RetailerProposal.objects.get(event=self.event).status == "none"
+
+    def test_a_town_in_the_sheets_store_column_is_not_a_store(self):
+        self._sheet("Cypress")
+        suggestion, _ = rp.suggest_for_event(self.event, use_network=False)
+        assert suggestion is None
+        assert rp._is_place_name("Cypress, TX", self.event.address) is False
+        assert rp._is_place_name("TX", self.event.address) is True
+
+    def test_run_stops_starting_events_once_its_time_is_up(self):
+        self._recap()
+        self._sheet("Kroger")
+        with mock.patch("recaps.management.commands.propose_recap_retailers.time.monotonic", side_effect=[0, 999, 999]):
+            call_command("propose_recap_retailers", "--no-network", "--max-seconds", "5")
+        assert not recap_models.RetailerProposal.objects.exists()
+
     def test_event_that_already_has_a_retailer_is_skipped(self):
         self._recap()
         self._sheet("Kroger")
@@ -218,6 +241,20 @@ class TestRetailerProposals(AmbassadorsGraphQLTestCase):
         assert self.event.retailer_id == self.kroger.id
         assert recap.retailer_id == self.kroger.id and recap.approved is True
         assert proposal.status == "accepted" and proposal.decided_by_id == self.admin.id
+
+    @pytest.mark.asyncio
+    async def test_a_brand_user_approving_cannot_apply_the_suggestion(self):
+        recap, proposal = await sync_to_async(self._pending)()
+        client = await sync_to_async(self.create_user)(
+            username="client-rp3", email="client-rp3@brand.com", role=self.roles["client"]
+        )
+        await sync_to_async(self.create_tenanted_user)(client, self.tenant)
+        await self._execute_mutation_authenticated(
+            APPROVE_CUSTOM, {"id": str(recap.id), "accept": True}, client, self.endpoint_path
+        )
+        await sync_to_async(self.event.refresh_from_db)()
+        await sync_to_async(proposal.refresh_from_db)()
+        assert self.event.retailer_id is None and proposal.status == "pending"
 
     @pytest.mark.asyncio
     async def test_approving_without_the_box_leaves_the_suggestion_pending(self):

@@ -9,6 +9,7 @@ at once (a "nothing found" result is remembered too).
     python manage.py propose_recap_retailers --tenant 17 --days 365 --limit 500
 """
 
+import time
 from datetime import timedelta
 
 from django.core.management.base import BaseCommand
@@ -50,7 +51,14 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument("--tenant", type=int, default=None)
         parser.add_argument("--days", type=int, default=120)
-        parser.add_argument("--limit", type=int, default=150)
+        parser.add_argument("--limit", type=int, default=25)
+        parser.add_argument(
+            "--max-seconds",
+            type=int,
+            default=200,
+            help="Stop starting new events after this long, so a web-triggered "
+            "run answers before the request times out. 0 = no limit.",
+        )
         parser.add_argument("--dry-run", action="store_true")
         parser.add_argument(
             "--no-network",
@@ -67,7 +75,17 @@ class Command(BaseCommand):
         )
         found = 0
         by_source: dict[str, int] = {}
+        started = time.monotonic()
+        budget = opts.get("max_seconds") or 0
+        looked = 0
         for event in events:
+            if budget and time.monotonic() - started > budget:
+                self.stdout.write(
+                    f"Stopped after {budget}s with {len(events) - looked} events left "
+                    "for the next run."
+                )
+                break
+            looked += 1
             try:
                 result = propose_for_event(
                     event, use_network=not opts["no_network"], dry_run=dry
@@ -86,6 +104,6 @@ class Command(BaseCommand):
             )
         verb = "would suggest" if dry else "suggested"
         self.stdout.write(
-            f"{len(events)} events looked at, {verb} {found}, nothing found for "
-            f"{len(events) - found}. By source: {by_source or '-'}"
+            f"{looked} events looked at, {verb} {found}, nothing found for "
+            f"{looked - found}. By source: {by_source or '-'}"
         )
