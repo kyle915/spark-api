@@ -11666,6 +11666,56 @@ class ProposeRecapRetailersView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class ProposeRetailerAliasesView(View):
+    """POST `/internal/cron/propose-retailer-aliases`.
+
+    Fires `propose_retailer_aliases` — stores, as suggestions for staff, the
+    store names that look like the same store written differently. Changes
+    no chart, retailer, request or event; only accepted aliases are read.
+
+    Params: dry_run ("1"/"true"/"yes"), tenant (int), limit (int, tenants),
+    no_ai ("1"/"true"/"yes").
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _param(name: str) -> str:
+            return (request.GET.get(name) or request.POST.get(name) or "").strip()
+
+        def _flag(name: str) -> bool:
+            return _param(name).lower() in ("1", "true", "yes", "on")
+
+        dry_run = _flag("dry_run")
+        args: list[str] = ["--dry-run"] if dry_run else []
+        if _flag("no_ai"):
+            args.append("--no-ai")
+        for name in ("tenant", "limit"):
+            value = _param(name)
+            if value.isdigit():
+                args += [f"--{name}", value]
+        out = io.StringIO()
+        try:
+            call_command("propose_retailer_aliases", *args, stdout=out, stderr=out)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Retailer alias cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc),
+                 "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse({"ok": True, "dry_run": dry_run, "log": out.getvalue()})
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        return JsonResponse({"ok": True, "endpoint": "propose-retailer-aliases"})
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class GeocodeEventsView(View):
     """POST `/internal/cron/geocode-events`.
 
@@ -11740,6 +11790,7 @@ def _registered_views() -> dict[str, Any]:
         "shift-sms": SendShiftSmsView,
         "sync-sheet-staffing": SyncSheetStaffingView,
         "propose-recap-retailers": ProposeRecapRetailersView,
+        "propose-retailer-aliases": ProposeRetailerAliasesView,
         "geocode-events": GeocodeEventsView,
         "send-payment-notifications": SendPaymentNotificationsView,
         "send-document-expiry-reminders": SendDocumentExpiryRemindersView,
