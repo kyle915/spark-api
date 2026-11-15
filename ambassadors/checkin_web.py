@@ -44,6 +44,7 @@ from recaps import co_activation
 from recaps.field_conditions import apply_conditions
 from recaps.photo_reuse import normalize_content_sha256
 from recaps.fresh_vintage import inject_roadshow_calcs
+from utils.deep_links import with_tenant
 from utils.outbound import block_if_suppressed
 
 logger = logging.getLogger(__name__)
@@ -1123,8 +1124,11 @@ def _email_admins_checkin_landed(event, ambassador) -> None:
     brand = event.tenant.name if getattr(event, "tenant_id", None) else ""
     venue = event.name or "an event"
     base = (getattr(settings, "ADMIN_FRONTEND_URL", "") or "").rstrip("/")
+    # /walkups is a per-client queue: carry the event's tenant so the button
+    # opens THIS brand's queue, not the reader's last-selected client.
+    walkups_url = escape(with_tenant(f"{base}/walkups", tenant))
     link_html = (
-        f"<div style='margin:16px 0 4px'><a href='{base}/walkups' "
+        f"<div style='margin:16px 0 4px'><a href='{walkups_url}' "
         "style='display:inline-block;background:#c5f546;color:#0a0d09;"
         "padding:10px 18px;border-radius:10px;text-decoration:none;"
         "font-weight:700'>Review in Walk-ups</a></div>"
@@ -1226,8 +1230,13 @@ def _email_admins_shift_moved_brand(event, ambassador, link_tenant) -> None:
     now_brand = getattr(getattr(event, "tenant", None), "name", "") or "another brand"
     venue = event.name or "an event"
     base = (getattr(settings, "ADMIN_FRONTEND_URL", "") or "").rstrip("/")
+    # The walk-up sits in the queue of the brand it LANDED on (the event's
+    # tenant), so that is the client the button has to open.
+    walkups_url = escape(
+        with_tenant(f"{base}/walkups", getattr(event, "tenant", None))
+    )
     link_html = (
-        f"<div style='margin:16px 0 4px'><a href='{base}/walkups' "
+        f"<div style='margin:16px 0 4px'><a href='{walkups_url}' "
         "style='display:inline-block;background:#c5f546;color:#0a0d09;"
         "padding:10px 18px;border-radius:10px;text-decoration:none;"
         "font-weight:700'>Open Walk-ups</a></div>"
@@ -3259,7 +3268,11 @@ def checkin_recap_open_url(recap) -> str:
             else f"/recap/view/{uuid}"
         )
         return f"{base}{path}"
-    return f"{base}/recaps/list"
+    # No permalink to mint: a bare /recaps/list would open whichever client
+    # the reader last selected, so say which client's list this is.
+    event = getattr(recap, "event", None)
+    tenant = getattr(recap, "tenant", None) or getattr(event, "tenant", None)
+    return with_tenant(f"{base}/recaps/list", tenant)
 
 
 def notify_checkin_recap_submitted(recap) -> None:

@@ -733,6 +733,17 @@ class ClientMonthlyReportMailer(Mailer):
         )
 
 
+def _tenant_link(url: str, payload) -> str:
+    """``url`` stamped with the digest's client (``?tenant=<uuid>``).
+
+    These digests are per client but Ignite staff are copied on them; a bare
+    ``/recaps/list`` opened whichever client the reader last had selected.
+    """
+    from utils.deep_links import with_tenant
+
+    return with_tenant(url, tenant_id=getattr(payload, "tenant_id", None))
+
+
 def _client_base_url() -> str:
     """Client/admin origin for digest deep-links (no trailing slash).
 
@@ -883,8 +894,10 @@ class ClientWeeklyDigestMailer(Mailer):
                 else None
             ),
             "links": {
-                "dashboard": f"{base}/" if base else "",
-                "tracker": f"{base}/requests/list" if base else "",
+                "dashboard": _tenant_link(f"{base}/", d) if base else "",
+                "tracker": (
+                    _tenant_link(f"{base}/requests/list", d) if base else ""
+                ),
             },
         }
 
@@ -1042,9 +1055,11 @@ class DailyRetailRollupMailer(Mailer):
                 {"text": q.text, "ba": q.ba, "store": q.store} for q in r.quotes
             ],
             "links": {
-                "dashboard": f"{client_base}/",
-                "insights": f"{client_base}/insights",
-                "recaps": f"{client_base}/recaps/list?activation=retail",
+                "dashboard": _tenant_link(f"{client_base}/", r),
+                "insights": _tenant_link(f"{client_base}/insights", r),
+                "recaps": _tenant_link(
+                    f"{client_base}/recaps/list?activation=retail", r
+                ),
             },
         }
 
