@@ -11,16 +11,16 @@ def _reply(text: str) -> dict:
     return {"choices": [{"message": {"content": text}}]}
 
 
-@override_settings(OPENAI_API_KEY="test-key", OPENAI_MODEL="gpt-6.1-sol")
+@override_settings(OPENAI_API_KEY="test-key", OPENAI_MODEL="gpt-6.1-terra")
 def test_small_caps_are_raised_to_the_reasoning_floor():
     with patch("utils.ai_text._post_json", return_value=_reply("ok")) as post:
         assert ai_text.generate_summary("system", "user", max_tokens=400) == "ok"
     payload = post.call_args.args[1]
-    assert payload["model"] == "gpt-6.1-sol"
+    assert payload["model"] == "gpt-6.1-terra"
     assert payload["max_completion_tokens"] == ai_text._MIN_COMPLETION_TOKENS
 
 
-@override_settings(OPENAI_API_KEY="test-key", OPENAI_MODEL="gpt-6.1-sol")
+@override_settings(OPENAI_API_KEY="test-key", OPENAI_MODEL="gpt-6.1-terra")
 def test_larger_caps_are_left_alone():
     with patch("utils.ai_text._post_json", return_value=_reply("ok")) as post:
         ai_text.generate_summary("system", "user", max_tokens=8000)
