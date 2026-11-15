@@ -583,6 +583,10 @@ GOOGLE_OAUTH_AUDIENCES = list(
 # on the account.
 OPENAI_API_KEY = env("OPENAI_API_KEY", default="")
 OPENAI_MODEL = env("OPENAI_MODEL", default="gpt-6.1-terra")
+# Short sorting jobs (store suggestions, photo and receipt reading, recap
+# checks) run many times and need no long reasoning, so they use a smaller
+# model. Set to "" to run everything on OPENAI_MODEL.
+OPENAI_MODEL_SMALL = env("OPENAI_MODEL_SMALL", default="gpt-5-mini")
 
 _job_extension_rate_default = env("JOB_EXTENSION_RATE_DEFAULT", default=8)
 if _job_extension_rate_default in (None, ""):

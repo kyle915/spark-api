@@ -612,6 +612,7 @@ def _ai_feedback_flag(feedback_texts: list[str]) -> dict | None:
             _FEEDBACK_QUALITY_SYSTEM_PROMPT,
             user_prompt,
             schema=_FEEDBACK_QUALITY_SCHEMA,
+            small=True,
         )
     except Exception:
         # AiUnavailable (no key) or anything else -> degrade silently.

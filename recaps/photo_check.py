@@ -246,6 +246,7 @@ def classify_photo(
                 image_bytes=image_bytes,
                 content_type=content_type,
                 schema=_PHOTO_SCHEMA,
+                small=True,
             )
         except AiUnavailable:
             parsed = None
