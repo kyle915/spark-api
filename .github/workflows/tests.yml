@@ -17,14 +17,21 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  pytest:
+  shard:
+    name: pytest (${{ matrix.shard }}/6)
     # Product suite lives on develop. main's pytest is stale; skip it on
     # PRs that target main so workflow-only / cherry-pick PRs stay green.
     if: github.event_name == 'push' || github.base_ref == 'develop'
     runs-on: ubuntu-latest
-    # Full suite regularly lands ~55–65m on GHA; 60 left no headroom
-    # (PRs timed out after green-path runs on sister branches finished ~56m).
-    timeout-minutes: 90
+    # The whole suite took 50-65 minutes in one job, which made every ship
+    # wait an hour. It is split by test file into six jobs that run at the
+    # same time, each with its own Postgres, so a run takes about as long
+    # as its slowest sixth.
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
     services:
       postgres:
         image: postgres:16
@@ -58,5 +65,28 @@ jobs:
           enable-cache: true
       - name: Install dependencies
         run: uv sync --locked
+      - name: Pick this job's test files
+        # Every sixth test file, in sorted order, from the same folders
+        # pytest.ini lists under testpaths. Round-robin keeps the big apps
+        # (recaps, events, ambassadors) spread across all six jobs.
+        run: |
+          git ls-files tenants/tests events/tests jobs/tests ambassadors/tests recaps/tests chats/tests \
+            | grep -E '(^|/)(test_[^/]*|[^/]*_tests|tests)\.py$' \
+            | sort \
+            | awk -v n=6 -v k=${{ matrix.shard }} 'NR % n == k % n' > shard-files.txt
+          echo "$(wc -l < shard-files.txt) test files in this job"
+          test -s shard-files.txt
       - name: Run test suite
-        run: uv run pytest -q -p no:cacheprovider
+        run: xargs uv run pytest -q -p no:cacheprovider < shard-files.txt
+
+  pytest:
+    # One result for the whole suite, under the name the single job used to
+    # have, so anything that waits on "pytest" still works.
+    if: always() && (github.event_name == 'push' || github.base_ref == 'develop')
+    needs: shard
+    runs-on: ubuntu-latest
+    steps:
+      - name: All six jobs passed
+        run: |
+          echo "shard result: ${{ needs.shard.result }}"
+          test "${{ needs.shard.result }}" = "success"
