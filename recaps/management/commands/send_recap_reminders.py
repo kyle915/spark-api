@@ -112,6 +112,11 @@ class Command(BaseCommand):
             .values_list("event_id", "ambassador_id")
         )
 
+        # Rows staff dismissed as owing no recap are never chased. One query.
+        from recaps.dismissals import DismissedLookup
+
+        dismissed = DismissedLookup(event_ids)
+
         # Reachable BAs (active push device) by user id.
         device_user_ids = set(
             PushDevice.objects.filter(is_active=True).values_list(
@@ -121,9 +126,13 @@ class Command(BaseCommand):
 
         sent = 0
         skipped_filed = 0
+        skipped_dismissed = 0
         for r in rosters:
             if (r.event_id, r.ambassador_id) in filed:
                 skipped_filed += 1
+                continue
+            if dismissed.covers(r.event_id, r.ambassador_id):
+                skipped_dismissed += 1
                 continue
             user_id = getattr(r.ambassador, "user_id", None)
             if not user_id or user_id not in device_user_ids:
@@ -163,7 +172,8 @@ class Command(BaseCommand):
 
         self.stdout.write(
             f"recap reminders: nudged {sent}, skipped {skipped_filed} "
-            f"already-filed, across {len(rosters)} roster row(s)."
+            f"already-filed, {skipped_dismissed} dismissed, across "
+            f"{len(rosters)} roster row(s)."
         )
 
     @staticmethod

@@ -54,6 +54,11 @@ def shift_history_for(*, ambassador, tenant, days: int = 60, limit: int = 30) ->
         return empty
 
     event_ids = [b.event_id for b in bookings]
+    # Shifts staff dismissed as owing no recap: the BA is not told one is
+    # needed. One query for the page.
+    from recaps.dismissals import DismissedLookup
+
+    dismissed = DismissedLookup(event_ids)
     facts = clock_facts(event_ids)
     approvals = list(
         PayrollApproval.objects.filter(tenant=tenant, ambassador=ambassador)
@@ -107,6 +112,7 @@ def shift_history_for(*, ambassador, tenant, days: int = 60, limit: int = 30) ->
                 "recapFiled": has_filed_recap(
                     ambassador_id=ambassador.id, event_id=ev.id
                 ),
+                "recapDismissed": dismissed.covers(ev.id, ambassador.id),
             }
         )
         if len(out) >= limit:

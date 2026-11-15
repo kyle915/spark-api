@@ -277,6 +277,7 @@ def _recap_candidates(now):
     from ambassadors.checkin_web import clock_state
     from ambassadors.models import Ambassador, Attendance, ShiftSms
     from events.models import Event
+    from recaps.dismissals import is_recap_dismissed
     from recaps.filed import has_filed_recap
 
     pairs = list(
@@ -348,6 +349,9 @@ def _recap_candidates(now):
         else:
             continue
         if has_filed_recap(ambassador_id=ambassador_id, event_id=event_id):
+            continue
+        # Staff said no recap is owed for this shift: no text, either kind.
+        if is_recap_dismissed(ambassador_id=ambassador_id, event_id=event_id):
             continue
         yield kind, ambassador, event
 

@@ -1960,7 +1960,10 @@ def tenant_program_health(
       (legacy or custom; empty clock-out shells do not count — see
       :mod:`recaps.filed`).
     * ``approved`` — those with at least one filed + ``approved=True`` recap.
-    * ``missing`` — scheduled minus filed (drill target for /recaps/missing).
+    * ``missing`` — scheduled minus filed, minus un-filed requests whose
+      every event staff dismissed as owing no recap (drill target for
+      /recaps/missing, which leaves those out too). ``scheduled``,
+      ``filed`` and ``approved`` never read dismissals.
 
     Returns ints only; never raises (callers degrade to zeros).
     """
@@ -2005,7 +2008,15 @@ def tenant_program_health(
 
     filed = qs.annotate(_filed=filed_q).filter(_filed=True).count()
     approved = qs.annotate(_approved=approved_q).filter(_approved=True).count()
-    missing = max(0, scheduled - filed)
+    from recaps.dismissals import request_dismissed_q
+
+    not_owed = (
+        qs.annotate(_filed=filed_q)
+        .filter(_filed=False)
+        .filter(request_dismissed_q())
+        .count()
+    )
+    missing = max(0, scheduled - filed - not_owed)
     return {
         "scheduled": int(scheduled),
         "filed": int(filed),

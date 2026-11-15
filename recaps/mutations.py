@@ -6970,6 +6970,99 @@ class RecapMutations:
             )
 
     @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def dismiss_missing_recaps(
+        self,
+        info: strawberry.Info,
+        input: inputs.DismissMissingRecapsInput,
+    ) -> types.DismissMissingRecapsResponse:
+        """Mark Missing Recaps rows as owing no recap, with a reason.
+
+        Ignite staff only. Writes dismissal records and nothing else: no
+        recap, booking or attendance row changes, so hours, payroll and
+        KPIs are untouched. The rows leave the Missing Recaps list, the
+        "Recaps due" counts and every recap reminder until restored.
+        """
+        from events.staffing_board import _accessible_tenants
+        from recaps.dismissals import DismissalError, dismiss_missing_recaps
+
+        user = info.context.request.user
+        is_admin, _allowed = await _accessible_tenants(user)
+        if not is_admin:
+            return build_mutation_response(
+                types.DismissMissingRecapsResponse,
+                success=False,
+                message="Only Ignite staff can dismiss a missing recap.",
+                input_obj=input,
+            )
+        try:
+            rows = await sync_to_async(dismiss_missing_recaps)(
+                user=user,
+                ambassador_event_uuids=input.ambassador_event_uuids,
+                event_uuids=input.event_uuids,
+                reason=input.reason,
+                note=input.note,
+            )
+        except DismissalError as e:
+            return build_mutation_response(
+                types.DismissMissingRecapsResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+        n = len(rows)
+        return build_mutation_response(
+            types.DismissMissingRecapsResponse,
+            success=True,
+            message=f"Dismissed {n} missing recap{'' if n == 1 else 's'}.",
+            input_obj=input,
+            dismissed_count=n,
+            dismissal_uuids=[strawberry.ID(str(r.uuid)) for r in rows],
+        )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def restore_missing_recaps(
+        self,
+        info: strawberry.Info,
+        input: inputs.RestoreMissingRecapsInput,
+    ) -> types.RestoreMissingRecapsResponse:
+        """Undo a dismissal: the rows are owed a recap again everywhere.
+        Ignite staff only. The dismissal record is kept, marked restored."""
+        from events.staffing_board import _accessible_tenants
+        from recaps.dismissals import DismissalError, restore_missing_recaps
+
+        user = info.context.request.user
+        is_admin, _allowed = await _accessible_tenants(user)
+        if not is_admin:
+            return build_mutation_response(
+                types.RestoreMissingRecapsResponse,
+                success=False,
+                message="Only Ignite staff can restore a missing recap.",
+                input_obj=input,
+            )
+        try:
+            n = await sync_to_async(restore_missing_recaps)(
+                user=user, dismissal_uuids=input.dismissal_uuids
+            )
+        except DismissalError as e:
+            return build_mutation_response(
+                types.RestoreMissingRecapsResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+        return build_mutation_response(
+            types.RestoreMissingRecapsResponse,
+            success=True,
+            message=(
+                f"Restored {n} missing recap{'' if n == 1 else 's'}."
+                if n
+                else "Already restored."
+            ),
+            input_obj=input,
+            restored_count=n,
+        )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
     async def nudge_ambassador_for_recap(
         self,
         info: strawberry.Info,
@@ -7016,12 +7109,26 @@ class RecapMutations:
                 already_filed = e_models.Event.objects.filter(
                     pk=ae.event_id, recaps__isnull=False
                 ).exists()
+                from recaps.dismissals import is_recap_dismissed
+
+                ae._recap_dismissed = is_recap_dismissed(
+                    ambassador_id=ae.ambassador_id, event_id=ae.event_id
+                )
                 return (ae, ae.ambassador.user if ae.ambassador else None,
                         already_filed)
 
             ae, user, already_filed = await _fetch()
             if not ae:
                 raise GraphQLError("Shift assignment not found.")
+            if getattr(ae, "_recap_dismissed", False):
+                # Staff said no recap is owed here — never chase it.
+                return build_mutation_response(
+                    types.NudgeRecapResponse,
+                    success=False,
+                    message="This recap was dismissed — no nudge sent.",
+                    input_obj=input,
+                    devices_notified=0,
+                )
             if not user:
                 raise GraphQLError("Ambassador has no user account.")
             if already_filed:

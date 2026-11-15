@@ -134,8 +134,9 @@ def missing_recap_events_queryset(
     punch is ``WALKIN_WRAP_GRACE_HOURS`` back, so nobody is chased mid-shift.
 
     Left out: events with a filed recap in either family (an empty clock-out
-    stub is not one, see ``events_missing_filed_recap``), and events whose
-    request was soft-deleted — a deleted gig owes nothing. Events with no
+    stub is not one, see ``events_missing_filed_recap``), events whose
+    request was soft-deleted — a deleted gig owes nothing — and events staff
+    dismissed as owing no recap (``recaps.dismissals``). Events with no
     request (walk-ins, bulk imports) stay in.
 
     Annotates ``last_punch``. ``tenant_id`` None means every tenant.
@@ -165,7 +166,11 @@ def missing_recap_events_queryset(
     qs = events_missing_filed_recap(qs)
     if tenant_id is not None:
         qs = qs.filter(tenant_id=tenant_id)
-    return qs
+    # Last, so the dismissal subqueries only run for the few events that
+    # are otherwise due.
+    from recaps.dismissals import exclude_dismissed_events
+
+    return exclude_dismissed_events(qs)
 
 
 def recap_instance_is_filed(obj, *, is_custom: bool = False) -> bool:
