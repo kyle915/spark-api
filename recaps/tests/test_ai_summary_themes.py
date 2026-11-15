@@ -40,7 +40,12 @@ from recaps.feedback_themes import (
     count_themes,
 )
 from recaps.weekly_narration import previous_complete_week
-from recaps.weekly_summary import REASON_UNAVAILABLE, REASON_UNGROUNDED, week_bounds
+from recaps.weekly_summary import (
+    REASON_UNAVAILABLE,
+    REASON_UNGROUNDED,
+    month_bounds,
+    week_bounds,
+)
 from utils.ai_text import AiUnavailable
 
 # The field sets the web client asks for.
@@ -71,14 +76,15 @@ mutation Refresh($tenantId: ID!, $startDate: String, $endDate: String) {
 """
 
 SUMMARY_FIELDS = """
-  id weekStart weekEnd body editedBody text status generatedAt
+  id period weekStart weekEnd body editedBody text status generatedAt
   reviewedByName reviewedAt
 """
 
 WEEK = (
     """
-query Week($weekStart: String) {
-  weeklyClientSummaries(weekStart: $weekStart) {
+query Week($weekStart: String, $period: String! = "week") {
+  weeklyClientSummaries(weekStart: $weekStart, period: $period) {
+    period
     weekStart
     weekEnd
     rows {
@@ -96,8 +102,8 @@ query Week($weekStart: String) {
 
 GENERATE = (
     """
-mutation Generate($tenantId: ID!, $weekStart: String!) {
-  generateWeeklyClientSummary(tenantId: $tenantId, weekStart: $weekStart) {
+mutation Generate($tenantId: ID!, $weekStart: String!, $period: String! = "week") {
+  generateWeeklyClientSummary(tenantId: $tenantId, weekStart: $weekStart, period: $period) {
     ok reason summary { %s }
   }
 }
@@ -803,6 +809,103 @@ class TestSummaryAndThemes(AmbassadorsGraphQLTestCase):
         # Reading never calls the model.
         assert self.post.call_count == calls
 
+    # ── monthly client email draft ────────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_monthly_draft_is_its_own_row_built_the_same_way(self):
+        def reply(url, payload, headers, timeout):
+            if "response_format" in payload:
+                return _reply(_themes_from_prompt(payload["messages"][1]["content"]))
+            return _reply("Hi team,\n\nEvents ran and shoppers liked the citrus flavor.")
+
+        self.post.side_effect = reply
+        day = self.store_one.date.date()
+        month_start, month_end = month_bounds(day.isoformat())
+        variables = {
+            "tenantId": str(self.tenant.id),
+            "weekStart": day.isoformat(),
+            "period": "month",
+        }
+        data = await self._run(GENERATE, variables, self.admin)
+        made = data["generateWeeklyClientSummary"]
+        assert made["ok"] is True, made
+        assert made["summary"]["period"] == "month"
+        assert made["summary"]["weekStart"] == month_start.isoformat()
+        assert made["summary"]["weekEnd"] == month_end.isoformat()
+        assert made["summary"]["text"].startswith("Hi team,\n\n")
+
+        # The last call is the email draft; any call before it grouped themes.
+        call = self.post.call_args
+        assert "monthly email" in call.args[1]["messages"][0]["content"]
+        prompt = _prompt(call)
+        facts = json.loads(prompt.split("FACTS:\n", 1)[1])
+        assert facts["month"] == month_start.strftime("%B %Y")
+        assert facts["approved_recaps"] >= 1
+        for dropped in (
+            "PENDING ALPHA QUOTE",
+            "ARCHIVED ALPHA QUOTE",
+            "DELETED ALPHA QUOTE",
+            "BETA",
+            "Rivera",
+            "Casey Walkup",
+            "555-123-4567",
+        ):
+            assert dropped not in prompt, dropped
+        if self.store_three.date.date() <= month_end:
+            # The whole fixture week is inside this month: the themes the
+            # report shows are handed over with their counted recaps.
+            themes = {t["theme"]: t for t in facts["feedback_themes"]}
+            assert themes["Price"]["recaps_mentioning_it"] == 3
+            assert themes["Price"]["section"] == "why people passed"
+
+        # A brand user cannot write one.
+        calls = self.post.call_count
+        data = await self._run(GENERATE, variables, self.client_user)
+        assert data["generateWeeklyClientSummary"]["ok"] is False
+        assert self.post.call_count == calls
+
+        # Listed under the month, not under the week.
+        data = await self._run(
+            WEEK, {"weekStart": day.isoformat(), "period": "month"}, self.admin
+        )
+        month = data["weeklyClientSummaries"]
+        assert month["period"] == "month"
+        assert month["weekStart"] == month_start.isoformat()
+        rows = {r["tenantName"]: r for r in month["rows"]}
+        assert rows["Alpha Brand"]["summary"]["id"] == made["summary"]["id"]
+        data = await self._run(WEEK, {"weekStart": self.start}, self.admin)
+        weekly = {r["tenantName"]: r for r in data["weeklyClientSummaries"]["rows"]}
+        assert weekly["Alpha Brand"]["summary"] is None
+
+        # Reviewed or not, a monthly draft is never the dashboard's summary.
+        await self._run(
+            REVIEWED, {"id": made["summary"]["id"], "reviewed": True}, self.admin
+        )
+        data = await self._run(CARD, {"tenantId": str(self.tenant.id)}, self.client_user)
+        assert data["tenantWeeklySummary"] is None
+        assert len(mail.outbox) == 0
+
+    @pytest.mark.asyncio
+    async def test_cron_drafts_a_month_when_asked(self):
+        day = self.store_one.date.date()
+        with override_settings(INTERNAL_CRON_SECRET=CRON_SECRET):
+            response = await sync_to_async(Client().post)(
+                f"{CRON_PATH}?period=month&week_start={day.isoformat()}",
+                HTTP_X_CRON_SECRET=CRON_SECRET,
+            )
+            bad = await sync_to_async(Client().post)(
+                f"{CRON_PATH}?period=year", HTTP_X_CRON_SECRET=CRON_SECRET
+            )
+        body = response.json()
+        assert response.status_code == 200
+        assert body["period"] == "month" and body["dry_run"] is True
+        assert body["week_start"] == month_bounds(day.isoformat())[0].isoformat()
+        assert body["emails_sent"] == 0
+        assert {t["result"] for t in body["tenants"]} == {"would_write"}
+        assert bad.status_code == 400
+        assert self.post.call_count == 0
+        assert await self._summaries() == []
+
     # ── the Monday job ────────────────────────────────────────────────
 
     @pytest.mark.asyncio
@@ -983,3 +1086,16 @@ def test_week_bounds_is_monday_to_sunday():
 )
 def test_notes_fields_are_not_consumer_comments(name, read):
     assert is_comment_field(name) is read
+
+
+def test_month_bounds_is_first_to_last_day():
+    from datetime import date
+
+    assert month_bounds("2026-10-14") == (date(2026, 10, 1), date(2026, 10, 31))
+    assert month_bounds("2026-02-28") == (date(2026, 2, 1), date(2026, 2, 28))
+    assert month_bounds("2024-02-10") == (date(2024, 2, 1), date(2024, 2, 29))
+    assert month_bounds("2026-12-31") == (date(2026, 12, 1), date(2026, 12, 31))
+    # With no date: the last finished month, across a year end too.
+    assert month_bounds(None, date(2026, 11, 1)) == (date(2026, 10, 1), date(2026, 10, 31))
+    assert month_bounds(None, date(2027, 1, 15)) == (date(2026, 12, 1), date(2026, 12, 31))
+    assert month_bounds("nonsense") is None

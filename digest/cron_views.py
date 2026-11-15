@@ -1918,8 +1918,9 @@ class GenerateWeeklyClientSummariesView(View):
     recaps, for Ignite staff to review in Spark. Dry-run is the default
     (lists the brands, calls no model, stores nothing); ``dry_run=false``
     writes the drafts. A brand that already has a draft for the week is
-    left alone, so staff edits are never overwritten. This endpoint never
-    sends email, Slack or texts.
+    left alone, so staff edits are never overwritten. ``period=month``
+    drafts last month's client email instead (``week_start`` is then any
+    day in the month). This endpoint never sends email, Slack or texts.
     """
 
     def post(self, request: HttpRequest) -> HttpResponse:
@@ -1927,7 +1928,12 @@ class GenerateWeeklyClientSummariesView(View):
         if deny is not None:
             return deny
 
-        from recaps.weekly_summary import generate_week_drafts, week_bounds
+        from recaps.weekly_summary import (
+            PERIODS,
+            generate_week_drafts,
+            period_bounds,
+            week_bounds,
+        )
 
         raw = (request.GET.get("dry_run") or request.POST.get("dry_run") or "true").lower()
         dry_run = raw not in ("0", "false", "no", "off")
@@ -1942,7 +1948,18 @@ class GenerateWeeklyClientSummariesView(View):
                     {"ok": False, "error": "tenant_id must be an integer"},
                     status=400,
                 )
-        bounds = week_bounds(week_start or None)
+        period = (request.GET.get("period") or request.POST.get("period") or "week").lower()
+        if period not in PERIODS:
+            return JsonResponse(
+                {"ok": False, "error": "period must be week or month"},
+                status=400,
+            )
+        # With no date, a week is the last finished one by the server's date,
+        # as before; a month is the last finished calendar month.
+        if period == "week" and not week_start:
+            bounds = week_bounds(None)
+        else:
+            bounds = period_bounds(period, week_start)
         if bounds is None:
             return JsonResponse(
                 {"ok": False, "error": "week_start must be YYYY-MM-DD"},
@@ -1951,7 +1968,11 @@ class GenerateWeeklyClientSummariesView(View):
 
         try:
             summary = generate_week_drafts(
-                bounds[0], bounds[1], tenant_id=tenant_id, apply=not dry_run
+                bounds[0],
+                bounds[1],
+                tenant_id=tenant_id,
+                apply=not dry_run,
+                period=period,
             )
         except Exception as exc:  # noqa: BLE001 — surface to caller
             logger.exception("Weekly client summaries cron failed")
