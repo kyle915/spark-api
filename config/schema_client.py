@@ -7,6 +7,8 @@ from utils.graphql.monitored_schema import MonitoredJwtSchema as JwtSchema
 from events.schema import EventQueryClient, EventMutationsClient
 from recaps.schema import RecapQueryClient, RecapMutationsClient
 from recaps.recap_ai import RecapAiMutations, RecapAiQueries
+from recaps.feedback_themes import FeedbackThemeMutations, FeedbackThemeQueries
+from recaps.weekly_summary import WeeklySummaryMutations, WeeklySummaryQueries
 from recaps.report_types import (
     CampaignReportQueries,
     ReportSubscriptionQueries,
@@ -47,6 +49,8 @@ QueryClients = merge_types(
         CheckinIssueQueries,
         NotificationPreferenceQueries,
         RecapAiQueries,
+        FeedbackThemeQueries,
+        WeeklySummaryQueries,
         AmbassadorQueryClient,
         QueryClients,
         ClientJobQueries,
@@ -69,6 +73,8 @@ MutationClients = merge_types(
         EventMutationsClient,
         RecapMutationsClient,
         RecapAiMutations,
+        FeedbackThemeMutations,
+        WeeklySummaryMutations,
         TenantGoalsMutations,
         ScheduledReportMutations,
         NotificationPreferenceMutations,

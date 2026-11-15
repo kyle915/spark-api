@@ -1911,6 +1911,65 @@ class GenerateWeeklyNarrationView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class GenerateWeeklyClientSummariesView(View):
+    """POST `/internal/cron/generate-weekly-client-summaries`.
+
+    Drafts last week's written summary for each brand that had approved
+    recaps, for Ignite staff to review in Spark. Dry-run is the default
+    (lists the brands, calls no model, stores nothing); ``dry_run=false``
+    writes the drafts. A brand that already has a draft for the week is
+    left alone, so staff edits are never overwritten. This endpoint never
+    sends email, Slack or texts.
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        from recaps.weekly_summary import generate_week_drafts, week_bounds
+
+        raw = (request.GET.get("dry_run") or request.POST.get("dry_run") or "true").lower()
+        dry_run = raw not in ("0", "false", "no", "off")
+        tenant = (request.GET.get("tenant_id") or request.POST.get("tenant_id") or "").strip()
+        week_start = (request.GET.get("week_start") or request.POST.get("week_start") or "").strip()
+        tenant_id = None
+        if tenant:
+            try:
+                tenant_id = int(tenant)
+            except ValueError:
+                return JsonResponse(
+                    {"ok": False, "error": "tenant_id must be an integer"},
+                    status=400,
+                )
+        bounds = week_bounds(week_start or None)
+        if bounds is None:
+            return JsonResponse(
+                {"ok": False, "error": "week_start must be YYYY-MM-DD"},
+                status=400,
+            )
+
+        try:
+            summary = generate_week_drafts(
+                bounds[0], bounds[1], tenant_id=tenant_id, apply=not dry_run
+            )
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("Weekly client summaries cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc)},
+                status=500,
+            )
+        return JsonResponse(
+            {
+                "ok": True,
+                "endpoint": "generate-weekly-client-summaries",
+                "dry_run": dry_run,
+                **summary,
+            }
+        )
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class BackfillGirlBeerReceiptsView(View):
     """POST `/internal/cron/backfill-girlbeer-receipts`.
 
@@ -11666,6 +11725,7 @@ def _registered_views() -> dict[str, Any]:
         "send-scheduled-client-reports": SendScheduledClientReportsView,
         "send-client-weekly-digest": SendClientWeeklyDigestView,
         "generate-weekly-narration": GenerateWeeklyNarrationView,
+        "generate-weekly-client-summaries": GenerateWeeklyClientSummariesView,
         "repair-approved-event-status": RepairApprovedEventStatusView,
         "repair-missing-events-for-approved-requests": (
             RepairMissingEventsForApprovedRequestsView

@@ -87,7 +87,8 @@ def summarize_consumers(
     top_stores: int = TOP_STORES,
 ) -> dict:
     """Pure roll-up. Each row is one recap: ``consumers`` (int), ``day``
-    (date of the event), ``store`` and ``state`` (may be blank).
+    (date of the event), ``store`` and ``state`` (may be blank), and ``event``
+    (its id, optional).
 
     Weeks run Monday to Sunday and are contiguous, zero-filled, from the
     first week to the last: the window's own weeks when ``start`` / ``end``
@@ -134,6 +135,8 @@ def summarize_consumers(
     return {
         "total": total,
         "recaps": len(rows),
+        # Distinct events behind those recaps: the base for "per event".
+        "events": len({r["event"] for r in rows if r.get("event") is not None}),
         "by_week": by_week,
         "by_store": by_store,
         "by_state": by_state,
@@ -171,6 +174,7 @@ def tenant_consumer_breakdown(
         .filter(_day__isnull=False)
         .values_list(
             "id",
+            "event_id",
             "_day",
             "event__retailer__name",
             "event__request__retailer__name",
@@ -179,8 +183,18 @@ def tenant_consumer_breakdown(
             "event__address",
         )
     )
-    for recap_id, day, retailer, req_retailer, req_name, state, address in custom.iterator():
+    for (
+        recap_id,
+        event_id,
+        day,
+        retailer,
+        req_retailer,
+        req_name,
+        state,
+        address,
+    ) in custom.iterator():
         placed[recap_id] = {
+            "event": event_id,
             "day": day.date(),
             "store": _store(retailer, req_retailer, req_name),
             "state": state or extract_state_code(address) or "",
@@ -230,6 +244,7 @@ def tenant_consumer_breakdown(
         .filter(_day__isnull=False)
         .values_list(
             "recap_id",
+            "recap__event_id",
             "total_consumer",
             "_day",
             "recap__event__retailer__name",
@@ -241,6 +256,7 @@ def tenant_consumer_breakdown(
     )
     for (
         recap_id,
+        event_id,
         consumers,
         day,
         retailer,
@@ -252,6 +268,7 @@ def tenant_consumer_breakdown(
         row = legacy.setdefault(
             recap_id,
             {
+                "event": event_id,
                 "day": day.date(),
                 "store": _store(retailer, req_retailer, req_name),
                 "state": state or extract_state_code(address) or "",
