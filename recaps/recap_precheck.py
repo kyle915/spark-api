@@ -57,6 +57,9 @@ MODEL_DEADLINE_SECONDS = 4.0
 # fails inside it. The deadline, not the token cap, is what bounds the wait:
 # a larger completion ceiling in utils.ai_text cannot make this step longer.
 _MODEL_REQUEST_TIMEOUT = 3.5
+# utils.ai_text raises this to its own minimum ceiling (room for a reasoning
+# model to think). It is a ceiling, not a target: the schema asks for a few
+# ids, and the deadline above ends a long answer.
 _MODEL_MAX_TOKENS = 400
 
 MAX_ITEMS = 6

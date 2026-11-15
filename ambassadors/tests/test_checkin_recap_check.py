@@ -274,10 +274,13 @@ class TestCheckinRecapCheck(AmbassadorsGraphQLTestCase):
             "“Additional notes” mentions a different number than “Single "
             "cans sold” (12). Can you check which is right?"
         )
-        # One call, a small completion, a short per-attempt timeout.
+        # One call, the smallest completion ceiling utils.ai_text allows, and
+        # a short per-attempt timeout. Time, not tokens, bounds the wait.
+        from utils import ai_text
+
         assert len(sent) == 1
         payload, timeout = sent[0]
-        assert payload["max_completion_tokens"] <= 500
+        assert payload["max_completion_tokens"] == ai_text._MIN_COMPLETION_TOKENS
         assert timeout <= recap_precheck.MODEL_DEADLINE_SECONDS
         # The page stops waiting at 5 seconds; the server gives up first.
         assert recap_precheck.MODEL_DEADLINE_SECONDS < 5
