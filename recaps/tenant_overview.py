@@ -2778,17 +2778,25 @@ def tenant_field_cadence(tenant_id: int) -> dict:
     }
 
 
-def _recent_event_lines(tenant_id: int) -> list[str]:
+# An event is live unless the Request it hangs off was soft-deleted
+# (deleteRequest only sets Request.deleted_at; the event and its recaps stay).
+# Standalone events have no request and are kept.
+_LIVE_REQUEST_Q = Q(request__isnull=True) | Q(request__deleted_at__isnull=True)
+
+
+def _recent_event_lines(tenant_id: int, *, client_safe: bool = False) -> list[str]:
     """Up to :data:`MAX_RECENT_EVENTS` recent events as 'name · date · city, ST'.
 
     Ordered most-recent-first by event date (NULL dates last). Only the
     capped slice is materialized; ``select_related`` avoids per-row joins.
+    ``client_safe`` leaves out events under a soft-deleted request.
     """
-    events = (
-        Event.objects.filter(tenant_id=tenant_id)
-        .select_related("location", "state")
-        .order_by("-date", "-id")[:MAX_RECENT_EVENTS]
-    )
+    events = Event.objects.filter(tenant_id=tenant_id)
+    if client_safe:
+        events = events.filter(_LIVE_REQUEST_Q)
+    events = events.select_related("location", "state").order_by("-date", "-id")[
+        :MAX_RECENT_EVENTS
+    ]
     lines: list[str] = []
     for ev in events:
         name = (getattr(ev, "name", None) or "").strip() or "(event)"
@@ -2813,7 +2821,7 @@ def _clean_quote(text: str | None) -> str | None:
     return cleaned
 
 
-def _recent_quote_lines(tenant_id: int) -> list[str]:
+def _recent_quote_lines(tenant_id: int, *, client_safe: bool = False) -> list[str]:
     """Up to :data:`MAX_RECENT_QUOTES` recent consumer quotes/highlights.
 
     Pulls only the ``quotes`` / ``positive_stories`` text columns from the
@@ -2823,10 +2831,18 @@ def _recent_quote_lines(tenant_id: int) -> list[str]:
     column, so — to keep this bounded and cheap — the quotes section draws
     from legacy feedback only; the KPI sums above still cover both shapes.
     """
-    rows = (
-        ConsumerFeedback.objects.filter(recap__event__tenant_id=tenant_id)
-        .order_by("-created_at", "-id")
-        .values_list("quotes", "positive_stories")
+    rows = ConsumerFeedback.objects.filter(recap__event__tenant_id=tenant_id)
+    if client_safe:
+        # What a client may be shown: approved, not archived, and not under
+        # a soft-deleted request. A needs-review recap's quotes stay out.
+        rows = rows.filter(
+            Q(recap__event__request__isnull=True)
+            | Q(recap__event__request__deleted_at__isnull=True),
+            recap__approved=True,
+            recap__archived_at__isnull=True,
+        )
+    rows = rows.order_by("-created_at", "-id").values_list(
+        "quotes", "positive_stories"
     )
     lines: list[str] = []
     seen: set[str] = set()
@@ -2845,7 +2861,7 @@ def _recent_quote_lines(tenant_id: int) -> list[str]:
     return lines
 
 
-def build_tenant_overview(tenant_id: int) -> str:
+def build_tenant_overview(tenant_id: int, *, client_safe: bool = False) -> str:
     """Render a compact plaintext summary of ONE tenant's whole dataset.
 
     Includes the brand/tenant name; headline totals (# campaigns, #
@@ -2859,6 +2875,11 @@ def build_tenant_overview(tenant_id: int) -> str:
     small. Raises :class:`tenants.models.Tenant.DoesNotExist` if no tenant
     matches ``tenant_id`` (the resolver translates that to a degradation
     reason).
+
+    ``client_safe`` is for a brand user's Ask AI question. The KPI totals
+    and counts are approved-only for everyone; with ``client_safe`` the
+    quotes are too, and events and dates under a soft-deleted request are
+    left out. Staff callers leave it off and get the text they always got.
     """
     tenant = Tenant.objects.get(id=tenant_id)
 
@@ -2872,9 +2893,10 @@ def build_tenant_overview(tenant_id: int) -> str:
     # Overall activity date range over the tenant's events (reuse the
     # campaign report's label formatter). Min/Max are computed in the DB —
     # a single aggregate query, no event rows pulled into Python.
-    span = Event.objects.filter(tenant_id=tenant_id, date__isnull=False).aggregate(
-        _lo=Min("date"), _hi=Max("date")
-    )
+    span_events = Event.objects.filter(tenant_id=tenant_id, date__isnull=False)
+    if client_safe:
+        span_events = span_events.filter(_LIVE_REQUEST_Q)
+    span = span_events.aggregate(_lo=Min("date"), _hi=Max("date"))
     lo, hi = span["_lo"], span["_hi"]
     if lo and hi:
         # Synthesize the two endpoints into the shape _format_date_range
@@ -2908,13 +2930,13 @@ def build_tenant_overview(tenant_id: int) -> str:
         f"- Willing to purchase: {kpis.willing_to_purchase}",
     ]
 
-    event_lines = _recent_event_lines(tenant_id)
+    event_lines = _recent_event_lines(tenant_id, client_safe=client_safe)
     if event_lines:
         lines.append("")
         lines.append(f"Most recent events (up to {MAX_RECENT_EVENTS}):")
         lines.extend(event_lines)
 
-    quote_lines = _recent_quote_lines(tenant_id)
+    quote_lines = _recent_quote_lines(tenant_id, client_safe=client_safe)
     if quote_lines:
         lines.append("")
         lines.append(f"Recent consumer quotes (up to {MAX_RECENT_QUOTES}):")

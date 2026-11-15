@@ -1891,13 +1891,30 @@ class _CampaignReportService(SparkGraphQLMixin):
 
     async def resolve_scope_tenant_id(self, info: strawberry.Info) -> int | None:
         """Return the tenant id to scope by, or None for an unrestricted
-        admin (sees any tenant's request)."""
+        admin (sees any tenant's request).
+
+        Only Ignite staff are unrestricted. This used to pin a caller only
+        when their role read as "client", so every other signed-in role (an
+        ambassador, a pending or invited user, a role that did not load)
+        fell through to "no restriction" and could read any brand's campaign
+        report and its AI summary. The staff decision is the same DB-backed
+        one the rest of the app uses.
+        """
         user = await self.get_user(info)
-        role_slug = self.get_role_slug(user)
-        if role_slug == "client":
-            tenant = await self.get_user_tenant(info)
-            return tenant.id
-        return None
+        if await self.is_staff_caller(info):
+            return None
+        tenant = await self.get_user_tenant(info, user=user)
+        return tenant.id
+
+    async def is_staff_caller(self, info: strawberry.Info) -> bool:
+        """True for Ignite staff, who may see every recap and ambassador
+        names. Everyone else gets the client-safe view of the AI data:
+        approved recaps only, no ambassador names."""
+        from events.staffing_board import _accessible_tenants
+
+        user = await self.get_user(info)
+        is_admin, _allowed = await _accessible_tenants(user)
+        return bool(is_admin)
 
     async def resolve_target_tenant_id(
         self, info: strawberry.Info, requested_tenant_id
@@ -2169,8 +2186,12 @@ class CampaignReportQueries:
             )
             if request_obj is None:
                 return None
+            # A brand user's AI text is written from approved recaps only.
+            # scope_tenant_id is None only for Ignite staff.
             return report_service.build_campaign_report(
-                request_obj, generated_at=generated_at
+                request_obj,
+                generated_at=generated_at,
+                approved_only=scope_tenant_id is not None,
             )
 
         try:
@@ -2250,8 +2271,12 @@ class CampaignReportQueries:
             )
             if request_obj is None:
                 return None
+            # A brand user's AI text is written from approved recaps only.
+            # scope_tenant_id is None only for Ignite staff.
             return report_service.build_campaign_report(
-                request_obj, generated_at=generated_at
+                request_obj,
+                generated_at=generated_at,
+                approved_only=scope_tenant_id is not None,
             )
 
         try:
@@ -2333,18 +2358,28 @@ class CampaignReportQueries:
         recap_token = str(recap_id).strip() if recap_id else ""
         event_token = str(event_id).strip() if event_id else ""
 
+        # Anyone who is not Ignite staff gets the client-safe data: approved
+        # recaps only, nothing under a deleted request, no ambassador names.
+        client_safe = not await service.is_staff_caller(info)
+
         def _build():
             if recap_token:
-                block = build_recap_scope(target_tenant_id, recap_token)
+                block = build_recap_scope(
+                    target_tenant_id, recap_token, client_safe=client_safe
+                )
                 if block is None:
                     return "missing-recap", None
                 return "recap", block
             if event_token:
-                block = build_event_scope(target_tenant_id, event_token)
+                block = build_event_scope(
+                    target_tenant_id, event_token, client_safe=client_safe
+                )
                 if block is None:
                     return "missing-event", None
                 return "event", block
-            return "tenant", build_tenant_overview(target_tenant_id)
+            return "tenant", build_tenant_overview(
+                target_tenant_id, client_safe=client_safe
+            )
 
         try:
             kind, payload = await sync_to_async(_build, thread_sensitive=True)()
