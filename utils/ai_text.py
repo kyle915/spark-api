@@ -90,7 +90,17 @@ def _configured_model() -> str:
     return (getattr(settings, "OPENAI_MODEL", "") or "").strip() or _FALLBACK_MODEL
 
 
-def _with_model_fallback(ask: Callable[[str], _T]) -> _T:
+def _small_model() -> str:
+    """The model for short sorting jobs (is this a store name, which bucket
+    is this photo, does this number look wrong). These run many times and
+    need no long reasoning, so they use a smaller, cheaper model than the
+    one that writes summaries and answers questions."""
+    return (
+        getattr(settings, "OPENAI_MODEL_SMALL", "") or ""
+    ).strip() or _configured_model()
+
+
+def _with_model_fallback(ask: Callable[[str], _T], *, small: bool = False) -> _T:
     """Run ``ask(model)`` against the configured model, then the fallback.
 
     ``ask`` takes a model id and returns its result (or raises
@@ -99,8 +109,10 @@ def _with_model_fallback(ask: Callable[[str], _T]) -> _T:
     we retry once against :data:`_FALLBACK_MODEL` so the feature degrades to
     a working model instead of breaking entirely. When the configured model
     *is* the fallback, the original error propagates unchanged.
+
+    ``small`` picks :func:`_small_model` instead of the main model.
     """
-    configured = _configured_model()
+    configured = _small_model() if small else _configured_model()
     try:
         return ask(configured)
     except AiUnavailable:
@@ -117,7 +129,9 @@ def _chat_messages(system: str, user: str) -> list[dict]:
     ]
 
 
-def generate_summary(system: str, user: str, *, max_tokens: int = 500) -> str:
+def generate_summary(
+    system: str, user: str, *, max_tokens: int = 500, small: bool = False
+) -> str:
     """Generate a short piece of text from a system + user prompt.
 
     Args:
@@ -153,7 +167,7 @@ def generate_summary(system: str, user: str, *, max_tokens: int = 500) -> str:
         )
         return _extract_message_text(body)
 
-    return _with_model_fallback(_ask)
+    return _with_model_fallback(_ask, small=small)
 
 
 # JSON Schema for the structured Q&A response (OpenAI "structured outputs").
@@ -275,7 +289,12 @@ def generate_structured_answer(
 
 
 def generate_json(
-    system: str, user: str, *, schema: dict, max_tokens: int = 2000
+    system: str,
+    user: str,
+    *,
+    schema: dict,
+    max_tokens: int = 2000,
+    small: bool = False,
 ) -> dict | None:
     """Generate a strict-JSON object matching ``schema`` (structured outputs).
 
@@ -340,7 +359,7 @@ def generate_json(
         return parsed
 
     try:
-        return _with_model_fallback(_ask)
+        return _with_model_fallback(_ask, small=small)
     except Exception:
         # ANY mid-flight failure (HTTP/model error incl. a model that rejects
         # json_schema, empty completion, bad/garbled JSON, non-object result)
@@ -357,6 +376,7 @@ def generate_vision_json(
     content_type: str,
     schema: dict,
     max_tokens: int = 400,
+    small: bool = False,
 ) -> dict | None:
     """Classify one image with a strict JSON schema.
 
@@ -410,7 +430,7 @@ def generate_vision_json(
         return parsed
 
     try:
-        return _with_model_fallback(_ask)
+        return _with_model_fallback(_ask, small=small)
     except Exception:
         return None
 

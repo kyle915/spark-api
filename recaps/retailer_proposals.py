@@ -341,7 +341,7 @@ def ai_suggestion(evidence: Evidence, retailers: list[tuple[int, str]]) -> Sugge
         + (", ".join(names) if names else "(none yet)")
     )
     try:
-        out = generate_json(_AI_SYSTEM, user, schema=_AI_SCHEMA, max_tokens=300)
+        out = generate_json(_AI_SYSTEM, user, schema=_AI_SCHEMA, max_tokens=300, small=True)
     except AiUnavailable:
         return None
     except Exception:  # noqa: BLE001
