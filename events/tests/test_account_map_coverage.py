@@ -1,8 +1,9 @@
 """Coverage classification: sampled (1 filed visit) / repeat (>1) / never (0).
 
-Counts come only from filed Recap/CustomRecap rows linked via
-recap.retailer -> event.retailer -> request.retailer. Requests alone are
-Planned, never Sampled.
+Counts come only from filed Recap/CustomRecap rows. The roster totals count
+Retailer rows (recap.retailer -> event.retailer -> request.retailer); the map
+pins count per physical store (see test_account_map_stores.py). Requests
+alone are Planned, never Sampled.
 """
 
 from datetime import timedelta
@@ -56,8 +57,12 @@ class TestAccountMapCoverage(EventsGraphQLTestCase):
         self._request_only(self.never, now + timedelta(days=5))
 
     def _retailer(self, name):
+        # A store is a place: each test store gets its own street address.
+        self._street = getattr(self, "_street", 0) + 1
+        self._coords = getattr(self, "_coords", {})
+        self._coords[name] = [41.9 + self._street / 100, -87.6]
         return em.Retailer.objects.create(
-            name=name, address="1 Main St", store_contact="Mgr",
+            name=name, address=f"{self._street} Main St, Chicago, IL 60601", store_contact="Mgr",
             location=self.location, tenant=self.tenant, created_by=self.sys,
         )
 
@@ -66,7 +71,7 @@ class TestAccountMapCoverage(EventsGraphQLTestCase):
             name=f"req {retailer.name} {when:%f}", address=retailer.address,
             request_type=self.rt, tenant=self.tenant, created_by=self.sys,
             status=self.approved, retailer=retailer, location=self.location,
-            state=self.state, date=when, coordinates=[41.9, -87.6],
+            state=self.state, date=when, coordinates=self._coords[retailer.name],
         )
         ev = self.create_event(name="shift", tenant=self.tenant, request=req, date=when, address=retailer.address)
         # create_event may not set retailer; link explicitly for the chain.
@@ -82,7 +87,7 @@ class TestAccountMapCoverage(EventsGraphQLTestCase):
             name="planned", address=retailer.address, request_type=self.rt,
             tenant=self.tenant, created_by=self.sys, status=self.approved,
             retailer=retailer, location=self.location, state=self.state,
-            date=when, coordinates=[42.0, -87.7],
+            date=when, coordinates=self._coords[retailer.name],
         )
 
     def test_roster_counts_classify_by_filed_recaps(self):

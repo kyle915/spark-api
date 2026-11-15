@@ -1873,3 +1873,67 @@ class EventMapPoint(models.Model):
 
     def __str__(self) -> str:
         return f"EventMapPoint(event={self.event_id}, {self.status})"
+
+
+class AccountListEntry(models.Model):
+    """One store on a brand's uploaded account list (Account Map).
+
+    The list used to live only in the uploader's browser, so it vanished on
+    another device and nobody else saw it. Saved here, per tenant.
+
+    ``lat`` / ``lng`` come from the uploaded file when it had them
+    (``provided``) or are looked up from the address (``ok``). Like
+    ``EventMapPoint``, a looked-up position is only ever used to draw a pin.
+    Rows are never deleted by the app.
+    """
+
+    POSITION_PENDING = "pending"  # has an address, not looked up yet
+    POSITION_OK = "ok"  # looked up from the address
+    POSITION_PROVIDED = "provided"  # lat/lng came in the uploaded file
+    POSITION_NOT_FOUND = "not_found"  # the address has no street-level spot
+    POSITION_NO_ADDRESS = "no_address"  # nothing to look up
+
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    tenant = models.ForeignKey(
+        Tenant, on_delete=models.RESTRICT, related_name="account_list_entries"
+    )
+    name = models.CharField(max_length=255)
+    address = models.TextField(blank=True, default="")
+    city = models.CharField(max_length=120, blank=True, default="")
+    state = models.CharField(max_length=64, blank=True, default="")
+    zip = models.CharField(max_length=20, blank=True, default="")
+    chain = models.CharField(max_length=255, blank=True, default="")
+    notes = models.TextField(blank=True, default="")
+    lat = models.FloatField(null=True, blank=True)
+    lng = models.FloatField(null=True, blank=True)
+    position_status = models.CharField(max_length=12, default=POSITION_PENDING)
+    # Hash of the full normalised address that was (or will be) looked up.
+    address_hash = models.CharField(max_length=64, blank=True, default="", db_index=True)
+    # Hash of normalised name + full address: one row per store per tenant.
+    dedupe_key = models.CharField(max_length=64)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="account_list_entries_created",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["tenant", "dedupe_key"], name="uq_account_list_tenant_store"
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["tenant", "position_status"],
+                name="ev_acctlist_tenant_pos_idx",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"AccountListEntry(tenant={self.tenant_id}, {self.name})"
