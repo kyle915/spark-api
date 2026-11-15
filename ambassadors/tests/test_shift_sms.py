@@ -327,6 +327,74 @@ class TestShiftSms(AmbassadorsGraphQLTestCase):
         # And never again.
         assert self._run(now=self.now + timedelta(hours=20))["sent"] == 0
 
+    # --- dismissed -------------------------------------------------------
+
+    @override_settings(**LIVE)
+    def test_a_dismissed_shift_gets_neither_recap_text_until_restored(self):
+        """Staff said no recap is owed: no "recap due" text, no morning
+        follow-up. Restoring it puts the shift back in line for one."""
+        from recaps.dismissals import dismiss_missing_recaps, restore_missing_recaps
+
+        event = self._event(
+            start=self.now - timedelta(hours=5), end=self.now - timedelta(hours=1)
+        )
+        roster = self._book(event)
+        self._punch(event, "clock_in", self.now - timedelta(hours=5))
+        self._punch(event, "clock_out", self.now - timedelta(hours=1))
+        staff = self.get_system_user()
+        rows = dismiss_missing_recaps(
+            user=staff, ambassador_event_uuids=[roster.uuid], reason="did_not_work"
+        )
+
+        # 3 PM: the recap_due window. Nothing sent, nothing recorded.
+        assert self._run()["sent"] == 0
+        # 9:30 AM next day: the recap_morning window. Still nothing.
+        assert self._run(now=self.now + timedelta(hours=18, minutes=30))["sent"] == 0
+        assert self.sent == [] and ShiftSms.objects.count() == 0
+        # A dry run would not preview one either.
+        assert self._run(dry_run=True)["would_send"] == 0
+
+        restore_missing_recaps(user=staff, dismissal_uuids=[r.uuid for r in rows])
+        assert self._run()["sent"] == 1
+        assert ShiftSms.objects.get().kind == "recap_due"
+        assert self._run(now=self.now + timedelta(hours=18, minutes=30))["sent"] == 1
+        assert sorted(r.kind for r in ShiftSms.objects.all()) == [
+            "recap_due",
+            "recap_morning",
+        ]
+
+    @override_settings(**LIVE)
+    def test_a_dismissed_walk_up_or_whole_event_gets_no_recap_text(self):
+        """A walk-up has no booking to dismiss; the event is dismissed as a
+        whole, which covers whoever clocked in on it."""
+        from recaps.dismissals import dismiss_missing_recaps
+
+        event = self._event(
+            start=self.now - timedelta(hours=5), end=self.now - timedelta(hours=1)
+        )
+        self._punch(event, "clock_in", self.now - timedelta(hours=5))
+        self._punch(event, "clock_out", self.now - timedelta(hours=1))
+        dismiss_missing_recaps(
+            user=self.get_system_user(), event_uuids=[event.uuid],
+            reason="duplicate_or_test",
+        )
+        assert self._run()["sent"] == 0
+        assert self._run(now=self.now + timedelta(hours=18, minutes=30))["sent"] == 0
+        assert self.sent == []
+
+        # The pre-shift text is about turning up, not about a recap: a
+        # dismissal does not touch it.
+        upcoming = self._event(
+            start=self.now + timedelta(minutes=90), end=self.now + timedelta(hours=5)
+        )
+        self._book(upcoming)
+        dismiss_missing_recaps(
+            user=self.get_system_user(), event_uuids=[upcoming.uuid],
+            reason="not_needed",
+        )
+        assert self._run()["sent"] == 1
+        assert ShiftSms.objects.get().kind == "pre_shift"
+
     # --- guards ----------------------------------------------------------
 
     @override_settings(**LIVE)

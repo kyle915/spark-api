@@ -76,6 +76,30 @@ class TestWalkupDraftReminders(AmbassadorsGraphQLTestCase):
         kwargs.setdefault("send_email", self._send)
         return send_walkup_draft_reminders(**kwargs)
 
+    def test_a_dismissed_shift_gets_no_draft_reminder_until_restored(self):
+        from ambassadors.models import AmbassadorEvent
+        from recaps.dismissals import dismiss_missing_recaps, restore_missing_recaps
+
+        roster = AmbassadorEvent.objects.create(
+            ambassador=self.ba, event=self.event, tenant=self.tenant,
+            is_approved=True, created_by=self.actor,
+        )
+        draft = self._draft()
+        rows = dismiss_missing_recaps(
+            user=self.actor, ambassador_event_uuids=[roster.uuid],
+            reason="filed_elsewhere",
+        )
+        counts = self._run()
+        assert counts["sent"] == 0 and counts["skipped_dismissed"] == 1
+        assert self.sent == []
+        draft.refresh_from_db()
+        assert draft.reminder_sent_at is None
+
+        restore_missing_recaps(user=self.actor, dismissal_uuids=[r.uuid for r in rows])
+        counts = self._run()
+        assert counts["sent"] == 1 and counts["skipped_dismissed"] == 0
+        assert len(self.sent) == 1
+
     def test_clocked_out_or_past_shift_draft_gets_one_email_with_standing_link(self):
         draft = self._draft()
         counts = self._run()

@@ -190,6 +190,27 @@ class TestTenantProgramHealth(AmbassadorsGraphQLTestCase):
         assert data["approved"] == 1
         assert data["missing"] == 1
 
+    def test_missing_leaves_out_a_request_staff_dismissed(self):
+        """"Missing" drills to /recaps/missing, which leaves dismissed rows
+        out — so the number does too. The funnel itself (scheduled, filed,
+        approved) never reads a dismissal."""
+        from recaps.dismissals import dismiss_missing_recaps, restore_missing_recaps
+
+        stub_event = event_models.Event.objects.get(recaps__name="stub")
+        rows = dismiss_missing_recaps(
+            user=self.spark_admin, event_uuids=[stub_event.uuid], reason="not_needed"
+        )
+        data = tenant_program_health(self.tenant.id, start=self.start, end=self.end)
+        assert (data["scheduled"], data["filed"], data["approved"]) == (2, 1, 1)
+        assert data["missing"] == 0
+
+        restore_missing_recaps(
+            user=self.spark_admin, dismissal_uuids=[r.uuid for r in rows]
+        )
+        data = tenant_program_health(self.tenant.id, start=self.start, end=self.end)
+        assert (data["scheduled"], data["filed"], data["approved"]) == (2, 1, 1)
+        assert data["missing"] == 1
+
     @pytest.mark.asyncio
     async def test_graphql_program_health(self):
         result = await self._execute_query_authenticated(

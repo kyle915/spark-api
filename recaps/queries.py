@@ -1351,6 +1351,23 @@ async def _assert_caller_authorized_to_read_recap_tenant(
 from recaps.filed import WALKIN_WRAP_GRACE_HOURS  # noqa: E402,F401
 
 
+def _missing_recap_ba_name(user, *, unnamed: str = "(unnamed)") -> str:
+    """Display name for a person on a Missing Recaps row."""
+    return (
+        " ".join(
+            filter(
+                None,
+                [
+                    getattr(user, "first_name", "") or "",
+                    getattr(user, "last_name", "") or "",
+                ],
+            )
+        ).strip()
+        or getattr(user, "email", None)
+        or unnamed
+    )
+
+
 def _id_or_none(raw) -> int | None:
     return resolve_id_to_int(raw) if raw not in (None, "") else None
 
@@ -2317,8 +2334,15 @@ class RecapQueries:
                 "ambassadors_events__ambassador__user",
             )
 
+            events = list(qs[:200])  # safety cap — UI paginates client-side
+            # Ambassadors staff dismissed on an event that still owes a
+            # recap from somebody else are left off its row. One query.
+            from recaps.dismissals import DismissedLookup
+
+            dismissed = DismissedLookup(ev.id for ev in events)
+
             rows: List[types.MissingRecapEventType] = []
-            for ev in qs[:200]:  # safety cap — UI paginates client-side
+            for ev in events:
                 hours_overdue: int | None = None
                 end = getattr(ev, "end_time", None) or getattr(ev, "start_time", None)
                 if end:
@@ -2327,21 +2351,11 @@ class RecapQueries:
 
                 ambassadors: List[types.MissingRecapAmbassadorInfo] = []
                 for ae in ev.ambassadors_events.all():
+                    if dismissed.covers(ev.id, ae.ambassador_id):
+                        continue
                     amb = getattr(ae, "ambassador", None)
                     user = getattr(amb, "user", None) if amb else None
-                    name = (
-                        " ".join(
-                            filter(
-                                None,
-                                [
-                                    getattr(user, "first_name", "") or "",
-                                    getattr(user, "last_name", "") or "",
-                                ],
-                            )
-                        ).strip()
-                        or getattr(user, "email", None)
-                        or "(unnamed)"
-                    )
+                    name = _missing_recap_ba_name(user)
                     ambassadors.append(
                         types.MissingRecapAmbassadorInfo(
                             ambassador_event_uuid=strawberry.ID(str(ae.uuid)),
@@ -2386,6 +2400,125 @@ class RecapQueries:
                             strawberry.ID(str(req_uuid)) if req_uuid else None
                         ),
                         assigned_ambassadors=ambassadors,
+                    )
+                )
+            return rows
+
+        return await sync_to_async(_fetch, thread_sensitive=True)()
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def dismissed_missing_recaps(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID | None = None,
+        lookback_days: int = 30,
+    ) -> List[types.DismissedMissingRecapType]:
+        """Missing Recaps rows staff dismissed as owing no recap, newest
+        first — the "Dismissed" tab, where a row can be restored.
+
+        Ignite staff only: a brand user or an ambassador is refused. The
+        window matches the Missing Recaps one (shifts that wrapped in the
+        last ``lookback_days``; a walk-in with no end time is placed by
+        when it was dismissed).
+        """
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from events.staffing_board import _accessible_tenants
+
+        is_admin, _allowed = await _accessible_tenants(info.context.request.user)
+        if not is_admin:
+            raise GraphQLError("Only Ignite staff can see dismissed recaps.")
+
+        resolved_tenant_id: int | None = None
+        if tenant_id not in (None, ""):
+            try:
+                resolved_tenant_id = resolve_id_to_int(tenant_id)
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError("Invalid tenant id.")
+
+        days = max(1, min(int(lookback_days or 30), 365))
+        cutoff = timezone.now() - timedelta(days=days)
+
+        def _fetch() -> List[types.DismissedMissingRecapType]:
+            from django.db.models import Exists, OuterRef
+
+            from recaps.dismissals import active_dismissals, reason_label
+            from recaps.filed import custom_filed_q, legacy_filed_q
+
+            qs = (
+                active_dismissals()
+                .select_related(
+                    "event",
+                    "event__retailer",
+                    "event__state",
+                    "ambassador__user",
+                    "dismissed_by",
+                )
+                .filter(
+                    Q(event__end_time__gte=cutoff)
+                    | Q(event__end_time__isnull=True, dismissed_at__gte=cutoff)
+                )
+                .annotate(
+                    _filed=Exists(
+                        models.Recap.objects.filter(
+                            event_id=OuterRef("event_id")
+                        ).filter(legacy_filed_q())
+                    )
+                    | Exists(
+                        models.CustomRecap.objects.filter(
+                            event_id=OuterRef("event_id")
+                        ).filter(custom_filed_q())
+                    )
+                )
+                .order_by("-dismissed_at")
+            )
+            if resolved_tenant_id is not None:
+                qs = qs.filter(tenant_id=resolved_tenant_id)
+
+            rows: List[types.DismissedMissingRecapType] = []
+            for d in qs[:300]:
+                ev = d.event
+                amb = d.ambassador
+                user = getattr(amb, "user", None) if amb else None
+                venue = getattr(ev, "name", None) or getattr(
+                    getattr(ev, "retailer", None), "name", None
+                )
+                rows.append(
+                    types.DismissedMissingRecapType(
+                        dismissal_uuid=strawberry.ID(str(d.uuid)),
+                        event_uuid=strawberry.ID(str(ev.uuid)),
+                        event_name=venue or "(shift)",
+                        address=getattr(ev, "address", None),
+                        state_code=getattr(
+                            getattr(ev, "state", None), "code", None
+                        ),
+                        date=(
+                            ev.date.isoformat() if getattr(ev, "date", None) else None
+                        ),
+                        end_time=(
+                            ev.end_time.isoformat()
+                            if getattr(ev, "end_time", None)
+                            else None
+                        ),
+                        ambassador_uuid=(
+                            strawberry.ID(str(amb.uuid)) if amb else None
+                        ),
+                        ambassador_name=(
+                            _missing_recap_ba_name(user) if amb else None
+                        ),
+                        ambassador_email=(
+                            getattr(user, "email", None) if user else None
+                        ),
+                        reason=d.reason,
+                        reason_label=reason_label(d.reason),
+                        note=d.note or "",
+                        dismissed_by_name=_missing_recap_ba_name(
+                            d.dismissed_by, unnamed="(removed user)"
+                        ),
+                        dismissed_at=d.dismissed_at.isoformat(),
+                        recap_filed=bool(getattr(d, "_filed", False)),
                     )
                 )
             return rows

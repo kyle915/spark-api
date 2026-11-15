@@ -1398,7 +1398,7 @@ class RequestQueriesService(BaseEventQueriesService):
         """
         from django.db.models import Prefetch
         from recaps.filed import custom_filed_q, legacy_filed_q
-        from recaps.models import Recap, CustomRecap
+        from recaps.models import Recap, CustomRecap, RecapDismissal
 
         return self._base_queryset().prefetch_related(
             "request_product__product",
@@ -1420,6 +1420,14 @@ class RequestQueriesService(BaseEventQueriesService):
                 ),
             ),
             "event_set__ambassadors_events",
+            # Dismissals in force (id + keys only) for recapDismissed: one
+            # batched `WHERE event_id IN (…)`, almost always empty.
+            Prefetch(
+                "event_set__recap_dismissals",
+                queryset=RecapDismissal.objects.filter(
+                    restored_at__isnull=True
+                ).only("id", "event_id", "ambassador_id"),
+            ),
             "event_set__open_shifts",
             "event_set__open_shifts__released_by",
             "event_set__open_shifts__claimed_by",

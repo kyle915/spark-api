@@ -214,6 +214,10 @@ def build_unfiled_recaps(tenant: Tenant) -> DigestSection:
         .select_related("retailer", "retailer__location", "retailer__location__state")
         .order_by("-end_time")
     )
+    # Shifts staff dismissed as owing no recap are not unfiled.
+    from recaps.dismissals import exclude_dismissed_events
+
+    qs = exclude_dismissed_events(qs)
     rows = []
     for ev in qs[:MAX_PER_SECTION]:
         retailer = getattr(ev, "retailer", None)

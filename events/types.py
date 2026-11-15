@@ -904,6 +904,52 @@ class Request(Node):
         return await sync_to_async(_find)()
 
     @strawberry.field
+    async def recap_dismissed(self) -> bool:
+        """True when staff dismissed every event on this request as owing
+        no recap — the Master Tracker must not show "Recap due" for it.
+
+        Resolved once PER ROW on the tracker, so it reads the
+        ``event_set__recap_dismissals`` / ``ambassadors_events`` prefetch
+        caches in memory (no query, no thread hop). The single filtered
+        EXISTS below is the no-prefetch fallback only.
+        """
+        cached = getattr(self, "_prefetched_objects_cache", {}).get("event_set")
+        events = list(cached) if cached is not None else None
+        if events is not None and not events:
+            return False
+        if events is not None and all(
+            "recap_dismissals" in getattr(ev, "_prefetched_objects_cache", {})
+            and "ambassadors_events" in getattr(ev, "_prefetched_objects_cache", {})
+            for ev in events
+        ):
+            for ev in events:
+                ev_pc = ev._prefetched_objects_cache
+                rows = ev_pc["recap_dismissals"]
+                if not rows:
+                    return False  # nothing dismissed on this event: owed
+                if any(d.ambassador_id is None for d in rows):
+                    continue  # the whole event was dismissed
+                done = {d.ambassador_id for d in rows}
+                if any(
+                    ae.ambassador_id not in done
+                    for ae in ev_pc["ambassadors_events"]
+                ):
+                    return False
+            return True
+
+        def _check() -> bool:
+            from events.models import Request as RequestModel
+            from recaps.dismissals import request_dismissed_q
+
+            return (
+                RequestModel.objects.filter(pk=self.pk)
+                .filter(request_dismissed_q())
+                .exists()
+            )
+
+        return await sync_to_async(_check)()
+
+    @strawberry.field
     async def events_count(self) -> int:
         """Number of events on this request — lets the tracker tell "no events"
         (none) apart from "events but no recap yet" (due)."""

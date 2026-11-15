@@ -829,6 +829,54 @@ class MissingRecapEventType:
 
 
 @strawberry.type
+class DismissedMissingRecapType:
+    """One dismissed Missing Recaps row: staff said no recap is owed for
+    this ambassador on this event (or, with no ambassador, for the event
+    as a whole). Listed on the "Dismissed" tab so it can be restored.
+    """
+
+    # RecapDismissal.uuid — what restoreMissingRecaps takes.
+    dismissal_uuid: strawberry.ID
+    event_uuid: strawberry.ID
+    event_name: str
+    address: str | None = None
+    state_code: str | None = None
+    date: str | None = None
+    end_time: str | None = None
+    # Null when the whole event was dismissed (a shift with nobody on it).
+    ambassador_uuid: strawberry.ID | None = None
+    ambassador_name: str | None = None
+    ambassador_email: str | None = None
+    reason: str
+    reason_label: str
+    note: str = ""
+    dismissed_by_name: str
+    dismissed_at: str
+    # A recap was filed for the event after all — the dismissal no longer
+    # changes anything; shown so staff are not surprised by it.
+    recap_filed: bool = False
+
+
+@strawberry.type
+class DismissMissingRecapsResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    dismissed_count: int = 0
+    # The dismissals now in force for what was asked — handed straight back
+    # to restoreMissingRecaps by the "Undo" on the toast.
+    dismissal_uuids: List[strawberry.ID] = strawberry.field(default_factory=list)
+
+
+@strawberry.type
+class RestoreMissingRecapsResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    restored_count: int = 0
+
+
+@strawberry.type
 class NudgeRecapResponse:
     success: bool
     message: str

@@ -793,9 +793,17 @@ class AmbassadorEventQueries:
                 )
                 .order_by("-event__end_time")
             )
+            rosters = list(qs)
+            # Shifts staff dismissed as owing no recap are not owed. One
+            # query for the list.
+            from recaps.dismissals import DismissedLookup
+
+            dismissed = DismissedLookup(ae.event_id for ae in rosters)
             out: List = []
-            for ae in qs:
+            for ae in rosters:
                 ev = ae.event
+                if dismissed.covers(ae.event_id, ambassador.id):
+                    continue
                 # Skip shifts that already have a recap (either family)
                 # filed for this BA — they don't "owe" one.
                 already_recapped = (

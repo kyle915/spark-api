@@ -1027,6 +1027,7 @@ def unfiled_shifts_for(*, ambassador, tenant, limit: int = 8) -> list[dict]:
     tap that shift instead of re-typing today's date and getting stuck.
     """
     from ambassadors.models import Attendance
+    from recaps.dismissals import is_recap_dismissed
     from recaps.filed import has_filed_recap
 
     if ambassador is None or tenant is None:
@@ -1052,6 +1053,10 @@ def unfiled_shifts_for(*, ambassador, tenant, limit: int = 8) -> list[dict]:
             continue
         seen.add(ev.id)
         if has_filed_recap(ambassador_id=ambassador.id, event_id=ev.id):
+            continue
+        # Staff dismissed it as owing no recap: don't list it as one to
+        # file. (Filing is still open to them the ordinary way.)
+        if is_recap_dismissed(ambassador_id=ambassador.id, event_id=ev.id):
             continue
         clock = clock_state(ambassador_id=ambassador.id, event_id=ev.id)
         cal = event_calendar_date(ev)

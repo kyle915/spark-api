@@ -409,6 +409,32 @@ class ReassignRecapEventInput(SparkGraphQLInput):
 
 
 @strawberry.input
+class DismissMissingRecapsInput(SparkGraphQLInput):
+    """Mark Missing Recaps rows as owing no recap. Staff only.
+
+    `ambassador_event_uuids` are the rows as /recaps/missing lists them
+    (one ambassador on one event). `event_uuids` dismiss a whole event,
+    for a shift with nobody assigned. `reason` is one of did_not_work,
+    filed_elsewhere, duplicate_or_test, not_needed, other; `note` is
+    optional except for "other".
+    """
+
+    ambassador_event_uuids: List[strawberry.ID] = strawberry.field(
+        default_factory=list
+    )
+    event_uuids: List[strawberry.ID] = strawberry.field(default_factory=list)
+    reason: str
+    note: str | None = None
+
+
+@strawberry.input
+class RestoreMissingRecapsInput(SparkGraphQLInput):
+    """Put dismissed rows back on Missing Recaps. Staff only."""
+
+    dismissal_uuids: List[strawberry.ID]
+
+
+@strawberry.input
 class NudgeAmbassadorForRecapInput(SparkGraphQLInput):
     """Fire a "you still owe a recap" push to a BA who was assigned to
     a shift that already wrapped. `ambassador_event_uuid` is what the

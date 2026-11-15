@@ -100,6 +100,7 @@ def send_walkup_draft_reminders(
     """
     from ambassadors.checkin_web import clock_state
     from ambassadors.models import WalkupRecapDraft
+    from recaps.dismissals import is_recap_dismissed
     from recaps.filed import has_filed_recap
     from utils.mailer import valid_recipient_emails
 
@@ -124,6 +125,8 @@ def send_walkup_draft_reminders(
         "sent": 0,
         "candidates": len(drafts),
         "skipped_filed": 0,
+        # Staff dismissed the shift as owing no recap — nobody is chased.
+        "skipped_dismissed": 0,
         "skipped_empty": 0,
         "skipped_open_shift": 0,
         "skipped_no_contact": 0,
@@ -147,6 +150,11 @@ def send_walkup_draft_reminders(
             ambassador_id=draft.ambassador_id, event_id=draft.event_id
         ):
             counts["skipped_filed"] += 1
+            continue
+        if is_recap_dismissed(
+            ambassador_id=draft.ambassador_id, event_id=draft.event_id
+        ):
+            counts["skipped_dismissed"] += 1
             continue
 
         state = clock_state(

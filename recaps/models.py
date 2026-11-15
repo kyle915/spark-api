@@ -1264,3 +1264,105 @@ class RetailerProposal(models.Model):
     decided_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
     updated_at = models.DateTimeField(auto_now=True)
+
+
+class RecapDismissal(models.Model):
+    """Staff said "no recap is owed here" for one ambassador on one event.
+
+    A row on Missing Recaps that will never get a recap (no-show, test
+    shift, duplicate event, filed outside Spark, client said not needed)
+    is dismissed rather than left to inflate the badge and be chased
+    forever. This row is the whole of it: no recap, booking or attendance
+    row is touched, and hours and KPIs do not read it.
+
+    ``ambassador`` is the same identity the Missing Recaps row is keyed by
+    (the booking's ambassador — a walk-up is a phone-keyed stub Ambassador,
+    so it is covered too). ``ambassador`` NULL dismisses the event itself:
+    the only way to dismiss a shift nobody is assigned to.
+
+    Restoring stamps ``restored_at`` instead of deleting, so who dismissed
+    what, and who brought it back, stays on record. Only rows with
+    ``restored_at`` NULL are in force (see ``recaps/dismissals.py``).
+    """
+
+    REASON_DID_NOT_WORK = "did_not_work"
+    REASON_FILED_ELSEWHERE = "filed_elsewhere"
+    REASON_DUPLICATE_OR_TEST = "duplicate_or_test"
+    REASON_NOT_NEEDED = "not_needed"
+    REASON_OTHER = "other"
+    REASON_CHOICES = [
+        (REASON_DID_NOT_WORK, "Did not work the shift"),
+        (REASON_FILED_ELSEWHERE, "Recap filed elsewhere"),
+        (REASON_DUPLICATE_OR_TEST, "Duplicate or test shift"),
+        (REASON_NOT_NEEDED, "Not needed for this event"),
+        (REASON_OTHER, "Other"),
+    ]
+    NOTE_MAX_LENGTH = 280
+
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    tenant = models.ForeignKey(
+        Tenant, on_delete=models.CASCADE, related_name="recap_dismissals"
+    )
+    event = models.ForeignKey(
+        Event, on_delete=models.CASCADE, related_name="recap_dismissals"
+    )
+    ambassador = models.ForeignKey(
+        Ambassador,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="recap_dismissals",
+    )
+    reason = models.CharField(max_length=24, choices=REASON_CHOICES)
+    note = models.CharField(max_length=NOTE_MAX_LENGTH, blank=True, default="")
+    dismissed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="recap_dismissals_made",
+    )
+    dismissed_at = models.DateTimeField(auto_now_add=True, editable=False)
+    restored_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="recap_dismissals_restored",
+    )
+    restored_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            # One dismissal in force per (event, ambassador)…
+            models.UniqueConstraint(
+                fields=["event", "ambassador"],
+                condition=models.Q(
+                    restored_at__isnull=True, ambassador__isnull=False
+                ),
+                name="recap_dismissal_active_pair_uniq",
+            ),
+            # …and one per event for the whole-event kind.
+            models.UniqueConstraint(
+                fields=["event"],
+                condition=models.Q(
+                    restored_at__isnull=True, ambassador__isnull=True
+                ),
+                name="recap_dismissal_active_event_uniq",
+            ),
+        ]
+        indexes = [
+            # The Dismissed tab: one brand's rows in force, newest first.
+            models.Index(
+                fields=["tenant", "-dismissed_at"],
+                condition=models.Q(restored_at__isnull=True),
+                name="recap_dismissal_tenant_idx",
+            ),
+        ]
+
+    def __str__(self) -> str:  # pragma: no cover - admin/debug only
+        return (
+            f"event={self.event_id} ambassador={self.ambassador_id} "
+            f"reason={self.reason}"
+        )
