@@ -536,3 +536,24 @@ class TestShorten:
         from ambassadors.shift_sms import _shorten
 
         assert _shorten("x" * 80, 60) == "x" * 60
+
+
+class TestQuoRequest:
+    """What actually goes over the wire to Quo."""
+
+    def test_names_a_client_quo_will_accept(self, settings):
+        from unittest.mock import MagicMock, patch
+
+        from ambassadors import shift_sms
+
+        settings.QUO_API_KEY = "test-key"
+        settings.QUO_FROM_NUMBER = "+17755550100"
+        response = MagicMock()
+        response.read.return_value = b'{"data": {"id": "AC123"}}'
+        response.__enter__.return_value = response
+        with patch.object(shift_sms.urllib.request, "urlopen", return_value=response) as opened:
+            assert shift_sms.send_quo_sms(to="+17755550101", body="hello") == "AC123"
+        request = opened.call_args.args[0]
+        # Python's default ("Python-urllib/3.x") is refused with 403 / 1010.
+        assert request.get_header("User-agent") == "shift-texts/1.0"
+        assert request.get_header("Authorization") == "test-key"
