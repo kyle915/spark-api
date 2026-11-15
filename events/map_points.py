@@ -12,7 +12,7 @@ from __future__ import annotations
 import hashlib
 import re
 
-from events.geocoding import valid_lat_lng
+from events.geocoding import in_service_area
 
 SOURCE_EVENT = "event"
 SOURCE_GEOCODED = "geocoded"
@@ -39,11 +39,13 @@ def is_lookup_worthy(address) -> bool:
 
 def own_point(event) -> tuple[float, float] | None:
     """The event's own ``coordinates`` as ``(lat, lng)`` when they are a
-    valid pair; None for null / ``[]`` / ``[0, 0]`` / out-of-range."""
+    valid pair; None for null / ``[]`` / ``[0, 0]`` / out-of-range, and for
+    a point outside North America (a wrong address match, see
+    :func:`events.geocoding.in_service_area`)."""
     coords = getattr(event, "coordinates", None)
     if not coords or not isinstance(coords, (list, tuple)) or len(coords) < 2:
         return None
-    if not valid_lat_lng(coords[0], coords[1]):
+    if not in_service_area(coords[0], coords[1]):
         return None
     return float(coords[0]), float(coords[1])
 
@@ -55,7 +57,7 @@ def _stored_point(event, row) -> tuple[float, float] | None:
         return None
     if row.address_hash != address_hash(getattr(event, "address", None)):
         return None
-    if not valid_lat_lng(row.lat, row.lng):
+    if not in_service_area(row.lat, row.lng):
         return None
     return float(row.lat), float(row.lng)
 

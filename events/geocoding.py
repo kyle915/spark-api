@@ -76,6 +76,20 @@ def valid_lat_lng(lat, lng) -> bool:
     return not (lat == 0.0 and lng == 0.0)
 
 
+def in_service_area(lat, lng) -> bool:
+    """Inside North America, where every Spark activation happens.
+
+    A stored or looked-up point outside this box is a wrong match, not a
+    real store: "509 Cambridge St, Allston, MA" once came back as Cambridge
+    in England and put a Boston 7-Eleven on the map in Europe. The box runs
+    from Hawaii and Puerto Rico in the south to northern Canada and Alaska.
+    """
+    if not valid_lat_lng(lat, lng):
+        return False
+    lat, lng = float(lat), float(lng)
+    return 14.0 <= lat <= 72.0 and -170.0 <= lng <= -50.0
+
+
 def _usable_point(result) -> tuple[float, float] | None:
     """The position in one Google result, or None when it is too vague."""
     if not isinstance(result, dict):
@@ -93,7 +107,7 @@ def _usable_point(result) -> tuple[float, float] | None:
     if not isinstance(location, dict):
         return None
     lat, lng = location.get("lat"), location.get("lng")
-    if not valid_lat_lng(lat, lng):
+    if not in_service_area(lat, lng):
         return None
     return float(lat), float(lng)
 
@@ -114,7 +128,8 @@ def _lookup(address: str) -> tuple[str, tuple[float, float] | None, str, str]:
         try:
             resp = requests.get(
                 GEOCODE_URL,
-                params={"address": address, "key": key},
+                # Prefer United States matches for an ambiguous address.
+                params={"address": address, "key": key, "region": "us"},
                 timeout=TIMEOUT_SECONDS,
             )
         except Exception as exc:  # noqa: BLE001 — the message can hold the URL + key

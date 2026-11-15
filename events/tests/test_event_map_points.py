@@ -100,7 +100,7 @@ class TestGeocodeAddress:
         get.assert_called_once()
         args, kwargs = get.call_args
         assert args[0] == "https://maps.googleapis.com/maps/api/geocode/json"
-        assert kwargs["params"] == {"address": ADDRESS, "key": FAKE_KEY}
+        assert kwargs["params"] == {"address": ADDRESS, "key": FAKE_KEY, "region": "us"}
         assert kwargs["timeout"] and kwargs["timeout"] <= 10
 
     def test_accepts_range_interpolated(self):
@@ -706,3 +706,34 @@ class TestEventPositionOnTheBoards(AmbassadorsGraphQLTestCase):
         assert shifts["Nowhere"]["locationSource"] is None
         assert shifts["No address"]["lng"] is None
         assert shifts["Own coords"]["isStaffed"] is True
+
+
+class TestServiceArea:
+    """A point outside North America is a wrong match, never a store."""
+
+    def test_us_canada_hawaii_and_puerto_rico_are_in(self):
+        from events.geocoding import in_service_area
+
+        assert in_service_area(42.3539, -71.1337)  # Allston, MA
+        assert in_service_area(21.3069, -157.8583)  # Honolulu
+        assert in_service_area(61.2181, -149.9003)  # Anchorage
+        assert in_service_area(18.4655, -66.1057)  # San Juan
+        assert in_service_area(43.6532, -79.3832)  # Toronto
+
+    def test_europe_and_the_null_island_are_out(self):
+        from events.geocoding import in_service_area
+
+        assert not in_service_area(52.2053, 0.1218)  # Cambridge, England
+        assert not in_service_area(0, 0)
+        assert not in_service_area(None, None)
+
+    def test_a_stored_point_in_europe_is_not_used(self):
+        from types import SimpleNamespace
+
+        from events.map_points import own_point
+
+        assert own_point(SimpleNamespace(coordinates=[52.2053, 0.1218])) is None
+        assert own_point(SimpleNamespace(coordinates=[42.3539, -71.1337])) == (
+            42.3539,
+            -71.1337,
+        )
