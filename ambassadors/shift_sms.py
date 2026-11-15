@@ -54,6 +54,8 @@ _FALLBACK_TZ = "America/Chicago"
 
 _OPT_OUT = "Reply STOP to opt out."
 
+_USER_AGENT = "shift-texts/1.0"
+
 # First try plus retries, for one (kind, ambassador, event).
 MAX_SEND_ATTEMPTS = 3
 
@@ -128,6 +130,10 @@ def send_quo_sms(*, to: str, body: str) -> str:
         headers={
             "Authorization": settings.QUO_API_KEY.strip(),
             "Content-Type": "application/json",
+            "Accept": "application/json",
+            # Quo's firewall rejects Python's default client name with
+            # "403 error code: 1010" before the request reaches the API.
+            "User-Agent": _USER_AGENT,
         },
     )
     try:
