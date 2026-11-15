@@ -520,6 +520,8 @@ def _ask_model(user_prompt: str) -> dict | None:
         user_prompt,
         schema=_MODEL_SCHEMA,
         max_tokens=_MODEL_MAX_TOKENS,
+        # A short sorting job someone is waiting on: the smaller model.
+        small=True,
         timeout=_MODEL_REQUEST_TIMEOUT,
     )
 
