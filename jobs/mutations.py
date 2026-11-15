@@ -22,6 +22,7 @@ from jobs.envelopes import (
 from jobs.notification_rules import should_send_ambassador_event_email
 from ambassadors.models import AmbassadorEvent
 from tenants.models import Role, TenantedUser
+from utils.deep_links import with_tenant
 from utils.onesignal import OneSignalError, one_signal_client
 from utils.graphql.mixins import (
     BaseMutationService,
@@ -439,10 +440,12 @@ def _notify_admins_of_application(application_id: int) -> None:
         base = (getattr(settings, "ADMIN_FRONTEND_URL", "") or "").rstrip("/")
         job_uuid = getattr(job, "uuid", None)
         applicants_url = None
+        # Jobs are listed per client: name it, or the link opens the
+        # reader's last-selected client and the job reads as "not found".
         if base and job_uuid:
-            applicants_url = f"{base}/job/view/{job_uuid}"
+            applicants_url = with_tenant(f"{base}/job/view/{job_uuid}", tenant)
         elif base:
-            applicants_url = f"{base}/jobs"
+            applicants_url = with_tenant(f"{base}/jobs", tenant)
 
         note = (getattr(app, "note", None) or "").strip()
         if len(note) > 300:

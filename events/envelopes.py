@@ -741,7 +741,12 @@ class RmmAssignedRequestMailer(Mailer):
             token = make_approval_token(self.request.id, primary_recipient)
             review_link = f"{admin_base}/approve/{token}"
         else:
-            review_link = f"{admin_base}/approvals?request={self.request.id}"
+            from utils.deep_links import with_tenant
+
+            review_link = with_tenant(
+                f"{admin_base}/approvals?request={self.request.id}",
+                getattr(self.request, "tenant", None),
+            )
 
         return Envelope(
             subject=f"[{getattr(getattr(self.request, 'tenant', None), 'name', 'New')}] {account_name or 'Request'} — needs your approval",
