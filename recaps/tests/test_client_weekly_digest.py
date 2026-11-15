@@ -236,7 +236,11 @@ class TestClientWeeklyDigest(AmbassadorsGraphQLTestCase):
         assert not env.attachments
         ctx = env.context
         assert "pending" not in ctx
-        assert ctx["links"]["tracker"].endswith("/requests/list")
+        # List links name the digest's client so a copied Ignite staffer
+        # lands in THIS brand, not their last-selected one.
+        assert ctx["links"]["tracker"].endswith(
+            f"/requests/list?tenant={self.enabled_tenant.uuid}"
+        )
         assert "/master-tracker" not in ctx["links"]["tracker"]
         assert "spark.igniteproductions.co" not in ctx["links"]["tracker"]
 

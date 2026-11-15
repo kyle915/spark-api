@@ -1,5 +1,6 @@
 from django.conf import settings
 
+from utils.deep_links import with_tenant
 from utils.mailer import Envelope, Mailer
 from .services import TenantDigest
 
@@ -29,6 +30,12 @@ class AdminDigestMailer(Mailer):
         self.to_emails = to_emails
         self.web_app_base_url = (web_app_base_url or _admin_frontend_url()).rstrip("/")
 
+    def _link(self, path: str) -> str:
+        return with_tenant(
+            f"{self.web_app_base_url}{path}",
+            tenant_id=getattr(self.digest, "tenant_id", None),
+        )
+
     def envelope(self) -> Envelope:
         d = self.digest
         action_chip = (
@@ -44,10 +51,12 @@ class AdminDigestMailer(Mailer):
             context={
                 "digest": d,
                 "web_app_base_url": self.web_app_base_url,
-                "tracker_url": f"{self.web_app_base_url}/requests/list",
-                "inbox_url": f"{self.web_app_base_url}/inbox",
-                "approvals_url": f"{self.web_app_base_url}/approvals",
-                "recaps_url": f"{self.web_app_base_url}/recaps/list",
+                # One digest per client: every list link names that client
+                # (?tenant=) or it opens the reader's last-selected one.
+                "tracker_url": self._link("/requests/list"),
+                "inbox_url": self._link("/inbox"),
+                "approvals_url": self._link("/approvals"),
+                "recaps_url": self._link("/recaps/list"),
             },
         )
 
@@ -76,6 +85,12 @@ class ExecutiveSummaryMailer(Mailer):
         self.to_emails = to_emails
         self.web_app_base_url = (web_app_base_url or _admin_frontend_url()).rstrip("/")
 
+    def _link(self, path: str) -> str:
+        return with_tenant(
+            f"{self.web_app_base_url}{path}",
+            tenant_id=getattr(self.summary, "tenant_id", None),
+        )
+
     def envelope(self) -> Envelope:
         s = self.summary
         # Subject reads like a Slack rollup so the inbox preview tells
@@ -92,8 +107,8 @@ class ExecutiveSummaryMailer(Mailer):
             context={
                 "summary": s,
                 "web_app_base_url": self.web_app_base_url,
-                "tracker_url": f"{self.web_app_base_url}/requests/list",
-                "recaps_url": f"{self.web_app_base_url}/recaps/list",
-                "reports_url": f"{self.web_app_base_url}/reports",
+                "tracker_url": self._link("/requests/list"),
+                "recaps_url": self._link("/recaps/list"),
+                "reports_url": self._link("/reports"),
             },
         )
