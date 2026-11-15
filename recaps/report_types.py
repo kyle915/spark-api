@@ -4050,6 +4050,43 @@ class PhotoGalleryPage:
     states: list[str]
 
 
+@strawberry.type
+class ConsumerWeek:
+    """Consumers sampled in one Monday-to-Sunday week."""
+
+    week_start: str
+    consumers: int
+    recaps: int
+
+
+@strawberry.type
+class ConsumerBreakdownRow:
+    """Consumers sampled at one store or in one state.
+
+    ``kind`` is ``named`` for a real store / state, ``other`` for the folded
+    tail of a long list, and ``missing`` for recaps whose event has no store
+    or no state recorded (``label`` is blank for the last two)."""
+
+    label: str
+    kind: str
+    consumers: int
+    recaps: int
+
+
+@strawberry.type
+class ConsumerBreakdown:
+    """Consumers sampled over a window, split three ways. Every split adds
+    up to ``total``."""
+
+    total: int
+    recaps: int
+    by_week: list[ConsumerWeek]
+    by_store: list[ConsumerBreakdownRow]
+    by_state: list[ConsumerBreakdownRow]
+    store_count: int
+    state_count: int
+
+
 def _iso_date(raw):
     if not raw:
         return None
@@ -4197,6 +4234,48 @@ class ReportSubscriptionQueries:
             by_daypart=[_row(d) for d in data["by_daypart"]],
             top_stores=[_row(d) for d in data["top_stores"]],
             recaps_without_hours=data["recaps_without_hours"],
+        )
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def tenant_consumer_breakdown(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> ConsumerBreakdown | None:
+        """Consumers sampled by week, by store and by state, from one pass so
+        each split adds up to the same total. Approved recaps, windowed by
+        event date; tenant scoping matches ``tenantKpis``. None when out of
+        scope or on error, so a chart never draws a partial number."""
+        service = _CampaignReportService()
+        try:
+            target = await service.resolve_target_tenant_id(info, tenant_id)
+        except Exception:  # noqa: BLE001
+            return None
+        if target is None:
+            return None
+        start_d, end_d = _iso_date(start_date), _iso_date(end_date)
+
+        def _build():
+            from recaps.consumer_breakdown import tenant_consumer_breakdown
+
+            return tenant_consumer_breakdown(target, start_d, end_d)
+
+        try:
+            data = await sync_to_async(_build, thread_sensitive=True)()
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("tenantConsumerBreakdown failed tenant=%s: %s", target, exc)
+            return None
+
+        return ConsumerBreakdown(
+            total=data["total"],
+            recaps=data["recaps"],
+            by_week=[ConsumerWeek(**w) for w in data["by_week"]],
+            by_store=[ConsumerBreakdownRow(**r) for r in data["by_store"]],
+            by_state=[ConsumerBreakdownRow(**r) for r in data["by_state"]],
+            store_count=data["store_count"],
+            state_count=data["state_count"],
         )
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
