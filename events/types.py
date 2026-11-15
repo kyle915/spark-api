@@ -1571,6 +1571,10 @@ class AccountMapPin:
     coverage_class: str = "never_visited"
     visit_count: int = 0
     planned: bool = False
+    # Rows sharing a store_key are one physical store: draw one pin.
+    store_key: str = ""
+    # "request" | "event" | "geocoded" — where lat/lng came from.
+    location_source: str = "request"
 
 
 @strawberry.type

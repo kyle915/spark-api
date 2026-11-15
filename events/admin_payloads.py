@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import timedelta
 
-from django.db.models import Count, F, Q, QuerySet
+from django.db.models import Count, Exists, F, OuterRef, Q, QuerySet
 from django.db.models.functions import Coalesce
 from django.utils import timezone
 from strawberry.relay import to_base64
@@ -292,11 +292,28 @@ class AccountMapPinData:
     coverage_class: str = COVERAGE_NEVER
     visit_count: int = 0
     planned: bool = False
+    # Rows with the same store_key are one physical store (one pin).
+    store_key: str = ""
+    # "request" = the request's own coordinates, "event" = its event's
+    # coordinates, "geocoded" = looked up from the event's address.
+    location_source: str = "request"
+
+
+LOCATION_REQUEST = "request"
+
+
+def _has_coordinates_q() -> Q:
+    return Q(coordinates__isnull=False) & ~Q(coordinates=[])
 
 
 def _account_map_pin_queryset(qs: QuerySet[Request]) -> QuerySet[Request]:
-    """Requests the map can draw. Empty coordinate arrays are not pins."""
-    return qs.exclude(coordinates=[])
+    """Requests the map might draw: the request has coordinates of its own,
+    or one of its events has a position (its own, or looked up from its
+    address into ``EventMapPoint``)."""
+    event_position = Event.objects.filter(request_id=OuterRef("pk")).filter(
+        _has_coordinates_q() | Q(map_point__status="ok")
+    )
+    return qs.filter(_has_coordinates_q() | Exists(event_position))
 
 
 def count_account_map_pins(qs: QuerySet[Request]) -> int:
@@ -304,19 +321,54 @@ def count_account_map_pins(qs: QuerySet[Request]) -> int:
     return _account_map_pin_queryset(qs).count()
 
 
+def _event_positions(request_ids: list[int]) -> dict[int, tuple[float, float, str]]:
+    """``{request_id: (lat, lng, source)}`` from each request's events.
+
+    An event's own coordinates win over a looked-up point; among equals the
+    oldest event wins, so a pin does not move between loads. Two queries for
+    the whole page.
+    """
+    from events.map_points import SOURCE_EVENT, event_map_points
+
+    if not request_ids:
+        return {}
+    events = list(
+        Event.objects.filter(request_id__in=request_ids)
+        .only("id", "request_id", "coordinates", "address")
+        .order_by("id")
+    )
+    points = event_map_points(events)
+    out: dict[int, tuple[float, float, str]] = {}
+    for event in events:
+        point = points.get(event.id)
+        if point is None:
+            continue
+        held = out.get(event.request_id)
+        if held is None or (held[2] != SOURCE_EVENT and point[2] == SOURCE_EVENT):
+            out[event.request_id] = point
+    return out
+
+
 def list_account_map_pins(
     qs: QuerySet[Request],
     *,
     limit: int = ACCOUNT_MAP_CAP,
     offset: int = 0,
+    tenant_id: int | None = None,
 ) -> list[AccountMapPinData]:
     """Lat/lng + label fields for Account Map. No products / shifts / recaps.
 
     ``limit`` stays at the 2,000 cap. ``offset`` is the next page so the
     client can load the rest instead of pretending the first page is the map.
+
+    Visit counts and "planned" are per physical STORE (``store_key``), not per
+    Retailer row: see :mod:`events.account_stores`.
     """
+    from events.account_stores import build_store_index
+    from events.map_points import own_point
+
     start = max(0, offset)
-    rows = (
+    rows = list(
         _account_map_pin_queryset(qs)
         .select_related(
             "status",
@@ -328,18 +380,20 @@ def list_account_map_pins(
         )
         .order_by("-date", "-pk")[start : start + limit]
     )
-    visits_by_retailer = retailer_visit_counts()
-    visits_by_request = request_visit_counts()
-    planned_ids = planned_retailer_ids()
+    if not rows:
+        return []
+    stores = build_store_index(tenant_id)
+    from_events = _event_positions(
+        [row.pk for row in rows if own_point(row) is None]
+    )
     pins: list[AccountMapPinData] = []
     for row in rows:
-        coords = row.coordinates or []
-        if len(coords) < 2:
-            continue
-        try:
-            lat = float(coords[0])
-            lng = float(coords[1])
-        except (TypeError, ValueError):
+        own = own_point(row)
+        if own is not None:
+            lat, lng, source = own[0], own[1], LOCATION_REQUEST
+        elif row.pk in from_events:
+            lat, lng, source = from_events[row.pk]
+        else:
             continue
         if not is_plottable_lat_lng(lat, lng):
             continue
@@ -349,6 +403,8 @@ def list_account_map_pins(
         loc = (retailer.location if retailer else None) or row.location
         state = (loc.state if loc else None) or row.state
         name = (retailer.name if retailer else None) or row.name or "—"
+        store_key = stores.store_for_request(row.pk)
+        visit_count = stores.visit_count(store_key)
         pins.append(
             AccountMapPinData(
                 id=to_base64("Request", row.pk),
@@ -361,17 +417,11 @@ def list_account_map_pins(
                 retailer_name=(retailer.name if retailer else None) or "",
                 location_name=(loc.name if loc else None) or "",
                 state_code=(state.code if state else None) or "",
-                coverage_class=coverage_class_for(
-                    visits_by_retailer.get(retailer.id, 0)
-                    if retailer
-                    else visits_by_request.get(row.pk, 0)
-                ),
-                visit_count=(
-                    visits_by_retailer.get(retailer.id, 0)
-                    if retailer
-                    else visits_by_request.get(row.pk, 0)
-                ),
-                planned=bool(retailer and retailer.id in planned_ids),
+                coverage_class=coverage_class_for(visit_count),
+                visit_count=visit_count,
+                planned=stores.is_planned(store_key),
+                store_key=store_key,
+                location_source=source,
             )
         )
     return pins

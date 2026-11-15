@@ -1881,6 +1881,10 @@ class RequestQueries:
         "Showing 2,000 of N" instead of looking finished.
         """
         qs = await _scoped_requests(info, tenant_id)
+        # Same resolution _scoped_requests just did; None = staff, all brands.
+        resolved_tenant_id = await RequestQueriesService().resolve_tenant_id(
+            info, tenant_id=tenant_id
+        )
         limit = admin_payloads.ACCOUNT_MAP_CAP
         if first is not None:
             if first <= 0:
@@ -1906,9 +1910,11 @@ class RequestQueries:
                     coverage_class=pin.coverage_class,
                     visit_count=pin.visit_count,
                     planned=pin.planned,
+                    store_key=pin.store_key,
+                    location_source=pin.location_source,
                 )
                 for pin in admin_payloads.list_account_map_pins(
-                    qs, limit=limit, offset=start
+                    qs, limit=limit, offset=start, tenant_id=resolved_tenant_id
                 )
             ]
 
