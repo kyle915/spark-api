@@ -1,0 +1,76 @@
+name: Weekly client summaries
+
+# Fires `/internal/cron/generate-weekly-client-summaries` on Cloud Run every
+# Monday morning. For each brand with approved recaps last week (Monday to
+# Sunday by event date) it drafts a short written summary and stores it for
+# Ignite staff to review in Spark (Weekly summaries). A brand that already
+# has a draft for the week is left alone.
+#
+# This job sends NOTHING: no email, no Slack, no texts. Staff read, edit and
+# copy the text themselves.
+#
+# NOTE: GitHub only fires `schedule:` from the DEFAULT branch (main), but the
+# cron ENDPOINT deploys from develop. So this workflow must live on BOTH
+# branches, same as client-weekly-digest.yml.
+#
+# Schedule: 14:40 UTC Monday = 07:40 PT (DST) / 06:40 PST. Off the hour to
+# avoid GHA's on-the-hour cron jitter.
+
+on:
+  schedule:
+    - cron: "40 14 * * 1"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry-run lists the brands and writes nothing (manual runs default to dry run)"
+        required: true
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+      tenant_id:
+        description: "Optional single tenant id"
+        required: false
+        default: ""
+        type: string
+      week_start:
+        description: "Optional date in the week to draft, YYYY-MM-DD (default: last finished week)"
+        required: false
+        default: ""
+        type: string
+
+jobs:
+  draft:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Draft weekly client summaries
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/generate-weekly-client-summaries
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          # The scheduled run has no inputs and writes drafts.
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+          TENANT_ID: ${{ github.event.inputs.tenant_id || '' }}
+          WEEK_START: ${{ github.event.inputs.week_start || '' }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set."
+            exit 1
+          fi
+          QUERY="dry_run=${DRY_RUN}"
+          if [ -n "$TENANT_ID" ]; then
+            QUERY="${QUERY}&tenant_id=${TENANT_ID}"
+          fi
+          if [ -n "$WEEK_START" ]; then
+            QUERY="${QUERY}&week_start=${WEEK_START}"
+          fi
+          STATUS=$(curl -sS --max-time 900 -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "${CRON_URL}?${QUERY}" \
+            -H "X-Cron-Secret: $CRON_SECRET")
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS"
+            exit 1
+          fi

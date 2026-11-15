@@ -4115,6 +4115,8 @@ class ConsumerBreakdown:
 
     total: int
     recaps: int
+    # Distinct events those recaps were filed on.
+    events: int
     by_week: list[ConsumerWeek]
     by_store: list[ConsumerBreakdownRow]
     by_state: list[ConsumerBreakdownRow]
@@ -4306,6 +4308,7 @@ class ReportSubscriptionQueries:
         return ConsumerBreakdown(
             total=data["total"],
             recaps=data["recaps"],
+            events=data.get("events", 0),
             by_week=[ConsumerWeek(**w) for w in data["by_week"]],
             by_store=[ConsumerBreakdownRow(**r) for r in data["by_store"]],
             by_state=[ConsumerBreakdownRow(**r) for r in data["by_state"]],

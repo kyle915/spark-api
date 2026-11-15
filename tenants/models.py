@@ -1266,6 +1266,86 @@ class TenantWeeklyNarration(models.Model):
         return f"Weekly narration {self.week_start} for tenant {self.tenant_id}"
 
 
+class TenantWeeklySummary(models.Model):
+    """A written summary of one brand's week, drafted for Ignite staff.
+
+    One row per (tenant, Monday). ``body`` is the generated draft and is
+    never changed by an edit; ``edited_body`` holds what staff changed it
+    to (blank when untouched). ``facts`` is the packet of numbers and
+    comments the draft was written from, all of it from approved recaps.
+    Nothing here is sent to anyone: staff read, edit and copy the text.
+    """
+
+    STATUS_DRAFT = "draft"
+    STATUS_REVIEWED = "reviewed"
+
+    id = models.BigAutoField(primary_key=True)
+    tenant = models.ForeignKey(
+        Tenant, on_delete=models.CASCADE, related_name="weekly_summaries"
+    )
+    week_start = models.DateField()
+    week_end = models.DateField()
+    body = models.TextField()
+    edited_body = models.TextField(blank=True, default="")
+    status = models.CharField(max_length=16, default=STATUS_DRAFT)
+    facts = models.JSONField(default=dict)
+    generated_at = models.DateTimeField()
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="weekly_summaries_reviewed",
+    )
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["tenant", "week_start"],
+                name="tenants_weekly_summary_tenant_week_uniq",
+            )
+        ]
+
+    def __str__(self) -> str:
+        return f"Weekly summary {self.week_start} for tenant {self.tenant_id}"
+
+
+class TenantFeedbackThemes(models.Model):
+    """Consumer comments grouped into themes, kept so a page load is a read.
+
+    Keyed by ``source_hash``, a digest of the exact comments the themes were
+    built from. A window with the same approved comments reads the same row;
+    a newly approved recap with a comment changes the digest, so the themes
+    are built again once. ``start_date`` / ``end_date`` record the window of
+    the request that last wrote the row.
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    tenant = models.ForeignKey(
+        Tenant, on_delete=models.CASCADE, related_name="feedback_themes"
+    )
+    source_hash = models.CharField(max_length=64)
+    start_date = models.DateField(null=True, blank=True)
+    end_date = models.DateField(null=True, blank=True)
+    payload = models.JSONField(default=dict)
+    recap_count = models.IntegerField(default=0)
+    comment_count = models.IntegerField(default=0)
+    generated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["tenant", "source_hash"],
+                name="tenants_feedback_themes_tenant_hash_uniq",
+            )
+        ]
+
+    def __str__(self) -> str:
+        return f"Feedback themes for tenant {self.tenant_id} @ {self.generated_at}"
+
+
 class Goal(models.Model):
     """
     Per-user, per-tenant, per-year goals (target values only).
