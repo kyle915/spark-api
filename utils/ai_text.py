@@ -45,7 +45,20 @@ DEFAULT_TIMEOUT_SECONDS = 30.0
 # support a requested feature (e.g. structured outputs).
 _FALLBACK_MODEL = "gpt-4o-mini"
 
+# Reasoning models (the GPT-5 and GPT-6 families) spend part of
+# ``max_completion_tokens`` thinking before they write. A small cap, sized
+# for the visible answer alone, can be used up before any text comes back,
+# which reads as an empty completion and drops the call to the fallback
+# model. The cap is a ceiling, not a spend: short answers still cost what
+# they use.
+_MIN_COMPLETION_TOKENS = 4000
+
 _T = TypeVar("_T")
+
+
+def _completion_cap(max_tokens: int) -> int:
+    """The completion ceiling to send: never below the reasoning floor."""
+    return max(int(max_tokens), _MIN_COMPLETION_TOKENS)
 
 
 class AiUnavailable(Exception):
@@ -130,7 +143,7 @@ def generate_summary(system: str, user: str, *, max_tokens: int = 500) -> str:
         payload = {
             "model": model_name,
             "messages": _chat_messages(system, user),
-            "max_completion_tokens": max_tokens,
+            "max_completion_tokens": _completion_cap(max_tokens),
         }
         body = _post_json(
             OPENAI_CHAT_COMPLETIONS_URL,
@@ -223,7 +236,7 @@ def generate_structured_answer(
         payload = {
             "model": model_name,
             "messages": _chat_messages(system, user),
-            "max_completion_tokens": max_tokens,
+            "max_completion_tokens": _completion_cap(max_tokens),
             "response_format": {
                 "type": "json_schema",
                 "json_schema": {
@@ -304,7 +317,7 @@ def generate_json(
         payload = {
             "model": model_name,
             "messages": _chat_messages(system, user),
-            "max_completion_tokens": max_tokens,
+            "max_completion_tokens": _completion_cap(max_tokens),
             "response_format": {
                 "type": "json_schema",
                 "json_schema": {
@@ -374,7 +387,7 @@ def generate_vision_json(
                     ],
                 },
             ],
-            "max_completion_tokens": max_tokens,
+            "max_completion_tokens": _completion_cap(max_tokens),
             "response_format": {
                 "type": "json_schema",
                 "json_schema": {
