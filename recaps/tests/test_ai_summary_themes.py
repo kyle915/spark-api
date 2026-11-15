@@ -35,6 +35,7 @@ from recaps.feedback_themes import (
     KIND_QUESTION,
     Comment,
     _field_kind,
+    is_comment_field,
     clean_comment,
     count_themes,
 )
@@ -392,6 +393,8 @@ class TestSummaryAndThemes(AmbassadorsGraphQLTestCase):
             ("List common questions asked by consumers", "Is it gluten free?"),
             ("Reasons consumers declined", "Casey Walkup heard the price is steep"),
             ("BA Name", "Jordan Rivera"),
+            ("Additional notes", "AMBASSADOR NOTE ran out of cups at noon"),
+            ("Notes", "AMBASSADOR NOTE manager was rude"),
             ("Total number of consumers sampled", "30"),
         ):
             field = recap_models.CustomField.objects.create(
@@ -469,6 +472,7 @@ class TestSummaryAndThemes(AmbassadorsGraphQLTestCase):
             "DELETED ALPHA QUOTE",
             "OLD ALPHA QUOTE",
             "BETA SECRET QUOTE",
+            "AMBASSADOR NOTE",
             "Rivera",
             "Casey Walkup",
             "555-123-4567",
@@ -659,6 +663,7 @@ class TestSummaryAndThemes(AmbassadorsGraphQLTestCase):
             "DELETED ALPHA QUOTE",
             "OLD ALPHA QUOTE",
             "BETA",
+            "AMBASSADOR NOTE",
             "Rivera",
             "Casey Walkup",
             "555-123-4567",
@@ -958,3 +963,23 @@ def test_week_bounds_is_monday_to_sunday():
     assert week_bounds("2026-11-09") == (date(2026, 11, 9), date(2026, 11, 15))
     assert week_bounds("nonsense") is None
     assert week_bounds(None, date(2026, 11, 18)) == (date(2026, 11, 9), date(2026, 11, 15))
+
+
+@pytest.mark.parametrize(
+    ("name", "read"),
+    [
+        ("Notes", False),
+        ("Additional notes", False),
+        ("Field Notes", False),
+        ("BA note", False),
+        ("Total number of consumers sampled", False),
+        ("Notes on consumer feedback", True),
+        ("Consumer feedback", True),
+        ("Best quote of the day", True),
+        ("Positive stories", True),
+        ("Reasons to decline", True),
+        ("List common questions asked by consumers", True),
+    ],
+)
+def test_notes_fields_are_not_consumer_comments(name, read):
+    assert is_comment_field(name) is read

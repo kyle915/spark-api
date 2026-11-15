@@ -92,9 +92,21 @@ _QUESTION_PY = r"question|\bfaqs?\b|\basked\b"
 _QUESTION_PG = r"question|\yfaqs?\y|\yasked\y"
 _DECLINE_RE = re.compile(_DECLINE, re.IGNORECASE)
 _QUESTION_RE = re.compile(_QUESTION_PY, re.IGNORECASE)
+# A field named "Notes" / "Additional notes" is left out: it usually holds
+# the ambassador's own notes about the shift, which must not reach a brand
+# as something a consumer said. A notes field that also names feedback
+# ("Notes on consumer feedback") still matches on that word.
+_NOTES_PG = r"\ynotes?\y|"
+assert _NOTES_PG in _CUSTOM_FEEDBACK_NAME_IREGEX
 _COMMENT_FIELD_IREGEX = (
-    f"{_CUSTOM_FEEDBACK_NAME_IREGEX}|{_DECLINE}|{_QUESTION_PG}"
+    f"{_CUSTOM_FEEDBACK_NAME_IREGEX.replace(_NOTES_PG, '')}|{_DECLINE}|{_QUESTION_PG}"
 )
+_COMMENT_FIELD_RE = re.compile(_COMMENT_FIELD_IREGEX.replace(r"\y", r"\b"), re.IGNORECASE)
+
+
+def is_comment_field(name: str | None) -> bool:
+    """Whether a custom-recap field holds consumer comments, by its name."""
+    return bool(_COMMENT_FIELD_RE.search(name or ""))
 
 _EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 # Ten to fifteen digits with the usual separators between them.
@@ -274,6 +286,7 @@ def gather_comments(
     Returns the comments and whether the list was cut at the size cap. Both
     recap shapes are read: the legacy feedback columns, and custom-recap
     fields whose name reads like feedback, a reason to decline or a question.
+    Plain notes fields are not read.
     """
     window = _inclusive_dates_to_window(start, end)
     raw: list[tuple[str, str, object]] = []
