@@ -1,7 +1,7 @@
 """Coverage for recaps/field_sampling_report.py — the consolidated Field
 Sampling Report backend (samples/hour, YTD + weekly SKU breakdowns,
 locations hit, upcoming shifts, the deterministic call-outs feed, and the
-on-demand Gemini narrative over them). Feel Free's Guerrilla Field Sampling
+on-demand AI narrative over them). Feel Free's Guerrilla Field Sampling
 program is the first — and so far only — consumer.
 
 Every shared KPI/date-window primitive here is proven elsewhere
@@ -14,6 +14,7 @@ event-type scoping applied consistently across all six sub-reports.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone as _tz
+from utils.ai_text import AiUnavailable
 from unittest.mock import patch
 
 import pytest
@@ -478,27 +479,38 @@ class TestBuildFieldSamplingReport(FieldSamplingReportTestBase):
 
 
 class TestGenerateAiCalloutSummary:
-    def test_no_callouts_returns_none_without_calling_gemini(self):
+    def test_no_callouts_returns_none_without_calling_ai(self):
         with patch(
-            "recaps.field_sampling_report.generate_gemini_text"
-        ) as mock_gemini:
+            "recaps.field_sampling_report.generate_summary"
+        ) as mock_ai:
             result = generate_ai_callout_summary("Feel Free", [], {"samples": 0})
         assert result is None
-        mock_gemini.assert_not_called()
+        mock_ai.assert_not_called()
 
-    def test_calls_gemini_with_callouts_and_returns_its_text(self):
+    def test_calls_ai_with_callouts_and_returns_its_text(self):
         callouts = [
             {"market": "Miami", "corridor": "Wynwood", "date": "2026-06-10", "text": "Great turnout"},
         ]
         with patch(
-            "recaps.field_sampling_report.generate_gemini_text",
+            "recaps.field_sampling_report.generate_summary",
             return_value="Solid week overall.",
-        ) as mock_gemini:
+        ) as mock_ai:
             result = generate_ai_callout_summary(
                 "Feel Free", callouts, {"samples": 50, "hours": 4, "per_hour": 12.5}
             )
         assert result == "Solid week overall."
-        mock_gemini.assert_called_once()
-        prompt = mock_gemini.call_args.args[0]
+        mock_ai.assert_called_once()
+        prompt = " ".join(mock_ai.call_args.args)
         assert "Feel Free" in prompt
         assert "Great turnout" in prompt
+
+    def test_returns_none_when_the_ai_call_fails(self):
+        callouts = [
+            {"market": "Miami", "corridor": "Wynwood", "date": "2026-06-10", "text": "Great turnout"},
+        ]
+        with patch(
+            "recaps.field_sampling_report.generate_summary",
+            side_effect=AiUnavailable("OpenAI is not configured (set OPENAI_API_KEY)."),
+        ):
+            result = generate_ai_callout_summary("Feel Free", callouts, {"samples": 50})
+        assert result is None

@@ -3786,11 +3786,11 @@ class ExportExpenseReceiptsResponse:
 
 @strawberry.type
 class FieldSamplingCalloutSummary:
-    """The on-demand Gemini narrative over one Field Sampling Report
+    """The on-demand AI narrative over one Field Sampling Report
     window's deterministic call-outs feed — see
     :func:`recaps.field_sampling_report.generate_ai_callout_summary`.
 
-    ``summary`` is None when Gemini is unavailable/fails (never an error —
+    ``summary`` is None when OpenAI is unavailable/fails (never an error —
     the caller already has the deterministic :class:`FieldCallout` feed to
     fall back to) OR when there were no call-outs to summarize.
     """
@@ -3803,7 +3803,7 @@ class FieldSamplingReportMutations:
     """Mutation surface for the Field Sampling Report's OPTIONAL AI layer.
 
     Deliberately separate from the (free, deterministic, always-on) read
-    side: generating a narrative costs a real Gemini call, so it only
+    side: generating a narrative costs a real OpenAI call, so it only
     happens when a user explicitly clicks "Summarize with AI" — never
     automatically on page load. Matches this codebase's own precedent
     (recaps/tenant_insights.py replaced free-form AI summaries with fixed
@@ -3820,12 +3820,12 @@ class FieldSamplingReportMutations:
         event_type_id: strawberry.ID | None = None,
         market: str | None = None,
     ) -> FieldSamplingCalloutSummary:
-        """Ask Gemini to summarize this EXACT window's deterministic
+        """Ask OpenAI to summarize this EXACT window's deterministic
         call-outs feed (same args as ``tenantFieldSamplingReport`` — the
         frontend calls this with whatever window it's currently showing).
 
         Never raises: an out-of-scope tenant, unparseable dates, no
-        call-outs in window, or any Gemini failure all resolve to
+        call-outs in window, or any AI failure all resolve to
         ``FieldSamplingCalloutSummary(summary=None)`` — the caller keeps
         showing the deterministic feed either way.
         """

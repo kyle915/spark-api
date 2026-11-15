@@ -575,16 +575,12 @@ GOOGLE_OAUTH_AUDIENCES = list(
     dict.fromkeys(_env_google_audiences + _required_google_audiences)
 )
 
-# Gemini AI Configuration
-GEMINI_API_KEY = env("GEMINI_API_KEY", default="")
-
-# OpenAI config for utils/ai_text.py (the Ask-AI Q&A + report summaries).
+# OpenAI is the only AI provider (utils/ai_text.py): Ask AI, report
+# summaries, store suggestions, photo checks, voice drafts, tenant insights.
 # OPENAI_API_KEY defaults to "" so the app boots without it; when unset the
-# AI resolvers degrade gracefully (ok=false). OPENAI_MODEL is overridable
-# per-environment (e.g. "gpt-4o", "gpt-4.1") and defaults to gpt-5-mini;
-# ai_text auto-falls-back to gpt-4o-mini if that id isn't available on the
-# account. NOTE: GEMINI_API_KEY above is still used by the separate
-# tenant-insights feature (tenants/insights), which is unchanged.
+# AI features say they are not configured. OPENAI_MODEL is overridable per
+# environment; ai_text falls back to gpt-4o-mini if that id isn't available
+# on the account.
 OPENAI_API_KEY = env("OPENAI_API_KEY", default="")
 OPENAI_MODEL = env("OPENAI_MODEL", default="gpt-5-mini")
 

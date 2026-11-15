@@ -20,6 +20,8 @@ never quietly drift from the dashboard card or the P&L lens:
 
 from __future__ import annotations
 
+import logging
+
 import json
 import re
 from datetime import datetime, timedelta
@@ -30,7 +32,9 @@ from django.utils import timezone
 from events.models import Event
 from recaps.models import CustomFieldValue, CustomRecap, CustomRecapProductSample
 from recaps.tenant_overview import _filter_event_window
-from utils.gemini_text import generate_gemini_text
+from utils.ai_text import generate_summary
+
+logger = logging.getLogger(__name__)
 
 # Mirrors recaps.tenant_sentiment._CUSTOM_FEEDBACK_NAME_RE (also duplicated
 # in recaps/recap_quality.py) — free-text fields worth surfacing as
@@ -336,7 +340,7 @@ def field_callouts(
     """Free-text BA notes/feedback from recaps in [start, end), tagged with
     their event's date/market/corridor — the deterministic, no-AI "things
     to note" feed. See :func:`generate_ai_callout_summary` for the
-    optional on-demand Gemini narrative built FROM this same data.
+    optional on-demand AI narrative built FROM this same data.
 
     Hard-capped at :data:`MAX_CALLOUTS`, most-recent-first, deduped on
     cleaned text (mirrors :func:`recaps.tenant_sentiment.
@@ -430,7 +434,7 @@ def generate_ai_callout_summary(
     callouts: list[dict],
     context: dict,
 ) -> str | None:
-    """On-demand Gemini narrative over the deterministic call-outs feed —
+    """On-demand AI narrative over the deterministic call-outs feed —
     NEVER called automatically; only from an explicit "Summarize with AI"
     action, so a client-facing report's numbers are never gated behind an
     AI call. Matches this codebase's own precedent
@@ -440,7 +444,7 @@ def generate_ai_callout_summary(
     ``callouts`` is :func:`field_callouts`'s output; ``context`` is this
     same window's headline numbers (samples/hours/per_hour) so the model
     references real figures instead of inventing its own math. Returns
-    None (never raises) if Gemini is unavailable or the call fails — the
+    None (never raises) if OpenAI is unavailable or the call fails — the
     caller always has the deterministic feed to show either way.
     """
     if not callouts:
@@ -450,19 +454,25 @@ def generate_ai_callout_summary(
         f"{c['date'] or ''}: {c['text']}"
         for c in callouts
     ]
-    prompt = (
+    system = (
         f"You are summarizing one period of field sampling activity for "
         f"{tenant_name}, a guerrilla field-marketing program, for an "
         "internal report a client will read. This period: "
         f"{context.get('samples', 0)} samples across "
         f"{context.get('hours', 0)} labor hours "
         f"({context.get('per_hour')} samples/hour). "
-        "Below are raw field notes/feedback submitted by brand "
+        "The message holds raw field notes/feedback submitted by brand "
         "ambassadors. Write a SHORT plain-text summary (3-5 bullet "
         "points, no markdown headers) of what's actually worth the "
         "client knowing: notable wins, problems, weather/turnout issues, "
         "anything unusual. Do not invent facts not present in the notes. "
-        "If the notes are mundane, say so briefly rather than padding.\n\n"
-        + "\n".join(lines)
+        "If the notes are mundane, say so briefly rather than padding."
     )
-    return generate_gemini_text(prompt, max_output_tokens=400)
+    try:
+        text = generate_summary(system, "\n".join(lines), max_tokens=1200)
+    except Exception:
+        # Unconfigured, timed out, or a bad response: the caller shows the
+        # call-outs feed on its own.
+        logger.warning("AI call-out summary failed", exc_info=True)
+        return None
+    return text or None
