@@ -25,6 +25,7 @@ from events.event_confirmation_schema import (
 )
 from events.staffing_board import StaffingBoardQueries
 from events.account_list import AccountListMutations, AccountListQueries
+from events.staffing_search import StaffingSearchQueries
 from events.live_board import LiveBoardQueries
 from events.payroll import PayrollQueries, PayrollMutations
 from events.campaign_pnl import CampaignPnlQueries
@@ -49,6 +50,7 @@ class EventQueryAmbassadors(
 class EventQueryClient(
     queries.EventQueries,
     StaffingBoardQueries,
+    StaffingSearchQueries,
     LiveBoardQueries,
     # Uploaded account lists (Account Map): staff, or a brand's own users.
     AccountListQueries,

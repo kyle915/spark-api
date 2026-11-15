@@ -44,6 +44,7 @@ from jobboard.checkin import (
     public_gig,
 )
 from recaps.photo_check import classify_photo
+from recaps.recap_precheck import precheck_recap
 from recaps.spend_amount import SpendAmountNeedsCents
 from recaps.voice_draft import structure_transcript
 from events.checkin_tokens import (
@@ -1114,6 +1115,67 @@ def public_checkin_voice_draft(request: HttpRequest, code: str) -> HttpResponse:
     if not isinstance(transcript, str):
         transcript = ""
     return JsonResponse(structure_transcript(transcript, fields))
+
+
+# --------------------------------------------------------------------------
+# POST recap-check  (advisory; never files, never refuses a recap)
+# --------------------------------------------------------------------------
+@csrf_exempt
+@require_http_methods(["POST"])
+def public_checkin_recap_check(request: HttpRequest, code: str) -> HttpResponse:
+    """Things to fix or confirm in the answers, before the BA submits.
+
+    Reads only. The page submits whatever this returns, including an error:
+    a 429, a 500 or a timeout all mean "nothing to mention".
+    """
+    ip = _client_ip(request)
+    if _over_limit("recap-check-ip", ip, limit=40, window=300):
+        return _rate_limited()
+    data = _body(request)
+    loaded, err = _load_session(code, data.get("session") or "")
+    if err is not None:
+        return err
+    event, ambassador = loaded
+
+    field_values = data.get("fieldValues") or data.get("field_values") or []
+    if not isinstance(field_values, list):
+        field_values = []
+    total_engagements = data.get("totalEngagements")
+    try:
+        total_engagements = (
+            int(total_engagements) if total_engagements is not None else None
+        )
+    except (TypeError, ValueError):
+        total_engagements = None
+    try:
+        photo_count = int(data.get("photoCount") or 0)
+    except (TypeError, ValueError):
+        photo_count = 0
+
+    try:
+        template = checkin_web.serialize_template(event) or {}
+        fields = [
+            field
+            for section in template.get("sections") or []
+            for field in section.get("fields") or []
+            if isinstance(field, dict)
+        ]
+        # The model step has its own, lower budget per network. Past it the
+        # rule checks still run.
+        use_model = not _over_limit("recap-check-model-ip", ip, limit=15, window=300)
+        result = precheck_recap(
+            template_fields=fields,
+            field_values=field_values,
+            total_engagements=total_engagements,
+            photo_count=photo_count,
+            event=event,
+            ambassador=ambassador,
+            use_model=use_model,
+        )
+    except Exception:  # noqa: BLE001 — advisory: a fault here means "no notes"
+        logger.exception("checkin recap check failed code=%s", code)
+        result = {"items": [], "modelChecked": False}
+    return JsonResponse(result)
 
 
 # --------------------------------------------------------------------------

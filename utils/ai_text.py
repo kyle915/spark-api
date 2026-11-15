@@ -295,6 +295,7 @@ def generate_json(
     schema: dict,
     max_tokens: int = 2000,
     small: bool = False,
+    timeout: float | None = None,
 ) -> dict | None:
     """Generate a strict-JSON object matching ``schema`` (structured outputs).
 
@@ -314,6 +315,11 @@ def generate_json(
             ``required`` at every object level (nullable fields express
             "optional" via a union type, e.g. ``["string", "null"]``).
         max_tokens: Cap on the completion length.
+        timeout: Seconds to wait on each HTTP attempt. Defaults to
+            :data:`DEFAULT_TIMEOUT_SECONDS`. A caller someone is waiting on
+            (the recap check on the check-in form) passes a short one. The
+            model fallback can make a second attempt, so a caller with a hard
+            limit must also bound the whole call itself.
 
     Returns:
         The parsed JSON object (a ``dict``) on success, or **None** on ANY
@@ -350,7 +356,7 @@ def generate_json(
             OPENAI_CHAT_COMPLETIONS_URL,
             payload,
             headers,
-            timeout=DEFAULT_TIMEOUT_SECONDS,
+            timeout=timeout or DEFAULT_TIMEOUT_SECONDS,
         )
         content = _extract_message_text(body)
         parsed = json.loads(content)  # JSONDecodeError caught below
