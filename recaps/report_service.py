@@ -578,8 +578,15 @@ def get_report_request(request_id, tenant_id: int | None = None):
     return qs.filter(uuid=raw).first()
 
 
+def _client_visible(recap) -> bool:
+    """Approved and not archived: the bar for anything a client is shown."""
+    return bool(getattr(recap, "approved", False)) and not getattr(
+        recap, "archived_at", None
+    )
+
+
 def build_campaign_report(
-    request_obj: Request, *, generated_at: str
+    request_obj: Request, *, generated_at: str, approved_only: bool = False
 ) -> CampaignReportData:
     """Aggregate one Request into a :class:`CampaignReportData`.
 
@@ -587,6 +594,10 @@ def build_campaign_report(
     equivalently prefetched queryset) so this runs without per-row queries.
     ``generated_at`` is passed in (ISO-8601) so the caller controls the
     clock — keeps the function pure and deterministic in tests.
+
+    ``approved_only`` drops every recap that is not approved or is archived
+    before anything is counted or quoted. The AI summary and Q&A pass it for
+    brand users, so a needs-review recap never reaches the model for them.
     """
     events = sorted(
         _all(request_obj, "event_set"),
@@ -603,6 +614,9 @@ def build_campaign_report(
     for event in events:
         ev_legacy = _all(event, "recaps")
         ev_custom = _all(event, "custom_recap")
+        if approved_only:
+            ev_legacy = [r for r in ev_legacy if _client_visible(r)]
+            ev_custom = [r for r in ev_custom if _client_visible(r)]
         legacy_recaps.extend(ev_legacy)
         custom_recaps.extend(ev_custom)
         event_rows.append(_event_row(event, len(ev_legacy) + len(ev_custom)))
