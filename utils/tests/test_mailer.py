@@ -12,7 +12,10 @@ This module tests:
 import base64
 import json
 import pytest
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import patch, MagicMock, AsyncMock, ANY
+
+import resend
+import resend.exceptions
 from django.test import override_settings
 
 from utils.mailer import (
@@ -294,7 +297,56 @@ class TestMailDrivers:
                         "<mailto:events@igniteproductions.co?subject=Unsubscribe>"
                     ),
                 },
-            })
+            }, ANY)
+
+    def _resend_envelope(self):
+        return Envelope(
+            subject="Test Subject",
+            from_email="from@acme.co",
+            to_emails=["to@acme.co"],
+            html="<html>Test</html>",
+        )
+
+    @patch('utils.mailer.time.sleep')
+    @patch('utils.mailer.resend.Emails.send')
+    def test_resend_timeout_is_retried_with_the_same_idempotency_key(
+        self, mock_resend_send, mock_sleep
+    ):
+        """A timeout is tried again, and Resend can tell it is the same email."""
+        timeout = resend.exceptions.ResendError(
+            code=500, error_type="HttpClientError",
+            message="Request failed: Read timed out.", suggested_action="",
+        )
+        mock_resend_send.side_effect = [timeout, {"id": "abc"}]
+        ResendMailDriver().send(self._resend_envelope())
+        assert mock_resend_send.call_count == 2
+        keys = [c.args[1]["idempotency_key"] for c in mock_resend_send.call_args_list]
+        assert keys[0] == keys[1] and keys[0]
+
+    @patch('utils.mailer.time.sleep')
+    @patch('utils.mailer.resend.Emails.send')
+    def test_resend_gives_up_after_three_timeouts(self, mock_resend_send, mock_sleep):
+        timeout = resend.exceptions.ResendError(
+            code=500, error_type="HttpClientError",
+            message="Request failed: Read timed out.", suggested_action="",
+        )
+        mock_resend_send.side_effect = timeout
+        with pytest.raises(resend.exceptions.ResendError):
+            ResendMailDriver().send(self._resend_envelope())
+        assert mock_resend_send.call_count == 3
+
+    @patch('utils.mailer.time.sleep')
+    @patch('utils.mailer.resend.Emails.send')
+    def test_resend_rejection_is_not_retried(self, mock_resend_send, mock_sleep):
+        rejected = resend.exceptions.ResendError(
+            code=422, error_type="validation_error",
+            message="Invalid `to` field.", suggested_action="",
+        )
+        mock_resend_send.side_effect = rejected
+        with pytest.raises(resend.exceptions.ResendError):
+            ResendMailDriver().send(self._resend_envelope())
+        assert mock_resend_send.call_count == 1
+        mock_sleep.assert_not_called()
 
     @patch('utils.mailer.resend.Emails.send')
     def test_resend_mail_driver_skips_empty_to(self, mock_resend_send):

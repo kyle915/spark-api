@@ -3,6 +3,8 @@ import datetime
 import logging
 import mimetypes
 import re
+import time
+import uuid
 from html import unescape
 from typing import Any
 from pathlib import Path
@@ -331,6 +333,39 @@ class MailDriver:
         raise NotImplementedError("Subclasses must implement this method")
 
 
+# Waits before the second and third try when Resend cannot be reached.
+_RESEND_RETRY_WAITS = (1.0, 3.0)
+
+
+def _is_resend_transport_error(exc: Exception) -> bool:
+    """True when the request never got an answer (timeout, connection
+    dropped), as opposed to Resend answering with a rejection."""
+    return getattr(exc, "error_type", None) == "HttpClientError"
+
+
+def _send_with_retry(params):
+    """Send through Resend, trying again when it cannot be reached.
+
+    A read timeout does not say whether Resend took the message, so every
+    try carries the same idempotency key: a retry of a message Resend did
+    accept returns the first send instead of emailing the person twice.
+    Rejections (bad key, invalid address) are not retried.
+    """
+    options = {"idempotency_key": f"spark-{uuid.uuid4()}"}
+    for wait in _RESEND_RETRY_WAITS:
+        try:
+            return resend.Emails.send(params, options)
+        except Exception as exc:
+            if not _is_resend_transport_error(exc):
+                raise
+            logger.warning(
+                "Resend unreachable for subject=%r, trying again in %ss: %s",
+                params.get("subject"), wait, exc,
+            )
+            time.sleep(wait)
+    return resend.Emails.send(params, options)
+
+
 class ResendMailDriver(MailDriver):
     """
     The Resend Mail Driver.
@@ -359,7 +394,7 @@ class ResendMailDriver(MailDriver):
             params["cc"] = cc_emails
         if envelope.attachments:
             params["attachments"] = json_safe_attachments(envelope.attachments)
-        result = resend.Emails.send(params)
+        result = _send_with_retry(params)
         # When the API key is invalid or the FROM domain isn't verified,
         # the SDK still returns a payload (no exception) but `id` is
         # missing — without this check that's a SILENT failure: the caller
