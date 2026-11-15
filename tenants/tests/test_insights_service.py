@@ -50,24 +50,20 @@ class TestInsightsService(BaseGraphQLTestCase):
             event=self.event,
             created_by=self.system_user,
         )
-
-    @patch('google.generativeai.configure')
-    def test_init_requires_gemini_api_key(self, mock_configure):
-        """Test that InsightsService requires GEMINI_API_KEY in settings."""
+    def test_init_requires_openai_api_key(self):
+        """Test that InsightsService requires OPENAI_API_KEY in settings."""
         from django.conf import settings
         from django.test import override_settings
 
-        with override_settings(GEMINI_API_KEY=""):
-            with pytest.raises(ValueError, match="GEMINI_API_KEY not configured"):
+        with override_settings(OPENAI_API_KEY=""):
+            with pytest.raises(ValueError, match="OPENAI_API_KEY not configured"):
                 InsightsService(self.tenant)
-
-    @patch('google.generativeai.configure')
-    def test_get_feedback_queryset_filters_by_tenant(self, mock_configure):
+    def test_get_feedback_queryset_filters_by_tenant(self):
         """Test that _get_feedback_queryset filters by tenant."""
         from django.conf import settings
         from django.test import override_settings
 
-        with override_settings(GEMINI_API_KEY="test-key"):
+        with override_settings(OPENAI_API_KEY="test-key"):
             service = InsightsService(self.tenant)
 
             # Create ConsumerFeedback for this tenant
@@ -104,14 +100,12 @@ class TestInsightsService(BaseGraphQLTestCase):
             # Should only include feedback from this tenant
             assert feedback1 in queryset
             assert feedback2 not in queryset
-
-    @patch('google.generativeai.configure')
-    def test_get_feedback_queryset_filters_by_date_range(self, mock_configure):
+    def test_get_feedback_queryset_filters_by_date_range(self):
         """Test that _get_feedback_queryset filters by date range."""
         from django.conf import settings
         from django.test import override_settings
 
-        with override_settings(GEMINI_API_KEY="test-key"):
+        with override_settings(OPENAI_API_KEY="test-key"):
             service = InsightsService(self.tenant)
 
             # Create feedback with different dates
@@ -147,14 +141,12 @@ class TestInsightsService(BaseGraphQLTestCase):
             # Should only include feedback from date range
             assert feedback_today in queryset
             assert feedback_old not in queryset
-
-    @patch('google.generativeai.configure')
-    def test_build_prompt_includes_feedback_data(self, mock_configure):
+    def test_build_prompt_includes_feedback_data(self):
         """Test that _build_prompt includes all feedback fields."""
         from django.conf import settings
         from django.test import override_settings
 
-        with override_settings(GEMINI_API_KEY="test-key"):
+        with override_settings(OPENAI_API_KEY="test-key"):
             service = InsightsService(self.tenant)
 
             # Create feedback with all fields
@@ -176,40 +168,31 @@ class TestInsightsService(BaseGraphQLTestCase):
             assert "1-4" in prompt and "insight" in prompt.lower()
             assert "high" in prompt.lower() or "medium" in prompt.lower() or "low" in prompt.lower()
 
-    @patch('google.generativeai.GenerativeModel')
-    @patch('google.generativeai.list_models')
-    @patch('google.generativeai.configure')
-    def test_call_gemini_api_success(self, mock_configure, mock_list_models, mock_model_class):
-        """Test successful Gemini API call."""
+    @patch("utils.ai_text._post_json")
+    def test_call_ai_success(self, mock_post):
+        """Test successful AI call."""
         from django.conf import settings
         from django.test import override_settings
 
-        with override_settings(GEMINI_API_KEY="test-key"):
+        with override_settings(OPENAI_API_KEY="test-key"):
             service = InsightsService(self.tenant)
 
-            # Mock Gemini response
-            mock_model = MagicMock()
-            mock_response = MagicMock()
-            mock_response.text = '{"insights": [{"title": "Test Insight", "content": "Test content", "priority": "high"}]}'
-            mock_model.generate_content.return_value = mock_response
-            mock_model_class.return_value = mock_model
-            mock_list_models.return_value = [
-                MagicMock(name="models/gemini-pro", supported_generation_methods=["generateContent"])
-            ]
+            # Mock the OpenAI response
+            mock_post.return_value = {
+                "choices": [{"message": {"content": '{"insights": [{"title": "Test Insight", "content": "Test content", "priority": "high"}]}'}}]
+            }
 
-            result = service._call_gemini_api("Test prompt")
+            result = service._call_ai("Test prompt")
 
             assert "insights" in result
             assert len(result["insights"]) == 1
             assert result["insights"][0]["title"] == "Test Insight"
-
-    @patch('google.generativeai.configure')
-    def test_parse_insights_response_validates_structure(self, mock_configure):
+    def test_parse_insights_response_validates_structure(self):
         """Test that _parse_insights_response validates response structure."""
         from django.conf import settings
         from django.test import override_settings
 
-        with override_settings(GEMINI_API_KEY="test-key"):
+        with override_settings(OPENAI_API_KEY="test-key"):
             service = InsightsService(self.tenant)
 
             # Test missing insights key
@@ -244,14 +227,12 @@ class TestInsightsService(BaseGraphQLTestCase):
                         "priority": "invalid"
                     }]
                 })
-
-    @patch('google.generativeai.configure')
-    def test_parse_insights_response_success(self, mock_configure):
+    def test_parse_insights_response_success(self):
         """Test successful parsing of insights response."""
         from django.conf import settings
         from django.test import override_settings
 
-        with override_settings(GEMINI_API_KEY="test-key"):
+        with override_settings(OPENAI_API_KEY="test-key"):
             service = InsightsService(self.tenant)
 
             response = {
@@ -281,28 +262,24 @@ class TestInsightsService(BaseGraphQLTestCase):
             assert parsed[0]["priority"] == "high"
             assert parsed[1]["priority"] == "medium"
             assert parsed[2]["priority"] == "low"
-
-    @patch('google.generativeai.configure')
-    def test_generate_insights_no_feedback(self, mock_configure):
+    def test_generate_insights_no_feedback(self):
         """Test that generate_insights raises error when no feedback exists."""
         from django.conf import settings
         from django.test import override_settings
 
-        with override_settings(GEMINI_API_KEY="test-key"):
+        with override_settings(OPENAI_API_KEY="test-key"):
             service = InsightsService(self.tenant)
 
             with pytest.raises(ValueError, match="No ConsumerFeedback records found"):
                 service.generate_insights()
 
-    @patch('google.generativeai.GenerativeModel')
-    @patch('google.generativeai.list_models')
-    @patch('google.generativeai.configure')
-    def test_generate_insights_success(self, mock_configure, mock_list_models, mock_model_class):
+    @patch("utils.ai_text._post_json")
+    def test_generate_insights_success(self, mock_post):
         """Test successful insights generation."""
         from django.conf import settings
         from django.test import override_settings
 
-        with override_settings(GEMINI_API_KEY="test-key"):
+        with override_settings(OPENAI_API_KEY="test-key"):
             service = InsightsService(self.tenant)
 
             # Create feedback
@@ -313,20 +290,15 @@ class TestInsightsService(BaseGraphQLTestCase):
                 created_by=self.system_user,
             )
 
-            # Mock Gemini API
-            mock_model = MagicMock()
-            mock_response = MagicMock()
-            mock_response.text = '''{
+            # Mock the OpenAI response
+            mock_post.return_value = {
+                "choices": [{"message": {"content": '''{
                 "insights": [
                     {"title": "Test Insight 1", "content": "Content 1", "priority": "high"},
                     {"title": "Test Insight 2", "content": "Content 2", "priority": "medium"}
                 ]
-            }'''
-            mock_model.generate_content.return_value = mock_response
-            mock_model_class.return_value = mock_model
-            mock_list_models.return_value = [
-                MagicMock(name="models/gemini-pro", supported_generation_methods=["generateContent"])
-            ]
+            }'''}}]
+            }
 
             # Generate insights
             insights = service.generate_insights(created_by=self.system_user)

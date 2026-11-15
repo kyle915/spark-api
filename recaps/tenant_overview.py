@@ -4,7 +4,7 @@ This is the client-level sibling of :mod:`recaps.report_service` (which
 rolls up ONE :class:`events.models.Request` into a campaign report). Here
 we summarize a *whole tenant's* program — every campaign, every event,
 every recap — into a single compact plaintext block that
-:func:`recaps.report_types.tenant_ai_answer` hands to Gemini as the only
+:func:`recaps.report_types.tenant_ai_answer` hands to OpenAI as the only
 source of truth for the model's answer.
 
 Design rules:
@@ -30,7 +30,7 @@ Design rules:
   lines. The recent-events and quotes sections are hard-capped
   (:data:`MAX_RECENT_EVENTS` / :data:`MAX_RECENT_QUOTES`), and each quote
   is length-trimmed, so the whole block stays a few dozen lines and the
-  Gemini prompt stays small whether the tenant ran 3 events or 30,000.
+  AI prompt stays small whether the tenant ran 3 events or 30,000.
 
 Everything here is synchronous Django ORM — the GraphQL resolver wraps the
 single entry point :func:`build_tenant_overview` in ``sync_to_async``.
@@ -2855,7 +2855,7 @@ def build_tenant_overview(tenant_id: int) -> str:
 
     Every total is a database aggregate and the two list sections are
     hard-capped, so the output stays a few dozen lines regardless of how
-    much activity the tenant has — keeping the downstream Gemini prompt
+    much activity the tenant has — keeping the downstream AI prompt
     small. Raises :class:`tenants.models.Tenant.DoesNotExist` if no tenant
     matches ``tenant_id`` (the resolver translates that to a degradation
     reason).

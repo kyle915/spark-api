@@ -84,12 +84,10 @@ class TestGenerateInsightsMutation(BaseGraphQLTestCase):
         return event, recap
 
     @pytest.mark.asyncio
-    @override_settings(GEMINI_API_KEY="test-key")
-    @patch("google.generativeai.GenerativeModel")
-    @patch("google.generativeai.list_models")
-    @patch("google.generativeai.configure")
+    @override_settings(OPENAI_API_KEY="test-key")
+    @patch("utils.ai_text._post_json")
     async def test_generate_insights_sync_success(
-        self, mock_configure, mock_list_models, mock_model_class
+        self, mock_post
     ):
         """Authenticated user calls generateInsights without enqueue; new Insights created."""
         user = await self._create_client_user()
@@ -98,22 +96,14 @@ class TestGenerateInsightsMutation(BaseGraphQLTestCase):
         )
         await sync_to_async(self._create_event_and_recap_with_feedback)()
 
-        mock_model = MagicMock()
-        mock_response = MagicMock()
-        mock_response.text = """{
+        mock_post.return_value = {
+            "choices": [{"message": {"content": """{
             "insights": [
                 {"title": "Test Insight 1", "content": "Content 1", "priority": "high"},
                 {"title": "Test Insight 2", "content": "Content 2", "priority": "medium"}
             ]
-        }"""
-        mock_model.generate_content.return_value = mock_response
-        mock_model_class.return_value = mock_model
-        mock_list_models.return_value = [
-            MagicMock(
-                name="models/gemini-pro",
-                supported_generation_methods=["generateContent"],
-            )
-        ]
+        }"""}}]
+        }
 
         mutation = """
         mutation GenerateInsights {
@@ -197,9 +187,8 @@ class TestGenerateInsightsMutation(BaseGraphQLTestCase):
         assert call_args[0][1] == self.tenant.id
 
     @pytest.mark.asyncio
-    @override_settings(GEMINI_API_KEY="test-key")
-    @patch("google.generativeai.configure")
-    async def test_generate_insights_no_feedback(self, mock_configure):
+    @override_settings(OPENAI_API_KEY="test-key")
+    async def test_generate_insights_no_feedback(self):
         """Tenant has no feedback in date range; graceful error."""
         user = await self._create_client_user()
         await sync_to_async(self.create_tenanted_user)(

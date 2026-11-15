@@ -61,28 +61,21 @@ class TestGenerateInsightsCommand(BaseGraphQLTestCase):
             created_by=self.system_user,
         )
 
-    @patch('google.generativeai.GenerativeModel')
-    @patch('google.generativeai.list_models')
-    @patch('google.generativeai.configure')
-    def test_generate_insights_single_tenant_success(self, mock_configure, mock_list_models, mock_model_class):
+    @patch("utils.ai_text._post_json")
+    def test_generate_insights_single_tenant_success(self, mock_post):
         """Test generating insights for a single tenant."""
         from django.conf import settings
         from django.test import override_settings
 
-        with override_settings(GEMINI_API_KEY="test-key"):
-            # Mock Gemini API
-            mock_model = MagicMock()
-            mock_response = MagicMock()
-            mock_response.text = '''{
+        with override_settings(OPENAI_API_KEY="test-key"):
+            # Mock the OpenAI response
+            mock_post.return_value = {
+                "choices": [{"message": {"content": '''{
                 "insights": [
                     {"title": "Test Insight", "content": "Content", "priority": "high"}
                 ]
-            }'''
-            mock_model.generate_content.return_value = mock_response
-            mock_model_class.return_value = mock_model
-            mock_list_models.return_value = [
-                MagicMock(name="models/gemini-pro", supported_generation_methods=["generateContent"])
-            ]
+            }'''}}]
+            }
 
             out = StringIO()
             call_command(

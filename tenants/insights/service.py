@@ -12,8 +12,40 @@ from django.utils import timezone
 
 from recaps.models import ConsumerFeedback
 from tenants.models import Insights, InsightReport, Tenant
+from utils.ai_text import AiUnavailable, generate_json
 
 logger = logging.getLogger(__name__)
+
+_INSIGHTS_SYSTEM_PROMPT = (
+    "You analyse consumer feedback from in-store product sampling events. "
+    "Use only what the feedback says. Do not invent facts or numbers."
+)
+
+# Strict structured-output schema: 1-4 reports, each with a priority. The
+# count is checked again in _parse_insights_response.
+_INSIGHTS_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["insights"],
+    "properties": {
+        "insights": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["title", "content", "priority"],
+                "properties": {
+                    "title": {"type": "string"},
+                    "content": {"type": "string"},
+                    "priority": {
+                        "type": "string",
+                        "enum": ["high", "medium", "low"],
+                    },
+                },
+            },
+        },
+    },
+}
 
 
 class InsightsService:
@@ -27,15 +59,12 @@ class InsightsService:
             tenant: The tenant to generate insights for
         """
         self.tenant = tenant
-        self._configure_gemini()
+        self._require_openai_key()
 
-    def _configure_gemini(self):
-        """Configure Gemini API with API key from settings."""
-        import google.generativeai as genai
-        api_key = getattr(settings, "GEMINI_API_KEY", None)
-        if not api_key:
-            raise ValueError("GEMINI_API_KEY not configured in settings")
-        genai.configure(api_key=api_key)
+    def _require_openai_key(self):
+        """Fail early, before any query, when OpenAI is not configured."""
+        if not (getattr(settings, "OPENAI_API_KEY", "") or "").strip():
+            raise ValueError("OPENAI_API_KEY not configured in settings")
 
     def _get_feedback_queryset(
         self, from_date: Optional[date] = None, to_date: Optional[date] = None
@@ -70,7 +99,7 @@ class InsightsService:
 
     def _build_prompt(self, feedback_records: list[ConsumerFeedback]) -> str:
         """
-        Build a prompt for Gemini API to analyze consumer feedback.
+        Build the prompt that asks for insights from consumer feedback.
 
         Args:
             feedback_records: List of ConsumerFeedback records
@@ -123,116 +152,36 @@ Ensure the JSON is valid and contains between 1 and 4 insights."""
 
         return prompt
 
-    def _call_gemini_api(self, prompt: str) -> dict:
+    def _call_ai(self, prompt: str) -> dict:
         """
-        Call Gemini API to generate insights.
-
-        Args:
-            prompt: The prompt to send to Gemini
-
-        Returns:
-            Parsed JSON response as dictionary
+        Ask OpenAI for the insights, as a JSON object matching
+        ``_INSIGHTS_SCHEMA``.
 
         Raises:
-            Exception: If API call fails or response is invalid
+            ValueError: If OpenAI is not configured or returned nothing
+                usable. Callers already treat ValueError as "no insights
+                this run".
         """
         try:
-            import google.generativeai as genai
-
-            # Ensure genai is configured (should already be done in __init__, but ensure it)
-            api_key = getattr(settings, "GEMINI_API_KEY", None)
-            if api_key:
-                genai.configure(api_key=api_key)
-
-            # List available models and find one that supports generateContent
-            try:
-                available_models = genai.list_models()
-                model_name = None
-
-                # Try to find a suitable model
-                for model in available_models:
-                    if "generateContent" in model.supported_generation_methods:
-                        # Prefer models with "gemini" in the name
-                        if "gemini" in model.name.lower():
-                            model_name = model.name
-                            break
-
-                # If no gemini model found, use the first available model
-                if not model_name:
-                    for model in available_models:
-                        if "generateContent" in model.supported_generation_methods:
-                            model_name = model.name
-                            break
-
-                if not model_name:
-                    raise ValueError(
-                        "No models available that support generateContent. "
-                        "Please check your API key and permissions."
-                    )
-
-                logger.info(f"Using model: {model_name}")
-            except Exception as e:
-                # If listing models fails, try common model names as fallback
-                logger.warning(
-                    f"Could not list available models: {e}. "
-                    "Trying common model names as fallback."
-                )
-                # Try common model name patterns
-                for fallback_name in ["gemini-pro", "models/gemini-pro", "gemini-1.5-pro", "models/gemini-1.5-pro"]:
-                    try:
-                        model = genai.GenerativeModel(fallback_name)
-                        # Test if model works by checking if it can be instantiated
-                        model_name = fallback_name
-                        logger.info(f"Using fallback model: {model_name}")
-                        break
-                    except Exception:
-                        continue
-
-                if not model_name:
-                    raise ValueError(
-                        f"Could not find an available model. Error: {e}. "
-                        "Please check your API key and ensure it has access to Gemini models."
-                    )
-
-            model = genai.GenerativeModel(model_name)
-            response = model.generate_content(prompt)
-
-            # Extract text from response
-            response_text = response.text.strip()
-
-            # Try to extract JSON from response (may have markdown code blocks)
-            if "```json" in response_text:
-                # Extract JSON from markdown code block
-                start = response_text.find("```json") + 7
-                end = response_text.find("```", start)
-                response_text = response_text[start:end].strip()
-            elif "```" in response_text:
-                # Extract JSON from generic code block
-                start = response_text.find("```") + 3
-                end = response_text.find("```", start)
-                response_text = response_text[start:end].strip()
-
-            # Parse JSON response
-            try:
-                result = json.loads(response_text)
-            except json.JSONDecodeError as e:
-                logger.error(f"Failed to parse Gemini JSON response: {e}")
-                logger.error(f"Response text: {response_text}")
-                raise ValueError(
-                    f"Invalid JSON response from Gemini: {e}") from e
-
-            return result
-
-        except Exception as e:
-            logger.error(f"Error calling Gemini API: {e}")
-            raise
+            result = generate_json(
+                _INSIGHTS_SYSTEM_PROMPT,
+                prompt,
+                schema=_INSIGHTS_SCHEMA,
+                max_tokens=4000,
+            )
+        except AiUnavailable as exc:
+            raise ValueError(str(exc)) from exc
+        if result is None:
+            logger.error("OpenAI returned no usable insights for tenant %s", self.tenant.id)
+            raise ValueError("The AI service returned no usable insights.")
+        return result
 
     def _parse_insights_response(self, response: dict) -> list[dict]:
         """
-        Parse and validate insights response from Gemini.
+        Parse and validate the insights response.
 
         Args:
-            response: Dictionary response from Gemini API
+            response: Dictionary response from the AI call
 
         Returns:
             List of insight dictionaries with title, content, and priority
@@ -326,8 +275,7 @@ Ensure the JSON is valid and contains between 1 and 4 insights."""
         # Build prompt
         prompt = self._build_prompt(feedback_records)
 
-        # Call Gemini API
-        response = self._call_gemini_api(prompt)
+        response = self._call_ai(prompt)
 
         # Parse response
         parsed_insights = self._parse_insights_response(response)
