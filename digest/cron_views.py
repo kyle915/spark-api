@@ -11585,6 +11585,58 @@ class ProposeRecapRetailersView(View):
         return JsonResponse({"ok": True, "endpoint": "propose-recap-retailers"})
 
 
+@method_decorator(csrf_exempt, name="dispatch")
+class GeocodeEventsView(View):
+    """POST `/internal/cron/geocode-events`.
+
+    Fires `geocode_events` — looks up a map position for upcoming events
+    that have a street address and no coordinates, so the staff maps can
+    draw them. Stores into `EventMapPoint`; never writes `Event.coordinates`.
+
+    Params: dry_run ("1"/"true"/"yes") — list what would be looked up,
+    store nothing; tenant (int id) — one tenant only; limit (int) — most
+    events to look up this run.
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _param(name: str) -> str:
+            return (request.GET.get(name) or request.POST.get(name) or "").strip()
+
+        dry_run = _param("dry_run").lower() in ("1", "true", "yes", "on")
+        args: list[str] = ["--dry-run"] if dry_run else []
+        for name in ("tenant", "limit"):
+            raw = _param(name)
+            if not raw:
+                continue
+            try:
+                args += [f"--{name}", str(int(raw))]
+            except ValueError:
+                return JsonResponse(
+                    {"ok": False, "error": f"invalid-{name}"}, status=400
+                )
+        out = io.StringIO()
+        try:
+            call_command("geocode_events", *args, stdout=out)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Geocode events cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc),
+                 "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse({"ok": True, "dry_run": dry_run, "log": out.getvalue()})
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        return JsonResponse({"ok": True, "endpoint": "geocode-events"})
+
+
 def _registered_views() -> dict[str, Any]:
     """Map URL path → view class. Lets `digest/urls.py` mount these
     without each one being re-exported explicitly.
@@ -11608,6 +11660,7 @@ def _registered_views() -> dict[str, Any]:
         "shift-sms": SendShiftSmsView,
         "sync-sheet-staffing": SyncSheetStaffingView,
         "propose-recap-retailers": ProposeRecapRetailersView,
+        "geocode-events": GeocodeEventsView,
         "send-payment-notifications": SendPaymentNotificationsView,
         "send-document-expiry-reminders": SendDocumentExpiryRemindersView,
         "send-scheduled-client-reports": SendScheduledClientReportsView,

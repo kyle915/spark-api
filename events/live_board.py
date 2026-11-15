@@ -237,6 +237,13 @@ class LiveBoardShift:
     # The last time someone on this shift pressed Clock in on the check-in
     # page, whether or not the punch was saved. Null when nobody has.
     last_clock_in_tap_at: str | None = None
+    # Where the EVENT is, so the map can pin a shift nobody has clocked into
+    # yet (the per-BA lat/lng above are where each person's phone last was).
+    # "event" = the event's own coordinates; "geocoded" = looked up from the
+    # address (EventMapPoint). All three null when neither exists.
+    lat: float | None = None
+    lng: float | None = None
+    location_source: str | None = None
 
 
 @strawberry.type
@@ -389,6 +396,7 @@ class LiveBoardQueries:
             from django.db.models import Q
             from django.utils import timezone
             from ambassadors.attendance_hours import clock_facts, worked_hours
+            from events.map_points import event_map_points
 
             now = timezone.now()
             try:
@@ -419,6 +427,7 @@ class LiveBoardQueries:
             facts = clock_facts(event_ids)
             locs = _latest_locations(event_ids)
             taps = _last_clock_in_taps(event_ids)
+            points = event_map_points(events)  # one query for the board
 
             grace = timedelta(minutes=NO_SHOW_GRACE_MIN)
             shifts: list[LiveBoardShift] = []
@@ -505,6 +514,8 @@ class LiveBoardQueries:
                 if not assigned:
                     continue
 
+                point = points.get(ev.id)
+
                 shifts.append(
                     LiveBoardShift(
                         event_uuid=str(ev.uuid),
@@ -527,6 +538,9 @@ class LiveBoardQueries:
                         on_clock=on_clock,
                         no_shows=no_shows,
                         pending_approval=pending,
+                        lat=point[0] if point else None,
+                        lng=point[1] if point else None,
+                        location_source=point[2] if point else None,
                     )
                 )
             return shifts
