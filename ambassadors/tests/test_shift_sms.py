@@ -509,3 +509,30 @@ class TestShiftSms(AmbassadorsGraphQLTestCase):
         body = res.json()
         assert body["ok"] is True and body["dry_run"] is True
         assert "would send 0" in body["log"]
+
+
+class TestShorten:
+    """Long place names are cut at a word, never mid-word or mid-bracket."""
+
+    def test_short_names_are_untouched(self):
+        from ambassadors.shift_sms import _shorten
+
+        assert _shorten("Hollywood Bowl", 60) == "Hollywood Bowl"
+
+    def test_cuts_at_a_word_and_drops_an_open_bracket(self):
+        from ambassadors.shift_sms import _shorten
+
+        name = "East South Boulder Road, Louisville, Colorado 80027 (King Soopers #121)"
+        assert _shorten(name, 60) == "East South Boulder Road, Louisville, Colorado 80027"
+
+    def test_keeps_a_closed_bracket(self):
+        from ambassadors.shift_sms import _shorten
+
+        name = "Total Wine (Reno) on South Virginia Street near the Summit Mall entrance"
+        out = _shorten(name, 60)
+        assert out == "Total Wine (Reno) on South Virginia Street near the Summit"
+
+    def test_one_long_word_is_still_cut(self):
+        from ambassadors.shift_sms import _shorten
+
+        assert _shorten("x" * 80, 60) == "x" * 60

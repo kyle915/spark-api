@@ -145,7 +145,21 @@ def _venue(event) -> str:
     name = (getattr(event, "name", None) or "").strip()
     name = re.sub(r"^\d{1,2}/\d{1,2}(/\d{2,4})?\s*-\s*", "", name)
     name = name.split(" · ")[0].strip()
-    return (name or "your shift")[:60]
+    return _shorten(name or "your shift", 60)
+
+
+def _shorten(text: str, limit: int) -> str:
+    """``text`` cut to ``limit`` characters at a word, never mid-word, and
+    never leaving a bracket open ("… 80027 (King So" → "… 80027")."""
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    if " " in cut:
+        cut = cut.rsplit(" ", 1)[0]
+    opened = cut.rfind("(")
+    if opened != -1 and ")" not in cut[opened:]:
+        cut = cut[:opened]
+    return cut.rstrip(" ,;:-–·(") or text[:limit]
 
 
 def _first_name(ambassador) -> str:
