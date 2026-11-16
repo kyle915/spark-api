@@ -41,6 +41,7 @@ class Command(BaseCommand):
 
     def handle(self, *args, **opts):
         from events.live_board import _ops_today
+        from recaps.comment_insights import get_competitor_mentions, get_product_regions
         from recaps.feedback_themes import (
             MIN_COMMENTS,
             STATUS_READY,
@@ -78,6 +79,17 @@ class Command(BaseCommand):
                 if len(comments) < MIN_COMMENTS:
                     thin += 1
                     continue
+                if not opts["dry_run"]:
+                    # The two cards under the themes read the same comments.
+                    # Each stores its own result and asks the model only when
+                    # the comments have changed, so this is cheap when fresh.
+                    for build in (get_competitor_mentions, get_product_regions):
+                        try:
+                            build(tenant_id, start, end)
+                        except Exception:  # noqa: BLE001 — one card must not stop the run
+                            self.stderr.write(
+                                f"{build.__name__} failed for tenant {tenant_id} {start} → {end}"
+                            )
                 if TenantFeedbackThemes.objects.filter(
                     tenant_id=tenant_id, source_hash=source_hash(comments)
                 ).exists():
