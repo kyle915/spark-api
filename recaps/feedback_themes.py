@@ -80,6 +80,10 @@ MAX_LABEL_CHARS = 60
 # Bump when the prompt or the cleaning changes, so stored themes are rebuilt.
 _VERSION = "1"
 
+# How long one attempt may take. The page shows "not available right now"
+# after this rather than leaving the section loading.
+_MODEL_TIMEOUT_SECONDS = 15.0
+
 # Custom-recap fields are matched by NAME. The decline and question patterns
 # come in two spellings, like the feedback pattern they sit beside: ``\b`` for
 # Python and ``\y`` for Postgres (see recaps.tenant_sentiment).
@@ -421,8 +425,15 @@ def count_themes(raw: dict | None, comments: list[Comment]) -> list[dict]:
 def build_themes(comments: list[Comment]) -> list[dict] | None:
     """Ask the model to group ``comments``. None when it is not available."""
     try:
+        # Sorting comments into groups is a short classification job: the
+        # small model does it in a fraction of the time the writing model
+        # takes, and this call runs while someone is waiting on the page.
         raw = generate_json(
-            _SYSTEM_PROMPT, compose_prompt(comments), schema=THEMES_JSON_SCHEMA
+            _SYSTEM_PROMPT,
+            compose_prompt(comments),
+            schema=THEMES_JSON_SCHEMA,
+            small=True,
+            timeout=_MODEL_TIMEOUT_SECONDS,
         )
     except AiUnavailable:
         return None
