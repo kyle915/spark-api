@@ -32,6 +32,12 @@ from announcements.schema import AnnouncementQueryClient, AnnouncementMutationsC
 from jobboard.schema import JobBoardMutations, JobBoardQueries
 from timeclock.schema import ClockLinkMutations, ClockLinkQueries
 from recaps.checkin_issue_schema import CheckinIssueQueries
+from recaps.client_deck_schema import (
+    BestPhotoMutations,
+    BestPhotoQueries,
+    ClientRecapDraftMutations,
+    ClientRecapDraftQueries,
+)
 from tenants.notification_pref_schema import (
     NotificationPreferenceMutations,
     NotificationPreferenceQueries,
@@ -49,6 +55,8 @@ QueryClients = merge_types(
         ReportSubscriptionQueries,
         CheckinIssueQueries,
         DashboardExplainQueries,
+        BestPhotoQueries,
+        ClientRecapDraftQueries,
         NotificationPreferenceQueries,
         RecapAiQueries,
         FeedbackThemeQueries,
@@ -81,6 +89,8 @@ MutationClients = merge_types(
         ScheduledReportMutations,
         NotificationPreferenceMutations,
         FieldSamplingReportMutations,
+        BestPhotoMutations,
+        ClientRecapDraftMutations,
         MutationClients,
         ClientJobMutations,
         AmbassadorMutationsClient,
