@@ -815,16 +815,35 @@ def _engagements_text(recap) -> str:
     return f"{n:,}" if n > 0 else ""
 
 
+def _metric_pairs(recap) -> list[tuple[str | None, str | None]]:
+    """A custom recap's ``(field name, value)`` pairs for the metric matchers.
+
+    A name carries staff's confirmed metric when there is one
+    (:mod:`recaps.metric_mapping`), so the PDF counts a confirmed field the
+    way the dashboard does. Loaded once per recap object.
+    """
+    cached = getattr(recap, "_spark_metric_pairs", None)
+    if cached is not None:
+        return cached
+    from recaps import metric_mapping
+
+    values = _related_items(recap, "custom_field_value")
+    try:
+        pairs = metric_mapping.tagged_pairs(values) if values else []
+    except Exception:
+        # The mapping could not be read: fall back to wording alone.
+        pairs = metric_mapping.tagged_pairs(values, {})
+    try:
+        recap._spark_metric_pairs = pairs
+    except Exception:
+        pass
+    return pairs
+
+
 def _headline_metrics(recap) -> list[tuple[str, str]]:
     """Sampled / sold / conversion for the strip under the title. Uses the
     same field matchers as the recap cards so the numbers agree."""
-    pairs = [
-        (
-            getattr(getattr(cfv, "custom_field", None), "name", None),
-            getattr(cfv, "value", None),
-        )
-        for cfv in _related_items(recap, "custom_field_value")
-    ]
+    pairs = _metric_pairs(recap)
     sampled = _consumers_sampled_from_fields(pairs) if pairs else None
     sold = _sold_units_from_fields(pairs) if pairs else None
     out: list[tuple[str, str]] = []
@@ -1230,13 +1249,7 @@ def build_recap_pdf_html(
             for name in custom_field_sections
         )
         if not sales and not has_own_sales_section:
-            unit_lines = _sold_unit_lines(
-                (
-                    getattr(getattr(cfv, "custom_field", None), "name", None),
-                    getattr(cfv, "value", None),
-                )
-                for cfv in _related_items(recap, "custom_field_value")
-            )
+            unit_lines = _sold_unit_lines(_metric_pairs(recap))
             if unit_lines:
                 sales = [f"{_display_field_label(name)}: {n:,}" for name, n in unit_lines]
                 total = sum(n for _, n in unit_lines)
@@ -1771,11 +1784,7 @@ def _custom_engagement_totals(recap) -> dict[str, int]:
     """
     from recaps.types import _engagement_totals_from_field_pairs
 
-    pairs: list[tuple[str | None, str | None]] = []
-    for cfv in _related_items(recap, "custom_field_value"):
-        cf = getattr(cfv, "custom_field", None)
-        pairs.append((getattr(cf, "name", None), getattr(cfv, "value", None)))
-    return _engagement_totals_from_field_pairs(pairs)
+    return _engagement_totals_from_field_pairs(_metric_pairs(recap))
 
 
 def _aggregate_engagements(recaps: Iterable) -> dict[str, int]:
@@ -1835,14 +1844,7 @@ def _aggregate_units_sold(recaps: Iterable) -> int:
     for recap in recaps:
         custom_values = _related_items(recap, "custom_field_value")
         if custom_values:
-            pairs = [
-                (
-                    getattr(getattr(cfv, "custom_field", None), "name", None),
-                    getattr(cfv, "value", None),
-                )
-                for cfv in custom_values
-            ]
-            sold = _sold_units_from_fields(pairs)
+            sold = _sold_units_from_fields(_metric_pairs(recap))
             if sold is not None:
                 total += int(sold)
         else:

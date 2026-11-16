@@ -169,13 +169,19 @@ def _custom_reach_by_recap(recap_ids: list[int]) -> dict[int, int]:
     from recaps.types import _consumers_sampled_from_fields
 
     by_recap: dict[int, list[tuple[str | None, str | None]]] = {}
-    rows = (
+    from recaps import metric_mapping
+
+    rows = list(
         CustomFieldValue.objects.filter(custom_recap_id__in=recap_ids)
         .order_by("custom_field__order", "custom_field_id", "id")
-        .values_list("custom_recap_id", "custom_field__name", "value")
+        .values_list("custom_recap_id", "custom_field_id", "custom_field__name", "value")
     )
-    for recap_id, name, value in rows:
-        by_recap.setdefault(recap_id, []).append((name, value))
+    # Names carry staff's confirmed metric when there is one.
+    confirmed = metric_mapping.confirmed_metrics(field_ids={row[1] for row in rows})
+    for recap_id, field_id, name, value in rows:
+        by_recap.setdefault(recap_id, []).append(
+            (metric_mapping.tag_name(name, field_id, confirmed), value)
+        )
     out: dict[int, int] = {}
     for recap_id, pairs in by_recap.items():
         reach = _consumers_sampled_from_fields(pairs)

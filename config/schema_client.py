@@ -9,6 +9,11 @@ from recaps.schema import RecapQueryClient, RecapMutationsClient
 from recaps.recap_ai import RecapAiMutations, RecapAiQueries
 from recaps.feedback_themes import FeedbackThemeMutations, FeedbackThemeQueries
 from recaps.weekly_summary import WeeklySummaryMutations, WeeklySummaryQueries
+from recaps.flag_explanation import RecapFlagExplanationQueries
+from recaps.metric_mapping_schema import (
+    RecapMetricMappingMutations,
+    RecapMetricMappingQueries,
+)
 from recaps.report_types import (
     CampaignReportQueries,
     ReportSubscriptionQueries,
@@ -53,6 +58,8 @@ QueryClients = merge_types(
         RecapAiQueries,
         FeedbackThemeQueries,
         WeeklySummaryQueries,
+        RecapFlagExplanationQueries,
+        RecapMetricMappingQueries,
         AmbassadorQueryClient,
         QueryClients,
         ClientJobQueries,
@@ -77,6 +84,7 @@ MutationClients = merge_types(
         RecapAiMutations,
         FeedbackThemeMutations,
         WeeklySummaryMutations,
+        RecapMetricMappingMutations,
         TenantGoalsMutations,
         ScheduledReportMutations,
         NotificationPreferenceMutations,

@@ -34,6 +34,7 @@ from recaps.report_service import (
     CampaignReportKpis,
     _accumulate_custom,
     _ba_display_name,
+    _confirmed_metrics_for,
 )
 from utils.sheets_mirror import _col_letter, _service, extract_sheet_id
 
@@ -178,9 +179,10 @@ def compute_ld_summary(tenant) -> LdSummary:
             "custom_field_value__custom_field", "custom_recap_product_sample"
         )
     )
+    confirmed = _confirmed_metrics_for(getattr(tenant, "id", None))
     for recap in recaps:
         k = CampaignReportKpis()
-        _accumulate_custom(recap, k)
+        _accumulate_custom(recap, k, confirmed)
         consumers, cans, packs, willing = (
             k.consumers_reached,
             k.cans_sold,
@@ -367,13 +369,19 @@ def compute_ld_program_kpis(tenant, year: int | None = None) -> ProgramKpis:
 
     cust = {"consumers": 0, "brand": 0, "willing": 0, "cans": 0, "packs": 0, "pack_cans": 0, "products": 0}
     try:
+        from recaps import metric_mapping
+
         rows = CustomFieldValue.objects.filter(
             custom_recap__event__in=base, custom_recap__exclude_from_aggregates=False
         ).values_list(
-            "custom_recap_id", "custom_field__name", "value"
+            "custom_recap_id", "custom_field_id", "custom_field__name", "value"
         )
+        # Same rule as the dashboard this mirrors: a field staff confirmed is
+        # counted by that confirmation, the rest by wording.
+        confirmed = _confirmed_metrics_for(getattr(tenant, "id", None))
         by_recap: dict = {}
-        for rid, name, value in rows:
+        for rid, field_id, name, value in rows:
+            name = metric_mapping.tag_name(name, field_id, confirmed)
             by_recap.setdefault(rid, []).append((name, value))
             low = (name or "").lower()
             digits = re.sub(r"[^\d-]", "", str(value or ""))
@@ -382,6 +390,18 @@ def compute_ld_program_kpis(tenant, year: int | None = None) -> ProgramKpis:
             try:
                 num = int(digits)
             except ValueError:
+                continue
+            decided = metric_mapping.confirmed_metric_of(name)
+            if decided is not None:
+                if decided == metric_mapping.BRAND_AWARE:
+                    cust["brand"] += num
+                elif decided == metric_mapping.WILLING_TO_BUY:
+                    cust["willing"] += num
+                elif decided == metric_mapping.UNITS_SOLD_SINGLE:
+                    cust["cans"] += num
+                elif decided == metric_mapping.UNITS_SOLD_PACK:
+                    cust["packs"] += num
+                    cust["pack_cans"] += num * (name.pack_size or _pack_size(low))
                 continue
             if "knew about" in low:
                 cust["brand"] += num

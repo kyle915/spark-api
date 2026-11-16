@@ -168,12 +168,14 @@ def _choice_text(raw: str | None) -> list[str]:
 
 
 def _field_pairs(custom_recap) -> list[tuple[str | None, str | None]]:
-    return [
-        (getattr(cfv.custom_field, "name", None), cfv.value)
-        for cfv in custom_recap.custom_field_value.select_related("custom_field").order_by(
+    from recaps import metric_mapping
+
+    # Names carry staff's confirmed metric when there is one.
+    return metric_mapping.tagged_pairs(
+        custom_recap.custom_field_value.select_related("custom_field").order_by(
             "custom_field__order", "custom_field_id"
         )
-    ]
+    )
 
 
 def _first_value(pairs, name: str) -> str | None:

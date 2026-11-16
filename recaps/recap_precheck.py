@@ -128,6 +128,33 @@ def _plural(n: int, one: str, many: str) -> str:
     return one if n == 1 else many
 
 
+def _field_pk(field: dict) -> int | None:
+    try:
+        from utils.graphql.mixins import resolve_id_to_int
+
+        return int(resolve_id_to_int(field["id"]))
+    except Exception:  # noqa: BLE001 — an id we cannot read is just untagged
+        return None
+
+
+def _confirmed_for(fields: list[dict]) -> dict:
+    try:
+        from recaps import metric_mapping
+
+        ids = [pk for pk in (_field_pk(f) for f in fields) if pk is not None]
+        return metric_mapping.confirmed_metrics(field_ids=ids) if ids else {}
+    except Exception:  # noqa: BLE001 — fall back to wording alone
+        return {}
+
+
+def _tag(field: dict, confirmed: dict):
+    if not confirmed:
+        return field["name"]
+    from recaps import metric_mapping
+
+    return metric_mapping.tag_name(field["name"], _field_pk(field), confirmed)
+
+
 class _Answers:
     """Template fields joined to the answers sent with this check."""
 
@@ -163,8 +190,12 @@ class _Answers:
                 }
             )
         # (name, value) for answered fields: the shape the matchers read.
+        # A name carries staff's confirmed metric when the field has one
+        # (recaps.metric_mapping), so this check reads the same fields the
+        # dashboard will. Unconfirmed fields stay plain names.
+        confirmed = _confirmed_for(self.fields)
         self.pairs: list[tuple[str, str]] = [
-            (f["name"], f["value"]) for f in self.fields if f["value"]
+            (_tag(f, confirmed), f["value"]) for f in self.fields if f["value"]
         ]
 
     def id_for(self, name: str) -> str | None:

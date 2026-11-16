@@ -17,6 +17,7 @@ from asgiref.sync import sync_to_async
 from utils.gcs import public_url, extract_blob_name_from_url
 from .heic_conversion import display_blob_name, is_heic_blob
 from .recap_types import recap_type_key
+from . import metric_mapping
 from utils.graphql.permissions import _is_admin_access, resolve_request_user_access
 
 
@@ -210,8 +211,20 @@ def _sold_unit_lines(
     fields: Iterable[tuple[str | None, str | None]],
 ) -> list[tuple[str, int]]:
     """The (field name, parsed count) pairs `_sold_units_from_fields` sums —
-    each counted as-is (a pack is 1 unit, never multiplied by pack size)."""
-    pairs = list(fields)
+    each counted as-is (a pack is 1 unit, never multiplied by pack size).
+
+    A field staff confirmed (:mod:`recaps.metric_mapping`) is decided by that
+    confirmation alone: it is a sold line when confirmed as units sold and is
+    left out otherwise. The name vocabulary below runs only over fields
+    nobody has confirmed."""
+    decided, pairs = metric_mapping.split_decided(fields)
+    confirmed_lines = []
+    for name, value in decided:
+        if name.metric not in metric_mapping.SOLD_METRICS:
+            continue
+        parsed = _parse_recap_int(value) if _is_clean_count(value) else None
+        if parsed is not None:
+            confirmed_lines.append((name, parsed))
 
     def _match(pattern, exclude=None):
         out = []
@@ -229,11 +242,12 @@ def _sold_unit_lines(
     parts = [line for line in cans_packs if not _SOLD_ROLLUP_RE.search(line[0])]
     if parts:
         cans_packs = parts
-    return (
+    by_wording = (
         _match(_SOLD_SKU_LINE_RE, exclude=_SOLD_EXCLUDE_RE)
         or cans_packs
         or _match(_SOLD_FALLBACK_RE, exclude=_SOLD_EXCLUDE_RE)
     )
+    return confirmed_lines + by_wording if confirmed_lines else by_wording
 
 
 def _is_clean_count(value: str | None) -> bool:
@@ -257,8 +271,26 @@ def _consumers_sampled_from_fields(
     DESCRIBE the sampled consumers (demographics / age range / gender /
     ethnicity) or whose value is free text rather than a clean number, so a
     prose answer can't be digit-mashed into a bogus total.
+
+    A field staff confirmed as consumers sampled (:mod:`recaps.metric_mapping`)
+    wins over the wording match; a field confirmed as anything else is never
+    read as this count. The clean-number guard applies to confirmed fields
+    too.
     """
-    pairs = list(fields)
+    decided, pairs = metric_mapping.split_decided(fields)
+    confirmed_total = 0
+    confirmed_hit = False
+    for name, value in decided:
+        if name.metric != metric_mapping.CONSUMERS_SAMPLED:
+            continue
+        if not _is_clean_count(value):
+            continue
+        parsed = _parse_recap_int(value)
+        if parsed is not None:
+            confirmed_total += parsed
+            confirmed_hit = True
+    if confirmed_hit:
+        return confirmed_total
     for name, value in pairs:
         if not name or not _CONSUMERS_SAMPLED_RE.search(name):
             continue
@@ -293,7 +325,7 @@ def _tried_before_from_fields(
     template has no explicit 'first time' field.
     """
     for name, value in fields:
-        if not name:
+        if not name or metric_mapping.confirmed_metric_of(name) is not None:
             continue
         label = name.lower()
         if "tried" not in label or "before" not in label:
@@ -306,6 +338,13 @@ def _tried_before_from_fields(
         if parsed is not None:
             return parsed
     return None
+
+
+_CONFIRMED_ENGAGEMENT_KEYS = {
+    metric_mapping.FIRST_TIME: "first_time_consumers",
+    metric_mapping.BRAND_AWARE: "brand_aware_consumers",
+    metric_mapping.WILLING_TO_BUY: "willing_to_purchase_consumers",
+}
 
 
 def _engagement_totals_from_field_pairs(
@@ -326,7 +365,17 @@ def _engagement_totals_from_field_pairs(
         "willing_to_purchase_consumers": 0,
     }
     demographic_sampled = 0
-    pair_list = list(pairs)
+    all_pairs = list(pairs)
+    # Fields staff confirmed are counted by that confirmation; the wording
+    # rules below see only the fields nobody has confirmed.
+    decided, pair_list = metric_mapping.split_decided(all_pairs)
+    for name, value in decided:
+        key = _CONFIRMED_ENGAGEMENT_KEYS.get(name.metric)
+        if key is None:
+            continue
+        parsed = _parse_recap_int(value) if _is_clean_count(value) else None
+        if parsed is not None:
+            out[key] += parsed
     for name, value in pair_list:
         label = (name or "").lower()
         parsed = _parse_recap_int(value)
@@ -343,7 +392,7 @@ def _engagement_totals_from_field_pairs(
         elif "willing to purchase" in label and "not" not in label:
             out["willing_to_purchase_consumers"] += parsed
 
-    consumers_sampled = _consumers_sampled_from_fields(pair_list)
+    consumers_sampled = _consumers_sampled_from_fields(all_pairs)
     if consumers_sampled is not None:
         out["total_consumer"] = consumers_sampled
     elif out["total_consumer"] == 0 and demographic_sampled:
@@ -364,10 +413,21 @@ def _samples_given_from_fields(
     """Sum of every "samples given/distributed/handed out" field, else
     None. Girl Beer's "Total Samples Given Out" is the canonical case —
     a free-text samples headline on templates that don't use structured
-    product-sample rows."""
+    product-sample rows.
+
+    A field staff confirmed as samples given counts whatever its wording; a
+    field confirmed as something else never does."""
+    decided, pairs = metric_mapping.split_decided(fields)
     total = 0
     matched = False
-    for name, value in fields:
+    for name, value in decided:
+        if name.metric != metric_mapping.SAMPLES_GIVEN:
+            continue
+        parsed = _parse_recap_int(value) if _is_clean_count(value) else None
+        if parsed is not None:
+            total += parsed
+            matched = True
+    for name, value in pairs:
         if not name or not _SAMPLES_GIVEN_RE.search(name):
             continue
         parsed = _parse_recap_int(value)
@@ -485,6 +545,33 @@ def _is_image_url(url: str | None) -> bool:
     """True when the resolved URL ends in a browser-renderable image
     extension (jpg/jpeg/png/webp/gif). Mirrors the frontend isImage."""
     return bool(url and _IMAGE_URL_RE.search(url))
+
+
+async def _request_confirmed_metrics(info) -> dict:
+    """Staff-confirmed field metrics, loaded once per GraphQL request.
+
+    The recap list resolves soldUnits / consumersSampled per row; each row
+    awaits the same task, so the whole page costs one small query however
+    many recaps it lists.
+    """
+    import asyncio
+
+    holder = getattr(getattr(info, "context", None), "request", None)
+    task = getattr(holder, "_spark_confirmed_metrics", None) if holder else None
+    if task is None:
+        task = asyncio.ensure_future(
+            sync_to_async(metric_mapping.confirmed_metrics, thread_sensitive=True)()
+        )
+        if holder is not None:
+            try:
+                holder._spark_confirmed_metrics = task
+            except Exception:
+                pass
+    try:
+        return await task
+    except Exception:
+        # The mapping could not be read: every field stays on its wording.
+        return {}
 
 
 def _prefetched(instance, attr_name: str):
@@ -1489,20 +1576,22 @@ class CustomRecap(Node):
     # request's async loop; on a populated prefetch cache it does no I/O.
 
     @strawberry.field
-    async def sold_units(self) -> int | None:
+    async def sold_units(self, info: strawberry.Info) -> int | None:
         """SOLD = sum of every cans/packs custom field's integer value.
 
         Replicates the frontend's customSoldUnits: match field NAMEs on
         /\\b(cans?|packs?)\\b/i, parse each value (strip non [0-9-], then
         parseInt). None when the template has no such field (so non-unit
-        templates render "—", not a misleading 0)."""
+        templates render "—", not a misleading 0).
+
+        A field staff confirmed as units sold counts whatever it is called
+        (:mod:`recaps.metric_mapping`)."""
+        confirmed = await _request_confirmed_metrics(info)
 
         def _compute(values):
-            pairs = [
-                (getattr(v.custom_field, "name", None), v.value)
-                for v in values
-            ]
-            return _sold_units_from_fields(pairs)
+            return _sold_units_from_fields(
+                metric_mapping.tagged_pairs(values, confirmed)
+            )
 
         cached = _prefetched(self, "custom_field_value")
         if cached is not None:
@@ -1513,18 +1602,20 @@ class CustomRecap(Node):
         )()
 
     @strawberry.field
-    async def consumers_sampled(self) -> int | None:
+    async def consumers_sampled(self, info: strawberry.Info) -> int | None:
         """Value of the FIRST 'consumers sampled' custom field, else None.
 
         Replicates the frontend's customConsumersSampled: first field NAME
-        matching /consumers?\\s+sampled/i, value parsed the same way."""
+        matching /consumers?\\s+sampled/i, value parsed the same way.
+
+        A field staff confirmed as consumers sampled wins over the wording
+        match (:mod:`recaps.metric_mapping`)."""
+        confirmed = await _request_confirmed_metrics(info)
 
         def _compute(values):
-            pairs = [
-                (getattr(v.custom_field, "name", None), v.value)
-                for v in values
-            ]
-            return _consumers_sampled_from_fields(pairs)
+            return _consumers_sampled_from_fields(
+                metric_mapping.tagged_pairs(values, confirmed)
+            )
 
         cached = _prefetched(self, "custom_field_value")
         if cached is not None:
