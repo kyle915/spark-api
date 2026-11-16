@@ -275,7 +275,7 @@ def draft_what_changed(facts: dict) -> Draft:
     directions: dict[str, str] = {}
     if facts["level"]:
         first = (
-            f"Consumers sampled is about level with the {days} days before "
+            "Consumers sampled is about level with the period before "
             f"({n(now)} against {n(before)})."
         )
         lines.append("Consumers sampled is about level.")
@@ -284,7 +284,7 @@ def draft_what_changed(facts: dict) -> Draft:
         directions["consumers"] = word
         lines.append(f"Consumers sampled is {word} {abs(change)}%.")
         first = (
-            f"Consumers sampled is {word} {abs(change)}% on the {days} days before "
+            f"Consumers sampled is {word} {abs(change)}% on the period before "
             f"({n(now)} against {n(before)})"
         )
         if driver:

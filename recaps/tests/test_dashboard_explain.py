@@ -332,7 +332,7 @@ class TestDashboardExplain(AmbassadorsGraphQLTestCase):
         out = data["tenantWhatChanged"]
         assert out["source"] == "template"
         assert out["text"] == (
-            "Consumers sampled is up 40% on the 30 days before "
+            "Consumers sampled is up 40% on the period before "
             "(1,400 against 1,000), mostly from 4 new stores in Texas."
         )
         assert out["previousEndDate"] == (self.start - timedelta(days=1)).isoformat()
@@ -583,7 +583,7 @@ class TestDashboardExplain(AmbassadorsGraphQLTestCase):
         facts = compute_what_changed(self.tenant.id, self.start, self.today)
         draft = draft_what_changed(facts)
         assert draft.template == (
-            "Consumers sampled is about level with the 30 days before "
+            "Consumers sampled is about level with the period before "
             "(1,200 against 1,200). Conversion rate fell from 15% to 9%, "
             "most at Costco (20% to 8%)."
         )
