@@ -311,3 +311,22 @@ class TestConsumerBreakdownSchema(AmbassadorsGraphQLTestCase):
         # Either refused outright or pinned back to their own brand: never
         # the other brand's 999.
         assert b is None or b["total"] != 999
+
+
+def test_the_sql_gate_lets_through_every_wording_the_matcher_counts():
+    """The gate filters field names in SQL before the matcher runs, so it must
+    accept every wording the consumers-sampled matcher accepts. One it missed
+    ("...consumers did you sample?") dropped a whole template version's
+    consumers from the totals."""
+    from recaps.tenant_overview import _CUSTOM_KPI_NAME_RE
+    from recaps.types import _CONSUMERS_SAMPLED_RE
+
+    wordings = [
+        "Total number of consumers sampled",
+        "How many TOTAL consumers did you sample?",
+        "How many consumers did you interact with?",
+        "Consumer sampled",
+    ]
+    for name in wordings:
+        assert _CONSUMERS_SAMPLED_RE.search(name), name
+        assert _CUSTOM_KPI_NAME_RE.search(name), name

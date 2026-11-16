@@ -409,7 +409,13 @@ def _legacy_kpis(tenant_id: int, year: int | None = None) -> dict[str, int]:
 # mirror recaps.report_service._custom_engagement_totals +
 # recaps.types._sold_units_from_fields / _consumers_sampled_from_fields.
 _CUSTOM_KPI_NAME_RE = re.compile(
-    r"consumers sampled|first time|knew about|willing to purchase"
+    r"consumers? sampled|first time|knew about|willing to purchase"
+    # The other two wordings recaps.types._CONSUMERS_SAMPLED_RE accepts.
+    # Without them a field worded "How many TOTAL consumers did you sample?"
+    # was dropped here, in SQL, before the matcher could count it: Liquid
+    # Death's second template version lost ~28,000 consumers from the
+    # by-week / by-store / by-state totals this way.
+    r"|consumers? did you sample|consumers? did you interact"
     r"|cans?|packs?"
     # SOLD fallback vocabulary (mirror of recaps.types._SOLD_FALLBACK_RE):
     # non-drink tenants log sales as "...did consumers PURCHASE...",
