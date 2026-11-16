@@ -69,12 +69,22 @@ def tenant_photo_gallery(
     store: str | None = None,
     category: str | None = None,
     include_paperwork: bool = False,
+    picks_only: bool = False,
     first: int = 60,
     offset: int = 0,
 ) -> dict:
-    """One page of photos plus the filter choices that exist in the window."""
+    """One page of photos plus the filter choices that exist in the window.
+
+    ``picks_only`` keeps the best photos only: the ones staff pinned, plus
+    the scorer's choices staff did not unpin (see ``recaps/photo_picks.py``).
+    A receipt is never one of them, whatever ``include_paperwork`` says.
+    """
+    from recaps.photo_picks import _related, effective_pick_q, is_effective_pick
+
     base = _base_queryset(tenant_id, start, end)
-    if not include_paperwork:
+    if picks_only:
+        base = base.filter(effective_pick_q())
+    if not include_paperwork or picks_only:
         base = base.exclude(
             file_recap_category__name__iregex=_PAPERWORK_CATEGORY_RE.pattern
         )
@@ -125,6 +135,9 @@ def tenant_photo_gallery(
             "custom_recap__event",
             "custom_recap__event__retailer",
             "custom_recap__event__state",
+            "photo_score",
+            "staff_pick",
+            "receipt_reading",
         )
         .order_by("-custom_recap__event__date", "-custom_recap_id", "id")[
             offset : offset + first
@@ -153,6 +166,9 @@ def tenant_photo_gallery(
                 ),
                 "state": getattr(getattr(event, "state", None), "code", None) or "",
                 "event_date": when.date().isoformat() if when else "",
+                "is_pick": is_effective_pick(f),
+                # The scorer's caption: setup, product and setting only.
+                "caption": getattr(_related(f, "photo_score"), "caption", "") or "",
             }
         )
     return {

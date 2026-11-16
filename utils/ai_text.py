@@ -383,12 +383,15 @@ def generate_vision_json(
     schema: dict,
     max_tokens: int = 400,
     small: bool = False,
+    timeout: float | None = None,
 ) -> dict | None:
     """Classify one image with a strict JSON schema.
 
     Same auth and model-fallback path as :func:`generate_json`. The image is
     sent as a data URL on the user message. Callers must not ask the model
     to identify people — this helper does not add a face feature of its own.
+    ``timeout`` is seconds per HTTP attempt (default
+    :data:`DEFAULT_TIMEOUT_SECONDS`), for a caller someone is waiting on.
 
     Raises:
         AiUnavailable: Only when ``OPENAI_API_KEY`` is unset.
@@ -427,7 +430,7 @@ def generate_vision_json(
             OPENAI_CHAT_COMPLETIONS_URL,
             payload,
             headers,
-            timeout=DEFAULT_TIMEOUT_SECONDS,
+            timeout=timeout or DEFAULT_TIMEOUT_SECONDS,
         )
         content = _extract_message_text(body)
         parsed = json.loads(content)

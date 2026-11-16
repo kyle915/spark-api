@@ -383,6 +383,19 @@ def list_account_map_pins(
     if not rows:
         return []
     stores = build_store_index(tenant_id)
+    # Accepted store-name aliases tidy the LABEL only ("HEB" shown as
+    # "H-E-B"). Which pin a request belongs to is still its place.
+    from events.retailer_aliases import (
+        accepted_alias_map,
+        accepted_alias_maps,
+        resolve_store_name,
+    )
+
+    alias_maps = (
+        {tenant_id: accepted_alias_map(tenant_id)}
+        if tenant_id is not None
+        else accepted_alias_maps()
+    )
     from_events = _event_positions(
         [row.pk for row in rows if own_point(row) is None]
     )
@@ -402,7 +415,11 @@ def list_account_map_pins(
         retailer = row.retailer
         loc = (retailer.location if retailer else None) or row.location
         state = (loc.state if loc else None) or row.state
-        name = (retailer.name if retailer else None) or row.name or "—"
+        aliases = alias_maps.get(row.tenant_id)
+        retailer_label = (
+            resolve_store_name(retailer.name, aliases) if retailer else ""
+        ) or ""
+        name = retailer_label or row.name or "—"
         store_key = stores.store_for_request(row.pk)
         visit_count = stores.visit_count(store_key)
         pins.append(
@@ -414,7 +431,7 @@ def list_account_map_pins(
                 lng=lng,
                 status_slug=slug.lower(),
                 date=_serialize_dt(row.date, offset_minutes=0),
-                retailer_name=(retailer.name if retailer else None) or "",
+                retailer_name=retailer_label,
                 location_name=(loc.name if loc else None) or "",
                 state_code=(state.code if state else None) or "",
                 coverage_class=coverage_class_for(visit_count),

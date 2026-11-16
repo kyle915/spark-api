@@ -8,6 +8,7 @@ from events.schema import EventQueryClient, EventMutationsClient
 from recaps.schema import RecapQueryClient, RecapMutationsClient
 from recaps.recap_ai import RecapAiMutations, RecapAiQueries
 from recaps.feedback_themes import FeedbackThemeMutations, FeedbackThemeQueries
+from recaps.comment_insights import CommentInsightQueries
 from recaps.weekly_summary import WeeklySummaryMutations, WeeklySummaryQueries
 from recaps.flag_explanation import RecapFlagExplanationQueries
 from recaps.metric_mapping_schema import (
@@ -37,6 +38,13 @@ from announcements.schema import AnnouncementQueryClient, AnnouncementMutationsC
 from jobboard.schema import JobBoardMutations, JobBoardQueries
 from timeclock.schema import ClockLinkMutations, ClockLinkQueries
 from recaps.checkin_issue_schema import CheckinIssueQueries
+from recaps.shelf_schema import ShelfCheckMutations, ShelfCheckQueries
+from recaps.client_deck_schema import (
+    BestPhotoMutations,
+    BestPhotoQueries,
+    ClientRecapDraftMutations,
+    ClientRecapDraftQueries,
+)
 from tenants.notification_pref_schema import (
     NotificationPreferenceMutations,
     NotificationPreferenceQueries,
@@ -53,10 +61,14 @@ QueryClients = merge_types(
         CampaignReportQueries,
         ReportSubscriptionQueries,
         CheckinIssueQueries,
+        ShelfCheckQueries,
         DashboardExplainQueries,
+        BestPhotoQueries,
+        ClientRecapDraftQueries,
         NotificationPreferenceQueries,
         RecapAiQueries,
         FeedbackThemeQueries,
+        CommentInsightQueries,
         WeeklySummaryQueries,
         RecapFlagExplanationQueries,
         RecapMetricMappingQueries,
@@ -83,12 +95,15 @@ MutationClients = merge_types(
         RecapMutationsClient,
         RecapAiMutations,
         FeedbackThemeMutations,
+        ShelfCheckMutations,
         WeeklySummaryMutations,
         RecapMetricMappingMutations,
         TenantGoalsMutations,
         ScheduledReportMutations,
         NotificationPreferenceMutations,
         FieldSamplingReportMutations,
+        BestPhotoMutations,
+        ClientRecapDraftMutations,
         MutationClients,
         ClientJobMutations,
         AmbassadorMutationsClient,
