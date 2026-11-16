@@ -310,11 +310,21 @@ def _gather_custom_facts(custom_recap) -> _RecapFacts:
 
     # Pull the recap's field (name, value) pairs once; classify both the
     # feedback snippets and the KPI numbers from the same in-memory list.
-    pairs = list(
+    from recaps import metric_mapping
+
+    rows = list(
         CustomFieldValue.objects.filter(custom_recap=custom_recap).values_list(
-            "custom_field__name", "value"
+            "custom_field_id", "custom_field__name", "value"
         )
     )
+    # Names carry staff's confirmed metric when there is one
+    # (recaps.metric_mapping), so the checks read the same numbers the
+    # dashboard does. With nothing confirmed every name is a plain str.
+    confirmed = metric_mapping.confirmed_metrics(field_ids={row[0] for row in rows})
+    pairs = [
+        (metric_mapping.tag_name(name, field_id, confirmed), value)
+        for field_id, name, value in rows
+    ]
 
     texts: list[str] = []
     consumers_reached = 0
@@ -328,6 +338,22 @@ def _gather_custom_facts(custom_recap) -> _RecapFacts:
         # Feedback snippet: field NAME reads like feedback and value is text.
         if _CUSTOM_FEEDBACK_NAME_RE.search(label) and not _is_blank(value):
             texts.append(value.strip())
+        decided = metric_mapping.confirmed_metric_of(name)
+        if decided is not None:
+            # Staff confirmed this field: read it by that, not by wording.
+            parsed = _leading_int(value)
+            if parsed is None:
+                continue
+            if decided == metric_mapping.CONSUMERS_SAMPLED:
+                consumers_reached += parsed
+                saw_consumers = True
+            elif decided == metric_mapping.UNITS_SOLD_SINGLE:
+                cans_sold += parsed
+                saw_sold = True
+            elif decided == metric_mapping.UNITS_SOLD_PACK:
+                packs_sold += parsed
+                saw_sold = True
+            continue
         # KPI parse: only the KPI-named fields carry numbers we sum.
         if not _CUSTOM_KPI_NAME_RE.search(label):
             continue

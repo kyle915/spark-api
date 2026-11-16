@@ -162,13 +162,21 @@ class CampaignReportData:
 # label matching + recaps.types._sold_units_from_fields / _consumers_sampled
 # so the report agrees with the recap cards, dashboard, and multi-recap PDF.
 # ---------------------------------------------------------------------------
-def _custom_field_pairs(custom_recap) -> list[tuple[str | None, str | None]]:
-    """(field_name, value) pairs for a CustomRecap's CustomFieldValue rows."""
-    pairs: list[tuple[str | None, str | None]] = []
-    for cfv in _all(custom_recap, "custom_field_value"):
-        cf = getattr(cfv, "custom_field", None)
-        pairs.append((getattr(cf, "name", None), getattr(cfv, "value", None)))
-    return pairs
+def _custom_field_pairs(
+    custom_recap, confirmed: dict | None = None
+) -> list[tuple[str | None, str | None]]:
+    """(field_name, value) pairs for a CustomRecap's CustomFieldValue rows.
+
+    A name carries staff's confirmed metric when there is one
+    (:mod:`recaps.metric_mapping`), so the matchers count a confirmed field
+    whatever it is called. ``confirmed`` is the map a caller folding many
+    recaps loads once; left out, it is loaded for this recap's fields.
+    """
+    from recaps import metric_mapping
+
+    return metric_mapping.tagged_pairs(
+        _all(custom_recap, "custom_field_value"), confirmed
+    )
 
 
 def _leading_int(value) -> int | None:
@@ -187,6 +195,19 @@ def _custom_engagement_totals(pairs) -> dict[str, int]:
     from recaps.types import _engagement_totals_from_field_pairs
 
     return _engagement_totals_from_field_pairs(pairs)
+
+
+def _confirmed_metrics_for(tenant_id) -> dict:
+    """Staff-confirmed field metrics for one tenant; ``{}`` on any failure,
+    which leaves every field on the wording match."""
+    if tenant_id is None:
+        return {}
+    try:
+        from recaps import metric_mapping
+
+        return metric_mapping.confirmed_metrics(tenant_id=tenant_id)
+    except Exception:
+        return {}
 
 
 def _all(obj, attr: str) -> list:
@@ -229,7 +250,9 @@ def _accumulate_legacy(recap, kpis: CampaignReportKpis) -> None:
         kpis.samples_distributed += int(getattr(sample, "quantity", 0) or 0)
 
 
-def _accumulate_custom(custom_recap, kpis: CampaignReportKpis) -> None:
+def _accumulate_custom(
+    custom_recap, kpis: CampaignReportKpis, confirmed: dict | None = None
+) -> None:
     """Fold one :class:`recaps.models.CustomRecap` into the KPI totals.
 
     ``total_engagements`` is a typed column on CustomRecap. The four
@@ -240,7 +263,9 @@ def _accumulate_custom(custom_recap, kpis: CampaignReportKpis) -> None:
     """
     kpis.total_engagements += int(getattr(custom_recap, "total_engagements", 0) or 0)
 
-    pairs = _custom_field_pairs(custom_recap)
+    from recaps import metric_mapping
+
+    pairs = _custom_field_pairs(custom_recap, confirmed)
 
     eng = _custom_engagement_totals(pairs)
     consumers_sampled = _consumers_sampled_from_fields(pairs)
@@ -267,7 +292,15 @@ def _accumulate_custom(custom_recap, kpis: CampaignReportKpis) -> None:
         parsed = _leading_int(value)
         if parsed is None:
             continue
-        if re.search(r"\bcans?\b", label):
+        decided = metric_mapping.confirmed_metric_of(name)
+        if decided is not None:
+            # Staff confirmed this field: singles and packs by that
+            # confirmation, never by the word "can" or "pack" in its label.
+            if decided == metric_mapping.UNITS_SOLD_SINGLE:
+                kpis.cans_sold += int(parsed)
+            elif decided == metric_mapping.UNITS_SOLD_PACK:
+                kpis.packs_sold += int(parsed)
+        elif re.search(r"\bcans?\b", label):
             kpis.cans_sold += int(parsed)
         elif re.search(r"\bpacks?\b", label):
             kpis.packs_sold += int(parsed)
@@ -473,7 +506,8 @@ def _collect_highlights(legacy_recaps, custom_recaps) -> list[CampaignReportQuot
             break
         ev = getattr(custom_recap, "event", None)
         source = getattr(ev, "name", None)
-        for name, value in _custom_field_pairs(custom_recap):
+        # Quotes only: no metric is read here, so no mapping is loaded.
+        for name, value in _custom_field_pairs(custom_recap, {}):
             if name and quote_name_re.search(name):
                 _add(value, source)
 
@@ -629,8 +663,9 @@ def build_campaign_report(
     kpis.recaps = len(legacy_recaps) + len(counted_custom)
     for recap in legacy_recaps:
         _accumulate_legacy(recap, kpis)
+    confirmed = _confirmed_metrics_for(getattr(request_obj, "tenant_id", None))
     for custom_recap in counted_custom:
-        _accumulate_custom(custom_recap, kpis)
+        _accumulate_custom(custom_recap, kpis, confirmed)
 
     tenant = getattr(request_obj, "tenant", None)
     brand_name = getattr(tenant, "name", None) or ""

@@ -28,13 +28,14 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
+from recaps import metric_mapping
 from recaps.models import ConsumerEngagements, CustomFieldValue, CustomRecap
 from recaps.tenant_overview import (
-    _CUSTOM_KPI_NAME_RE,
     _approved_only,
     _event_date_expr,
     _filter_event_window,
     _inclusive_dates_to_window,
+    _kpi_gate,
 )
 from recaps.types import _consumers_sampled_from_fields
 
@@ -220,12 +221,13 @@ def consumer_rows(
     # …and how many consumers it sampled, by the same field matcher (and the
     # same SQL gate on field names) the KPI totals use.
     pairs: dict[int, list[tuple[str | None, str | None]]] = {}
+    gate, confirmed = _kpi_gate(tenant_id)
     values = (
         _approved_only(
             _filter_event_window(
                 CustomFieldValue.objects.filter(
+                    gate,
                     custom_recap__tenant_id=tenant_id,
-                    custom_field__name__iregex=_CUSTOM_KPI_NAME_RE.pattern,
                     **{f"custom_recap__{k}": v for k, v in live.items()},
                 ),
                 "custom_recap__event__",
@@ -233,11 +235,13 @@ def consumer_rows(
             ),
             "custom_recap__",
         )
-        .values_list("custom_recap_id", "custom_field__name", "value")
+        .values_list("custom_recap_id", "custom_field_id", "custom_field__name", "value")
         .order_by("custom_recap_id")
     )
-    for recap_id, name, value in values.iterator():
-        pairs.setdefault(recap_id, []).append((name, value))
+    for recap_id, field_id, name, value in values.iterator():
+        pairs.setdefault(recap_id, []).append(
+            (metric_mapping.tag_name(name, field_id, confirmed), value)
+        )
     for recap_id, fields in pairs.items():
         where = placed.get(recap_id)
         if where is None:
