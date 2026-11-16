@@ -126,11 +126,17 @@ def tenant_field_efficiency(tenant_id: int, start: date | None, end: date | None
         return summarize_efficiency([])
 
     pairs: dict[int, list[tuple[str | None, str | None]]] = {}
+    from recaps import metric_mapping
+
     values = CustomFieldValue.objects.filter(
         custom_recap_id__in=[r.id for r in recaps]
-    ).values_list("custom_recap_id", "custom_field__name", "value")
-    for recap_id, name, value in values.iterator(chunk_size=5000):
-        pairs.setdefault(recap_id, []).append((name, value))
+    ).values_list("custom_recap_id", "custom_field_id", "custom_field__name", "value")
+    # Names carry staff's confirmed metric when there is one.
+    confirmed = metric_mapping.confirmed_metrics(tenant_id=tenant_id)
+    for recap_id, field_id, name, value in values.iterator(chunk_size=5000):
+        pairs.setdefault(recap_id, []).append(
+            (metric_mapping.tag_name(name, field_id, confirmed), value)
+        )
 
     # Clocked hours per event. Bound the P&L pull to the recaps' own dates so
     # an all-time report does not scan every event the brand ever had.

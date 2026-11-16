@@ -567,11 +567,25 @@ class DashboardQueries:
                                 "brand_base": 0,      # consumers on recaps that asked awareness
                                 "willing_base": 0,    # consumers on recaps that asked intent
                                 "products_sold": 0}   # two-tier SOLD (shared helper)
-                        rows = recap_models.CustomFieldValue.objects.filter(
-                            custom_recap__event__in=base_queryset,
-                            custom_recap__exclude_from_aggregates=False,
-                        ).values_list(
-                            "custom_recap_id", "custom_field__name", "value"
+                        from recaps import metric_mapping
+
+                        rows = list(
+                            recap_models.CustomFieldValue.objects.filter(
+                                custom_recap__event__in=base_queryset,
+                                custom_recap__exclude_from_aggregates=False,
+                            ).values_list(
+                                "custom_recap_id",
+                                "custom_field_id",
+                                "custom_field__name",
+                                "value",
+                            )
+                        )
+                        # Fields staff confirmed (recaps.metric_mapping) are
+                        # counted by that confirmation, whatever their wording.
+                        # With none confirmed every name below is a plain str
+                        # and each rule takes the path it always took.
+                        confirmed = metric_mapping.confirmed_metrics(
+                            field_ids={row[1] for row in rows}
                         )
                         # Group (name, value) by recap so products_sold can run the
                         # shared per-recap two-tier matcher (cans/packs primary,
@@ -580,7 +594,8 @@ class DashboardQueries:
                         by_recap: dict = {}
                         asked_brand: set = set()
                         asked_willing: set = set()
-                        for recap_id, name, value in rows:
+                        for recap_id, field_id, name, value in rows:
+                            name = metric_mapping.tag_name(name, field_id, confirmed)
                             by_recap.setdefault(recap_id, []).append((name, value))
                             low = (name or "").lower()
                             digits = _re.sub(r"[^\d-]", "", str(value or ""))
@@ -589,6 +604,24 @@ class DashboardQueries:
                             try:
                                 num = int(digits)
                             except ValueError:
+                                continue
+                            decided = metric_mapping.confirmed_metric_of(name)
+                            if decided is not None:
+                                if decided == metric_mapping.BRAND_AWARE:
+                                    sums["brand"] += num
+                                    sums["brand_rows"] += 1
+                                    asked_brand.add(recap_id)
+                                elif decided == metric_mapping.WILLING_TO_BUY:
+                                    sums["willing"] += num
+                                    sums["willing_rows"] += 1
+                                    asked_willing.add(recap_id)
+                                elif decided == metric_mapping.UNITS_SOLD_SINGLE:
+                                    sums["cans"] += num
+                                elif decided == metric_mapping.UNITS_SOLD_PACK:
+                                    sums["packs"] += num
+                                    sums["pack_cans"] += num * (
+                                        name.pack_size or _pack_size_from_label(low)
+                                    )
                                 continue
                             if "knew about" in low:
                                 sums["brand"] += num

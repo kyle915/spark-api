@@ -992,6 +992,12 @@ class RecapAiReview(models.Model):
     extracted_at = models.DateTimeField(null=True, blank=True)
     summary = models.JSONField(null=True, blank=True)
     summarized_at = models.DateTimeField(null=True, blank=True)
+    # One-line "why this was flagged, look here first" for the reviewer
+    # (:mod:`recaps.flag_explanation`). ``flag_explanation_hash`` is the hash
+    # of the flag codes and numbers the line was written from, so the line
+    # is rebuilt only when the flags change — never on a plain page load.
+    flag_explanation = models.JSONField(null=True, blank=True)
+    flag_explanation_hash = models.CharField(max_length=64, blank=True, default="")
 
     class Meta:
         constraints = [
@@ -1412,6 +1418,48 @@ class DashboardText(models.Model):
                 name="dashboard_text_asker_idx",
             )
         ]
+
+
+class RecapFieldMetricMapping(models.Model):
+    """Which standard Spark number one recap template field feeds.
+
+    Spark's SOLD / sampled / purchase-intent numbers were found by matching a
+    field's NAME against a fixed vocabulary (:mod:`recaps.types`). A client
+    whose form is worded differently silently read "—". This row is the
+    explicit answer for one field, set by Ignite staff:
+
+    * no row, or ``confirmed_at`` null — nobody has decided; the name
+      vocabulary still applies to this field, exactly as before;
+    * ``metric`` set and ``confirmed_at`` set — staff confirmed it. The
+      matchers use this and skip the vocabulary for the field. ``"none"``
+      means "confirmed: not one of the standard numbers".
+
+    ``pack_size`` is units per pack, only for ``units_sold_pack``. A model may
+    PROPOSE a metric (:mod:`recaps.metric_mapping`), but a proposal is never
+    stored: rows are written only when a staff member saves.
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    custom_field = models.OneToOneField(
+        CustomField,
+        on_delete=models.CASCADE,
+        related_name="metric_mapping",
+    )
+    metric = models.CharField(max_length=32, null=True, blank=True)
+    pack_size = models.PositiveIntegerField(null=True, blank=True)
+    confirmed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="recap_metric_mappings_confirmed",
+    )
+    confirmed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self) -> str:
+        return f"Field {self.custom_field_id} -> {self.metric or 'undecided'}"
 
 
 class RecapPhotoScore(models.Model):

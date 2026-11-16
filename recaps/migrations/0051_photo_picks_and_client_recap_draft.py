@@ -9,7 +9,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('recaps', '0049_dashboard_text'),
+        ('recaps', '0050_recap_field_metric_mapping'),
         ('tenants', '0063_summary_period'),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]

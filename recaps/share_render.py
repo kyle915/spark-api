@@ -276,10 +276,11 @@ def recap_to_public_dict(kind: str, recap) -> dict[str, Any]:
                 _consumers_sampled_from_fields,
                 _sold_units_from_fields,
             )
-            pairs = [
-                (getattr(v.custom_field, "name", None), v.value)
-                for v in recap.custom_field_value.all()
-            ]
+            from recaps import metric_mapping
+
+            # Names carry staff's confirmed metric when there is one, so the
+            # shared page counts a confirmed field the way the dashboard does.
+            pairs = metric_mapping.tagged_pairs(recap.custom_field_value.all())
             sold = _sold_units_from_fields(pairs)
             sampled = _consumers_sampled_from_fields(pairs)
             spend = _account_spend_from_fields(pairs)

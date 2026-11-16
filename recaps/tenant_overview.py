@@ -58,8 +58,13 @@ from recaps.models import (
     ProductSamples,
     Recap,
 )
+from recaps import metric_mapping
 from recaps.aggregates import exclude_non_aggregate_recaps
-from recaps.report_service import _format_date_range, _leading_int
+from recaps.report_service import (
+    _confirmed_metrics_for,
+    _format_date_range,
+    _leading_int,
+)
 from recaps.types import (
     _consumers_sampled_from_fields,
     _is_dry_demo_from_fields,
@@ -424,6 +429,45 @@ _CUSTOM_KPI_NAME_RE = re.compile(
 )
 
 
+def _kpi_gate(tenant_id: int | None = None):
+    """``(SQL name gate, confirmed map)`` for the KPI value-row readers.
+
+    The gate is the name vocabulary, widened to every field staff confirmed
+    (:mod:`recaps.metric_mapping`) — a confirmed field can be worded any way
+    and must not be dropped in SQL before a matcher sees it. With nothing
+    confirmed the gate is the bare name regex, as it always was.
+    """
+    confirmed = (
+        _confirmed_metrics_for(tenant_id)
+        if tenant_id is not None
+        else _all_confirmed_metrics()
+    )
+    return metric_mapping.kpi_name_gate(_CUSTOM_KPI_NAME_RE.pattern, confirmed), confirmed
+
+
+def _all_confirmed_metrics() -> dict:
+    try:
+        return metric_mapping.confirmed_metrics()
+    except Exception:
+        return {}
+
+
+_AUDIENCE_KEYS = {
+    metric_mapping.FIRST_TIME: "first_time_consumers",
+    metric_mapping.BRAND_AWARE: "brand_aware_consumers",
+    metric_mapping.WILLING_TO_BUY: "willing_to_purchase",
+}
+
+
+def _asks_first_time(name) -> bool:
+    """True when this field is the recap's first-time count: confirmed as
+    such, or (nobody has confirmed it) worded "first time"."""
+    decided = metric_mapping.confirmed_metric_of(name)
+    if decided is not None:
+        return decided == metric_mapping.FIRST_TIME
+    return "first time" in (name or "").lower()
+
+
 def _add_audience_from_pairs(
     pairs: list[tuple[str | None, str | None]], out: dict[str, int]
 ) -> None:
@@ -432,6 +476,13 @@ def _add_audience_from_pairs(
         label = (name or "").lower()
         val = _leading_int(value)
         if val is None:
+            continue
+        decided = metric_mapping.confirmed_metric_of(name)
+        if decided is not None:
+            # Staff confirmed this field: count it by that, not by wording.
+            key = _AUDIENCE_KEYS.get(decided)
+            if key is not None:
+                out[key] += val
             continue
         if "first time" in label:
             out["first_time_consumers"] += val
@@ -501,25 +552,27 @@ def _custom_kpis_window(tenant_id: int, window: tuple | None) -> dict[str, int]:
     # Pull only the KPI-relevant free-text value rows, grouped by recap so
     # the per-recap "consumers sampled" fallback (sold units + samples)
     # matches the campaign report's per-recap accumulation.
+    gate, confirmed = _kpi_gate(tenant_id)
     rows = (
         _approved_only(
             _filter_event_window(
                 CustomFieldValue.objects.filter(
-                    custom_recap__tenant_id=tenant_id,
-                    custom_field__name__iregex=_CUSTOM_KPI_NAME_RE.pattern,
+                    gate, custom_recap__tenant_id=tenant_id
                 ),
                 "custom_recap__event__",
                 window,
             ),
             "custom_recap__",
         )
-        .values_list("custom_recap_id", "custom_field__name", "value")
+        .values_list("custom_recap_id", "custom_field_id", "custom_field__name", "value")
         .order_by("custom_recap_id")
     )
 
     per_recap: dict[int, list[tuple[str | None, str | None]]] = {}
-    for recap_id, name, value in rows.iterator():
-        per_recap.setdefault(recap_id, []).append((name, value))
+    for recap_id, field_id, name, value in rows.iterator():
+        per_recap.setdefault(recap_id, []).append(
+            (metric_mapping.tag_name(name, field_id, confirmed), value)
+        )
 
     sampled_total = 0
     samples_given_total = 0
@@ -543,7 +596,13 @@ def _custom_kpis_window(tenant_id: int, window: tuple | None) -> dict[str, int]:
             parsed = _leading_int(value)
             if parsed is None:
                 continue
-            if re.search(r"\bcans?\b", label):
+            decided = metric_mapping.confirmed_metric_of(name)
+            if decided is not None:
+                if decided == metric_mapping.UNITS_SOLD_SINGLE:
+                    out["cans_sold"] += parsed
+                elif decided == metric_mapping.UNITS_SOLD_PACK:
+                    out["packs_sold"] += parsed
+            elif re.search(r"\bcans?\b", label):
                 out["cans_sold"] += parsed
             elif re.search(r"\bpacks?\b", label):
                 out["packs_sold"] += parsed
@@ -1397,12 +1456,12 @@ def _custom_market_kpis(
     # code, so we can group per recap (for the per-recap parse rules) and
     # attribute the result to the right state. Bounded slice, never the full
     # recap tree.
+    gate, confirmed = _kpi_gate(tenant_id)
     rows = (
         _approved_only(
             _filter_event_window(
                 CustomFieldValue.objects.filter(
-                    custom_recap__tenant_id=tenant_id,
-                    custom_field__name__iregex=_CUSTOM_KPI_NAME_RE.pattern,
+                    gate, custom_recap__tenant_id=tenant_id
                 ),
                 "custom_recap__event__",
                 window,
@@ -1413,6 +1472,7 @@ def _custom_market_kpis(
             "custom_recap_id",
             f"custom_recap__{_CUSTOM_STATE_PATH}",
             "custom_recap__event__address",
+            "custom_field_id",
             "custom_field__name",
             "value",
         )
@@ -1420,11 +1480,13 @@ def _custom_market_kpis(
     )
 
     per_recap: dict[int, dict] = {}
-    for recap_id, state_code, address, name, value in rows.iterator():
+    for recap_id, state_code, address, field_id, name, value in rows.iterator():
         entry = per_recap.setdefault(
             recap_id, {"state": state_code, "address": address, "pairs": []}
         )
-        entry["pairs"].append((name, value))
+        entry["pairs"].append(
+            (metric_mapping.tag_name(name, field_id, confirmed), value)
+        )
 
     # Per-state free-text "consumers sampled" total, the structured-sample
     # fallback source (kept separate from consumers_reached so the fallback
@@ -1710,15 +1772,15 @@ def tenant_metro_breakdown(
     # recap (for the per-recap parse rules), then attributed to that
     # recap's (metro, week) bucket.
     per_recap_pairs: dict[int, list[tuple[str, str]]] = {}
-    for recap_id, cf_name, value in (
-        CustomFieldValue.objects.filter(
-            custom_recap_id__in=recap_ids,
-            custom_field__name__iregex=_CUSTOM_KPI_NAME_RE.pattern,
-        )
-        .values_list("custom_recap_id", "custom_field__name", "value")
+    gate, confirmed = _kpi_gate(tenant_id)
+    for recap_id, field_id, cf_name, value in (
+        CustomFieldValue.objects.filter(gate, custom_recap_id__in=recap_ids)
+        .values_list("custom_recap_id", "custom_field_id", "custom_field__name", "value")
         .order_by("custom_recap_id")
     ):
-        per_recap_pairs.setdefault(recap_id, []).append((cf_name, value))
+        per_recap_pairs.setdefault(recap_id, []).append(
+            (metric_mapping.tag_name(cf_name, field_id, confirmed), value)
+        )
 
     sampled_totals: dict[tuple[str, int, int], int] = {}
     products_totals: dict[tuple[str, int, int], int] = {}
@@ -2284,16 +2346,16 @@ def custom_conversion_rows(
 
     # Free-text sold + sample base on the selected recaps only.
     per_recap: dict[int, list[tuple[str | None, str | None]]] = {}
-    for recap_id, name, value in (
-        CustomFieldValue.objects.filter(
-            custom_recap_id__in=custom_ids,
-            custom_field__name__iregex=_CUSTOM_KPI_NAME_RE.pattern,
-        )
-        .values_list("custom_recap_id", "custom_field__name", "value")
+    gate, confirmed = _kpi_gate()
+    for recap_id, field_id, name, value in (
+        CustomFieldValue.objects.filter(gate, custom_recap_id__in=custom_ids)
+        .values_list("custom_recap_id", "custom_field_id", "custom_field__name", "value")
         .order_by("custom_recap_id")
         .iterator()
     ):
-        per_recap.setdefault(recap_id, []).append((name, value))
+        per_recap.setdefault(recap_id, []).append(
+            (metric_mapping.tag_name(name, field_id, confirmed), value)
+        )
 
     structured_by_recap: dict[int, int] = {}
     for row in (
@@ -2455,27 +2517,33 @@ def sales_program_metrics(
     out["demos"] = len(event_ids)
 
     per_recap: dict[int, list[tuple[str | None, str | None]]] = {}
-    for recap_id, name, value in (
-        CustomFieldValue.objects.filter(
-            custom_recap_id__in=custom_ids,
-            custom_field__name__iregex=_CUSTOM_KPI_NAME_RE.pattern,
-        )
-        .values_list("custom_recap_id", "custom_field__name", "value")
+    gate, confirmed = _kpi_gate(tenant_id)
+    for recap_id, field_id, name, value in (
+        CustomFieldValue.objects.filter(gate, custom_recap_id__in=custom_ids)
+        .values_list("custom_recap_id", "custom_field_id", "custom_field__name", "value")
         .order_by("custom_recap_id")
         .iterator()
     ):
-        per_recap.setdefault(recap_id, []).append((name, value))
+        per_recap.setdefault(recap_id, []).append(
+            (metric_mapping.tag_name(name, field_id, confirmed), value)
+        )
     for recap_id, pairs in per_recap.items():
         _add_audience_from_pairs(pairs, out)
         # Trial quality's denominator: only recaps whose template asked
         # first-time (Brew Dr's Aug v1 template didn't).
         if any(
-            "first time" in (name or "").lower() and _leading_int(value) is not None
+            _asks_first_time(name) and _leading_int(value) is not None
             for name, value in pairs
         ):
             out["first_time_base"] += custom_base.get(recap_id, 0)
         for name, count in _sold_unit_lines(pairs):
-            if _CANS_RE.search(name):
+            decided = metric_mapping.confirmed_metric_of(name)
+            if decided is not None:
+                if decided == metric_mapping.UNITS_SOLD_SINGLE:
+                    out["cans_sold"] += count
+                elif decided == metric_mapping.UNITS_SOLD_PACK:
+                    out["packs_sold"] += count
+            elif _CANS_RE.search(name):
                 out["cans_sold"] += count
             elif _PACKS_RE.search(name):
                 out["packs_sold"] += count
