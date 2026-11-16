@@ -271,6 +271,12 @@ class TestInviteUserWelcomeEmail(BaseGraphQLTestCase):
         self.schema = schema_spark
         self.endpoint_path = "/api/v1/graphql/spark"
         self.tenant = None
+        # inviteUser is Spark-admin only; invite as an admin.
+        self.admin = self.create_user(
+            username="invite-admin@test.com",
+            email="invite-admin@test.com",
+            role=self.roles["spark_admin"],
+        )
 
     async def _tenant(self):
         if self.tenant is None:
@@ -307,6 +313,7 @@ class TestInviteUserWelcomeEmail(BaseGraphQLTestCase):
                     }
                 },
                 self.endpoint_path,
+                user=self.admin,
             )
 
         assert result.errors is None
@@ -382,6 +389,7 @@ class TestInviteUserWelcomeEmail(BaseGraphQLTestCase):
                     }
                 },
                 self.endpoint_path,
+                user=self.admin,
             )
 
         assert result.errors is None

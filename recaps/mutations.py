@@ -2503,6 +2503,13 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
         if recap_section.tenant_id != custom_recap_template.tenant_id:
             raise GraphQLError("Recap section does not belong to the template tenant.")
 
+        await self._assert_caller_authorized_for_recap_tenant(
+            custom_recap_template.tenant_id,
+            action="modify",
+            block_ambassadors=True,
+            record_label="Custom recap template",
+        )
+
         @sync_to_async
         def create_custom_field_transaction():
             with transaction.atomic():
@@ -2530,11 +2537,20 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
 
         try:
             custom_field_id = resolve_id_to_int(self.input.id)
-            custom_field = await sync_to_async(models.CustomField.objects.get)(
-                id=custom_field_id
-            )
+            custom_field = await sync_to_async(
+                models.CustomField.objects.select_related(
+                    "custom_recap_template"
+                ).get
+            )(id=custom_field_id)
         except (models.CustomField.DoesNotExist, TypeError, ValueError, GraphQLError):
             raise GraphQLError("Custom field not found.")
+
+        await self._assert_caller_authorized_for_recap_tenant(
+            custom_field.custom_recap_template.tenant_id,
+            action="modify",
+            block_ambassadors=True,
+            record_label="Custom field",
+        )
 
         try:
             custom_recap_template_id = resolve_id_to_int(
@@ -2575,6 +2591,13 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
         if recap_section.tenant_id != custom_recap_template.tenant_id:
             raise GraphQLError("Recap section does not belong to the template tenant.")
 
+        await self._assert_caller_authorized_for_recap_tenant(
+            custom_recap_template.tenant_id,
+            action="modify",
+            block_ambassadors=True,
+            record_label="Custom recap template",
+        )
+
         @sync_to_async
         def update_custom_field_transaction():
             with transaction.atomic():
@@ -2606,6 +2629,13 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
             event_type = await sync_to_async(EventType.objects.get)(id=event_type_id)
         except (EventType.DoesNotExist, TypeError, ValueError, GraphQLError):
             raise GraphQLError("Event type not found.")
+
+        await self._assert_caller_authorized_for_recap_tenant(
+            event_type.tenant_id,
+            action="modify",
+            block_ambassadors=True,
+            record_label="Event type",
+        )
 
         @sync_to_async
         def create_custom_recap_template_transaction():
@@ -2655,6 +2685,13 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
         except models.CustomField.DoesNotExist:
             raise GraphQLError("Custom field not found.")
 
+        await self._assert_caller_authorized_for_recap_tenant(
+            custom_field.custom_recap_template.tenant_id,
+            action="modify",
+            block_ambassadors=True,
+            record_label="Custom field",
+        )
+
         @sync_to_async
         def _delete():
             value_qs = models.CustomFieldValue.objects.filter(
@@ -2699,6 +2736,19 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
         except (EventType.DoesNotExist, TypeError, ValueError, GraphQLError):
             raise GraphQLError("Event type not found.")
 
+        await self._assert_caller_authorized_for_recap_tenant(
+            custom_recap_template.tenant_id,
+            action="modify",
+            block_ambassadors=True,
+            record_label="Custom recap template",
+        )
+        await self._assert_caller_authorized_for_recap_tenant(
+            event_type.tenant_id,
+            action="modify",
+            block_ambassadors=True,
+            record_label="Event type",
+        )
+
         @sync_to_async
         def update_custom_recap_template_transaction():
             with transaction.atomic():
@@ -2727,6 +2777,10 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
         """Create a custom recap field type."""
         if not isinstance(self.input, inputs.CreateCustomRecapFieldTypeInput):
             raise GraphQLError("Invalid input type.")
+
+        # Field types are a global catalog shared by every tenant.
+        if not await self._caller_is_admin():
+            raise GraphQLError("Only Spark admins can manage recap field types.")
 
         @sync_to_async
         def create_custom_recap_field_type_transaction():
@@ -2757,6 +2811,10 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
         ):
             raise GraphQLError("Custom recap field type not found.")
 
+        # Field types are a global catalog shared by every tenant.
+        if not await self._caller_is_admin():
+            raise GraphQLError("Only Spark admins can manage recap field types.")
+
         @sync_to_async
         def update_custom_recap_field_type_transaction():
             with transaction.atomic():
@@ -2777,6 +2835,13 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
             tenant = await sync_to_async(Tenant.objects.get)(id=tenant_id)
         except (Tenant.DoesNotExist, TypeError, ValueError, GraphQLError):
             raise GraphQLError("Tenant not found.")
+
+        await self._assert_caller_authorized_for_recap_tenant(
+            tenant.id,
+            action="modify",
+            block_ambassadors=True,
+            record_label="Tenant",
+        )
 
         @sync_to_async
         def create_recap_section_transaction():
@@ -2809,6 +2874,19 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
             tenant = await sync_to_async(Tenant.objects.get)(id=tenant_id)
         except (Tenant.DoesNotExist, TypeError, ValueError, GraphQLError):
             raise GraphQLError("Tenant not found.")
+
+        await self._assert_caller_authorized_for_recap_tenant(
+            recap_section.tenant_id,
+            action="modify",
+            block_ambassadors=True,
+            record_label="Recap section",
+        )
+        await self._assert_caller_authorized_for_recap_tenant(
+            tenant.id,
+            action="modify",
+            block_ambassadors=True,
+            record_label="Tenant",
+        )
 
         @sync_to_async
         def update_recap_section_transaction():
@@ -5564,7 +5642,39 @@ class RecapMutations:
                 input_obj=input,
             )
 
+        # Tenant write gate: admins anywhere, never ambassadors, everyone
+        # else only inside the event's own tenant.
+        try:
+            gate = RecapMutationService()
+            await gate.set_user(info)
+            await gate._assert_caller_authorized_for_recap_tenant(
+                event.tenant_id,
+                action="import",
+                block_ambassadors=True,
+                record_label="Event",
+            )
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.ImportConnecteamRecapPdfResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
         gcs_path = (getattr(input, "pdf_gcs_path", None) or "").strip()
+        # Only PDFs uploaded through getUploadUrl's import prefix may be
+        # read back here — never an arbitrary object in the bucket.
+        if gcs_path and (
+            not gcs_path.startswith("connecteam-imports/")
+            or gcs_path.startswith("connecteam-imports/jobs/")
+            or ".." in gcs_path
+        ):
+            return build_mutation_response(
+                types.ImportConnecteamRecapPdfResponse,
+                success=False,
+                message="Invalid PDF upload path.",
+                input_obj=input,
+            )
         if gcs_path:
             job_id = str(_uuid.uuid4())
             await sync_to_async(write_connecteam_job)(
@@ -7086,6 +7196,13 @@ class RecapMutations:
         from events import models as e_models
 
         try:
+            # Staff only: this pushes caller-written text to a BA's phone.
+            role_slug, is_staff, is_super, email = (
+                await resolve_request_user_access(info.context.request.user)
+            )
+            if not _is_admin_access(role_slug, is_staff, is_super, email):
+                raise GraphQLError("Only Spark admins can nudge ambassadors.")
+
             ae_uuid = str(input.ambassador_event_uuid)
             if not ae_uuid:
                 raise GraphQLError("ambassador_event_uuid is required.")
