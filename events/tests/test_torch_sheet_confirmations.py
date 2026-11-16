@@ -39,6 +39,10 @@ from events.sheet_event_confirmations import (
         (" 3:15p ", time(15, 15)),
         ("1:30 PM", time(13, 30)),
         ("4:30 PM", time(16, 30)),
+        ("630a", time(6, 30)),
+        ("1030p", time(22, 30)),
+        ("1230 PM", time(12, 30)),
+        ("1300", time(13, 0)),
     ],
 )
 def test_parse_sheet_clock(raw, expected):

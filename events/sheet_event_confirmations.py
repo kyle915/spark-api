@@ -294,6 +294,11 @@ def sheet_url_for_config(config: SheetConfirmationConfig) -> str:
 
 _TAB_TITLE_CACHE: dict[str, str] = {}
 
+_COMPACT_TIME_RE = re.compile(
+    r"^\s*(?P<hour>\d{1,2})(?P<minute>[0-5]\d)(?P<rest>\s*(?:[ap]\.?m?\.?)?\s*)$",
+    re.IGNORECASE,
+)
+
 _TIME_RE = re.compile(
     r"""
     ^\s*
@@ -464,6 +469,10 @@ def parse_sheet_clock(raw: str | None) -> time:
     text = (raw or "").strip()
     if not text:
         raise ValueError("Time is required")
+    # Compact clocks typed without a colon: "630a", "1030p", "1300".
+    compact = _COMPACT_TIME_RE.match(text)
+    if compact:
+        text = f"{compact.group('hour')}:{compact.group('minute')}{compact.group('rest')}"
     match = _TIME_RE.match(text)
     if not match:
         raise ValueError(f"Unrecognized time {raw!r}")
