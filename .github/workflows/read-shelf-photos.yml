@@ -1,0 +1,51 @@
+name: read-shelf-photos
+
+# Reads on-shelf photos from retail recaps that have no answer yet (product
+# on shelf, facings, price tag, gap) so staff see the reading at review and
+# the brand's "On shelf" summary has something to count. See
+# recaps/shelf_check.py. Each photo is read once; each run is capped.
+# Every 3 hours + manual dispatch.
+#
+# Schedules only fire from the default branch: this file must also be on
+# `main` for the schedule to run.
+
+on:
+  schedule:
+    - cron: "20 */3 * * *"
+  workflow_dispatch:
+    inputs:
+      tenant_id:
+        description: "Scope to one tenant id (blank = all)"
+        required: false
+        default: ""
+      limit:
+        description: "Most photos to read this run (max 200)"
+        required: false
+        default: "40"
+      since_days:
+        description: "Only recaps created in the last N days"
+        required: false
+        default: "45"
+
+jobs:
+  fire:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Fire read-shelf-photos cron endpoint
+        run: |
+          if [ -z "${{ secrets.INTERNAL_CRON_SECRET }}" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          BODY=$(curl -sS -w "\nHTTP %{http_code}" \
+            -X POST "https://spark-api-new-490085168610.us-central1.run.app/internal/cron/read-shelf-photos" \
+            -H "X-Cron-Secret: ${{ secrets.INTERNAL_CRON_SECRET }}" \
+            --data-urlencode "tenant_id=${{ inputs.tenant_id }}" \
+            --data-urlencode "limit=${{ inputs.limit || '40' }}" \
+            --data-urlencode "since_days=${{ inputs.since_days || '45' }}" \
+            --data-urlencode "max_seconds=240" \
+            --max-time 540)
+          echo "$BODY"
+          STATUS=$(echo "$BODY" | tail -1 | awk '{print $2}')
+          [ "$STATUS" = "200" ] || exit 1
