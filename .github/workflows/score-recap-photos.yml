@@ -1,0 +1,74 @@
+name: Score recap photos
+
+# Fires `/internal/cron/score-recap-photos` on Cloud Run. Looks at the photos
+# on approved recaps that have not been scored yet and marks each recap's
+# best three or four for client reports. See recaps/photo_picks.py.
+#
+# Each photo is scored once (the result is stored), so a run with nothing
+# new makes no vision calls. A run is capped at `max_photos` vision calls and
+# `max_seconds`; anything left waits for the next run.
+#
+# Sends nothing and changes no recap.
+#
+# Secret-gated via `X-Cron-Secret` (shared INTERNAL_CRON_SECRET).
+#
+# Schedule: hourly at :41 (offset from the other hourly crons).
+# NOTE: schedules only fire from the default branch (main).
+
+on:
+  schedule:
+    - cron: "41 * * * *"
+  workflow_dispatch:
+    inputs:
+      tenant_id:
+        description: "Limit to one tenant id (blank = all tenants)"
+        required: false
+        default: ""
+      since_days:
+        description: "Only recaps created in the last N days"
+        required: false
+        default: "45"
+      limit:
+        description: "Recaps to look at this run"
+        required: false
+        default: "40"
+      max_photos:
+        description: "Vision calls allowed this run (cap 200)"
+        required: false
+        default: "60"
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  score-recap-photos:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Fire score-recap-photos cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/score-recap-photos
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          TENANT_ID: ${{ github.event.inputs.tenant_id || '' }}
+          SINCE_DAYS: ${{ github.event.inputs.since_days || '45' }}
+          LIMIT: ${{ github.event.inputs.limit || '40' }}
+          MAX_PHOTOS: ${{ github.event.inputs.max_photos || '60' }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS -o /tmp/resp.json -w '%{http_code}' \
+            --max-time 900 \
+            -X POST "$CRON_URL" \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            --data-urlencode "tenant_id=$TENANT_ID" \
+            --data-urlencode "since_days=$SINCE_DAYS" \
+            --data-urlencode "limit=$LIMIT" \
+            --data-urlencode "max_photos=$MAX_PHOTOS")
+          echo "HTTP $STATUS"
+          cat /tmp/resp.json
+          echo
+          [ "$STATUS" != "200" ] && exit 1 || exit 0

@@ -4075,6 +4075,11 @@ class GalleryPhoto:
     store: str
     state: str
     event_date: str
+    # True for a best photo: pinned by staff, or chosen by the scorer and
+    # not unpinned. ``caption`` is the scorer's short description of the
+    # setup, product and setting ("" when the photo has not been scored).
+    is_pick: bool = False
+    caption: str = ""
 
 
 @strawberry.type
@@ -4329,11 +4334,13 @@ class ReportSubscriptionQueries:
         include_paperwork: bool = False,
         first: int = 60,
         offset: int = 0,
+        picks_only: bool = False,
     ) -> PhotoGalleryPage:
         """Field photos from a brand's approved recaps, newest event first,
         with the filter choices available in the window. Receipts and other
         paperwork are excluded unless ``includePaperwork`` — and only staff
-        may ask for them. Never raises; degrades to an empty page."""
+        may ask for them. ``picksOnly`` keeps the best photos only (never a
+        receipt). Never raises; degrades to an empty page."""
         empty = PhotoGalleryPage(total=0, photos=[], categories=[], states=[])
         service = _CampaignReportService()
         try:
@@ -4360,6 +4367,7 @@ class ReportSubscriptionQueries:
                 store=store,
                 category=category,
                 include_paperwork=paperwork,
+                picks_only=bool(picks_only),
                 first=first,
                 offset=offset,
             )
