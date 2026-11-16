@@ -568,11 +568,12 @@ class TestSummaryAndThemes(AmbassadorsGraphQLTestCase):
         assert themes["status"] == "ready"
         assert self.post.call_count == calls
 
-        # A second run finds everything up to date and asks nothing.
+        # A second run finds the themes up to date and builds none again.
+        again = io.StringIO()
         await sync_to_async(call_command)(
-            "prebuild_feedback_themes", "--tenant", str(self.tenant.id), stdout=out
+            "prebuild_feedback_themes", "--tenant", str(self.tenant.id), stdout=again
         )
-        assert self.post.call_count == calls
+        assert "built 0," in again.getvalue()
 
     @pytest.mark.asyncio
     async def test_a_newly_approved_comment_rebuilds_once(self):

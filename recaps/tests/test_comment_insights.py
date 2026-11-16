@@ -734,3 +734,45 @@ def test_summarize_regions_floors_and_ties():
     thin = summarize_regions([], [["C4", "A", "positive"], ["C5", "B", "neutral"],
                                   ["C6", "B", "neutral"]], places)  # fmt: skip
     assert thin[0]["spoken"]["status"] == LEAD_NO_LEADER
+
+
+def test_plural_and_joined_spellings_are_one_brand():
+    """"Red Bull", "Red Bulls" and "redbull" are one brand, not three."""
+    from recaps.comment_insights import brand_key, normalise
+
+    assert brand_key(normalise("Red Bulls")) == brand_key(normalise("Red Bull"))
+    assert brand_key(normalise("redbull")) == brand_key(normalise("Red Bull"))
+    assert brand_key(normalise("Monsters")) == brand_key(normalise("Monster"))
+    # Names that end in s themselves are left alone.
+    assert brand_key(normalise("Celsius")) != brand_key(normalise("Celsiu"))
+    assert brand_key(normalise("Bliss")) != brand_key(normalise("Blis"))
+
+
+def test_spellings_of_one_brand_are_counted_together_under_its_proper_name():
+    comments = [
+        Comment(recap="r1", kind="feedback", text="I dislike Red Bull but this is good."),
+        Comment(recap="r2", kind="feedback", text="People came in for Monsters or Red Bulls."),
+        Comment(recap="r3", kind="feedback", text="Better than redbull."),
+    ]
+    raw = {
+        "mentions": [
+            {"comment": 1, "brand": "Red Bull", "name": "Red Bull", "stance": "prefers_ours"},
+            {"comment": 2, "brand": "Red Bulls", "name": "Red Bull", "stance": "prefers_theirs"},
+            {"comment": 2, "brand": "Monsters", "name": "Monster", "stance": "prefers_theirs"},
+            {"comment": 3, "brand": "redbull", "name": "Red Bull", "stance": "prefers_ours"},
+        ]
+    }
+    out = count_mentions(raw, comments, "Alpha Brand", [])
+    brands = {b["brand"]: b for b in out["brands"]}
+    assert set(brands) == {"Red Bull", "Monster"}
+    assert brands["Red Bull"]["recap_count"] == 3
+    assert brands["Monster"]["recap_count"] == 1
+
+
+def test_a_proper_name_that_is_a_different_brand_is_ignored():
+    comments = [Comment(recap="r1", kind="feedback", text="Tastes like Monsters to me.")]
+    raw = {"mentions": [
+        {"comment": 1, "brand": "Monsters", "name": "Rockstar", "stance": "neutral"},
+    ]}
+    out = count_mentions(raw, comments, "Alpha Brand", [])
+    assert [b["brand"] for b in out["brands"]] == ["Monsters"]

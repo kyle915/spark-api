@@ -67,7 +67,7 @@ KIND_COMPETITORS = "competitors"
 KIND_PRODUCT_FEELING = "product_feeling"
 
 # Bump when a prompt or a rule here changes, so stored rows are rebuilt.
-_VERSION = "1"
+_VERSION = "2"
 
 STANCE_OURS = "prefers_ours"
 STANCE_THEIRS = "prefers_theirs"
@@ -247,10 +247,11 @@ MENTIONS_JSON_SCHEMA = {
             "items": {
                 "type": "object",
                 "additionalProperties": False,
-                "required": ["comment", "brand", "stance"],
+                "required": ["comment", "brand", "name", "stance"],
                 "properties": {
                     "comment": {"type": "integer"},
                     "brand": {"type": "string"},
+                    "name": {"type": "string"},
                     "stance": {"type": "string", "enum": list(STANCES)},
                 },
             },
@@ -270,7 +271,9 @@ def competitor_system_prompt(brand: str, product_names: list[str]) -> str:
         + (f" and its own products ({products})" if products else "")
         + " are not other brands: never list them. For each one give the "
         "comment's number, the other brand's name with the spelling used in "
-        "the comment (fix capitals only), and a stance: 'prefers_ours' when "
+        "the comment (fix capitals only) as 'brand', that brand's proper name "
+        "as the company writes it as 'name' (a comment that says 'Red Bulls' "
+        "or 'redbull' gets name 'Red Bull'), and a stance: 'prefers_ours' when "
         f"the shopper prefers {own} to that brand, 'prefers_theirs' when they "
         "prefer the other brand, 'neutral' when they only mention it. A "
         "comment that names two other brands gets two entries. A flavour, an "
@@ -278,6 +281,19 @@ def competitor_system_prompt(brand: str, product_names: list[str]) -> str:
         "guess a brand the comment does not name. Do not count anything: "
         "only tag comments."
     )
+
+
+def brand_key(name_norm: str) -> str:
+    """One key for the ways people write a brand: "red bull", "red bulls",
+    "redbull" and "red bull's" are the same brand. The plural is folded only
+    on the last word, and not for names that end in s themselves (Celsius,
+    Bliss)."""
+    words = name_norm.split()
+    if words:
+        last = words[-1]
+        if len(last) > 3 and last.endswith("s") and not last.endswith(("ss", "us", "is")):
+            words[-1] = last[:-1]
+    return "".join(words)
 
 
 def _clean_brand(raw) -> str:
@@ -318,12 +334,19 @@ def count_mentions(
             continue
         if is_own_name(name, brand, product_names):
             continue
-        key = name.replace(" ", "")
+        key = brand_key(name)
         if (index, key) in seen:
             continue
         seen.add((index, key))
-        entry = brands.setdefault(key, {"spellings": Counter(), "tags": []})
+        entry = brands.setdefault(
+            key, {"spellings": Counter(), "proper": Counter(), "tags": []}
+        )
         entry["spellings"][label] += 1
+        # The model's proper name is used only when it is this same brand
+        # written properly, never a different name it came up with.
+        proper = _clean_brand(tag.get("name"))
+        if proper and brand_key(normalise(proper)) == key:
+            entry["proper"][proper] += 1
         entry["tags"].append((index, stance))
 
     out: list[dict] = []
@@ -341,8 +364,17 @@ def count_mentions(
         )
         out.append(
             {
-                # The spelling used most; the first one seen on a tie.
-                "brand": entry["spellings"].most_common(1)[0][0],
+                # The brand's proper name when the model gave one for this
+                # same brand; otherwise the shortest spelling people used
+                # (the singular), the most common one on a tie.
+                "brand": (
+                    entry["proper"].most_common(1)[0][0]
+                    if entry["proper"]
+                    else min(
+                        entry["spellings"],
+                        key=lambda sp: (len(sp), -entry["spellings"][sp]),
+                    )
+                ),
                 "recap_count": len(by_recap),
                 "prefer_ours": settled[STANCE_OURS],
                 "prefer_theirs": settled[STANCE_THEIRS],
