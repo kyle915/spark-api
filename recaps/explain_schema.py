@@ -56,7 +56,7 @@ class CalloutLink:
 class DashboardCallout:
     key: str
     # store_above_average | store_below_average | state_quiet |
-    # product_no_sales | week_drop
+    # state_waiting_review (staff only) | product_no_sales | week_drop
     kind: str
     text: str
     numbers: list[CalloutNumber]
@@ -165,10 +165,12 @@ class DashboardExplainQueries:
         end_date: str | None = None,
     ) -> list[DashboardCallout]:
         """Up to four things that stand out, found by rule, most significant
-        first. Same basis for staff and clients: approved recaps only."""
+        first, from approved recaps. Recaps still waiting for review can
+        hold a callout back (a state in review is not quiet) for everyone;
+        only Ignite staff are told how many are waiting."""
         from recaps.report_types import _iso_date
 
-        target, _staff = await _scope(info, tenant_id)
+        target, staff = await _scope(info, tenant_id)
         if target is None:
             return []
         start, end = _iso_date(start_date), _iso_date(end_date)
@@ -177,12 +179,14 @@ class DashboardExplainQueries:
             from recaps import explain_text
             from recaps.callouts import compute_callouts, draft_callouts
 
-            found = compute_callouts(target, start, end, _today())
+            found = compute_callouts(target, start, end, _today(), staff=staff)
             written = {
                 w.key: w.text
                 for w in explain_text.write(
                     target,
-                    "callouts",
+                    # Staff can get a different list (their own callouts can
+                    # take a place), so the two are cached apart.
+                    "callouts_staff" if staff else "callouts",
                     explain_text.window_key(start, end),
                     draft_callouts(found),
                 )

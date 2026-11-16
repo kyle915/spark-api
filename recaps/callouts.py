@@ -7,12 +7,18 @@ small event cannot raise a callout. All of it is arithmetic done here;
 The four rules (constants below hold every threshold):
 
 1. A store converting far above or below the brand's average.
-2. A state that was active and has had no approved recap since.
+2. A state that was active and has had no approved recap since. A state
+   with recaps filed in that time and still waiting for review is not
+   quiet: it is left out, and staff are told how many are waiting instead.
 3. A product with samples handed out and almost nothing sold, where the
    recaps log sales per product.
-4. A sharp week-over-week drop in consumers sampled.
+4. A sharp week-over-week drop in consumers sampled, unless the latest
+   week still has recaps waiting for review.
 
 At most :data:`MAX_CALLOUTS` are returned, most significant first.
+
+A count of recaps waiting for review is for Ignite staff only. A brand user
+never gets one: for them such a state is simply not called out.
 """
 
 from __future__ import annotations
@@ -20,7 +26,12 @@ from __future__ import annotations
 from datetime import date, timedelta
 
 from recaps.consumer_breakdown import week_start
-from recaps.explain_facts import product_facts, recap_facts, state_names
+from recaps.explain_facts import (
+    pending_review,
+    product_facts,
+    recap_facts,
+    state_names,
+)
 from recaps.explain_text import Draft, n, pct, plural
 
 MAX_CALLOUTS = 4
@@ -147,13 +158,23 @@ def _store_callouts(rows: list[dict], start: date, end: date) -> list[dict]:
     return out
 
 
-def _quiet_state_callouts(tenant_id: int, anchor: date) -> list[dict]:
+def _quiet_state_callouts(
+    tenant_id: int, anchor: date, *, staff: bool = False
+) -> list[dict]:
     quiet_from = anchor - timedelta(weeks=QUIET_WEEKS) + timedelta(days=1)
     active_from = quiet_from - timedelta(weeks=ACTIVE_WEEKS)
     rows = recap_facts(tenant_id, active_from, anchor)
     recent = [r for r in rows if r["day"] >= quiet_from]
-    if len(recent) < PROGRAM_MIN_RECENT_RECAPS:
-        return []  # the whole program is quiet: not one state's story
+    # Filed in the quiet window and not yet approved, per state.
+    waiting: dict[str, int] = {}
+    for r in pending_review(tenant_id, quiet_from, anchor):
+        if r["state"]:
+            waiting[r["state"]] = waiting.get(r["state"], 0) + 1
+    # With too few approved recaps lately the whole program is quiet, which
+    # is not one state's story. Recaps waiting for review still are.
+    program_filing = len(recent) >= PROGRAM_MIN_RECENT_RECAPS
+    if not program_filing and not (staff and waiting):
+        return []
     active: dict[str, dict] = {}
     for r in rows:
         if not r["state"] or r["day"] >= quiet_from:
@@ -171,6 +192,41 @@ def _quiet_state_callouts(tenant_id: int, anchor: date) -> list[dict]:
         weeks = (anchor - s["last"]).days // 7
         name = names.get(code, code)
         recaps = plural(s["recaps"], "approved recap")
+        pending = waiting.get(code, 0)
+        if pending:
+            # Not quiet: waiting on review. Staff get the count; a brand
+            # user gets nothing for this state.
+            if staff:
+                out.append(
+                    {
+                        "kind": "state_waiting_review",
+                        "key": f"state:{code}:review",
+                        "severity": 1.0 + min(1.0, pending / 10),
+                        "staff_only": True,
+                        "template": (
+                            f"{name} has {plural(pending, 'recap')} waiting for "
+                            f"review from the last {QUIET_WEEKS} weeks."
+                        ),
+                        "facts": "",
+                        "numbers": [
+                            _number("Waiting for review", n(pending)),
+                            _number("Last approved recap", _day(s["last"])),
+                            _number(
+                                f"Approved in the {ACTIVE_WEEKS} weeks before",
+                                n(s["recaps"]),
+                            ),
+                        ],
+                        "link": {
+                            "store": None,
+                            "state": code,
+                            "start": quiet_from,
+                            "end": anchor,
+                        },
+                    }
+                )
+            continue
+        if not program_filing:
+            continue
         out.append(
             {
                 "kind": "state_quiet",
@@ -262,6 +318,8 @@ def _week_drop_callouts(tenant_id: int, anchor: date) -> list[dict]:
         return []
     if earlier_total < DROP_MIN_CONSUMERS:
         return []
+    if pending_review(tenant_id, last_monday, last_sunday):
+        return []  # the latest week is still in review: not a drop yet
     drop = round((earlier_total - last_total) / earlier_total * 100)
     if drop < DROP_MIN_PCT:
         return []
@@ -300,16 +358,22 @@ def _week_drop_callouts(tenant_id: int, anchor: date) -> list[dict]:
 
 
 def compute_callouts(
-    tenant_id: int, start: date | None, end: date | None, today: date
+    tenant_id: int,
+    start: date | None,
+    end: date | None,
+    today: date,
+    *,
+    staff: bool = False,
 ) -> list[dict]:
     """Every callout the rules raise for this window, most significant
-    first, capped at :data:`MAX_CALLOUTS`."""
+    first, capped at :data:`MAX_CALLOUTS`. ``staff`` adds the callouts only
+    Ignite staff may see (recaps waiting for review)."""
     anchor = min(end, today) if end is not None else today
     if start is None or end is None:
         start, end = anchor - timedelta(days=DEFAULT_DAYS - 1), anchor
     found = []
     found += _store_callouts(recap_facts(tenant_id, start, end), start, end)
-    found += _quiet_state_callouts(tenant_id, anchor)
+    found += _quiet_state_callouts(tenant_id, anchor, staff=staff)
     found += _product_callouts(tenant_id, start, end)
     found += _week_drop_callouts(tenant_id, anchor)
     found.sort(key=lambda c: (-c["severity"], c["key"]))
@@ -325,4 +389,6 @@ def draft_callouts(callouts: list[dict]) -> list[Draft]:
             directions=c.get("directions", {}),
         )
         for c in callouts
+        # A staff-only callout is worded here and never sent to the model.
+        if not c.get("staff_only")
     ]

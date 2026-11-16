@@ -134,6 +134,41 @@ def recap_facts(tenant_id: int, start: date | None, end: date | None) -> list[di
     return list(rows.values())
 
 
+def pending_review(tenant_id: int, start: date | None, end: date | None) -> list[dict]:
+    """Recaps that were filed and are still waiting for review: not approved,
+    not archived, otherwise on the same basis as :func:`recap_facts` (the
+    request is not soft-deleted, the event is on the dashboard, dated by the
+    event). One dict per recap: ``kind``, ``id``, ``day``, ``state``.
+
+    These never reach a client as a figure. The callouts use them only to
+    tell a state that has gone quiet from one whose recaps are in review.
+    """
+    from events.market import parse_address_geo
+
+    window = _inclusive_dates_to_window(start, end)
+    out = []
+    for kind, model, tenant_filter in (
+        ("custom", CustomRecap, {"tenant_id": tenant_id}),
+        ("legacy", Recap, {"event__tenant_id": tenant_id}),
+    ):
+        rows = (
+            _filter_event_window(
+                model.objects.filter(
+                    archived_at__isnull=True, approved=False, **tenant_filter
+                ),
+                "event__",
+                window,
+            )
+            .annotate(_day=_event_date_expr("event__"))
+            .filter(_day__isnull=False)
+            .values_list("id", "_day", "event__state__code", "event__address")
+        )
+        for recap_id, day, state, address in rows.iterator():
+            code = (state or parse_address_geo(address).state_code or "").upper()
+            out.append({"kind": kind, "id": recap_id, "day": day.date(), "state": code})
+    return out
+
+
 def product_facts(tenant_id: int, start: date | None, end: date | None) -> list[dict]:
     """Per catalog product: ``label``, ``samples`` handed out, the number of
     ``recaps`` that logged it, and, only where recaps carry a per-product
