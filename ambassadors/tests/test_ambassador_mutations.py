@@ -1327,29 +1327,20 @@ class TestDisableAmbassador(AmbassadorsGraphQLTestCase):
             }
         """
 
-    @pytest.mark.asyncio
-    async def test_disable_ambassador_success(self):
-        """Test disabling ambassador and associated user."""
-        variables = {"input": {"ambassadorId": str(self.ambassador.id)}}
-
-        result = await self._execute_mutation_authenticated(
-            self.mutation, variables, self.client_user, self.endpoint_path
-        )
-
-        assert result.errors is None
-        assert result.data is not None
-        assert result.data["disableAmbassador"]["success"] is True
-        assert result.data["disableAmbassador"]["ambassador"]["isActive"] is False
-
+    async def _ambassador_active(self):
         ambassador = await sync_to_async(Ambassador.objects.select_related("user").get)(
             pk=self.ambassador.id
         )
-        assert ambassador.is_active is False
-        assert ambassador.user.is_active is False
+        return ambassador.is_active, ambassador.user.is_active
+
+    def _assert_refused(self, result):
+        # IsSparkAdminAccess denies at the field: an error, no payload.
+        assert result.errors
+        assert result.data is None or result.data.get("disableAmbassador") is None
 
     @pytest.mark.asyncio
     async def test_disable_ambassador_success_by_spark_admin(self):
-        """Test disabling by spark admin user."""
+        """Spark admin disables the ambassador and their login."""
         variables = {"input": {"ambassadorId": str(self.ambassador.id)}}
 
         result = await self._execute_mutation_authenticated(
@@ -1359,25 +1350,56 @@ class TestDisableAmbassador(AmbassadorsGraphQLTestCase):
         assert result.errors is None
         assert result.data is not None
         assert result.data["disableAmbassador"]["success"] is True
+        assert result.data["disableAmbassador"]["ambassador"]["isActive"] is False
+        assert await self._ambassador_active() == (False, False)
 
     @pytest.mark.asyncio
-    async def test_disable_ambassador_success_by_same_ambassador(self):
-        """Test ambassador can disable their own account."""
+    async def test_disable_ambassador_admin_with_unhydrated_role(self):
+        """The JWT user's role doesn't hydrate in async resolvers; the
+        admin check re-reads it from the DB."""
+        self.spark_admin_user.role = None
+        variables = {"input": {"ambassadorId": str(self.ambassador.id)}}
+
+        result = await self._execute_mutation_authenticated(
+            self.mutation, variables, self.spark_admin_user, self.endpoint_path
+        )
+
+        assert result.errors is None, result.errors
+        assert result.data["disableAmbassador"]["success"] is True
+
+    @pytest.mark.asyncio
+    async def test_disable_ambassador_refused_for_anonymous(self):
+        variables = {"input": {"ambassadorId": str(self.ambassador.id)}}
+        result = await self._execute_mutation(
+            self.mutation, variables, self.endpoint_path, user=None
+        )
+        self._assert_refused(result)
+        assert await self._ambassador_active() == (True, True)
+
+    @pytest.mark.asyncio
+    async def test_disable_ambassador_refused_for_client(self):
+        """A client could disable any BA platform-wide by id."""
+        variables = {"input": {"ambassadorId": str(self.ambassador.id)}}
+
+        result = await self._execute_mutation_authenticated(
+            self.mutation, variables, self.client_user, self.endpoint_path
+        )
+
+        self._assert_refused(result)
+        assert await self._ambassador_active() == (True, True)
+
+    @pytest.mark.asyncio
+    async def test_disable_ambassador_refused_for_same_ambassador(self):
+        """A BA closes their own account with disableAmbassadorMobile, not
+        this admin mutation."""
         variables = {"input": {"ambassadorId": str(self.ambassador.id)}}
 
         result = await self._execute_mutation_authenticated(
             self.mutation, variables, self.ambassador_user, self.endpoint_path
         )
 
-        assert result.errors is None
-        assert result.data is not None
-        assert result.data["disableAmbassador"]["success"] is True
-
-        ambassador = await sync_to_async(Ambassador.objects.select_related("user").get)(
-            pk=self.ambassador.id
-        )
-        assert ambassador.is_active is False
-        assert ambassador.user.is_active is False
+        self._assert_refused(result)
+        assert await self._ambassador_active() == (True, True)
 
     @pytest.mark.asyncio
     async def test_disable_ambassador_not_found(self):
@@ -1385,7 +1407,7 @@ class TestDisableAmbassador(AmbassadorsGraphQLTestCase):
         variables = {"input": {"ambassadorId": "99999"}}
 
         result = await self._execute_mutation_authenticated(
-            self.mutation, variables, self.client_user, self.endpoint_path
+            self.mutation, variables, self.spark_admin_user, self.endpoint_path
         )
 
         assert result.errors is None
@@ -1411,10 +1433,7 @@ class TestDisableAmbassador(AmbassadorsGraphQLTestCase):
             self.mutation, variables, self.ambassador_user, self.endpoint_path
         )
 
-        assert result.errors is None
-        assert result.data is not None
-        assert result.data["disableAmbassador"]["success"] is False
-        assert "permission" in result.data["disableAmbassador"]["message"].lower()
+        self._assert_refused(result)
 
 
 @pytest.mark.django_db(transaction=True)

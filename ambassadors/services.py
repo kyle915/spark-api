@@ -1040,9 +1040,29 @@ class DisableAmbassadorService(BaseAmbassadorService):
         input: inputs.DisableAmbassadorInput,
         info: strawberry.Info,
     ) -> DisableAmbassadorResponse:
-        """Disable an ambassador and their associated user account."""
+        """Disable an ambassador and their associated user account.
+
+        Spark admins only, decided from the DB (``_is_admin_access``), not
+        the JWT user's role, which does not hydrate in async resolvers. The
+        mutation's IsSparkAdminAccess permission already enforces this; the
+        re-check keeps the service safe if it is reused elsewhere."""
+        from utils.graphql.permissions import (
+            _is_admin_access,
+            resolve_request_user_access,
+        )
+
         user = info.context.request.user
-        role_slug = cls().get_role_slug(user)
+        if not user or not getattr(user, "is_authenticated", False):
+            is_admin = False
+        else:
+            is_admin = _is_admin_access(*await resolve_request_user_access(user))
+        if not is_admin:
+            return build_mutation_response(
+                DisableAmbassadorResponse,
+                success=False,
+                message="You do not have permission to disable this ambassador.",
+                input_obj=input,
+            )
 
         try:
             ambassador_id = resolve_id_to_int(input.ambassador_id)
@@ -1054,16 +1074,6 @@ class DisableAmbassadorService(BaseAmbassadorService):
                 DisableAmbassadorResponse,
                 success=False,
                 message="Ambassador not found.",
-                input_obj=input,
-            )
-
-        is_client_or_spark = role_slug in {"client", "spark-admin"}
-        is_own_ambassador = role_slug == "ambassador" and ambassador.user_id == user.id
-        if not (is_client_or_spark or is_own_ambassador):
-            return build_mutation_response(
-                DisableAmbassadorResponse,
-                success=False,
-                message="You do not have permission to disable this ambassador.",
                 input_obj=input,
             )
 

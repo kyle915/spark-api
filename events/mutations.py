@@ -154,21 +154,20 @@ class BaseMutationService(SparkGraphQLMixin):
 
         self.info = info
         self.user = await self.get_user(info)
-        # Treat any Ignite admin (staff / superuser / spark-admin role /
-        # @igniteproductions.co email) as a spark-schema request, so they can
-        # manage catalog entities (Locations/Retailers/Distributors/types) for
-        # ANY tenant without being a literal TenantUser member — matching the
-        # read side (_is_admin_access). is_spark_schema_request alone reads
-        # user.role synchronously, which does NOT hydrate inside async
-        # resolvers (the documented gotcha resolve_request_user_access exists
-        # to fix), so a genuine spark-admin was denied with "not a member of
-        # this tenant" when adding a town.
+        # Admin = any Ignite admin (staff / superuser / spark-admin role /
+        # @igniteproductions.co email), decided ONLY from the DB
+        # (_is_admin_access over resolve_request_user_access), the same
+        # check utils/graphql/mixins.py uses. Admins manage catalog entities
+        # (Locations/Retailers/Distributors/types) for ANY tenant without
+        # being a TenantUser member, and skip the row-tenant gate below.
+        # Never is_spark_schema_request here: it reads user.role
+        # synchronously (doesn't hydrate in async resolvers) and ignores
+        # IGNITE_ADMIN_EXCLUDE, so OR-ing it in let a removed admin whose
+        # request user still carried the spark-admin role past the gate.
         role_slug, is_staff, is_super, email = await resolve_request_user_access(
             self.user
         )
-        self.is_spark_schema = self.is_spark_schema_request(
-            info, user=self.user
-        ) or _is_admin_access(role_slug, is_staff, is_super, email)
+        self.is_spark_schema = _is_admin_access(role_slug, is_staff, is_super, email)
         tenant_id = getattr(self.input, "tenant_id", None)
         is_update = hasattr(self.input, "id") and self.input.id is not None
         if is_update:

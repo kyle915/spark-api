@@ -21,7 +21,7 @@ from strawberry import relay
 from asgiref.sync import sync_to_async
 
 from events.models import Event
-from utils.graphql.permissions import IsClientOrSparkAdmin, IsSparkAdminAccess
+from utils.graphql.permissions import IsSparkAdminAccess
 from utils.graphql.mixins import resolve_id_to_int
 from events.staffing_board import _accessible_tenants
 
@@ -439,7 +439,12 @@ class PayrollActionResponse:
 
 @strawberry.type
 class PayrollMutations:
-    @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
+    # Spark admins only (IsSparkAdminAccess, DB-backed). These sign off and
+    # record pay for BA hours; the only screen that calls them is the
+    # admin-only /timesheet page, and the timesheet read is already
+    # admin-only (#1426). A client used to be able to approve, un-approve
+    # or mark paid any BA's hours in their tenant.
+    @relay.mutation(permission_classes=[IsSparkAdminAccess])
     async def approve_payroll_hours(
         self, info: strawberry.Info, input: ApprovePayrollInput
     ) -> PayrollActionResponse:
@@ -447,7 +452,7 @@ class PayrollMutations:
         hours + estimated pay). Idempotent per (tenant, BA, period)."""
         return await _payroll_action(info, input, kind="approve")
 
-    @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
+    @relay.mutation(permission_classes=[IsSparkAdminAccess])
     async def mark_payroll_paid(
         self, info: strawberry.Info, input: ApprovePayrollInput
     ) -> PayrollActionResponse:
@@ -455,7 +460,7 @@ class PayrollMutations:
         Spark never moves money). Stamps ``paid_at``; only affects approved rows."""
         return await _payroll_action(info, input, kind="paid")
 
-    @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
+    @relay.mutation(permission_classes=[IsSparkAdminAccess])
     async def unapprove_payroll_hours(
         self, info: strawberry.Info, input: ApprovePayrollInput
     ) -> PayrollActionResponse:

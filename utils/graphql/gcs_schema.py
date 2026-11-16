@@ -6,9 +6,14 @@ import re
 import uuid
 
 import strawberry
+from graphql import GraphQLError
 
 from utils.gcs import generate_upload_url, public_url
-from utils.graphql.permissions import StrictIsAuthenticated
+from utils.graphql.permissions import (
+    StrictIsAuthenticated,
+    _is_admin_access,
+    resolve_request_user_access,
+)
 
 
 # Bucket prefixes a caller may upload under. The caller's ``filePath`` is
@@ -74,6 +79,37 @@ def build_upload_blob_name(file_path: str | None) -> str:
     return "/".join(parts)
 
 
+# Prefixes a NON-admin may ask getDownloadUrl about: brand-facing catalog
+# and branding assets only (product images, receipt-campaign artwork,
+# tenant logos). Everything else in the bucket (BA documents and profile
+# files under ba/ + documents/ + users/, chat attachments, receipts,
+# Connecteam imports, recap files) is admin-only through this resolver.
+# No web or mobile screen calls getDownloadUrl today; widen this only for a
+# real caller, and prefer per-row access checks over a broader prefix.
+NON_ADMIN_DOWNLOAD_PREFIXES: tuple[str, ...] = (
+    "products/",
+    "receipt-campaign-images/",
+    "tenants/images/",
+)
+
+
+def normalize_download_path(file_path: str | None) -> str | None:
+    """Bucket object key for ``file_path``, or None when it is not a plain
+    relative key (empty, a URL, or containing ``.``/``..`` segments)."""
+    raw = (file_path or "").strip()
+    if not raw or "\\" in raw or "://" in raw or raw.startswith("//"):
+        return None
+    key = raw.lstrip("/")
+    segments = key.split("/")
+    if any(seg in ("", ".", "..") for seg in segments):
+        return None
+    return key
+
+
+def non_admin_may_download(key: str) -> bool:
+    return key.startswith(NON_ADMIN_DOWNLOAD_PREFIXES)
+
+
 @strawberry.type
 class UploadUrlResponse:
     """Response containing a signed upload URL and the blob path."""
@@ -112,16 +148,28 @@ class GCSQuery:
             blob_name=blob_name
         )
 
-    @strawberry.field
-    def get_download_url(self, file_path: str) -> str:
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def get_download_url(self, info: strawberry.Info, file_path: str) -> str:
         """
-        Get a signed URL for downloading/viewing a file from GCS.
+        URL for viewing a file in the GCS bucket.
+
+        Authenticated callers only. Spark admins (DB-backed
+        ``_is_admin_access``) may ask for any object key; everyone else only
+        for keys under ``NON_ADMIN_DOWNLOAD_PREFIXES`` (catalog/branding
+        assets). The bucket is public-read, so this returns the plain public
+        URL (signing fails on Cloud Run).
 
         Args:
-            file_path: The path of the file in the bucket (e.g., "products/my-image.jpg")
-
-        Returns:
-            A signed URL for accessing the file
+            file_path: Object key in the bucket (e.g. "products/my-image.jpg").
         """
-        # Public bucket — return unsigned URL, signing fails on Cloud Run.
-        return public_url(file_path) or ""
+        key = normalize_download_path(file_path)
+        if key is None:
+            raise GraphQLError("Invalid file path.")
+        user = info.context.request.user
+        role_slug, is_staff, is_super, email = await resolve_request_user_access(
+            user
+        )
+        if not _is_admin_access(role_slug, is_staff, is_super, email):
+            if not non_admin_may_download(key):
+                raise GraphQLError("You do not have access to this file.")
+        return public_url(key) or ""
