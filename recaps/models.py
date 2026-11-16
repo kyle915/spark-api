@@ -1460,3 +1460,74 @@ class RecapFieldMetricMapping(models.Model):
 
     def __str__(self) -> str:
         return f"Field {self.custom_field_id} -> {self.metric or 'undecided'}"
+
+
+class ShelfReading(models.Model):
+    """What Spark read off one on-shelf photo (see ``recaps.shelf_check``).
+
+    One row per photo, written by the background reader. ``unclear`` is a
+    full answer, not a failure: the reader is told not to guess. A photo
+    that is not a shelf at all is ``unreadable``. A call that failed is
+    ``failed`` and is tried again at most ``shelf_check.MAX_ATTEMPTS`` times.
+    Nothing here describes a person.
+    """
+
+    STATUS_READ = "read"
+    STATUS_UNREADABLE = "unreadable"
+    STATUS_FAILED = "failed"
+
+    YES, NO, UNCLEAR = "yes", "no", "unclear"
+
+    id = models.BigAutoField(primary_key=True)
+    custom_recap_file = models.OneToOneField(
+        "CustomRecapFile",
+        on_delete=models.CASCADE,
+        related_name="shelf_reading",
+    )
+    status = models.CharField(max_length=16, default=STATUS_UNREADABLE)
+    attempts = models.PositiveSmallIntegerField(default=1)
+    product_on_shelf = models.CharField(max_length=8, default=UNCLEAR)
+    # Approximate count of facings; null when it could not be counted.
+    facings = models.PositiveSmallIntegerField(null=True, blank=True)
+    price_tag_visible = models.CharField(max_length=8, default=UNCLEAR)
+    # The shelf price, only when it was clearly legible.
+    price = models.DecimalField(max_digits=7, decimal_places=2, null=True, blank=True)
+    out_of_stock_gap = models.CharField(max_length=8, default=UNCLEAR)
+    read_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self) -> str:  # pragma: no cover - admin/debug only
+        return f"file {self.custom_recap_file_id}: {self.status} {self.product_on_shelf}"
+
+
+class ShelfReadingCorrection(models.Model):
+    """A staff member's own answers for one on-shelf photo.
+
+    Kept apart from :class:`ShelfReading` so the reader can never overwrite
+    it and what the reader said stays on record. When a correction exists it
+    is the answer everywhere. ``note`` is for staff and is never shown to a
+    brand user.
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    custom_recap_file = models.OneToOneField(
+        "CustomRecapFile",
+        on_delete=models.CASCADE,
+        related_name="shelf_correction",
+    )
+    product_on_shelf = models.CharField(max_length=8, default=ShelfReading.UNCLEAR)
+    facings = models.PositiveSmallIntegerField(null=True, blank=True)
+    price_tag_visible = models.CharField(max_length=8, default=ShelfReading.UNCLEAR)
+    price = models.DecimalField(max_digits=7, decimal_places=2, null=True, blank=True)
+    out_of_stock_gap = models.CharField(max_length=8, default=ShelfReading.UNCLEAR)
+    note = models.TextField(blank=True, default="")
+    corrected_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="shelf_corrections",
+    )
+    corrected_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self) -> str:  # pragma: no cover - admin/debug only
+        return f"file {self.custom_recap_file_id}: corrected {self.product_on_shelf}"

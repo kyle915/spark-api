@@ -86,6 +86,12 @@ urlpatterns = [
         checkin_views.public_checkin_recap_check,
         name="events.public_checkin_recap_check",
     ),
+    # Proposes numbers from a tally photo. Saves nothing.
+    path(
+        "checkin/<str:code>/tally-read",
+        checkin_views.public_checkin_tally_read,
+        name="events.public_checkin_tally_read",
+    ),
     path(
         "checkin/<str:code>/where",
         checkin_views.public_checkin_where,
