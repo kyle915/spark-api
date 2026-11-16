@@ -153,10 +153,23 @@ def _store(*names: str | None) -> str:
     return ""
 
 
-def tenant_consumer_breakdown(
-    tenant_id: int, start: date | None, end: date | None
-) -> dict:
+def consumer_rows(
+    tenant_id: int,
+    start: date | None,
+    end: date | None,
+    *,
+    include_archived: bool = True,
+) -> list[dict]:
+    """One row per approved recap that recorded consumers sampled.
+
+    Each row: ``kind`` ("custom" / "legacy"), ``id``, ``day``, ``store``,
+    ``state``, ``consumers``. ``include_archived=False`` also leaves out
+    archived recaps (the dashboard totals count them today; the sentences
+    written from these rows must not).
+    """
     from events.routing import extract_state_code
+
+    live = {} if include_archived else {"archived_at__isnull": True}
 
     window = _inclusive_dates_to_window(start, end)
     rows: list[dict] = []
@@ -166,7 +179,9 @@ def tenant_consumer_breakdown(
     custom = (
         _approved_only(
             _filter_event_window(
-                CustomRecap.objects.filter(tenant_id=tenant_id), "event__", window
+                CustomRecap.objects.filter(tenant_id=tenant_id, **live),
+                "event__",
+                window,
             ),
             "",
         )
@@ -195,6 +210,8 @@ def tenant_consumer_breakdown(
     ) in custom.iterator():
         placed[recap_id] = {
             "event": event_id,
+            "kind": "custom",
+            "id": recap_id,
             "day": day.date(),
             "store": _store(retailer, req_retailer, req_name),
             "state": state or extract_state_code(address) or "",
@@ -209,6 +226,7 @@ def tenant_consumer_breakdown(
                 CustomFieldValue.objects.filter(
                     custom_recap__tenant_id=tenant_id,
                     custom_field__name__iregex=_CUSTOM_KPI_NAME_RE.pattern,
+                    **{f"custom_recap__{k}": v for k, v in live.items()},
                 ),
                 "custom_recap__event__",
                 window,
@@ -234,7 +252,10 @@ def tenant_consumer_breakdown(
     engagements = (
         _approved_only(
             _filter_event_window(
-                ConsumerEngagements.objects.filter(recap__event__tenant_id=tenant_id),
+                ConsumerEngagements.objects.filter(
+                    recap__event__tenant_id=tenant_id,
+                    **{f"recap__{k}": v for k, v in live.items()},
+                ),
                 "recap__event__",
                 window,
             ),
@@ -269,6 +290,8 @@ def tenant_consumer_breakdown(
             recap_id,
             {
                 "event": event_id,
+                "kind": "legacy",
+                "id": recap_id,
                 "day": day.date(),
                 "store": _store(retailer, req_retailer, req_name),
                 "state": state or extract_state_code(address) or "",
@@ -277,5 +300,10 @@ def tenant_consumer_breakdown(
         )
         row["consumers"] += int(consumers or 0)
     rows.extend(legacy.values())
+    return rows
 
-    return summarize_consumers(rows, start, end)
+
+def tenant_consumer_breakdown(
+    tenant_id: int, start: date | None, end: date | None
+) -> dict:
+    return summarize_consumers(consumer_rows(tenant_id, start, end), start, end)
