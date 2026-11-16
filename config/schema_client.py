@@ -8,6 +8,7 @@ from events.schema import EventQueryClient, EventMutationsClient
 from recaps.schema import RecapQueryClient, RecapMutationsClient
 from recaps.recap_ai import RecapAiMutations, RecapAiQueries
 from recaps.feedback_themes import FeedbackThemeMutations, FeedbackThemeQueries
+from recaps.comment_insights import CommentInsightQueries
 from recaps.weekly_summary import WeeklySummaryMutations, WeeklySummaryQueries
 from recaps.report_types import (
     CampaignReportQueries,
@@ -52,6 +53,7 @@ QueryClients = merge_types(
         NotificationPreferenceQueries,
         RecapAiQueries,
         FeedbackThemeQueries,
+        CommentInsightQueries,
         WeeklySummaryQueries,
         AmbassadorQueryClient,
         QueryClients,
