@@ -16,6 +16,13 @@ Same basis as :func:`recaps.tenant_overview.tenant_kpi_totals`'s
   (:func:`recaps.tenant_overview._filter_event_window`). A pending walk-up
   has no approved recap, so it is left out too.
 
+"By store" groups by store NAME, after accepted store-name aliases
+(:mod:`events.retailer_aliases`) are applied: "HEB" and "H-E-B" are one row
+once staff have accepted that they are the same. A name that carries a store
+number ("HEB #725") stays its own row, so it is a physical store; a
+banner-only name is one row for the banner, as before. Proposed and dismissed
+aliases change nothing here.
+
 A recap whose event has no store or no state is not dropped: it is counted
 under a row of ``kind="missing"`` so the split still adds up and the gap in
 the data stays visible. Recaps whose event has no date at all cannot be
@@ -146,10 +153,15 @@ def summarize_consumers(
     }
 
 
-def _store(*names: str | None) -> str:
+def _store(*names: str | None, aliases: dict[str, str] | None = None) -> str:
+    """The first name recorded, shown under its accepted alias if it has one."""
     for name in names:
         cleaned = (name or "").strip()
         if cleaned:
+            if aliases:
+                from events.retailer_aliases import resolve_store_name
+
+                return resolve_store_name(cleaned, aliases)
             return cleaned
     return ""
 
@@ -168,11 +180,14 @@ def consumer_rows(
     archived recaps (the dashboard totals count them today; the sentences
     written from these rows must not).
     """
+    from events.retailer_aliases import accepted_alias_map
     from events.routing import extract_state_code
 
     live = {} if include_archived else {"archived_at__isnull": True}
 
     window = _inclusive_dates_to_window(start, end)
+    # Accepted store-name aliases only; empty for most tenants.
+    aliases = accepted_alias_map(tenant_id)
     rows: list[dict] = []
 
     # Custom recaps: where and when each one happened…
@@ -214,7 +229,7 @@ def consumer_rows(
             "kind": "custom",
             "id": recap_id,
             "day": day.date(),
-            "store": _store(retailer, req_retailer, req_name),
+            "store": _store(retailer, req_retailer, req_name, aliases=aliases),
             "state": state or extract_state_code(address) or "",
         }
 
@@ -297,7 +312,7 @@ def consumer_rows(
                 "kind": "legacy",
                 "id": recap_id,
                 "day": day.date(),
-                "store": _store(retailer, req_retailer, req_name),
+                "store": _store(retailer, req_retailer, req_name, aliases=aliases),
                 "state": state or extract_state_code(address) or "",
                 "consumers": 0,
             },

@@ -26,6 +26,8 @@ from events.event_confirmation_schema import (
 from events.staffing_board import StaffingBoardQueries
 from events.account_list import AccountListMutations, AccountListQueries
 from events.staffing_search import StaffingSearchQueries
+from events.request_intake import RequestIntakeMutations
+from events.retailer_aliases import RetailerAliasMutations, RetailerAliasQueries
 from events.live_board import LiveBoardQueries
 from events.payroll import PayrollQueries, PayrollMutations
 from events.campaign_pnl import CampaignPnlQueries
@@ -54,6 +56,8 @@ class EventQueryClient(
     LiveBoardQueries,
     # Uploaded account lists (Account Map): staff, or a brand's own users.
     AccountListQueries,
+    # Store names that look like the same store: staff only.
+    RetailerAliasQueries,
     # Admin-only in practice: every resolver is gated by IsClientOrSparkAdmin
     # and scoped through _accessible_tenants. It lives on the CLIENTS schema
     # because that's the endpoint spark-front-client actually calls
@@ -140,6 +144,10 @@ class EventMutationsClient(
     EventMutations,
     PayrollMutations,
     AccountListMutations,
+    # Staff only: accept / dismiss store-name suggestions, and read a pasted
+    # email or sheet row into a draft request (creates nothing).
+    RetailerAliasMutations,
+    RequestIntakeMutations,
     # Admin-gated; on the clients schema for the same endpoint reason as
     # EventConfirmationQueries above.
     EventConfirmationMutations,

@@ -151,6 +151,11 @@ def tenant_field_efficiency(tenant_id: int, start: date | None, end: date | None
         for row in event_pnl_rows(tenant_id, min(event_dates), max(event_dates)):
             hours_by_event[row["event_id"]] = float(row.get("hours") or 0)
 
+    # Accepted store-name aliases ("HEB" shown as "H-E-B"); usually empty.
+    from events.retailer_aliases import accepted_alias_map, resolve_store_name
+
+    aliases = accepted_alias_map(tenant_id)
+
     # Several recaps can sit on one event (two ambassadors): split the
     # event's clocked hours evenly so they are not counted once per recap.
     per_event: dict[int, int] = {}
@@ -179,10 +184,11 @@ def tenant_field_efficiency(tenant_id: int, start: date | None, end: date | None
                     when = when.astimezone(zone)
                 except (ValueError, OverflowError):
                     pass
+            retailer_name = getattr(getattr(event, "retailer", None), "name", None)
             store = (
-                getattr(getattr(event, "retailer", None), "name", None)
-                or getattr(event, "name", None)
-                or ""
+                resolve_store_name(retailer_name, aliases)
+                if retailer_name
+                else (getattr(event, "name", None) or "")
             )
             share = per_event.get(event.id, 1) or 1
             hours = hours_by_event.get(event.id, 0.0) / share

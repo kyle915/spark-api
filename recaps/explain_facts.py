@@ -86,9 +86,13 @@ def recap_facts(tenant_id: int, start: date | None, end: date | None) -> list[di
     ``units`` (None when the recap is not in the conversion rate)."""
     from events.map_points import is_lookup_worthy, normalise_address
     from events.market import parse_address_geo
+    from events.retailer_aliases import accepted_alias_map, resolve_store_name
     from recaps.consumer_breakdown import consumer_rows
 
     window = _inclusive_dates_to_window(start, end)
+    # Accepted store-name aliases, so a sentence names a store the way the
+    # by-store chart does. Empty for most tenants.
+    aliases = accepted_alias_map(tenant_id)
     rows: dict[tuple[str, int], dict] = {}
     for kind, model, tenant_filter in (
         ("custom", CustomRecap, {"tenant_id": tenant_id}),
@@ -103,7 +107,9 @@ def recap_facts(tenant_id: int, start: date | None, end: date | None) -> list[di
                 "id": recap_id,
                 "event_id": event_id,
                 "day": day.date(),
-                "store": _first(retailer, req_retailer, req_name),
+                "store": resolve_store_name(
+                    _first(retailer, req_retailer, req_name), aliases
+                ),
                 "place": normalise_address(address) if is_lookup_worthy(address) else "",
                 "state": (state or geo.state_code or "").upper(),
                 "city": (geo.city or "").strip(),
