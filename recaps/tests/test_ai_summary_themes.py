@@ -550,6 +550,31 @@ class TestSummaryAndThemes(AmbassadorsGraphQLTestCase):
         assert again["generatedAt"] == first["generatedAt"]
 
     @pytest.mark.asyncio
+    async def test_built_ahead_of_time_the_page_does_not_call_the_model(self):
+        from asgiref.sync import sync_to_async
+        from django.core.management import call_command
+        import io
+
+        self._model_groups_comments()
+        out = io.StringIO()
+        await sync_to_async(call_command)(
+            "prebuild_feedback_themes", "--tenant", str(self.tenant.id), stdout=out
+        )
+        assert "built 1" in out.getvalue() or "built" in out.getvalue()
+        calls = self.post.call_count
+        assert calls >= 1
+
+        themes = await self._themes(self.client_user, self.tenant)
+        assert themes["status"] == "ready"
+        assert self.post.call_count == calls
+
+        # A second run finds everything up to date and asks nothing.
+        await sync_to_async(call_command)(
+            "prebuild_feedback_themes", "--tenant", str(self.tenant.id), stdout=out
+        )
+        assert self.post.call_count == calls
+
+    @pytest.mark.asyncio
     async def test_a_newly_approved_comment_rebuilds_once(self):
         self._model_groups_comments()
         await self._themes(self.client_user, self.tenant)
