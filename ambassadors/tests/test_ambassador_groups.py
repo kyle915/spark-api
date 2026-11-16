@@ -628,7 +628,8 @@ class TestUpdateAmbassadorGroup(AmbassadorsGraphQLTestCase):
 
         assert result.errors is None
         assert result.data["updateAmbassadorGroup"]["success"] is False
-        assert "does not exist" in result.data["updateAmbassadorGroup"]["message"]
+        # Missing and out-of-tenant rows share one "not found" message.
+        assert "not found" in result.data["updateAmbassadorGroup"]["message"]
 
     @pytest.mark.asyncio
     async def test_update_ambassador_group_unauthorized_ambassador(self):
@@ -808,7 +809,7 @@ class TestDeleteAmbassadorGroup(AmbassadorsGraphQLTestCase):
         assert result.errors is None
         assert result.data is not None
         assert result.data["deleteAmbassadorGroup"]["success"] is False
-        assert "AmbassadorGroup not found." in result.data["deleteAmbassadorGroup"]["message"]
+        assert "not found" in result.data["deleteAmbassadorGroup"]["message"]
 
     @pytest.mark.asyncio
     async def test_delete_ambassador_group_unauthorized_ambassador(self):

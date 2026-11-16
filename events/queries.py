@@ -1126,15 +1126,39 @@ class EventQueries:
         within_minutes defaults to 30 (recent enough to be "live" given
         the mobile pinger fires every ~2 min). Bumping to 60+ lets ops
         see slightly-stale pings during connectivity dropouts.
+
+        Admins only (live BA GPS is not client data). An ambassador gets
+        only their own latest ping; brand/client users get an empty list
+        rather than an error because the shared Today page still issues
+        this query for them (it just doesn't render the map).
         """
         from ambassadors.models import LocationPing as LocationPingModel
         from ambassadors.types import LocationPingType
         from django.db.models import Max
-
-        service = EventQueriesService()
-        resolved_tenant_id = await service.resolve_tenant_id(
-            info, tenant_id=tenant_id
+        from utils.graphql.permissions import (
+            _is_admin_access,
+            resolve_request_user_access,
         )
+
+        caller = info.context.request.user
+        role_slug, is_staff, is_super, email = await resolve_request_user_access(
+            caller
+        )
+        is_admin = _is_admin_access(role_slug, is_staff, is_super, email)
+        only_user = None
+        if not is_admin:
+            if role_slug != "ambassador":
+                return []
+            only_user = caller
+
+        if only_user is not None:
+            # Own pings only; a BA isn't a tenant member, so no tenant scope.
+            resolved_tenant_id = None
+        else:
+            service = EventQueriesService()
+            resolved_tenant_id = await service.resolve_tenant_id(
+                info, tenant_id=tenant_id
+            )
 
         cutoff = timezone.now() - timedelta(minutes=within_minutes)
 
@@ -1146,6 +1170,8 @@ class EventQueries:
             # ``event__tenant_id=None``, which matches nothing — empty map.
             if resolved_tenant_id is not None:
                 qs = qs.filter(event__tenant_id=resolved_tenant_id)
+            if only_user is not None:
+                qs = qs.filter(ambassador__user=only_user)
             qs = qs.select_related(
                 "ambassador",
                 "ambassador__user",

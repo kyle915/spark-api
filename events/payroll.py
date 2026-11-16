@@ -21,7 +21,7 @@ from strawberry import relay
 from asgiref.sync import sync_to_async
 
 from events.models import Event
-from utils.graphql.permissions import IsClientOrSparkAdmin
+from utils.graphql.permissions import IsClientOrSparkAdmin, IsSparkAdminAccess
 from utils.graphql.mixins import resolve_id_to_int
 from events.staffing_board import _accessible_tenants
 
@@ -91,7 +91,7 @@ class PayrollShiftRow:
 
 @strawberry.type
 class PayrollQueries:
-    @strawberry.field(permission_classes=[IsClientOrSparkAdmin])
+    @strawberry.field(permission_classes=[IsSparkAdminAccess])
     async def payroll_timesheet(
         self,
         info: strawberry.Info,
@@ -100,7 +100,11 @@ class PayrollQueries:
         tenant_id: strawberry.ID | None = None,
     ) -> PayrollTimesheet:
         """Per-BA worked hours + estimated pay over [start_date, end_date]
-        (inclusive, by event date). Tenant-scoped."""
+        (inclusive, by event date). Tenant-scoped.
+
+        Admins only: BA pay, hours and emails are not brand/client data
+        (the web Timesheet page is admin-only; BAs see their own pay via
+        myEarningsStats)."""
         user = info.context.request.user
         is_admin, allowed = await _accessible_tenants(user)
         resolved_tid = None
@@ -252,7 +256,7 @@ class PayrollQueries:
         return await sync_to_async(_go)()
 
 
-    @strawberry.field(permission_classes=[IsClientOrSparkAdmin])
+    @strawberry.field(permission_classes=[IsSparkAdminAccess])
     async def payroll_timesheet_shifts(
         self,
         info: strawberry.Info,
@@ -263,7 +267,8 @@ class PayrollQueries:
     ) -> list[PayrollShiftRow]:
         """The shifts behind one BA's timesheet row over [start_date, end_date]
         (inclusive, by event date) — same scope, clock join and rate join as
-        `payroll_timesheet`, un-aggregated. Oldest first."""
+        `payroll_timesheet`, un-aggregated. Oldest first. Admins only, same
+        as `payroll_timesheet` (it is that row's drill-down)."""
         user = info.context.request.user
         is_admin, allowed = await _accessible_tenants(user)
         resolved_tid = None

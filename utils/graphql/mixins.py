@@ -10,7 +10,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.db.models import Model
 
-from tenants.models import Tenant
+from tenants.models import Tenant, TenantedUser
 from utils.graphql.inputs import SparkGraphQLInput
 
 User = get_user_model()
@@ -511,6 +511,31 @@ class BaseMutationService(SparkGraphQLMixin):
         self.user = await self.get_user(info)
         self.is_spark_schema = self.is_spark_schema_request(info, user=self.user)
         tenant_id = getattr(self.input, "tenant_id", None)
+        row_id = getattr(self.input, "id", None)
+        is_admin = row_id is not None and await self._caller_is_admin()
+
+        if row_id is not None and is_admin and not tenant_id:
+            # Admin update without an explicit tenant: keep the row's own
+            # tenant (events/mutations.py does the same). Falling through
+            # to get_tenant() would re-home the row into the admin's
+            # default tenant on save.
+            existing = await self._existing_row_tenant(row_id)
+            if existing is not None:
+                self.tenant_id = existing
+                return self
+
+        if row_id is not None and not is_admin:
+            # Non-admin UPDATE/DELETE (same rule as events/mutations.py,
+            # #1424): the row's own tenant decides access, never the tenant
+            # the caller names or defaults to. save() loads the row by raw
+            # id and writes self.tenant_id onto it, so without this a client
+            # could edit another brand's row and re-home it into their own
+            # tenant. The row keeps its tenant; a row outside the caller's
+            # tenants reads as "not found" so a probe can't confirm it.
+            tenant = await self.get_tenant(self.user, tenant_id)
+            self.tenant_id = tenant.id
+            self.tenant_id = await self._existing_row_tenant_for_member(row_id)
+            return self
 
         if self.is_spark_schema and tenant_id:
             self.tenant_id = await self._resolve_tenant_without_membership(tenant_id)
@@ -518,6 +543,85 @@ class BaseMutationService(SparkGraphQLMixin):
             tenant = await self.get_tenant(self.user, tenant_id)
             self.tenant_id = tenant.id
         return self
+
+    async def _caller_is_admin(self) -> bool:
+        """DB-backed admin check (``_is_admin_access``). Never the JWT
+        user's role, which does not hydrate inside async resolvers."""
+        from utils.graphql.permissions import (
+            _is_admin_access,
+            resolve_request_user_access,
+        )
+
+        if not self.user or not getattr(self.user, "is_authenticated", False):
+            return False
+        role_slug, is_staff, is_super, email = await resolve_request_user_access(
+            self.user
+        )
+        return _is_admin_access(role_slug, is_staff, is_super, email)
+
+    async def _existing_row_tenant(self, row_id) -> int | None:
+        """The row's tenant_id, or None when the model has no tenant
+        column, the row has none, or it doesn't exist (save() reports
+        that)."""
+        model_class = self.get_model()
+        if not any(
+            f.attname == "tenant_id" for f in model_class._meta.concrete_fields
+        ):
+            return None
+        try:
+            resolved_id = resolve_id_to_int(row_id)
+        except (TypeError, ValueError, GraphQLError):
+            raise GraphQLError(f"Invalid ID: {row_id}")
+        return await sync_to_async(
+            lambda: model_class.objects.filter(id=resolved_id)
+            .values_list("tenant_id", flat=True)
+            .first()
+        )()
+
+    async def _existing_row_tenant_for_member(self, row_id) -> int | None:
+        """Tenant of the row being updated/deleted, if the (non-admin)
+        caller is an active member of it. Raises "<Model> not found."
+        otherwise.
+
+        Models without a tenant column keep the previous behaviour (no
+        tenant to check or reassign)."""
+        model_class = self.get_model()
+        label = getattr(model_class._meta, "verbose_name", None) or model_class.__name__
+        label = str(label)[:1].upper() + str(label)[1:]
+        not_found = GraphQLError(f"{label} not found.")
+        has_tenant = any(
+            f.attname == "tenant_id" for f in model_class._meta.concrete_fields
+        )
+        try:
+            resolved_id = resolve_id_to_int(row_id)
+        except (TypeError, ValueError, GraphQLError):
+            raise GraphQLError(f"Invalid ID: {row_id}")
+        user = self.user
+
+        @sync_to_async
+        def _load():
+            qs = model_class.objects.filter(id=resolved_id)
+            if not has_tenant:
+                return qs.exists(), None, False
+            rows = list(qs.values_list("tenant_id", flat=True)[:1])
+            if not rows:
+                return False, None, False
+            row_tenant = rows[0]
+            if row_tenant is None:
+                return True, None, False
+            member = TenantedUser.objects.filter(
+                user=user, tenant_id=row_tenant, is_active=True
+            ).exists()
+            return True, row_tenant, member
+
+        exists, row_tenant, member = await _load()
+        if not exists:
+            raise not_found
+        if not has_tenant:
+            return self.tenant_id
+        if row_tenant is None or not member:
+            raise not_found
+        return row_tenant
 
     def set_is_public(self, is_public: bool) -> "BaseMutationService":
         """Set the is public for the service."""

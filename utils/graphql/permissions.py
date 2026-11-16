@@ -147,3 +147,23 @@ class IsClientOrSparkAdmin(BasePermission):
         return _is_admin_access(role_slug, is_staff, is_super, email) or (
             role_slug == "client"
         )
+
+
+class IsSparkAdminAccess(BasePermission):
+    """Allow only Spark/Ignite admins (``_is_admin_access``, DB-backed).
+
+    For BA operational data (pay, hours, live location) that brand/client
+    users must not see. Re-reads the role from the DB, so a spark-admin
+    whose JWT user didn't hydrate its role is not spuriously denied.
+    """
+
+    message = "Only Ignite admins have access to this."
+
+    async def has_permission(self, source, info, **kwargs) -> bool:
+        user = info.context.request.user
+        if not user or not user.is_authenticated:
+            return False
+        role_slug, is_staff, is_super, email = await resolve_request_user_access(
+            user
+        )
+        return _is_admin_access(role_slug, is_staff, is_super, email)
