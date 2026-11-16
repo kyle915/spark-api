@@ -26,11 +26,11 @@ THE RULES
   it is a general comment (not a reason to decline, not a question), holds
   a word of praise and holds no word of complaint. The longest candidate
   wins; ties go to the newer event. The text is the stored comment.
-* Photo: the first approved photo, oldest event first, in a category that
-  reads as sampling or table set-up, from the best store's recaps when it
-  has one, otherwise from any recap of the month. Never a receipt or other
-  paperwork. Photo picks and scores are not on this branch's base; when
-  they land, they belong ahead of this rule.
+* Photo (:mod:`recaps.photo_picks`): a photo staff pinned, else the
+  scorer's pick with the highest score, else the first photo, oldest event
+  first, in a category that reads as sampling or table set-up. At each step
+  the best store's recaps come before the rest of the month. Never a
+  receipt or other paperwork, and never a photo staff unpinned.
 
 No ambassador name and no cost figure is read here. Same result for staff
 and for the brand.
@@ -218,27 +218,45 @@ def _stored_liked_quotes(tenant_id: int, comments) -> list[str] | None:
 
 
 def _pick_photo(tenant_id: int, start: date, end: date, preferred_ids: list[int]):
+    """Staff pins first, then the scorer's picks by score, then the first
+    photo in a sampling or table bucket. Within each step the best store's
+    recaps come before the rest of the month. Never paperwork, never a
+    photo the scorer read as a receipt, never one staff unpinned."""
+    from django.db.models import F
+
     from recaps.photo_gallery import _base_queryset, _image_url
+    from recaps.photo_picks import effective_pick_q
     from recaps.types import _PAPERWORK_CATEGORY_RE
 
     base = (
         _base_queryset(tenant_id, start, end)
         .exclude(file_recap_category__name__iregex=_PAPERWORK_CATEGORY_RE.pattern)
-        .filter(file_recap_category__name__iregex=_SAMPLING_PHOTO_RE.pattern)
+        .exclude(photo_score__kind="receipt")
+        .exclude(staff_pick__choice="unpinned")
         .select_related("file_recap_category", "custom_recap")
-        .order_by("custom_recap__event__date", "custom_recap_id", "id")
     )
-    pools = [base.filter(custom_recap_id__in=preferred_ids)] if preferred_ids else []
-    pools.append(base)
-    for pool in pools:
-        for f in pool[:20]:
-            url = _image_url(f)
-            if url:
-                return HighlightPhoto(
-                    url=url,
-                    category=getattr(f.file_recap_category, "name", None) or "",
-                    recap_uuid=str(f.custom_recap.uuid),
-                )
+    oldest = ("custom_recap__event__date", "custom_recap_id", "id")
+    by_score = (F("photo_score__score").desc(nulls_last=True), *oldest)
+    picks = base.filter(effective_pick_q())
+    steps = (
+        picks.filter(staff_pick__choice="pinned").order_by(*by_score),
+        picks.order_by(*by_score),
+        base.filter(
+            file_recap_category__name__iregex=_SAMPLING_PHOTO_RE.pattern
+        ).order_by(*oldest),
+    )
+    for step in steps:
+        pools = [step.filter(custom_recap_id__in=preferred_ids)] if preferred_ids else []
+        pools.append(step)
+        for pool in pools:
+            for f in pool[:20]:
+                url = _image_url(f)
+                if url:
+                    return HighlightPhoto(
+                        url=url,
+                        category=getattr(f.file_recap_category, "name", None) or "",
+                        recap_uuid=str(f.custom_recap.uuid),
+                    )
     return None
 
 

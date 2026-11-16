@@ -949,6 +949,57 @@ class TestSearchStoreHighlight(AmbassadorsGraphQLTestCase):
         assert brand["photo"]["recapUuid"] == str(self.d[0].uuid)
 
     @pytest.mark.asyncio
+    async def test_the_photo_is_a_staff_pin_then_the_top_score(self, monkeypatch):
+        monkeypatch.setattr(PUBLIC_URL, lambda blob: f"https://cdn.test/{blob}")
+        await sync_to_async(self._seed)()
+
+        def _file(name, recap, category=None):
+            return recap_models.CustomRecapFile.objects.create(
+                name=name, url=f"recap_files/{name}", custom_recap=recap,
+                file_type=self.file_type, file_recap_category=category or self.sampling,
+                created_by=self.sys,
+            )
+
+        def _score(f, score, kind="table_setup"):
+            recap_models.RecapPhotoScore.objects.create(
+                custom_recap_file=f, status="scored", score=score, kind=kind,
+                model_pick=True,
+            )
+
+        def _scored():
+            self.low = _file("low.jpg", self.l[0])
+            self.high = _file("high.jpg", self.l[1])
+            _score(self.low, 60)
+            _score(self.high, 90)
+            # A pinned receipt and an unapproved recap's pick never show.
+            receipt = _file("pinned-receipt.jpg", self.l[0], self.receipts)
+            recap_models.RecapPhotoStaffPick.objects.create(
+                custom_recap_file=receipt, choice="pinned"
+            )
+            _score(_file("hidden.jpg", self.unapproved), 99)
+
+        await sync_to_async(_scored)()
+        with patch(GENERATE, side_effect=AiUnavailable("off")):
+            top = await self._highlight(self.client_user)
+            await sync_to_async(recap_models.RecapPhotoStaffPick.objects.create)(
+                custom_recap_file=self.low, choice="pinned"
+            )
+            pinned = await self._highlight(self.client_user)
+            await sync_to_async(
+                recap_models.RecapPhotoStaffPick.objects.filter(
+                    custom_recap_file=self.low
+                ).update
+            )(choice="unpinned")
+            await sync_to_async(recap_models.RecapPhotoStaffPick.objects.create)(
+                custom_recap_file=self.high, choice="unpinned"
+            )
+            neither = await self._highlight(self.client_user)
+        assert top["photo"]["url"].endswith("high.jpg")
+        assert pinned["photo"]["url"].endswith("low.jpg")
+        # Both unpinned: back to the best store's sampling photo.
+        assert neither["photo"]["url"].endswith("table.jpg")
+
+    @pytest.mark.asyncio
     async def test_the_caption_falls_back_when_the_model_adds_a_number(self):
         await sync_to_async(self._seed)()
 
