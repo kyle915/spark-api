@@ -163,6 +163,43 @@ class TestUpdateTenantGate(AmbassadorsGraphQLTestCase):
         row = await self._event_row(self.event_b)
         assert row == {"name": "Renamed", "tenant_id": self.tenant_b.id}
 
+    @pytest.mark.asyncio
+    async def test_admin_with_unhydrated_role_updates_any_event(self):
+        # The JWT user's role doesn't hydrate in async resolvers; admin is
+        # decided from the DB, so a real admin is not treated as a client.
+        self.admin.role = None
+        result = await self._update_event(self.event_b, self.admin)
+        assert result.errors is None
+        assert result.data["updateEvent"]["success"] is True, result.data
+        row = await self._event_row(self.event_b)
+        assert row == {"name": "Renamed", "tenant_id": self.tenant_b.id}
+
+    @pytest.mark.asyncio
+    async def test_excluded_admin_with_stale_role_is_gated(self):
+        # A removed Ignite admin (IGNITE_ADMIN_EXCLUDE) whose request user
+        # still carries the spark-admin role. The old gate OR-ed in
+        # is_spark_schema_request (sync role read, ignores the exclude
+        # list) and let them edit and re-home any brand's row.
+        from utils.graphql.permissions import IGNITE_ADMIN_EXCLUDE
+
+        email = "gate-removed@igniteproductions.co"
+        removed = await sync_to_async(self.create_user)(
+            username="gate-removed", email=email,
+            role=self.roles["spark_admin"],
+        )
+        await sync_to_async(self.create_tenanted_user)(removed, self.tenant_a)
+        IGNITE_ADMIN_EXCLUDE.add(email)
+        try:
+            result = await self._update_event(self.event_b, removed)
+        finally:
+            IGNITE_ADMIN_EXCLUDE.discard(email)
+        assert result.errors is None
+        payload = result.data["updateEvent"]
+        assert payload["success"] is False
+        assert payload["message"] == "Event not found."
+        row = await self._event_row(self.event_b)
+        assert row == {"name": "B event", "tenant_id": self.tenant_b.id}
+
     # ── catalog: updateRetailer ──────────────────────────────────────
 
     def _retailer_input(self):

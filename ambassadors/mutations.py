@@ -1278,12 +1278,16 @@ class AmbassadorMutations:
     ) -> ApproveAmbassadorResponse:
         return await ApproveAmbassadorService.approve(input, info)
 
-    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    @relay.mutation(permission_classes=[IsSparkAdminAccess])
     async def disable_ambassador(
         self,
         info: strawberry.Info,
         input: inputs.DisableAmbassadorInput,
     ) -> DisableAmbassadorResponse:
+        """Deactivate any BA and their login. Spark admins only (the web
+        Pending-ambassadors screen, admin-only). A client could disable any
+        BA platform-wide by id. A BA closing their own account uses
+        disableAmbassadorMobile."""
         return await DisableAmbassadorService.disable(input, info)
 
     @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
