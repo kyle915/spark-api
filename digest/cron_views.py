@@ -11830,6 +11830,52 @@ class ProposeRetailerAliasesView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class PrebuildFeedbackThemesView(View):
+    """POST `/internal/cron/prebuild-feedback-themes`.
+
+    Fires `prebuild_feedback_themes` — builds "What consumers said" ahead of
+    time for the date ranges the dashboard and report offer, so the page
+    reads a stored result. Sends nothing; stores only the themes cache.
+
+    Params: dry_run ("1"/"true"/"yes"), tenant (int), days (int),
+    max_seconds (int).
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _param(name: str) -> str:
+            return (request.GET.get(name) or request.POST.get(name) or "").strip()
+
+        dry_run = _param("dry_run").lower() in ("1", "true", "yes", "on")
+        args: list[str] = ["--dry-run"] if dry_run else []
+        for name, flag in (("tenant", "--tenant"), ("days", "--days"),
+                           ("max_seconds", "--max-seconds")):
+            value = _param(name)
+            if value.isdigit():
+                args += [flag, value]
+        out = io.StringIO()
+        try:
+            call_command("prebuild_feedback_themes", *args, stdout=out, stderr=out)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Feedback themes prebuild cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc),
+                 "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse({"ok": True, "dry_run": dry_run, "log": out.getvalue()})
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        return JsonResponse({"ok": True, "endpoint": "prebuild-feedback-themes"})
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class GeocodeEventsView(View):
     """POST `/internal/cron/geocode-events`.
 
@@ -11906,6 +11952,7 @@ def _registered_views() -> dict[str, Any]:
         "propose-recap-retailers": ProposeRecapRetailersView,
         "propose-retailer-aliases": ProposeRetailerAliasesView,
         "geocode-events": GeocodeEventsView,
+        "prebuild-feedback-themes": PrebuildFeedbackThemesView,
         "send-payment-notifications": SendPaymentNotificationsView,
         "send-document-expiry-reminders": SendDocumentExpiryRemindersView,
         "send-scheduled-client-reports": SendScheduledClientReportsView,
