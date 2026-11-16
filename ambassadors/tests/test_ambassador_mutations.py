@@ -391,6 +391,14 @@ class TestAmbassadorInvitationCreation(AmbassadorsGraphQLTestCase):
             role=self.roles['client']
         )
         self.create_tenanted_user(self.client_user, self.tenant)
+        # Invitations are Spark-admin only (the web Invite-BA button is on
+        # the admin-only Talent page); see test_ba_access_gates.py for the
+        # refusals.
+        self.admin_user = self.create_user(
+            username=f"admin_inv_{unique_id}@test.com",
+            email=f"admin_inv_{unique_id}@test.com",
+            role=self.roles['spark_admin']
+        )
         self.schema = schema_spark
         self.endpoint_path = "/api/v1/graphql/spark"
 
@@ -426,7 +434,7 @@ class TestAmbassadorInvitationCreation(AmbassadorsGraphQLTestCase):
         }
 
         result = await self._execute_mutation_authenticated(
-            self.mutation, variables, self.client_user, self.endpoint_path
+            self.mutation, variables, self.admin_user, self.endpoint_path
         )
 
         assert result.errors is None
@@ -445,7 +453,7 @@ class TestAmbassadorInvitationCreation(AmbassadorsGraphQLTestCase):
                 email=email
             )
         invitation = await get_invitation()
-        assert invitation.invited_by == self.client_user
+        assert invitation.invited_by == self.admin_user
         assert invitation.tenant == self.tenant
         assert invitation.is_used is False
 
@@ -471,7 +479,7 @@ class TestAmbassadorInvitationCreation(AmbassadorsGraphQLTestCase):
         }
 
         result = await self._execute_mutation_authenticated(
-            self.mutation, variables, self.client_user, self.endpoint_path
+            self.mutation, variables, self.admin_user, self.endpoint_path
         )
 
         assert result.data is not None
@@ -505,7 +513,7 @@ class TestAmbassadorInvitationCreation(AmbassadorsGraphQLTestCase):
         }
 
         result = await self._execute_mutation_authenticated(
-            self.mutation, variables, self.client_user, self.endpoint_path
+            self.mutation, variables, self.admin_user, self.endpoint_path
         )
 
         assert result.data is not None
@@ -540,7 +548,7 @@ class TestAmbassadorInvitationCreation(AmbassadorsGraphQLTestCase):
         }
 
         result = await self._execute_mutation_authenticated(
-            self.mutation, variables, self.client_user, self.endpoint_path
+            self.mutation, variables, self.admin_user, self.endpoint_path
         )
 
         assert result.data is not None
@@ -561,7 +569,7 @@ class TestAmbassadorInvitationCreation(AmbassadorsGraphQLTestCase):
         }
 
         result = await self._execute_mutation_authenticated(
-            self.mutation, variables, self.client_user, self.endpoint_path
+            self.mutation, variables, self.admin_user, self.endpoint_path
         )
 
         assert result.data is not None

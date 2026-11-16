@@ -1820,15 +1820,20 @@ class SparkUserMutations:
         info: strawberry.Info,
         input: ChangeUserPasswordInput,
     ) -> UpdateUserResponse:
+        """Set a user's password.
+
+        Anyone signed in may change their OWN password. Changing someone
+        else's password is Spark-admin only (DB-backed gate, all tenants).
+        Clients used to be able to reset the password of anyone sharing one
+        of their tenants (incl. Ignite staff and BAs on their roster), which
+        is an account takeover; that path is gone.
+        """
         requester = info.context.request.user
 
-        allowed, is_spark_admin, _, error = await _check_client_or_spark_admin(
-            requester
-        )
-        if not allowed:
+        if not requester or not getattr(requester, "is_authenticated", False):
             return UpdateUserResponse(
                 success=False,
-                message=error,
+                message="User not authenticated.",
                 client_mutation_id=input.client_mutation_id,
             )
 
@@ -1854,23 +1859,27 @@ class SparkUserMutations:
                 else await sync_to_async(User.objects.get)(uuid=input.uuid)
             )
         except (User.DoesNotExist, ValueError, TypeError, GraphQLError):
-            return UpdateUserResponse(
-                success=False,
-                message="User not found.",
-                client_mutation_id=input.client_mutation_id,
-            )
+            target_user = None
 
-        if not is_spark_admin:
-            requester_tenant_ids = await _get_active_tenant_ids(requester)
-            target_user_tenant_ids = await sync_to_async(list)(
-                target_user.tenanted_users.filter(is_active=True).values_list(
-                    "tenant_id", flat=True
-                )
+        is_self = target_user is not None and target_user.pk == getattr(
+            requester, "pk", None
+        )
+        if not is_self:
+            role_slug, is_staff, is_super, email = (
+                await resolve_request_user_access(requester)
             )
-            if not set(target_user_tenant_ids).intersection(requester_tenant_ids):
+            if not _is_admin_access(role_slug, is_staff, is_super, email):
+                # Same message whether or not the target exists, so a
+                # non-admin can't probe for user ids.
                 return UpdateUserResponse(
                     success=False,
-                    message="You do not have permission to update this user.",
+                    message="You can only change your own password.",
+                    client_mutation_id=input.client_mutation_id,
+                )
+            if target_user is None:
+                return UpdateUserResponse(
+                    success=False,
+                    message="User not found.",
                     client_mutation_id=input.client_mutation_id,
                 )
 

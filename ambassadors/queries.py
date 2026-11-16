@@ -15,11 +15,29 @@ from utils.graphql.permissions import (
     StrictIsAuthenticated,
     IsClientOrSparkAdmin,
     email_grants_ignite_admin,
+    _is_admin_access,
+    resolve_request_user_access,
 )
 from utils.gcs import public_url, extract_blob_name_from_url
 from events import models as event_models
 from events import types as event_types
 from utils.graphql.mixins import SparkGraphQLMixin, resolve_id_to_int
+
+
+async def _ba_data_access(info) -> tuple[bool, bool, object]:
+    """(is_admin, is_ambassador, user) for BA-data reads, DB-backed.
+
+    BA operational data (bookings, profile, files, notes) is for Ignite
+    admins, and for an ambassador about themselves. Brand/client users and
+    anonymous callers get neither flag.
+    """
+    request = getattr(info.context, "request", None)
+    user = getattr(request, "user", None)
+    if not user or not getattr(user, "is_authenticated", False):
+        return False, False, None
+    role_slug, is_staff, is_super, email = await resolve_request_user_access(user)
+    is_admin = _is_admin_access(role_slug, is_staff, is_super, email)
+    return is_admin, (not is_admin and role_slug == "ambassador"), user
 from utils.graphql.queries import BaseQueriesService
 from utils.graphql.inputs import SparkGraphQLInput
 from utils.graphql.relay import (
@@ -1717,15 +1735,19 @@ class AmbassadorEventQueries:
     ) -> CountableConnection[types.AmbassadorEventType]:
         """Return ambassador events with ambassador and user nested.
 
-        If user role is 'ambassador', only returns events for the logged ambassador.
-        Otherwise, returns all ambassador events (for admins, clients, etc).
+        Admins see every booking; an ambassador sees only their own.
+        Brand/client users are refused (BA bookings, names and contact
+        details are not client data). The role is read from the DB: the
+        old sync ``user.role`` read could come back empty in this async
+        resolver and hand a BA everyone's bookings.
         """
         service = AmbassadorEventQueriesService()
-        user = await service.get_user(info)
-
-        # Check if user role is ambassador
-        role_slug = service.get_role_slug(user)
-        filter_by_user = role_slug == "ambassador"
+        is_admin, is_ambassador, user = await _ba_data_access(info)
+        if not is_admin and not is_ambassador:
+            raise GraphQLError(
+                "You do not have permission to view ambassador bookings."
+            )
+        filter_by_user = not is_admin
 
         queryset = service.get_ambassador_queryset(user, filter_by_user=filter_by_user)
         if q:
@@ -2068,7 +2090,16 @@ class AmbassadorProfileQueries:
         uuid: strawberry.ID | None = None,
         user_id: strawberry.ID | None = None,
     ) -> types.AmbassadorProfile | None:
-        """Return ambassador profile with related data in a single query."""
+        """Return ambassador profile with related data in a single query.
+
+        Admins may read any BA; an ambassador only their own profile
+        (another BA's reads as not found). Brand/client users are refused:
+        the profile carries the BA's phone, address, files and notes."""
+        is_admin, is_ambassador, caller = await _ba_data_access(info)
+        if not is_admin and not is_ambassador:
+            raise GraphQLError(
+                "You do not have permission to view ambassador profiles."
+            )
         if id is None and uuid is None and user_id is None:
             raise GraphQLError("Either id, uuid, or user_id must be provided")
 
@@ -2090,6 +2121,9 @@ class AmbassadorProfileQueries:
                 **filters
             )
         except models.Ambassador.DoesNotExist:
+            return None
+
+        if not is_admin and ambassador.user_id != getattr(caller, "pk", None):
             return None
 
         ambassador_id = ambassador.id

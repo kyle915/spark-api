@@ -15,7 +15,13 @@ from jobs.models import (
 from jobs.types import AmbassadorJob as AmbassadorJobType
 
 from events.models import Event
-from utils.graphql.permissions import StrictIsAuthenticated, IsClientOrSparkAdmin
+from utils.graphql.permissions import (
+    StrictIsAuthenticated,
+    IsClientOrSparkAdmin,
+    IsSparkAdminAccess,
+    _is_admin_access,
+    resolve_request_user_access,
+)
 from utils.graphql.mixins import (
     BaseMutationService,
     SparkGraphQLMixin,
@@ -1240,12 +1246,16 @@ class AmbassadorMutations:
             input, info, ambassador_is_active=input.is_active
         )
 
-    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    @relay.mutation(permission_classes=[IsSparkAdminAccess])
     async def create_ambassador_invitation(
         self,
         info: strawberry.Info,
         input: inputs.CreateAmbassadorInvitationInput,
     ) -> AmbassadorInvitationResponse:
+        """Spark-admin only (the web "Invite new BA" button lives on the
+        admin-only Talent page). It was open to any signed-in user, which
+        let a client or BA add an existing BA to ANY tenant's roster or
+        mint invitations into another brand."""
         return await AmbassadorInvitationService.create(input, info)
 
     @relay.mutation  # Public with token validation
@@ -1302,13 +1312,19 @@ class AmbassadorMutations:
         """Update ambassador profile fields including about_me."""
         return await UpdateAmbassadorService.update(input, info)
 
-    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    @relay.mutation(permission_classes=[IsSparkAdminAccess])
     async def upsert_ambassador_profile(
         self,
         info: strawberry.Info,
         input: inputs.UpsertAmbassadorProfileInput,
     ) -> UpsertAmbassadorProfileResponse:
-        """Upsert ambassador profile and related data, including about_me."""
+        """Upsert ambassador profile and related data, including about_me.
+
+        Spark-admin only. It writes admin-owned fields (is_active, rating,
+        notes, email) and could target any BA by id, so a client could edit
+        any BA and a BA could re-activate or re-rate themselves. No web or
+        mobile screen calls it; BAs edit their own profile through
+        updateBaProfile."""
         return await UpsertAmbassadorProfileService.upsert(input, info)
 
     @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
@@ -2907,13 +2923,90 @@ class AttendanceMutationService(TenantOptionalMutationService):
         """
         Override tenant resolution so attendance creation does not require tenant membership.
         Ambassadors are not tied to tenants, so we skip the tenant lookup entirely.
+
+        Access (DB-backed role, never the JWT user's un-hydrated role):
+        - Spark admins may create/update any punch.
+        - An ambassador may only write their OWN punches, on an event they
+          are booked on (an AmbassadorEvent row, same rule as the shift
+          clock-in mutations). Updating someone else's punch reads as
+          "Attendance not found.".
+        - Everyone else (clients) is refused.
         """
         self.info = info
         self.user = await self.get_user(info)
         self.is_spark_schema = self.is_spark_schema_request(
             info, user=self.user)
         self.tenant_id = None
+
+        role_slug, is_staff, is_super, email = await resolve_request_user_access(
+            self.user
+        )
+        self._db_role_slug = role_slug
+        self._is_admin = _is_admin_access(role_slug, is_staff, is_super, email)
+        if self._is_admin:
+            return self
+        if role_slug != "ambassador":
+            raise GraphQLError("You are not authorized to record attendance.")
+        await self._assert_ambassador_owns_punch()
         return self
+
+    async def _assert_ambassador_owns_punch(self) -> None:
+        """Ambassador callers: the punch (existing row and the values being
+        written) must be theirs and on an event they are booked on."""
+        user = self.user
+        inp = self.input
+
+        def _opt_int(value, label):
+            if value is None:
+                return None
+            try:
+                return resolve_id_to_int(value)
+            except (TypeError, ValueError, GraphQLError):
+                raise GraphQLError(f"Invalid {label}: {value}")
+
+        row_id = _opt_int(getattr(inp, "id", None), "ID")
+        amb_id = _opt_int(getattr(inp, "ambassador_id", None), "ambassador_id")
+        event_id = _opt_int(getattr(inp, "event_id", None), "event_id")
+        job_id = _opt_int(getattr(inp, "job_id", None), "job_id")
+
+        @sync_to_async
+        def _check():
+            own = Ambassador.objects.filter(user=user).values_list(
+                "id", flat=True
+            ).first()
+            if own is None:
+                return "You are not authorized to record attendance.", None
+            ev = event_id
+            if row_id is not None:
+                row = (
+                    Attendance.objects.filter(id=row_id)
+                    .values("ambassador_id", "event_id")
+                    .first()
+                )
+                if row is None or row["ambassador_id"] != own:
+                    return "Attendance not found.", None
+                if ev is None:
+                    ev = row["event_id"]
+            if amb_id is not None and amb_id != own:
+                return "You can only record your own attendance.", None
+            if ev is None:
+                return "event_id is required.", None
+            if not AmbassadorEvent.objects.filter(
+                ambassador_id=own, event_id=ev
+            ).exists():
+                return "You are not booked on this event.", None
+            if job_id is not None and not Job.objects.filter(
+                id=job_id, event_id=ev
+            ).exists():
+                return "That job is not part of this event.", None
+            return None, own
+
+        error, own = await _check()
+        if error:
+            raise GraphQLError(error)
+        # A BA's own punch always names them, even if they left it blank.
+        if getattr(inp, "id", None) is None:
+            inp.ambassador_id = own
 
     async def validations(self):
         """Skip tenant validations for attendance because it is tenant-agnostic."""
@@ -2921,7 +3014,9 @@ class AttendanceMutationService(TenantOptionalMutationService):
 
     async def _assign_status_for_creator(self):
         """Force attendance status based on creator role."""
-        role_slug = self.get_role_slug(self.user)
+        role_slug = getattr(self, "_db_role_slug", None) or self.get_role_slug(
+            self.user
+        )
         if role_slug not in {"spark-admin", "ambassador"}:
             return
 

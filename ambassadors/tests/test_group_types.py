@@ -282,9 +282,11 @@ class TestUpdateGroupType(AmbassadorsGraphQLTestCase):
             self.mutation, variables, self.client_user, self.endpoint_path
         )
 
-        assert result.errors is not None
-        assert len(result.errors) > 0
-        assert "GroupType matching query does not exist" in result.errors[0].message
+        # Was an unhandled DoesNotExist; now a clean refusal whose message
+        # matches the out-of-tenant case (no existence probe).
+        assert result.errors is None
+        assert result.data["updateGroupType"]["success"] is False
+        assert "not found" in result.data["updateGroupType"]["message"]
 
     @pytest.mark.asyncio
     async def test_update_group_type_unauthorized_ambassador(self):
