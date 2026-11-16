@@ -532,6 +532,90 @@ class TestDashboardExplain(AmbassadorsGraphQLTestCase):
         self._recap(last, 10, retailer=self.costco, state=self.ca)
         assert _week_drop_callouts(self.tenant.id, self.today) == []
 
+    def test_a_week_still_in_review_is_not_called_a_drop(self):
+        from recaps.callouts import _week_drop_callouts, week_start
+
+        last = (self.today - week_start(self.today)).days + 7
+        for offset in range(3):
+            self._recap(last - offset, 20, retailer=self.costco, state=self.ca)
+            self._recap(last + 7 - offset, 100, retailer=self.costco, state=self.ca)
+        assert len(_week_drop_callouts(self.tenant.id, self.today)) == 1
+        # One recap from the latest week is filed and waiting for review.
+        self._recap(last, 90, retailer=self.costco, state=self.ca, approved=False)
+        assert _week_drop_callouts(self.tenant.id, self.today) == []
+
+    def _seed_texas_then_nothing_approved(self):
+        """Texas: 3 approved recaps five to seven weeks ago, none since.
+        California files every day, so the program is not what went quiet
+        and no week reads as a drop."""
+        for days in (36, 43, 50):
+            self._recap(days, 100, retailer=self.kroger, state=self.tx)
+        for days in range(1, 22):
+            self._recap(days, 100, retailer=self.costco, state=self.ca)
+
+    def _seed_texas_in_review(self):
+        self._seed_texas_then_nothing_approved()
+        # Filed in the last 4 weeks, not yet approved: these two count.
+        self._recap(5, 80, retailer=self.kroger, state=self.tx, approved=False)
+        self._recap(
+            12, 80, retailer=self.kroger, approved=False,
+            address="9 Texas Ave, Houston, TX 77001",
+        )
+        # These do not: archived, on a deleted request, older than the
+        # quiet window, another brand's.
+        self._recap(
+            6, 80, retailer=self.kroger, state=self.tx, approved=False, archived=True
+        )
+        self._recap(
+            6, 80, retailer=self.kroger, state=self.tx, approved=False,
+            request=self._deleted_request(),
+        )
+        self._recap(30, 80, retailer=self.kroger, state=self.tx, approved=False)
+        self._recap(6, 80, state=self.tx, approved=False, tenant=self.other)
+
+    @pytest.mark.asyncio
+    async def test_staff_see_a_state_waiting_for_review_not_a_quiet_one(self):
+        await sync_to_async(self._seed_texas_in_review)()
+        with patch(GENERATE, side_effect=_reworded(" Really.")) as generate:
+            data = await self._run(CALLOUTS_Q, self._window(), self.admin)
+        callouts = data["tenantCallouts"]
+        assert [c["kind"] for c in callouts] == ["state_waiting_review"]
+        texas = callouts[0]
+        # Worded in code, word for word: never sent to the model.
+        assert texas["text"] == (
+            "Texas has 2 recaps waiting for review from the last 4 weeks."
+        )
+        generate.assert_not_called()
+        assert {"label": "Waiting for review", "value": "2"} in texas["numbers"]
+        assert texas["link"] == {
+            "store": None,
+            "state": "TX",
+            "startDate": (self.today - timedelta(days=27)).isoformat(),
+            "endDate": self.today.isoformat(),
+        }
+
+    @pytest.mark.asyncio
+    async def test_a_brand_user_sees_nothing_for_a_state_waiting_for_review(self):
+        await sync_to_async(self._seed_texas_in_review)()
+        with patch(GENERATE, side_effect=AiUnavailable("off")):
+            data = await self._run(CALLOUTS_Q, self._window(), self.client_user)
+        # Not quiet, and no count of unapproved recaps either.
+        assert data["tenantCallouts"] == []
+
+    @pytest.mark.asyncio
+    async def test_a_truly_quiet_state_is_still_called_out_for_everyone(self):
+        await sync_to_async(self._seed_texas_then_nothing_approved)()
+        for user in (self.client_user, self.admin):
+            with patch(GENERATE, side_effect=AiUnavailable("off")):
+                data = await self._run(CALLOUTS_Q, self._window(), user)
+            callouts = data["tenantCallouts"]
+            assert [c["kind"] for c in callouts] == ["state_quiet"]
+            assert callouts[0]["text"] == (
+                "Texas has had no approved recap for 5 weeks. "
+                "It had 3 approved recaps in the 8 weeks before that."
+            )
+            assert callouts[0]["link"]["state"] == "TX"
+
     def test_a_product_with_samples_and_almost_no_sales(self):
         from recaps.callouts import _product_callouts
 
