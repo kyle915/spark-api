@@ -38,7 +38,13 @@ from django.db.models import Count
 from django.utils import timezone
 
 from recaps.consumer_breakdown import KIND_NAMED, tenant_consumer_breakdown
-from recaps.feedback_themes import KIND_DECLINE, KIND_QUESTION, gather_comments
+from recaps.feedback_themes import (
+    KIND_DECLINE,
+    KIND_QUESTION,
+    STATUS_READY,
+    gather_comments,
+    get_feedback_themes,
+)
 from recaps.filed import custom_filed_q, legacy_filed_q
 from recaps.models import CustomRecap, Recap
 from recaps.tenant_overview import (
@@ -84,6 +90,73 @@ _SYSTEM = (
 )
 
 
+PERIOD_WEEK = "week"
+PERIOD_MONTH = "month"
+PERIODS = (PERIOD_WEEK, PERIOD_MONTH)
+
+_SYSTEM_MONTH = (
+    "You draft a short monthly email from Ignite to a brand about its "
+    "in-store sampling program. Ignite staff will check it before anyone "
+    "sees it, so write to the brand in plain, short sentences. Use ONLY "
+    "what is in FACTS. Copy every number exactly as given, with the label "
+    "it has; never add, subtract, average, round or estimate, and never "
+    "write a number that is not in FACTS. Start with the line 'Hi team,' "
+    "then three or four short paragraphs separated by a blank line, in this "
+    "order: what ran in the month (events and where), the headline numbers, "
+    "what consumers said (use feedback_themes and their recap counts when "
+    "present), and then anything the brand should look at, such as reasons "
+    "people gave for not buying, questions people asked, or a change from "
+    "the previous month. Leave a paragraph out when FACTS has nothing for "
+    "it. Do not name any brand ambassador or shopper. No sign-off, no "
+    "subject line, no headings, no bullet points, no markdown, no "
+    "exclamation marks, no sales language. Stay under 220 words."
+)
+
+
+def month_bounds(raw: str | None, today: date | None = None) -> tuple[date, date] | None:
+    """First to last day of the month holding ``raw`` (YYYY-MM-DD), or of
+    the last finished month when ``raw`` is empty. None when unreadable."""
+    if raw:
+        try:
+            first = date.fromisoformat(raw).replace(day=1)
+        except ValueError:
+            return None
+    else:
+        if today is None:
+            from events.live_board import _ops_today
+
+            today = _ops_today()
+        first = (today.replace(day=1) - timedelta(days=1)).replace(day=1)
+    following = (first.replace(day=28) + timedelta(days=4)).replace(day=1)
+    return first, following - timedelta(days=1)
+
+
+def period_bounds(
+    period: str, raw: str | None, today: date | None = None
+) -> tuple[date, date] | None:
+    """The window for a period: a Monday-to-Sunday week or a calendar month."""
+    if period == PERIOD_MONTH:
+        return month_bounds(raw, today)
+    if period != PERIOD_WEEK:
+        return None
+    if raw:
+        return week_bounds(raw)
+    return _ops_week(today)
+
+
+def _previous_period(period: str, start: date, end: date) -> tuple[date, date]:
+    if period == PERIOD_MONTH:
+        prev_end = start - timedelta(days=1)
+        return prev_end.replace(day=1), prev_end
+    return start - timedelta(days=7), end - timedelta(days=7)
+
+
+def _period_label(period: str, start: date, end: date) -> str:
+    if period == PERIOD_MONTH:
+        return start.strftime("%B %Y")
+    return _week_label(start, end)
+
+
 def week_bounds(raw: str | None, today: date | None = None) -> tuple[date, date] | None:
     """Monday to Sunday for ``raw`` (YYYY-MM-DD, any day of that week), or
     the last finished week when ``raw`` is empty. None when unreadable."""
@@ -109,8 +182,11 @@ def _week_label(start: date, end: date) -> str:
     return f"{start.strftime('%b %-d')} to {end.strftime('%b %-d, %Y')}"
 
 
-def week_facts(tenant_id: int, start: date, end: date) -> dict:
-    """Everything the draft may say, from approved recaps of that week."""
+def week_facts(
+    tenant_id: int, start: date, end: date, period: str = PERIOD_WEEK
+) -> dict:
+    """Everything the draft may say, from approved recaps of that week or
+    month. A month also carries the feedback themes for its dates."""
     from tenants.models import Tenant
 
     window = _inclusive_dates_to_window(start, end)
@@ -121,7 +197,7 @@ def week_facts(tenant_id: int, start: date, end: date) -> dict:
     facts: dict = {
         "brand": Tenant.objects.filter(id=tenant_id).values_list("name", flat=True).first()
         or "",
-        "week": _week_label(start, end),
+        period: _period_label(period, start, end),
         "events_run": events,
         "approved_recaps": recaps,
         "consumers_sampled": int(breakdown["total"]),
@@ -155,13 +231,13 @@ def week_facts(tenant_id: int, start: date, end: date) -> dict:
             {"state": r["label"], "consumers_sampled": r["consumers"]} for r in states
         ]
 
-    prev_start, prev_end = start - timedelta(days=7), end - timedelta(days=7)
+    prev_start, prev_end = _previous_period(period, start, end)
     prev_events, _prev_recaps = _tenant_event_recap_counts_window(
         tenant_id, _inclusive_dates_to_window(prev_start, prev_end)
     )
     if prev_events:
-        facts["previous_week"] = {
-            "week": _week_label(prev_start, prev_end),
+        facts[f"previous_{period}"] = {
+            period: _period_label(period, prev_start, prev_end),
             "events_run": prev_events,
             "consumers_sampled": int(
                 tenant_consumer_breakdown(tenant_id, prev_start, prev_end)["total"]
@@ -174,6 +250,24 @@ def week_facts(tenant_id: int, start: date, end: date) -> dict:
         {"type": kinds.get(c.kind, "comment"), "text": c.text}
         for c in comments[:MAX_COMMENTS]
     ]
+    if period == PERIOD_MONTH:
+        # The same stored themes the report shows for these dates; the
+        # counts are the ones computed there, not the model's.
+        themes = get_feedback_themes(tenant_id, start, end)
+        if themes["status"] == STATUS_READY:
+            sections = {
+                "liked": "what people liked",
+                "passed": "why people passed",
+                "asked": "questions people asked",
+            }
+            facts["feedback_themes"] = [
+                {
+                    "section": sections.get(t["section"], t["section"]),
+                    "theme": t["label"],
+                    "recaps_mentioning_it": t["recap_count"],
+                }
+                for t in themes["themes"]
+            ]
     return facts
 
 
@@ -188,16 +282,19 @@ def _tidy(text: str) -> str:
     return "\n\n".join(paragraphs)
 
 
-def compose_summary(facts: dict) -> tuple[str | None, str | None]:
+def compose_summary(
+    facts: dict, period: str = PERIOD_WEEK
+) -> tuple[str | None, str | None]:
     """``(body, None)``, or ``(None, reason)`` when no draft can be kept."""
     if not int(facts.get("approved_recaps") or 0):
         return None, REASON_NO_RECAPS
+    system = _SYSTEM_MONTH if period == PERIOD_MONTH else _SYSTEM
     user = "FACTS:\n" + json.dumps(facts, indent=2, ensure_ascii=False)
     # One more try when a draft holds a number that is not in the facts;
     # after that it is not kept.
     for _attempt in range(2):
         try:
-            text = generate_summary(_SYSTEM, user)
+            text = generate_summary(system, user)
         except AiUnavailable:
             return None, REASON_UNAVAILABLE
         except Exception:  # noqa: BLE001
@@ -211,7 +308,9 @@ def compose_summary(facts: dict) -> tuple[str | None, str | None]:
     return None, REASON_UNGROUNDED
 
 
-def generate_summary_draft(tenant_id: int, start: date, end: date):
+def generate_summary_draft(
+    tenant_id: int, start: date, end: date, period: str = PERIOD_WEEK
+):
     """Write (or rewrite) the draft for one brand and week.
 
     Returns ``(row, None)`` or ``(None, reason)``. A rewrite replaces the
@@ -220,12 +319,13 @@ def generate_summary_draft(tenant_id: int, start: date, end: date):
     """
     from tenants.models import TenantWeeklySummary
 
-    facts = week_facts(tenant_id, start, end)
-    body, reason = compose_summary(facts)
+    facts = week_facts(tenant_id, start, end, period)
+    body, reason = compose_summary(facts, period)
     if body is None:
         return None, reason
     row, _created = TenantWeeklySummary.objects.update_or_create(
         tenant_id=tenant_id,
+        period=period,
         week_start=start,
         defaults={
             "week_end": end,
@@ -267,7 +367,7 @@ def _recap_counts(window, *, approved: bool) -> dict[int, int]:
     return counts
 
 
-def week_rows(start: date, end: date) -> list[dict]:
+def week_rows(start: date, end: date, period: str = PERIOD_WEEK) -> list[dict]:
     """One row per brand that ran something that week or has a draft."""
     from tenants.models import Tenant, TenantWeeklySummary
 
@@ -276,7 +376,9 @@ def week_rows(start: date, end: date) -> list[dict]:
     pending = _recap_counts(window, approved=False)
     drafts = {
         row.tenant_id: row
-        for row in TenantWeeklySummary.objects.filter(week_start=start).select_related(
+        for row in TenantWeeklySummary.objects.filter(
+            period=period, week_start=start
+        ).select_related(
             "reviewed_by"
         )
     }
@@ -296,7 +398,12 @@ def week_rows(start: date, end: date) -> list[dict]:
 
 
 def generate_week_drafts(
-    start: date, end: date, *, tenant_id: int | None = None, apply: bool = False
+    start: date,
+    end: date,
+    *,
+    tenant_id: int | None = None,
+    apply: bool = False,
+    period: str = PERIOD_WEEK,
 ) -> dict:
     """The Monday job: a draft for every brand with approved recaps that
     week and no draft yet. An existing draft is never overwritten here, so
@@ -306,7 +413,7 @@ def generate_week_drafts(
     window = _inclusive_dates_to_window(start, end)
     approved = _recap_counts(window, approved=True)
     existing = set(
-        TenantWeeklySummary.objects.filter(week_start=start).values_list(
+        TenantWeeklySummary.objects.filter(period=period, week_start=start).values_list(
             "tenant_id", flat=True
         )
     )
@@ -322,7 +429,7 @@ def generate_week_drafts(
             entry["result"] = "would_write"
         else:
             try:
-                row, reason = generate_summary_draft(tenant.id, start, end)
+                row, reason = generate_summary_draft(tenant.id, start, end, period)
             except Exception:  # noqa: BLE001
                 logger.exception("weekly summary failed tenant=%s", tenant.id)
                 row, reason = None, REASON_UNAVAILABLE
@@ -331,6 +438,7 @@ def generate_week_drafts(
                 entry["reason"] = reason
         results.append(entry)
     return {
+        "period": period,
         "week_start": start.isoformat(),
         "week_end": end.isoformat(),
         "mode": "apply" if apply else "dry_run",
@@ -349,6 +457,7 @@ class WeeklyClientSummary:
     otherwise the draft as written."""
 
     id: strawberry.ID
+    period: str
     week_start: str
     week_end: str
     body: str
@@ -372,6 +481,9 @@ class WeeklyClientSummaryRow:
 
 @strawberry.type
 class WeeklyClientSummaryWeek:
+    # "week" or "month". For a month, week_start / week_end are its first
+    # and last day.
+    period: str
     week_start: str
     week_end: str
     rows: list[WeeklyClientSummaryRow]
@@ -396,6 +508,7 @@ def _person(user) -> str | None:
 def _summary_type(row) -> WeeklyClientSummary:
     return WeeklyClientSummary(
         id=strawberry.ID(f"{_ID_PREFIX}{row.id}"),
+        period=row.period,
         week_start=row.week_start.isoformat(),
         week_end=row.week_end.isoformat(),
         body=row.body,
@@ -425,7 +538,7 @@ def latest_summary(tenant_id: int, *, include_drafts: bool):
     ``include_drafts`` (Ignite staff)."""
     from tenants.models import TenantWeeklySummary as Row
 
-    rows = Row.objects.filter(tenant_id=tenant_id)
+    rows = Row.objects.filter(tenant_id=tenant_id, period=PERIOD_WEEK)
     if not include_drafts:
         rows = rows.filter(status=Row.STATUS_REVIEWED)
     return rows.order_by("-week_start").first()
@@ -499,13 +612,17 @@ class WeeklySummaryQueries:
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def weekly_client_summaries(
-        self, info: strawberry.Info, week_start: str | None = None
+        self,
+        info: strawberry.Info,
+        week_start: str | None = None,
+        period: str = PERIOD_WEEK,
     ) -> WeeklyClientSummaryWeek | None:
-        """Every brand's draft for one week. Ignite staff only: anyone else
-        gets null. Reads stored rows; never calls the model."""
+        """Every brand's draft for one week, or with ``period: "month"`` one
+        month (``weekStart`` is then any day in it). Ignite staff only:
+        anyone else gets null. Reads stored rows; never calls the model."""
         if await _staff_user(info) is None:
             return None
-        bounds = week_bounds(week_start) if week_start else _ops_week()
+        bounds = period_bounds(period, week_start)
         if bounds is None:
             return None
         start, end = bounds
@@ -519,7 +636,7 @@ class WeeklySummaryQueries:
                     pending_recaps=r["pending_recaps"],
                     summary=_summary_type(r["summary"]) if r["summary"] else None,
                 )
-                for r in week_rows(start, end)
+                for r in week_rows(start, end, period)
             ]
 
         try:
@@ -528,6 +645,7 @@ class WeeklySummaryQueries:
             logger.exception("weeklyClientSummaries failed")
             return None
         return WeeklyClientSummaryWeek(
+            period=period,
             week_start=start.isoformat(), week_end=end.isoformat(), rows=rows
         )
 
@@ -536,15 +654,19 @@ class WeeklySummaryQueries:
 class WeeklySummaryMutations:
     @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
     async def generate_weekly_client_summary(
-        self, info: strawberry.Info, tenant_id: strawberry.ID, week_start: str
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID,
+        week_start: str,
+        period: str = PERIOD_WEEK,
     ) -> WeeklyClientSummaryResult:
         """Write the draft for one brand and week, replacing any stored one
         (and its edit). Staff only. Sends nothing."""
         if await _staff_user(info) is None:
             return _fail("Not available.")
-        bounds = week_bounds(week_start)
+        bounds = period_bounds(period, week_start) if week_start else None
         if bounds is None:
-            return _fail("Pick a week.")
+            return _fail("Pick a week or a month.")
         try:
             tid = resolve_id_to_int(str(tenant_id).strip())
         except Exception:  # noqa: BLE001
@@ -556,7 +678,7 @@ class WeeklySummaryMutations:
 
             if not Tenant.objects.filter(id=tid).exists():
                 return None, "Pick a brand."
-            row, reason = generate_summary_draft(tid, start, end)
+            row, reason = generate_summary_draft(tid, start, end, period)
             return (_summary_type(row) if row is not None else None), reason
 
         try:

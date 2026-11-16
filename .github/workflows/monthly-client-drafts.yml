@@ -1,0 +1,75 @@
+name: Monthly client email drafts
+
+# Fires `/internal/cron/generate-weekly-client-summaries?period=month` on
+# Cloud Run on the 1st of each month. For each brand with approved recaps
+# last month (by event date) it drafts a short client email and stores it
+# for Ignite staff to review in Spark (Client summaries, Monthly). A brand
+# that already has a draft for the month is left alone.
+#
+# This job sends NOTHING: no email, no Slack, no texts. It writes drafts.
+# Staff read, edit and copy the text themselves.
+#
+# NOTE: GitHub only fires `schedule:` from the DEFAULT branch (main), but the
+# cron ENDPOINT deploys from develop. So this workflow must live on BOTH
+# branches, same as weekly-client-summaries.yml.
+#
+# Schedule: 15:10 UTC on the 1st = 08:10 PT (DST) / 07:10 PST.
+
+on:
+  schedule:
+    - cron: "10 15 1 * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry-run lists the brands and writes nothing (manual runs default to dry run)"
+        required: true
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+      tenant_id:
+        description: "Optional single tenant id"
+        required: false
+        default: ""
+        type: string
+      month:
+        description: "Optional date in the month to draft, YYYY-MM-DD (default: last finished month)"
+        required: false
+        default: ""
+        type: string
+
+jobs:
+  draft:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Draft monthly client emails
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/generate-weekly-client-summaries
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          # The scheduled run has no inputs and writes drafts.
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+          TENANT_ID: ${{ github.event.inputs.tenant_id || '' }}
+          MONTH: ${{ github.event.inputs.month || '' }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set."
+            exit 1
+          fi
+          QUERY="period=month&dry_run=${DRY_RUN}"
+          if [ -n "$TENANT_ID" ]; then
+            QUERY="${QUERY}&tenant_id=${TENANT_ID}"
+          fi
+          if [ -n "$MONTH" ]; then
+            QUERY="${QUERY}&week_start=${MONTH}"
+          fi
+          STATUS=$(curl -sS --max-time 900 -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "${CRON_URL}?${QUERY}" \
+            -H "X-Cron-Secret: $CRON_SECRET")
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS"
+            exit 1
+          fi

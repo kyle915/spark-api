@@ -1269,7 +1269,8 @@ class TenantWeeklyNarration(models.Model):
 class TenantWeeklySummary(models.Model):
     """A written summary of one brand's week, drafted for Ignite staff.
 
-    One row per (tenant, Monday). ``body`` is the generated draft and is
+    One row per (tenant, period, first day): a week starting on a Monday,
+    or a calendar month, which is drafted as a short email. ``body`` is the generated draft and is
     never changed by an edit; ``edited_body`` holds what staff changed it
     to (blank when untouched). ``facts`` is the packet of numbers and
     comments the draft was written from, all of it from approved recaps.
@@ -1278,11 +1279,16 @@ class TenantWeeklySummary(models.Model):
 
     STATUS_DRAFT = "draft"
     STATUS_REVIEWED = "reviewed"
+    PERIOD_WEEK = "week"
+    PERIOD_MONTH = "month"
 
     id = models.BigAutoField(primary_key=True)
     tenant = models.ForeignKey(
         Tenant, on_delete=models.CASCADE, related_name="weekly_summaries"
     )
+    # "week" (Monday to Sunday) or "month" (a calendar month). For a month,
+    # week_start / week_end hold its first and last day.
+    period = models.CharField(max_length=8, default=PERIOD_WEEK)
     week_start = models.DateField()
     week_end = models.DateField()
     body = models.TextField()
@@ -1303,8 +1309,8 @@ class TenantWeeklySummary(models.Model):
     class Meta:
         constraints = [
             models.UniqueConstraint(
-                fields=["tenant", "week_start"],
-                name="tenants_weekly_summary_tenant_week_uniq",
+                fields=["tenant", "period", "week_start"],
+                name="tenants_summary_tenant_period_start_uniq",
             )
         ]
 
