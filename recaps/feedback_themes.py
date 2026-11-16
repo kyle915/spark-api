@@ -279,7 +279,12 @@ def _custom_rows(tenant_id: int, window):
 
 
 def gather_comments(
-    tenant_id: int, start: date | None, end: date | None
+    tenant_id: int,
+    start: date | None,
+    end: date | None,
+    *,
+    legacy_ids=None,
+    custom_ids=None,
 ) -> tuple[list[Comment], bool]:
     """Consumer comments on approved recaps in the window, newest event first.
 
@@ -287,8 +292,16 @@ def gather_comments(
     recap shapes are read: the legacy feedback columns, and custom-recap
     fields whose name reads like feedback, a reason to decline or a question.
     Plain notes fields are not read.
+
+    ``legacy_ids`` / ``custom_ids`` narrow the read to those recaps (one
+    store's, for the store profile). Give both or neither.
     """
     window = _inclusive_dates_to_window(start, end)
+    legacy_rows = _legacy_rows(tenant_id, window)
+    custom_rows = _custom_rows(tenant_id, window)
+    if legacy_ids is not None or custom_ids is not None:
+        legacy_rows = legacy_rows.filter(recap_id__in=list(legacy_ids or ()))
+        custom_rows = custom_rows.filter(custom_recap_id__in=list(custom_ids or ()))
     raw: list[tuple[str, str, object]] = []
     names: set[str] = set()
 
@@ -297,18 +310,23 @@ def gather_comments(
             if name:
                 names.add(name)
 
-    for recap_id, quotes, stories, feedback, decline, first, last, external in _legacy_rows(
-        tenant_id, window
-    ).iterator():
+    for (
+        recap_id,
+        quotes,
+        stories,
+        feedback,
+        decline,
+        first,
+        last,
+        external,
+    ) in legacy_rows.iterator():
         _note_names(first, last, external)
         key = f"L{recap_id}"
         for value in (quotes, stories, feedback):
             raw.append((key, KIND_GENERAL, value))
         raw.append((key, KIND_DECLINE, decline))
 
-    for recap_id, field_name, value, first, last, external in _custom_rows(
-        tenant_id, window
-    ).iterator():
+    for recap_id, field_name, value, first, last, external in custom_rows.iterator():
         _note_names(first, last, external)
         if _BA_NAME_FIELD_RE.search(field_name or ""):
             continue

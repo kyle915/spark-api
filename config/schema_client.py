@@ -23,6 +23,9 @@ from recaps.report_types import (
     TenantGoalsMutations,
 )
 from recaps.explain_schema import DashboardExplainQueries
+from recaps.list_search import ListSearchQueries
+from recaps.month_highlight import MonthHighlightQueries
+from recaps.store_profile import StoreProfileQueries
 from receipts.schema import ReceiptQueryClient, ReceiptMutationsClient
 from billing.schema import BillingQueryClient, BillingMutationsClient
 from ambassadors.schema import AmbassadorQueryClient, AmbassadorMutationsClient
@@ -65,6 +68,9 @@ QueryClients = merge_types(
         DashboardExplainQueries,
         BestPhotoQueries,
         ClientRecapDraftQueries,
+        ListSearchQueries,
+        StoreProfileQueries,
+        MonthHighlightQueries,
         NotificationPreferenceQueries,
         RecapAiQueries,
         FeedbackThemeQueries,
