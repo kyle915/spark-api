@@ -890,6 +890,28 @@ class TestSearchStoreHighlight(AmbassadorsGraphQLTestCase):
         # Kroger is two stores, so its chart row links nowhere; Costco is one.
         assert links["tenantStoreLinks"] == [{"name": "Costco", "storeKey": key}]
 
+    @pytest.mark.asyncio
+    async def test_the_store_heading_uses_the_accepted_store_name(self):
+        await sync_to_async(self._seed)()
+        key = await sync_to_async(self._key)(self.la)
+
+        def _accept():
+            from events.retailer_aliases import alias_key
+
+            event_models.RetailerAlias.objects.create(
+                tenant=self.tenant, alias_key=alias_key("Costco"), alias_name="Costco",
+                canonical_name="Costco Wholesale", group_key="g1", status="accepted",
+            )
+
+        await sync_to_async(_accept)()
+        with patch(GENERATE, side_effect=AiUnavailable("off")):
+            page = await self._profile(self.client_user, key)
+        links = await self._run(STORE_LINKS_Q, self._vars(), self.client_user)
+        assert page["name"] == "Costco Wholesale"
+        assert page["summary"].startswith("Costco Wholesale has 2 approved recaps")
+        # The chart row carries the accepted name, so the link matches it.
+        assert links["tenantStoreLinks"] == [{"name": "Costco Wholesale", "storeKey": key}]
+
     # ── highlight of the month ────────────────────────────────────────
 
     async def _highlight(self, user, month="2026-10", tenant=None):

@@ -114,7 +114,11 @@ def store_header(tenant_id: int, places: Places, key: str) -> dict:
 
     from events.market import parse_address_geo
     from events.models import Request
+    from events.retailer_aliases import accepted_alias_map, resolve_store_name
 
+    # The name staff accepted for a store written several ways, the same
+    # one the store chart shows.
+    aliases = accepted_alias_map(tenant_id)
     names: Counter[str] = Counter()
     address = ""
     city = ""
@@ -127,7 +131,7 @@ def store_header(tenant_id: int, places: Places, key: str) -> dict:
             (s.strip() for s in (retailer, typed, name) if s and s.strip()), ""
         )
         if label:
-            names[label] += 1
+            names[resolve_store_name(label, aliases)] += 1
         if not address and (addr or "").strip():
             address = addr.strip()
             geo = parse_address_geo(address)
@@ -146,8 +150,11 @@ def named_store_links(tenant_id: int) -> list[dict]:
     out: a chart row for the name is all of them, not one store.
     """
     from events.models import Request
+    from events.retailer_aliases import accepted_alias_map, resolve_store_name
 
     places = tenant_places(tenant_id)
+    # The chart rows are named after accepted aliases, so match on those.
+    aliases = accepted_alias_map(tenant_id)
     by_name: dict[str, dict] = {}
     rows = Request.objects.filter(
         tenant_id=tenant_id, deleted_at__isnull=True
@@ -156,6 +163,7 @@ def named_store_links(tenant_id: int) -> list[dict]:
         label = next((s.strip() for s in (retailer, typed) if s and s.strip()), "")
         if not label:
             continue
+        label = resolve_store_name(label, aliases)
         held = by_name.setdefault(label.casefold(), {"name": label, "keys": set()})
         held["keys"].add(places.index.store_for_request(int(pk)))
     return sorted(
