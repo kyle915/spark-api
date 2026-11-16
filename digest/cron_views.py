@@ -3438,6 +3438,68 @@ class ReadShelfPhotosView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class ScoreRecapPhotosView(View):
+    """POST `/internal/cron/score-recap-photos`.
+
+    Scores the photos on approved recaps that have not been looked at yet
+    (see `recaps/photo_picks.py`) and marks each recap's best three or four
+    for client reports. Idempotent: a photo is scored once. Sends nothing
+    and changes no recap.
+
+    Bounded per run by `max_photos` vision calls and `max_seconds`; what is
+    left waits for the next run.
+
+    Params: tenant_id (optional), since_days (default 45), limit (recaps,
+    default 40), max_photos (default 60, cap 200), max_seconds (default 200).
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _int(name: str, default: int | None) -> int | None:
+            raw = (request.POST.get(name) or request.GET.get(name) or "").strip()
+            if not raw:
+                return default
+            try:
+                return int(raw)
+            except ValueError:
+                return default
+
+        from recaps.photo_picks import (
+            DEFAULT_RUN_PHOTOS,
+            DEFAULT_RUN_RECAPS,
+            DEFAULT_RUN_SECONDS,
+            DEFAULT_SINCE_DAYS,
+            MAX_RUN_PHOTOS,
+            score_pending_photos,
+        )
+
+        try:
+            report = score_pending_photos(
+                tenant_id=_int("tenant_id", None),
+                since_days=max(1, min(_int("since_days", DEFAULT_SINCE_DAYS) or DEFAULT_SINCE_DAYS, 730)),
+                limit=max(1, min(_int("limit", DEFAULT_RUN_RECAPS) or DEFAULT_RUN_RECAPS, 200)),
+                max_photos=max(
+                    1, min(_int("max_photos", DEFAULT_RUN_PHOTOS) or DEFAULT_RUN_PHOTOS, MAX_RUN_PHOTOS)
+                ),
+                max_seconds=max(
+                    10, min(_int("max_seconds", DEFAULT_RUN_SECONDS) or DEFAULT_RUN_SECONDS, 800)
+                ),
+            )
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("Score recap photos cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "score-failed", "detail": str(exc)}, status=500
+            )
+        return JsonResponse({"ok": True, "report": report})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class RegenerateRecapPdfsView(View):
     """POST `/internal/cron/regenerate-recap-pdfs`.
 
@@ -11718,6 +11780,56 @@ class ProposeRecapRetailersView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class ProposeRetailerAliasesView(View):
+    """POST `/internal/cron/propose-retailer-aliases`.
+
+    Fires `propose_retailer_aliases` — stores, as suggestions for staff, the
+    store names that look like the same store written differently. Changes
+    no chart, retailer, request or event; only accepted aliases are read.
+
+    Params: dry_run ("1"/"true"/"yes"), tenant (int), limit (int, tenants),
+    no_ai ("1"/"true"/"yes").
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _param(name: str) -> str:
+            return (request.GET.get(name) or request.POST.get(name) or "").strip()
+
+        def _flag(name: str) -> bool:
+            return _param(name).lower() in ("1", "true", "yes", "on")
+
+        dry_run = _flag("dry_run")
+        args: list[str] = ["--dry-run"] if dry_run else []
+        if _flag("no_ai"):
+            args.append("--no-ai")
+        for name in ("tenant", "limit"):
+            value = _param(name)
+            if value.isdigit():
+                args += [f"--{name}", value]
+        out = io.StringIO()
+        try:
+            call_command("propose_retailer_aliases", *args, stdout=out, stderr=out)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Retailer alias cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc),
+                 "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse({"ok": True, "dry_run": dry_run, "log": out.getvalue()})
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        return JsonResponse({"ok": True, "endpoint": "propose-retailer-aliases"})
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class GeocodeEventsView(View):
     """POST `/internal/cron/geocode-events`.
 
@@ -11792,6 +11904,7 @@ def _registered_views() -> dict[str, Any]:
         "shift-sms": SendShiftSmsView,
         "sync-sheet-staffing": SyncSheetStaffingView,
         "propose-recap-retailers": ProposeRecapRetailersView,
+        "propose-retailer-aliases": ProposeRetailerAliasesView,
         "geocode-events": GeocodeEventsView,
         "send-payment-notifications": SendPaymentNotificationsView,
         "send-document-expiry-reminders": SendDocumentExpiryRemindersView,
@@ -11825,6 +11938,7 @@ def _registered_views() -> dict[str, Any]:
         "dump-tenant-receipts": DumpTenantReceiptsView,
         "regenerate-recap-pdfs": RegenerateRecapPdfsView,
         "read-recap-receipts": ReadRecapReceiptsView,
+        "score-recap-photos": ScoreRecapPhotosView,
         "read-shelf-photos": ReadShelfPhotosView,
         "campaign-to-date": CampaignToDateView,
         "dedupe-skills": DedupeSkillsView,

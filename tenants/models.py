@@ -1352,6 +1352,39 @@ class TenantFeedbackThemes(models.Model):
         return f"Feedback themes for tenant {self.tenant_id} @ {self.generated_at}"
 
 
+class TenantCommentInsight(models.Model):
+    """What the model tagged in a tenant's approved consumer comments, kept
+    so a page load is a read (see :mod:`recaps.comment_insights`).
+
+    ``kind`` is the reading ("competitors", "product_feeling").
+    ``source_hash`` is a digest of the exact comments, and of the brand and
+    product names they were read against, so the same comments read the
+    same row and a newly approved comment builds once more.
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    tenant = models.ForeignKey(
+        Tenant, on_delete=models.CASCADE, related_name="comment_insights"
+    )
+    kind = models.CharField(max_length=24)
+    source_hash = models.CharField(max_length=64)
+    start_date = models.DateField(null=True, blank=True)
+    end_date = models.DateField(null=True, blank=True)
+    payload = models.JSONField(default=dict)
+    generated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["tenant", "kind", "source_hash"],
+                name="tenants_comment_insight_tenant_kind_hash_uniq",
+            )
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.kind} for tenant {self.tenant_id} @ {self.generated_at}"
+
+
 class Goal(models.Model):
     """
     Per-user, per-tenant, per-year goals (target values only).

@@ -8,7 +8,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('recaps', '0050_recap_field_metric_mapping'),
+        ('recaps', '0051_photo_picks_and_client_recap_draft'),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 

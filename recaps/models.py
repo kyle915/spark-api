@@ -1462,6 +1462,131 @@ class RecapFieldMetricMapping(models.Model):
         return f"Field {self.custom_field_id} -> {self.metric or 'undecided'}"
 
 
+class RecapPhotoScore(models.Model):
+    """How useful one recap photo is in a client report (see
+    ``recaps/photo_picks.py``).
+
+    One row per photo, written once by the background scorer, so a photo is
+    never sent to the model twice. Holds a score, a short caption of the
+    setup, product and setting, and whether the scorer put it in the recap's
+    top few. Nothing about a person is asked for or stored. A photo that was
+    set aside without a model call (a receipt, a duplicate, too small) is
+    kept as ``skipped`` with the reason.
+
+    ``model_pick`` is the scorer's choice only. What staff decide lives in
+    :class:`RecapPhotoStaffPick` and always wins.
+    """
+
+    STATUS_SCORED = "scored"
+    STATUS_SKIPPED = "skipped"
+    STATUS_UNREADABLE = "unreadable"
+
+    id = models.BigAutoField(primary_key=True)
+    custom_recap_file = models.OneToOneField(
+        "CustomRecapFile",
+        on_delete=models.CASCADE,
+        related_name="photo_score",
+    )
+    status = models.CharField(max_length=12, default=STATUS_SKIPPED, db_index=True)
+    # Why a photo was set aside without a score ("receipt", "duplicate", …).
+    skip_reason = models.CharField(max_length=24, blank=True, default="")
+    score = models.PositiveSmallIntegerField(null=True, blank=True)
+    kind = models.CharField(max_length=24, blank=True, default="")
+    caption = models.CharField(max_length=140, blank=True, default="")
+    width = models.PositiveIntegerField(null=True, blank=True)
+    height = models.PositiveIntegerField(null=True, blank=True)
+    # 64-bit difference hash as 16 hex chars, to spot near-identical shots.
+    dhash = models.CharField(max_length=16, blank=True, default="")
+    model_pick = models.BooleanField(default=False, db_index=True)
+    scored_at = models.DateTimeField(auto_now_add=True, editable=False)
+
+    def __str__(self) -> str:  # pragma: no cover - admin/debug only
+        return f"file {self.custom_recap_file_id}: {self.status} {self.score}"
+
+
+class RecapPhotoStaffPick(models.Model):
+    """A staff decision about one recap photo: pinned as a best photo, or
+    taken off the list. Kept apart from the scorer's own choice
+    (:class:`RecapPhotoScore`) and never overwritten by it. ``choice`` is
+    blank when staff handed the decision back to the scorer."""
+
+    CHOICE_PINNED = "pinned"
+    CHOICE_UNPINNED = "unpinned"
+    CHOICE_NONE = ""
+
+    id = models.BigAutoField(primary_key=True)
+    custom_recap_file = models.OneToOneField(
+        "CustomRecapFile",
+        on_delete=models.CASCADE,
+        related_name="staff_pick",
+    )
+    choice = models.CharField(max_length=10, blank=True, default="", db_index=True)
+    decided_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="recap_photo_staff_picks",
+    )
+    decided_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self) -> str:  # pragma: no cover - admin/debug only
+        return f"file {self.custom_recap_file_id}: {self.choice or 'no decision'}"
+
+
+class ClientRecapDraft(models.Model):
+    """A first draft of a client recap deck for one brand and date range (see
+    ``recaps/client_recap_draft.py``).
+
+    Staff only. The numbers are a snapshot of the dashboard roll-ups taken
+    when the draft was made; the summary and takeaways are text staff can
+    edit; ``photo_ids`` are the ``CustomRecapFile`` ids staff kept, in order.
+    A draft is never sent or shared by Spark: staff download the PDF.
+    """
+
+    SOURCE_MODEL = "model"
+    SOURCE_FALLBACK = "fallback"
+    SOURCE_EDITED = "edited"
+    # The text is the weekly / monthly client summary for the same dates.
+    SOURCE_SUMMARY = "summary"
+
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    tenant = models.ForeignKey(
+        Tenant, on_delete=models.CASCADE, related_name="client_recap_drafts"
+    )
+    start_date = models.DateField()
+    end_date = models.DateField()
+    title = models.CharField(max_length=160, blank=True, default="")
+    summary = models.TextField(blank=True, default="")
+    takeaways = models.JSONField(blank=True, default=list)
+    text_source = models.CharField(max_length=10, default=SOURCE_FALLBACK)
+    facts = models.JSONField(blank=True, default=dict)
+    photo_ids = models.JSONField(blank=True, default=list)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="client_recap_drafts_created",
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="client_recap_drafts_updated",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-id"]
+
+    def __str__(self) -> str:  # pragma: no cover - admin/debug only
+        return f"Client recap draft {self.uuid} ({self.tenant_id})"
+
+
 class ShelfReading(models.Model):
     """What Spark read off one on-shelf photo (see ``recaps.shelf_check``).
 

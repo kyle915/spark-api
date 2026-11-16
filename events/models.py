@@ -1937,3 +1937,78 @@ class AccountListEntry(models.Model):
 
     def __str__(self) -> str:
         return f"AccountListEntry(tenant={self.tenant_id}, {self.name})"
+
+
+class RetailerAlias(models.Model):
+    """One written store name and the name reports should show for it.
+
+    "HEB", "H-E-B" and "Heb" are one chain typed three ways; charts that
+    group by store name counted them as three stores. An ACCEPTED row says
+    "when a record's store reads ``alias_name``, show ``canonical_name``".
+    See ``events/retailer_aliases.py``.
+
+    Nothing else is changed: no Retailer row is merged or renamed and no
+    request or event has its stored name rewritten, so dismissing an alias
+    puts every chart back exactly as it was. Only accepted rows are read by
+    reports; ``proposed`` rows wait for staff, ``dismissed`` rows are never
+    proposed again, and ``none`` records that the name was looked at and
+    nothing was found (so the model is not asked about it twice).
+
+    ``kind`` keeps two different things apart: ``chain`` is a banner spelled
+    two ways ("HEB" / "H-E-B"); ``store`` is one numbered store written two
+    ways ("Heb 725" / "HEB #725"). A numbered store is never folded into its
+    banner.
+    """
+
+    STATUS_PROPOSED = "proposed"
+    STATUS_ACCEPTED = "accepted"
+    STATUS_DISMISSED = "dismissed"
+    STATUS_NONE = "none"
+
+    KIND_CHAIN = "chain"
+    KIND_STORE = "store"
+
+    SOURCE_RULE = "rule"
+    SOURCE_AI = "ai"
+
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    tenant = models.ForeignKey(
+        Tenant, on_delete=models.RESTRICT, related_name="retailer_aliases"
+    )
+    # The written name, lower-cased and single-spaced: the key the charts
+    # already group by. One row per written name per tenant.
+    alias_key = models.CharField(max_length=255)
+    # The written name as it is most often typed.
+    alias_name = models.CharField(max_length=255)
+    canonical_name = models.CharField(max_length=255, blank=True, default="")
+    kind = models.CharField(max_length=8, default=KIND_CHAIN)
+    store_number = models.CharField(max_length=16, blank=True, default="")
+    # Rows proposed together ("these look like the same store").
+    group_key = models.CharField(max_length=40, blank=True, default="", db_index=True)
+    source = models.CharField(max_length=8, default=SOURCE_RULE)
+    reason = models.CharField(max_length=300, blank=True, default="")
+    status = models.CharField(max_length=12, default=STATUS_PROPOSED)
+    decided_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="retailer_aliases_decided",
+    )
+    decided_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["tenant", "alias_key"], name="uq_retailer_alias_tenant_name"
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["tenant", "status"], name="ev_retalias_tenant_status_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"RetailerAlias(tenant={self.tenant_id}, {self.alias_name} -> {self.canonical_name})"
