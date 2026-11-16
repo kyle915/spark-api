@@ -38,6 +38,7 @@ from announcements.schema import AnnouncementQueryClient, AnnouncementMutationsC
 from jobboard.schema import JobBoardMutations, JobBoardQueries
 from timeclock.schema import ClockLinkMutations, ClockLinkQueries
 from recaps.checkin_issue_schema import CheckinIssueQueries
+from recaps.shelf_schema import ShelfCheckMutations, ShelfCheckQueries
 from recaps.client_deck_schema import (
     BestPhotoMutations,
     BestPhotoQueries,
@@ -60,6 +61,7 @@ QueryClients = merge_types(
         CampaignReportQueries,
         ReportSubscriptionQueries,
         CheckinIssueQueries,
+        ShelfCheckQueries,
         DashboardExplainQueries,
         BestPhotoQueries,
         ClientRecapDraftQueries,
@@ -93,6 +95,7 @@ MutationClients = merge_types(
         RecapMutationsClient,
         RecapAiMutations,
         FeedbackThemeMutations,
+        ShelfCheckMutations,
         WeeklySummaryMutations,
         RecapMetricMappingMutations,
         TenantGoalsMutations,

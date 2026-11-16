@@ -3386,6 +3386,58 @@ class ReadRecapReceiptsView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class ReadShelfPhotosView(View):
+    """POST `/internal/cron/read-shelf-photos`.
+
+    Reads on-shelf photos from retail recaps that have no answer yet (see
+    `recaps/shelf_check.py`): product on shelf, facings, price tag, gap.
+    Idempotent: a photo with an answer is never read again. Each run stops
+    at `limit` photos or `max_seconds`, whichever comes first, and early
+    when the model is failing.
+
+    Params: tenant_id (optional), since_days (default 45), limit (default
+    40, max 200), max_seconds (default 240, max 480).
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _int(name: str, default: int | None) -> int | None:
+            raw = (request.POST.get(name) or request.GET.get(name) or "").strip()
+            if not raw:
+                return default
+            try:
+                return int(raw)
+            except ValueError:
+                return default
+
+        from recaps.shelf_check import (
+            DEFAULT_RUN_LIMIT,
+            DEFAULT_RUN_SECONDS,
+            read_pending_shelf_photos,
+        )
+
+        try:
+            report = read_pending_shelf_photos(
+                tenant_id=_int("tenant_id", None),
+                since_days=max(1, min(_int("since_days", 45) or 45, 365)),
+                limit=_int("limit", DEFAULT_RUN_LIMIT) or DEFAULT_RUN_LIMIT,
+                max_seconds=_int("max_seconds", DEFAULT_RUN_SECONDS) or DEFAULT_RUN_SECONDS,
+            )
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("Read shelf photos cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "read-failed", "detail": str(exc)}, status=500
+            )
+        return JsonResponse({"ok": True, "report": report})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class ScoreRecapPhotosView(View):
     """POST `/internal/cron/score-recap-photos`.
 
@@ -11887,6 +11939,7 @@ def _registered_views() -> dict[str, Any]:
         "regenerate-recap-pdfs": RegenerateRecapPdfsView,
         "read-recap-receipts": ReadRecapReceiptsView,
         "score-recap-photos": ScoreRecapPhotosView,
+        "read-shelf-photos": ReadShelfPhotosView,
         "campaign-to-date": CampaignToDateView,
         "dedupe-skills": DedupeSkillsView,
         "purge-walkin-event": PurgeWalkinEventView,

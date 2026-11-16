@@ -17,6 +17,7 @@ Routes (mounted under ``/api/public/`` in ``events/urls.py``):
     POST checkin/<code>/upload-url     → {uploadUrl, blobName}
     POST checkin/<code>/photo-check    → advisory bucket classification
     POST checkin/<code>/voice-draft    → notes/feedback/competitor draft
+    POST checkin/<code>/tally-read     → numbers proposed from a tally photo
     POST checkin/<code>/recap          → {success}
     POST checkin/<code>/recap-draft    → {saved, filed: false}  (not a submit)
 """
@@ -95,6 +96,11 @@ _ALLOWED_UPLOAD_TYPES = {
     "video/3gpp",
     "video/3gpp2",
 }
+
+# "Fill from photo" reads a tally sheet with the vision model. Each read is a
+# paid call, so it is held to a few per network and per ambassador shift.
+TALLY_READ_IP_LIMIT = 20
+TALLY_READ_SESSION_LIMIT = 6
 
 # Signed-URL mints per IP. Feel Free-style batches can be ~100 shots; each may
 # retry 2–3 times on LTE. Keep headroom above PHOTO_CAP × PHOTO_PUT_ATTEMPTS.
@@ -1115,6 +1121,54 @@ def public_checkin_voice_draft(request: HttpRequest, code: str) -> HttpResponse:
     if not isinstance(transcript, str):
         transcript = ""
     return JsonResponse(structure_transcript(transcript, fields))
+
+
+# --------------------------------------------------------------------------
+# POST tally-read  (proposes numbers from a tally photo; saves nothing)
+# --------------------------------------------------------------------------
+@csrf_exempt
+@require_http_methods(["POST"])
+def public_checkin_tally_read(request: HttpRequest, code: str) -> HttpResponse:
+    """Numbers read off a photo of a tally sheet, for the form's number
+    fields. The ambassador accepts each one on the page; nothing is saved
+    here and the photo is not kept. Any failure is the same plain "could not
+    read" answer, and the form carries on without it.
+    """
+    from recaps.tally_reader import TALLY_UNREADABLE, read_tally_photo
+
+    unreadable = {
+        "available": False,
+        "values": [],
+        "productSamples": [],
+        "message": TALLY_UNREADABLE,
+    }
+    ip = _client_ip(request)
+    if _over_limit("tally-read-ip", ip, limit=TALLY_READ_IP_LIMIT, window=300):
+        return _rate_limited()
+    data = _body(request)
+    token = data.get("session") or ""
+    loaded, err = _load_session(code, token)
+    if err is not None:
+        return err
+    event, ambassador = loaded
+    # One ambassador on one shift: a tally sheet is read once or twice.
+    who = f"{event.id}:{getattr(ambassador, 'id', '')}"
+    if _over_limit("tally-read-session", who, limit=TALLY_READ_SESSION_LIMIT, window=600):
+        return _rate_limited()
+    try:
+        image = _image_bytes(data.get("imageBase64") or data.get("image") or "")
+        content_type = str(data.get("contentType") or data.get("content_type") or "image/jpeg")
+        template = checkin_web.serialize_template(event) or {}
+        result = read_tally_photo(
+            image,
+            content_type=content_type,
+            template=template,
+            include_products=bool(data.get("includeProducts")),
+        )
+    except Exception:  # noqa: BLE001 — advisory: the form works without it
+        logger.exception("checkin tally read failed code=%s", code)
+        result = unreadable
+    return JsonResponse(result)
 
 
 # --------------------------------------------------------------------------
