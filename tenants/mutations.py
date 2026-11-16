@@ -46,6 +46,28 @@ from jobs.models import Status as JobStatus, RateType
 from recaps.models import FileRecapCategory, TypeOfGood
 from ambassadors.models import AttendanceStatus, Skill
 
+
+async def _spark_admin_refusal(info) -> str | None:
+    """Return an error message unless the caller is a signed-in Spark admin.
+
+    Same gate as ``invite_client_users``: the request user is re-read from
+    the DB via ``resolve_request_user_access`` (the JWT user's role does not
+    hydrate inside async resolvers), then checked with ``_is_admin_access``.
+    Returns None when the caller is allowed.
+    """
+    request = getattr(info.context, "request", None)
+    requester = getattr(request, "user", None) or getattr(
+        info.context, "user", None
+    )
+    if not requester or not getattr(requester, "is_authenticated", False):
+        return "Authentication required."
+    role_slug, is_staff, is_super, req_email = await resolve_request_user_access(
+        requester
+    )
+    if not _is_admin_access(role_slug, is_staff, is_super, req_email):
+        return "Only Spark admins can manage users."
+    return None
+
 User = get_user_model()
 ensure_relay_mutation()
 
@@ -919,7 +941,16 @@ class SparkUserMutations:
 
         Idempotent: if a user with this email already exists, we
         re-send the magic link without altering their role or tenants.
+
+        Spark-admin only (same gate as invite_client_users).
         """
+        refusal = await _spark_admin_refusal(info)
+        if refusal:
+            return UpdateUserResponse(
+                success=False,
+                message=refusal,
+                client_mutation_id=input.client_mutation_id,
+            )
         role_slug = (input.role or "").strip().lower()
         role_map = {"admin": 2, "spark-admin": 2, "client": 3, "ambassador": 1}
         if role_slug not in role_map:
@@ -1313,12 +1344,22 @@ class SparkUserMutations:
         """Soft-delete by deactivating the user + clearing their tenant
         links. We never hard-delete because foreign keys (requests,
         events, recaps) reference the user; flipping is_active=false is
-        enough to revoke access immediately."""
+        enough to revoke access immediately.
+
+        Spark-admin only (same gate as invite_client_users)."""
+        refusal = await _spark_admin_refusal(info)
+        if refusal:
+            return UpdateUserResponse(
+                success=False,
+                message=refusal,
+                client_mutation_id=input.client_mutation_id,
+            )
         uid = resolve_id_to_int(input.user_id)
-        actor = await sync_to_async(
-            lambda: getattr(info.context, "user", None)
-        )()
-        if actor and getattr(actor, "id", None) == uid:
+        request = getattr(info.context, "request", None)
+        actor = getattr(request, "user", None) or getattr(
+            info.context, "user", None
+        )
+        if actor and getattr(actor, "pk", None) == uid:
             return UpdateUserResponse(
                 success=False,
                 message="You can't deactivate yourself.",

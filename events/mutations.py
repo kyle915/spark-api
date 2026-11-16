@@ -174,8 +174,23 @@ class BaseMutationService(SparkGraphQLMixin):
         if is_update:
             self.input.id = resolve_id_to_int(self.input.id)
 
+        if is_update and not self.is_spark_schema:
+            # Non-admin UPDATE: the row's own tenant decides access, never
+            # the tenant the caller names (or defaults to). Without this a
+            # client/BA could pass another brand's row id, have it loaded by
+            # raw id, edited, and re-homed into their own tenant on save.
+            # The row keeps its tenant; a row outside the caller's tenants
+            # reads as "not found" so a probe can't confirm it exists.
+            # Existing membership check (explicit tenant, else default).
+            tenant = await self.get_tenant(self.user, tenant_id)
+            self.tenant_id = tenant.id
+            self.tenant_id = await self._existing_row_tenant_for_member()
+            return self
+
         if self.is_spark_schema and tenant_id:
-            # Spark user with explicit tenant_id
+            # Spark admin with explicit tenant_id. On update this is the
+            # admin's deliberate, validated move of the row to that tenant
+            # (pre-existing behaviour, admins only).
             self.tenant_id = await self._resolve_tenant_without_membership(tenant_id)
         elif self.is_spark_schema and is_update:
             # Spark user updating without tenant_id - use existing object's tenant
@@ -198,6 +213,49 @@ class BaseMutationService(SparkGraphQLMixin):
             tenant = await self.get_tenant(self.user, tenant_id)
             self.tenant_id = tenant.id
         return self
+
+    async def _existing_row_tenant_for_member(self) -> int | None:
+        """Tenant of the row being updated, if the (non-admin) caller is an
+        active member of it. Raises "<Model> not found." otherwise.
+
+        Models without a tenant column keep the previous behaviour (no
+        tenant to check or reassign)."""
+        model_class = self.get_model()
+        label = getattr(model_class._meta, "verbose_name", None) or model_class.__name__
+        label = str(label)[:1].upper() + str(label)[1:]
+        not_found = GraphQLError(f"{label} not found.")
+        has_tenant = any(
+            f.attname == "tenant_id" for f in model_class._meta.concrete_fields
+        )
+        row_id = self.input.id
+        user = self.user
+
+        @sync_to_async
+        def _load():
+            qs = model_class.objects.filter(id=row_id)
+            if not has_tenant:
+                return qs.exists(), None, False
+            rows = list(qs.values_list("tenant_id", flat=True)[:1])
+            if not rows:
+                return False, None, False
+            row_tenant = rows[0]
+            if row_tenant is None:
+                return True, None, False
+            from tenants.models import TenantedUser
+
+            member = TenantedUser.objects.filter(
+                user=user, tenant_id=row_tenant, is_active=True
+            ).exists()
+            return True, row_tenant, member
+
+        exists, row_tenant, member = await _load()
+        if not exists:
+            raise not_found
+        if not has_tenant:
+            return self.tenant_id
+        if row_tenant is None or not member:
+            raise not_found
+        return row_tenant
 
     def set_is_public(self, is_public: bool) -> "BaseMutationService":
         """Set the is public for the service."""
@@ -318,6 +376,40 @@ class BaseMutationService(SparkGraphQLMixin):
             else:
                 normalized[key] = value
         return normalized
+
+
+async def _bulk_clone_refusal(user, source_pk: int) -> str | None:
+    """Why ``user`` may not clone request ``source_pk``, or None if allowed."""
+    from tenants.models import Role, TenantedUser
+    from utils.graphql.permissions import (
+        _is_admin_access,
+        resolve_request_user_access,
+    )
+
+    if user is None:
+        return "Authentication required."
+    role_slug, is_staff, is_super, email = await resolve_request_user_access(user)
+    if _is_admin_access(role_slug, is_staff, is_super, email):
+        return None
+    if role_slug == Role.AMBASSADOR_SLUG:
+        return "You are not authorized to clone requests."
+
+    @sync_to_async
+    def _member_of_source_tenant() -> bool:
+        source_tenant = (
+            models.Request.objects.filter(pk=source_pk)
+            .values_list("tenant_id", flat=True)
+            .first()
+        )
+        if source_tenant is None:
+            return False
+        return TenantedUser.objects.filter(
+            user=user, tenant_id=source_tenant, is_active=True
+        ).exists()
+
+    if not await _member_of_source_tenant():
+        return "Source request not found."
+    return None
 
 
 class EventMutationService(BaseMutationService):
@@ -4206,13 +4298,24 @@ class RequestMutations:
             )
 
         # Pull the acting user once outside the sync block so we can
-        # attribute each clone's audit-log entry to them. None is fine
-        # for system-initiated paths.
+        # attribute each clone's audit-log entry to them.
         try:
             _service = EventMutationService()
             actor_user = await _service.get_user(info)
         except Exception:
             actor_user = None
+
+        # Cross-tenant guard (DB-backed): admins clone anywhere; ambassadors
+        # never; anyone else only from a tenant they're an active member of.
+        # A source outside the caller's tenants reads as "not found".
+        refusal = await _bulk_clone_refusal(actor_user, source_pk)
+        if refusal:
+            return build_mutation_response(
+                types.BulkCloneRequestResponse,
+                success=False,
+                message=refusal,
+                input_obj=input,
+            )
 
         # ISO parser shared across all copies. Accepts date-only
         # (YYYY-MM-DD) and full ISO datetime. Date-only gets midnight
