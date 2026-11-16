@@ -4988,6 +4988,65 @@ class DumpRecapFieldsView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class AuditLegacyRecapsView(View):
+    """GET/POST `/internal/cron/audit-legacy-recaps` — READ-ONLY.
+
+    One row per LEGACY ``Recap`` for a tenant: request link + ``deleted_at``,
+    event date, retailer/store/state, approval/archive state, KPI children,
+    feedback text and file links. Closes the gaps ``campaign-to-date`` leaves
+    (no per-recap approval; nothing outside live requests). Ambassadors are
+    opaque ids only. Fires ``audit_legacy_recaps --json``.
+
+    Params: tenant_id (required), start / end (YYYY-MM-DD, EVENT date, optional).
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _param(name: str) -> str:
+            return (request.GET.get(name) or request.POST.get(name) or "").strip()
+
+        raw_tid = _param("tenant_id")
+        try:
+            tenant_id = int(raw_tid)
+        except ValueError:
+            return JsonResponse({"ok": False, "error": "tenant_id must be an integer"}, status=400)
+
+        kwargs: dict = {"tenant_id": tenant_id, "as_json": True}
+        for name in ("start", "end"):
+            if _param(name):
+                kwargs[name] = _param(name)
+
+        out = io.StringIO()
+        try:
+            call_command("audit_legacy_recaps", stdout=out, **kwargs)
+            raw = out.getvalue()
+            blob = raw.split("LEGACYRECAPS_JSON_START", 1)[1].split("LEGACYRECAPS_JSON_END", 1)[0]
+            data = json.loads(blob)
+        except CommandError as exc:
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc), "report": out.getvalue()},
+                status=400,
+            )
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("audit_legacy_recaps cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": f"{type(exc).__name__}: {exc}"},
+                status=500,
+            )
+        report = raw.split("LEGACYRECAPS_JSON_START", 1)[0].strip()
+        return JsonResponse({"ok": True, "report": report, "data": data})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class ExportRecapsToSheetView(View):
     """POST `/internal/cron/export-recaps-to-sheet`.
 
@@ -12023,6 +12082,7 @@ def _registered_views() -> dict[str, Any]:
         "audit-client-submissions": AuditClientSubmissionsView,
         "dump-field-sampling": DumpFieldSamplingView,
         "dump-recap-fields": DumpRecapFieldsView,
+        "audit-legacy-recaps": AuditLegacyRecapsView,
         "export-recaps-to-sheet": ExportRecapsToSheetView,
         "export-ld-summary": ExportLdSummaryView,
         "export-girlbeer-summary": ExportGirlbeerSummaryView,
