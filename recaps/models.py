@@ -1366,3 +1366,49 @@ class RecapDismissal(models.Model):
             f"event={self.event_id} ambassador={self.ambassador_id} "
             f"reason={self.reason}"
         )
+
+
+class DashboardText(models.Model):
+    """A sentence written for a dashboard, kept so the model is not asked on
+    every page load.
+
+    One row per (tenant, kind, scope_key). ``inputs_hash`` is a hash of the
+    numbers the text was written from: the text is written again only when
+    they change. ``source`` says who wrote it ("model", or "template" when
+    the model was unavailable or its text failed the number check). Holds
+    no personal data.
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    tenant = models.ForeignKey(
+        Tenant, on_delete=models.CASCADE, related_name="dashboard_texts"
+    )
+    kind = models.CharField(max_length=32)
+    scope_key = models.CharField(max_length=200)
+    inputs_hash = models.CharField(max_length=64)
+    payload = models.JSONField(default=dict)
+    source = models.CharField(max_length=16, default="template")
+    # Only set for a chart question: who asked, for the hourly limit.
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="dashboard_texts",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["tenant", "kind", "scope_key"],
+                name="dashboard_text_one_per_scope",
+            )
+        ]
+        indexes = [
+            models.Index(
+                fields=["created_by", "kind", "updated_at"],
+                name="dashboard_text_asker_idx",
+            )
+        ]
