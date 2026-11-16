@@ -1,0 +1,65 @@
+name: Audit legacy recaps (read-only)
+
+# Manually fires `/internal/cron/audit-legacy-recaps` on Cloud Run — READ-ONLY.
+# One row per LEGACY Recap for a tenant: request link + deleted_at, event date,
+# retailer/store/state, approval/archive state, KPI children, feedback text and
+# file links. Closes what campaign-to-date can't show: per-recap approval, and
+# legacy recaps on soft-deleted requests or standalone events.
+#
+# Ambassadors are opaque ids only. The JSON goes to a short-retention artifact
+# (it carries consumer feedback text and file links) — download with
+# `gh run download <run-id>`; only the summary prints in the log.
+# Secret-gated via X-Cron-Secret (header, never in the URL).
+# Endpoint code ships from develop; this YAML lives on main so it can dispatch.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tenant_id:
+        description: "Tenant id (e.g. 1 for Liquid Death)"
+        required: true
+        type: string
+      start:
+        description: "Optional window start YYYY-MM-DD (inclusive, EVENT date)"
+        required: false
+        type: string
+      end:
+        description: "Optional window end YYYY-MM-DD (inclusive, EVENT date)"
+        required: false
+        type: string
+
+jobs:
+  audit-legacy-recaps:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Fire audit-legacy-recaps cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/audit-legacy-recaps
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          TENANT_ID: ${{ github.event.inputs.tenant_id }}
+          START: ${{ github.event.inputs.start }}
+          END: ${{ github.event.inputs.end }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS --max-time 600 -o response.json -w '%{http_code}' \
+            -X POST "$CRON_URL" \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            --data-urlencode "tenant_id=$TENANT_ID" \
+            --data-urlencode "start=$START" \
+            --data-urlencode "end=$END")
+          echo "HTTP $STATUS"
+          python3 -c "import json; d=json.load(open('response.json')); print(d.get('report') or d)" || head -c 2000 response.json
+          [ "$STATUS" = "200" ] || exit 1
+
+      - name: Upload response JSON
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: legacy-recap-audit
+          path: response.json
+          retention-days: 3
