@@ -1606,7 +1606,7 @@ class AmbassadorInvitationQueriesService(SparkGraphQLMixin):
     ) -> CountableConnection[AmbassadorInvitationType]:
         """Get sent invitations for a tenant (client/spark-admin only)."""
         user = await self.get_user(info)
-        is_spark_request = self.is_spark_schema_request(info, user=user)
+        is_spark_request = await self.is_admin_request(info, user=user)
 
         # Resolve tenant
         tenant_id: int | None = None
@@ -1708,7 +1708,7 @@ class AmbassadorInvitationQueriesService(SparkGraphQLMixin):
     ) -> CountableConnection["AmbassadorGroup"]:
         """Return groups that contain ambassadors invited to the given job."""
         user = await self.get_user(info)
-        is_spark_request = self.is_spark_schema_request(info, user=user)
+        is_spark_request = await self.is_admin_request(info, user=user)
 
         job_id = filters.job_id if filters else None
         if not job_id:
@@ -1768,7 +1768,7 @@ class AmbassadorQueriesService(SparkGraphQLMixin):
     ) -> CountableConnection[AmbassadorType]:
         """Get available ambassadors for a tenant (client/spark-admin only)."""
         user = await self.get_user(info)
-        is_spark_request = self.is_spark_schema_request(info, user=user)
+        is_spark_request = await self.is_admin_request(info, user=user)
 
         # Resolve tenant
         tenant_id: int | None = None
@@ -1815,7 +1815,7 @@ class AmbassadorQueriesService(SparkGraphQLMixin):
     ) -> CountableConnection[AmbassadorType]:
         """General ambassador list with filters for active status, rating, name, and email."""
         user = await self.get_user(info)
-        is_spark_request = self.is_spark_schema_request(info, user=user)
+        is_spark_request = await self.is_admin_request(info, user=user)
 
         tenant_id: int | None = None
         tenant_id_input = filters.tenant_id if filters else None
@@ -2206,7 +2206,7 @@ class AmbassadorReviewQueriesService(SparkGraphQLMixin):
     ) -> CountableConnection:
         """Get ambassador reviews with filters (authenticated users only)."""
         user = await self.get_user(info)
-        is_spark_request = self.is_spark_schema_request(info, user=user)
+        is_spark_request = await self.is_admin_request(info, user=user)
 
         # Resolve tenant
         tenant_id: int | None = None
@@ -2461,7 +2461,7 @@ class AmbassadorNoteQueriesService(SparkGraphQLMixin):
     ) -> CountableConnection:
         """Get ambassador notes with filters (authenticated users only)."""
         user = await self.get_user(info)
-        is_spark_request = self.is_spark_schema_request(info, user=user)
+        is_spark_request = await self.is_admin_request(info, user=user)
 
         # Resolve tenant
         tenant_id: int | None = None
@@ -2912,7 +2912,7 @@ class AmbassadorSkillQueriesService(SparkGraphQLMixin):
     ) -> CountableConnection:
         """Get ambassador skills with filters (authenticated users only)."""
         user = await self.get_user(info)
-        is_spark_request = self.is_spark_schema_request(info, user=user)
+        is_spark_request = await self.is_admin_request(info, user=user)
 
         # Resolve tenant
         tenant_id: int | None = None

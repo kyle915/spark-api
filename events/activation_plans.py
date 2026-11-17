@@ -228,7 +228,7 @@ def _serialize_plan(plan: models.ActivationPlan) -> ActivationPlanType:
 class ActivationPlanService(SparkGraphQLMixin):
     async def resolve_tenant_for_user(self, info, tenant_id: strawberry.ID | None):
         user = await self.get_user(info)
-        is_spark = self.is_spark_schema_request(info, user=user)
+        is_spark = await self.is_admin_request(info, user=user)
         if is_spark and tenant_id:
             return await self._get_tenant_without_membership(tenant_id)
         resolved = None
@@ -268,6 +268,10 @@ class ActivationPlanQueries:
     ) -> ActivationPlanType | None:
         service = ActivationPlanService()
         user = await service.get_user(info)
+        # DB-backed admin check, resolved before the sync block: the JWT
+        # user's role doesn't hydrate in async resolvers and the old sync
+        # read ignored IGNITE_ADMIN_EXCLUDE.
+        is_admin = await service.is_admin_request(info, user=user)
 
         def _get() -> ActivationPlanType | None:
             qs = models.ActivationPlan.objects.select_related("owner")
@@ -280,14 +284,16 @@ class ActivationPlanQueries:
                 raise GraphQLError("Provide id or uuid.")
             if plan is None:
                 return None
-            if not service.is_spark_schema_request(info, user=user):
+            if not is_admin:
                 from tenants.models import TenantedUser
 
                 ok = TenantedUser.objects.filter(
                     user_id=user.id, tenant_id=plan.tenant_id, is_active=True
                 ).exists()
-                if not ok and not getattr(user, "is_staff", False):
-                    raise GraphQLError("Not allowed to view this plan.")
+                if not ok:
+                    # Same answer as a missing plan, so a probe can't
+                    # confirm another brand's plan exists.
+                    return None
             return _serialize_plan(plan)
 
         return await sync_to_async(_get)()
