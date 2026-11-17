@@ -19,7 +19,11 @@ Rules (decided here, tested in ``recaps/tests/test_recap_numbers.py``):
 * Whitespace around the value is ignored.
 * Approximate markers are ignored: a leading "~", "≈", "approx",
   "approximately", "about", "around", "roughly", "est"/"estimated", and a
-  leading or trailing "+" ("50+" -> 50). The number counts as typed. A
+  leading or trailing "+" ("50+" -> 50). The number counts as typed. Lower
+  bounds count as the bound: "over 200", "more than 200", "at least 200",
+  "upwards of 200" -> 200. Words that mean LESS than the number ("almost",
+  "nearly", "under") are not read: counting them would claim more than the
+  BA said. A
   leading "$" is ignored too ("$ 87" -> 87).
 * Ranges ("20-30", "20 – 30", "20 to 30") count as the LOWER bound. A
   client report should never claim more than the BA said; both readers
@@ -45,7 +49,10 @@ import re
 # A leading approximation word or sign. Order matters: longest first.
 _APPROX = (
     r"(?:~|≈|approximately|approx\.?|about|around|roughly|"
-    r"estimated|est\.?)"
+    r"estimated|est\.?|"
+    # Lower bounds: "over 200" counts as 200, never more than the BA said.
+    r"(?:just\s+|a\s+little\s+|a\s+bit\s+)?(?:over|more\s+than)|"
+    r"at\s+least|upwards\s+of)"
 )
 # One number: comma-grouped thousands, else plain digits, with an optional
 # decimal part. The (?!\d) after a grouped run stops "1,2345" from reading
