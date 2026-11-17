@@ -52,6 +52,8 @@ CORS_ALLOW_HEADERS = (
     *default_headers,
     "x-checkin-session",
     "x-clock-session",
+    # Selected brand for users on several tenants (utils/graphql/mixins.py).
+    "x-spark-tenant",
 )
 
 
