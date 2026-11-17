@@ -13,31 +13,22 @@ from recaps.recap_tokens import make_recap_token
 from utils.mailer import Envelope, Mailer
 
 
-def _apply_offset(
-    value: datetime.datetime | None, offset_minutes: int
-) -> datetime.datetime | None:
-    if not value:
-        return None
-    return value + datetime.timedelta(minutes=offset_minutes)
-
-
 def _format_dt_no_tz(
-    value: datetime.datetime | None, fmt: str, offset_minutes: int = 0
+    value: datetime.datetime | None, fmt: str, tz_row=None
 ) -> str:
-    """Format a datetime, or return "" when there isn't one.
+    """Format a datetime as the venue's wall clock, or "" when there isn't one.
 
     Empty rather than "-": the approval email now HIDES a row it has no
     value for, and it can only do that if "missing" is falsy in the
     template. Cells that should still show a dash keep `|default:"-"`,
     which fires on "" exactly as it did on None.
+
+    DST-aware per date (utils.tz.format_venue_local); adding the TimeZone
+    row's fixed offset put summer shifts an hour off.
     """
-    if not value:
-        return ""
-    value = _apply_offset(value, offset_minutes) or value
-    formatted = value.replace(tzinfo=None).strftime(fmt)
-    if fmt.startswith("%I"):
-        return formatted.lstrip("0")
-    return formatted
+    from utils.tz import format_venue_local
+
+    return format_venue_local(value, fmt, tz_row, empty="")
 
 
 def _normalize_slug(slug: str | None) -> str:
@@ -115,7 +106,7 @@ class RecapApprovedNotificationMailer(Mailer):
             return self.recap.event.address
         return "-"
 
-    def _attendance_window(self, offset_minutes: int) -> tuple[str, str]:
+    def _attendance_window(self, tz_row) -> tuple[str, str]:
         if not self.recap.ambassador_id:
             return "-", "-"
 
@@ -136,12 +127,12 @@ class RecapApprovedNotificationMailer(Mailer):
                 clock_out_times.append(record.clock_time)
 
         actual_check_in = (
-            _format_dt_no_tz(min(clock_in_times), "%I:%M %p", offset_minutes)
+            _format_dt_no_tz(min(clock_in_times), "%I:%M %p", tz_row)
             if clock_in_times
             else ""
         )
         actual_check_out = (
-            _format_dt_no_tz(max(clock_out_times), "%I:%M %p", offset_minutes)
+            _format_dt_no_tz(max(clock_out_times), "%I:%M %p", tz_row)
             if clock_out_times
             else ""
         )
@@ -184,7 +175,6 @@ class RecapApprovedNotificationMailer(Mailer):
         tenant = event.tenant
         job = self.recap.job
         timezone_obj = self.recap.timezone or event.timezone
-        offset_minutes = int(getattr(timezone_obj, "offset", 0) or 0)
 
         start_dt = (
             job.start_date if job and job.start_date else None
@@ -198,7 +188,7 @@ class RecapApprovedNotificationMailer(Mailer):
             else f"RECAP-{self.recap.id}"
         )
         location_name = self._location_name()
-        actual_check_in, actual_check_out = self._attendance_window(offset_minutes)
+        actual_check_in, actual_check_out = self._attendance_window(timezone_obj)
         ba_on_site = self._ba_on_site_count()
         photos_count = self._photos_count()
         client_metrics = []
@@ -255,13 +245,13 @@ class RecapApprovedNotificationMailer(Mailer):
                 "campaign_name": event.name or "-",
                 "location_name": location_name,
                 "date_text": _format_dt_no_tz(
-                    recap_date_source, "%m/%d/%Y", offset_minutes
+                    recap_date_source, "%m/%d/%Y", timezone_obj
                 ),
                 "scheduled_start_time": _format_dt_no_tz(
-                    start_dt, "%I:%M %p", offset_minutes
+                    start_dt, "%I:%M %p", timezone_obj
                 ),
                 "scheduled_end_time": _format_dt_no_tz(
-                    end_dt, "%I:%M %p", offset_minutes
+                    end_dt, "%I:%M %p", timezone_obj
                 ),
                 "actual_check_in": actual_check_in,
                 "actual_check_out": actual_check_out,

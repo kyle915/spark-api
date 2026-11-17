@@ -37,8 +37,13 @@ from zoneinfo import ZoneInfo
 
 from django.conf import settings
 from django.db import IntegrityError
-from django.db.models import F, Q
+from django.db.models import F
 from django.utils import timezone
+
+# Shared with the reminder emails and the no-show nudge so every BA message
+# agrees on what a cancelled or deleted demo is.
+from events.cancelled import live_event_q as _live_event_q
+from events.cancelled import not_cancelled_q as _not_cancelled_q
 
 logger = logging.getLogger(__name__)
 
@@ -221,27 +226,6 @@ def events_from():
     if floor is not None and timezone.is_naive(floor):
         floor = timezone.make_aware(floor)
     return floor
-
-
-def _live_event_q(prefix: str = "event__") -> Q:
-    """Events whose request was not deleted (standalone events always pass)."""
-    return Q(**{f"{prefix}request__isnull": True}) | Q(
-        **{f"{prefix}request__deleted_at__isnull": True}
-    )
-
-
-# What events/demo_cancel.py moves a cancelled demo to: the request to the
-# tenant's declined/cancelled status, each linked event to its
-# suspended/declined/cancelled one.
-_CANCELLED_REQUEST_SLUGS = ("declined", "cancelled", "canceled")
-_CANCELLED_EVENT_SLUGS = ("suspended", "declined", "cancelled", "canceled")
-
-
-def _not_cancelled_q(prefix: str = "event__") -> Q:
-    """Events that were not cancelled, directly or through their request."""
-    return ~Q(**{f"{prefix}status__slug__in": _CANCELLED_EVENT_SLUGS}) & ~Q(
-        **{f"{prefix}request__status__slug__in": _CANCELLED_REQUEST_SLUGS}
-    )
 
 
 def _pre_shift_candidates(now):

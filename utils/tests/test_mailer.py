@@ -395,6 +395,34 @@ class TestMailDrivers:
         mock_queues_class.assert_not_called()
         mock_resend_send.assert_not_called()
 
+    @patch('utils.mailer.resend.Emails.send')
+    def test_resend_reports_whether_the_email_was_accepted(self, mock_resend_send):
+        """A reply with no id (bad key, unverified sender) is a failed send:
+        callers that record "sent" must be able to tell."""
+        mock_resend_send.return_value = {"id": "abc"}
+        assert ResendMailDriver().send(self._resend_envelope()) is True
+        mock_resend_send.return_value = {}
+        assert ResendMailDriver().send(self._resend_envelope()) is False
+
+    @override_settings(MAIL_DRIVER="resend", RQ_ENABLED=False)
+    @patch("utils.mailer.resend.Emails.send")
+    def test_mailer_send_returns_false_when_the_inline_send_fails(self, mock_resend_send):
+        class ShiftMailer(Mailer):
+            def envelope(self):
+                return Envelope(
+                    subject="Reminder", to_emails=["ba@acme.co"], html="<p>x</p>"
+                )
+
+        with patch.object(Mailer, "_build_logo_attachment", return_value=None):
+            mock_resend_send.return_value = {"id": "abc"}
+            assert ShiftMailer().send() is True
+            assert ShiftMailer().send_now() is True
+            mock_resend_send.return_value = {}
+            assert ShiftMailer().send() is False
+            assert ShiftMailer().send_now() is False
+            mock_resend_send.side_effect = RuntimeError("down")
+            assert ShiftMailer().send() is False
+
     @patch('utils.mailer.EmailMultiAlternatives')
     def test_mailpit_mail_driver_send(self, mock_email_class):
         """Test MailpitMailDriver sends email via Django email."""

@@ -106,15 +106,12 @@ class SendInvitationMailToAmbassadorMailer(Mailer):
         self.invitation = invitation
 
     def _format_dt_no_tz(
-        self, value: datetime.datetime | None, fmt: str, offset_minutes: int = 0
+        self, value: datetime.datetime | None, fmt: str, tz_row=None
     ) -> str:
-        if not value:
-            return "-"
-        value = value + datetime.timedelta(minutes=offset_minutes)
-        formatted = value.replace(tzinfo=None).strftime(fmt)
-        if fmt.startswith("%I"):
-            return formatted.lstrip("0")
-        return formatted
+        # Venue wall clock, DST-aware per date (see utils.tz.format_venue_local).
+        from utils.tz import format_venue_local
+
+        return format_venue_local(value, fmt, tz_row, empty="-")
 
     def _build_job_invite_context(self) -> dict[str, str | bool]:
         from jobs.models import AmbassadorJob
@@ -130,7 +127,6 @@ class SendInvitationMailToAmbassadorMailer(Mailer):
         retailer_state = getattr(retailer_location, "state", None)
         retailer_is_national = bool(getattr(retailer, "is_national", False))
         event_timezone = getattr(event, "timezone", None)
-        offset_minutes = int(getattr(event_timezone, "offset", 0) or 0)
 
         request_id_value = getattr(event, "request_id", None)
         request_id = f"REQ-{request_id_value}" if request_id_value else f"JOB-{job.id}"
@@ -171,9 +167,9 @@ class SendInvitationMailToAmbassadorMailer(Mailer):
             "show_location": not retailer_is_national,
             "location_name": location_name,
             "event_address": event_address,
-            "activation_date": self._format_dt_no_tz(start_dt, "%m/%d/%Y", offset_minutes),
-            "start_time": self._format_dt_no_tz(start_dt, "%I:%M %p", offset_minutes),
-            "end_time": self._format_dt_no_tz(end_dt, "%I:%M %p", offset_minutes),
+            "activation_date": self._format_dt_no_tz(start_dt, "%m/%d/%Y", event_timezone),
+            "start_time": self._format_dt_no_tz(start_dt, "%I:%M %p", event_timezone),
+            "end_time": self._format_dt_no_tz(end_dt, "%I:%M %p", event_timezone),
             "event_notes": getattr(event, "notes", None) or job.description or "-",
             "deep_link": f"spark://my-gigs/{ambassador_job_id or ''}",
         }

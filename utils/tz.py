@@ -333,8 +333,33 @@ def apply_dst_aware_offset(
     return (value + timedelta(minutes=minutes)).replace(tzinfo=None)
 
 
+def format_venue_local(
+    value: _dt.datetime | None,
+    fmt: str,
+    tz_row: Any | None,
+    *,
+    empty: str = "-",
+) -> str:
+    """strftime ``value`` as wall-clock time at the venue, DST-aware.
+
+    For shift emails. The venue's zone is resolved with ZoneInfo and applied
+    AT ``value`` itself, so a shift after a DST change reads the same as the
+    time the admin picked, whichever way the TimeZone row stores its offset
+    (minutes, hours, or the standard-time value on a summer shift). A 12-hour
+    format loses its leading zero ("9:00 AM").
+    """
+    local = apply_dst_aware_offset(value, tz_row)
+    if local is None:
+        return empty
+    formatted = local.strftime(fmt)
+    if fmt.startswith("%I"):
+        return formatted.lstrip("0")
+    return formatted
+
+
 __all__ = [
     "apply_dst_aware_offset",
+    "format_venue_local",
     "fixed_offset_minutes",
     "iana_for_us_state",
     "naive_local_iso",
