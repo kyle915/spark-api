@@ -1,0 +1,66 @@
+name: Audit access misuse (read-only)
+
+# Manually fires `/internal/cron/audit-access-misuse` on Cloud Run. READ-ONLY.
+# Reports what the database still shows about use of the access holes closed
+# in spark-api #1424/#1426/#1427, for the window before each fix: accounts
+# created (elevated ones by email), deactivations, password-change proxies,
+# tenant memberships added, tenant moves, attendance written by someone other
+# than an admin or the BA, and payroll close-out by non-admins.
+#
+# Clients and BAs are ids only; emails appear only for accounts carrying an
+# admin marker. The JSON goes to a short-retention artifact
+# (`gh run download <run-id>`); only the summary prints in the log.
+# Secret-gated via X-Cron-Secret (header, never in the URL).
+# Endpoint code ships from develop; this YAML lives on main so it can dispatch.
+
+on:
+  workflow_dispatch:
+    inputs:
+      start:
+        description: "Optional window start (YYYY-MM-DD or ISO). Default 2026-06-01"
+        required: false
+        type: string
+      end:
+        description: "Optional end for every section (ISO). Default: each fix PR's merge time"
+        required: false
+        type: string
+      cap:
+        description: "Max rows per list (default 500)"
+        required: false
+        type: string
+
+jobs:
+  audit-access-misuse:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Fire audit-access-misuse cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/audit-access-misuse
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          START: ${{ github.event.inputs.start }}
+          END: ${{ github.event.inputs.end }}
+          CAP: ${{ github.event.inputs.cap }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS --max-time 600 -o response.json -w '%{http_code}' \
+            -X POST "$CRON_URL" \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            --data-urlencode "start=$START" \
+            --data-urlencode "end=$END" \
+            --data-urlencode "cap=$CAP")
+          echo "HTTP $STATUS"
+          python3 -c "import json; d=json.load(open('response.json')); print(d.get('report') or d)" || head -c 2000 response.json
+          [ "$STATUS" = "200" ] || exit 1
+
+      - name: Upload response JSON
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: access-misuse-audit
+          path: response.json
+          retention-days: 3
