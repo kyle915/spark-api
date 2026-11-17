@@ -94,7 +94,11 @@ from recaps.mutation_parts.notify import (  # noqa: F401
     _send_recap_data_quality_alert,
     _thread_recap_approved_notify,
 )
-from recaps.mutation_parts.exports import RecapExportMixin
+from recaps.mutation_parts.exports import (
+    EXPORT_SCOPE_ADMIN,
+    EXPORT_SCOPE_CLIENT,
+    RecapExportMixin,
+)
 
 
 User = get_user_model()
@@ -4952,18 +4956,24 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
         # this method.
         #   - Ignite admins (DB-backed `_is_admin_access`, never the
         #     unhydrated JWT role) may bundle any recaps.
-        #   - Everyone else keeps only recaps in a tenant they are an active
-        #     member of. A foreign id is dropped exactly like an id that
-        #     doesn't exist, so the response can't confirm the recap exists
-        #     under another brand (#247 posture).
-        caller_is_admin = await self._caller_is_admin()
-        if not caller_is_admin:
+        #   - Clients keep only APPROVED, un-archived recaps in a tenant they
+        #     are an active member of (what their recap list shows them).
+        #   - Everyone else (brand ambassadors, a removed admin) gets
+        #     nothing.
+        # An out-of-scope id is dropped exactly like an id that doesn't
+        # exist, so the response can't confirm the recap (or a draft)
+        # exists under another brand (#247 posture).
+        scope = await self._export_scope()
+        if scope == EXPORT_SCOPE_CLIENT:
             member_tenant_ids = await self._caller_member_tenant_ids()
             ordered = [
                 (k, obj)
                 for (k, obj) in ordered
                 if self._recap_within_tenants(obj, member_tenant_ids)
+                and self._client_visible_recap(obj)
             ]
+        elif scope != EXPORT_SCOPE_ADMIN:
+            ordered = []
 
         if not ordered:
             raise GraphQLError("None of the supplied recap ids were found.")

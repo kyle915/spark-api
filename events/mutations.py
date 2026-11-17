@@ -423,7 +423,9 @@ class EventMutationService(BaseMutationService):
         user: User = await self.get_user(info)
         self.info = info
         self.user = user
-        self.is_spark_schema = self.is_spark_schema_request(info, user=user)
+        # DB-backed admin check (never the JWT user's role, which doesn't
+        # hydrate in async resolvers and ignores IGNITE_ADMIN_EXCLUDE).
+        self.is_spark_schema = await self.is_admin_request(info, user=user)
 
         request_id = getattr(self.input, "request_id", None)
         tenant_id: int | None = None
@@ -440,8 +442,7 @@ class EventMutationService(BaseMutationService):
             )
             tenant_id = request.tenant_id
 
-            is_spark_admin = await user.role.is_spark_admin
-            if not self.is_spark_schema and not is_spark_admin:
+            if not self.is_spark_schema:
                 try:
                     await sync_to_async(user.get_tenant)(tenant_id=tenant_id)
                 except Exception:
@@ -2227,7 +2228,7 @@ class ProductMutations:
         service = ProductMutationService()
         try:
             user: User = await service.get_user(info)
-            is_spark_request = service.is_spark_schema_request(info, user=user)
+            is_spark_request = await service.is_admin_request(info, user=user)
 
             try:
                 input.id = resolve_id_to_int(input.id)
@@ -2656,7 +2657,7 @@ class RequestStoreManagerMutationService(BaseMutationService):
         """Set user/tenant using the related request instead of tenant_id input."""
         self.info = info
         self.user = await self.get_user(info)
-        self.is_spark_schema = self.is_spark_schema_request(info, user=self.user)
+        self.is_spark_schema = await self.is_admin_request(info, user=self.user)
         request = await self._get_request()
 
         if request:
@@ -2680,10 +2681,12 @@ class RequestStoreManagerMutationService(BaseMutationService):
         return self
 
     async def _ensure_tenant_access(self, tenant_id: int) -> bool:
-        """Validate that the user can operate on the request's tenant."""
-        role = getattr(self.user, "role", None)
-        is_spark_admin = await role.is_spark_admin if role else False
-        if self.is_spark_schema or is_spark_admin:
+        """Validate that the user can operate on the request's tenant.
+
+        ``is_spark_schema`` is the DB-backed admin check set in
+        set_user_and_tenant. The old extra ``user.role.is_spark_admin``
+        read is gone: it ignored IGNITE_ADMIN_EXCLUDE."""
+        if self.is_spark_schema:
             return True
 
         try:
@@ -3881,7 +3884,7 @@ class RequestMutations:
         try:
             service = RequestMutationService()
             user: User = await service.get_user(info)
-            is_spark_request = service.is_spark_schema_request(info, user=user)
+            is_spark_request = await service.is_admin_request(info, user=user)
 
             input_tenant_id = getattr(input, "tenant_id", None)
             tenant_id: int
@@ -3969,7 +3972,7 @@ class RequestMutations:
         try:
             service = RequestMutationService()
             user: User = await service.get_user(info)
-            is_spark_request = service.is_spark_schema_request(info, user=user)
+            is_spark_request = await service.is_admin_request(info, user=user)
 
             input_tenant_id = getattr(input, "tenant_id", None)
             tenant_id: int

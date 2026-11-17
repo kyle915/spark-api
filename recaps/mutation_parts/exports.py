@@ -17,9 +17,100 @@ from utils.gcs import (
     get_gcs_client,
 )
 from utils.graphql.mixins import resolve_id_to_int
+from utils.graphql.permissions import _is_admin_access, resolve_request_user_access
+
+# Who may export what (recap exports, file downloads, campaign report):
+#   - Ignite admins (DB-backed ``_is_admin_access``): any recap, any tenant.
+#   - Clients: only recaps in a tenant they're an ACTIVE member of, and only
+#     approved, un-archived ones (the same rule the client recap lists use).
+#   - Everyone else (brand ambassadors, a removed admin whose role was
+#     cleared): refused.
+# Out-of-scope ids read as "<Recap> not found." so a probe can't confirm a
+# recap exists under another brand, or that a draft exists.
+EXPORT_SCOPE_ADMIN = "admin"
+EXPORT_SCOPE_CLIENT = "client"
+EXPORT_SCOPE_REFUSED = "refused"
 
 
 class RecapExportMixin:
+    async def _export_scope(self) -> str:
+        """Classify the caller for exports, from the DB row (never the JWT
+        user's role, which doesn't hydrate inside async resolvers)."""
+        user = getattr(self, "user", None)
+        if user is None or not getattr(user, "is_authenticated", False):
+            return EXPORT_SCOPE_REFUSED
+        role_slug, is_staff, is_super, email = await resolve_request_user_access(
+            user
+        )
+        if _is_admin_access(role_slug, is_staff, is_super, email):
+            return EXPORT_SCOPE_ADMIN
+        if role_slug == "client":
+            return EXPORT_SCOPE_CLIENT
+        return EXPORT_SCOPE_REFUSED
+
+    async def _export_member_tenant_ids(self) -> set[int]:
+        """Tenants the caller is an active member of (one query)."""
+        from tenants.models import TenantedUser
+
+        user = getattr(self, "user", None)
+        if user is None or getattr(user, "pk", None) is None:
+            return set()
+        return await sync_to_async(
+            lambda: set(
+                TenantedUser.objects.filter(
+                    user_id=user.pk, is_active=True
+                ).values_list("tenant_id", flat=True)
+            )
+        )()
+
+    @staticmethod
+    def _client_visible_recap(recap) -> bool:
+        """Approved and not archived: what a client may see."""
+        return bool(getattr(recap, "approved", False)) and (
+            getattr(recap, "archived_at", None) is None
+        )
+
+    async def _assert_recap_export_access(
+        self,
+        *,
+        tenant_id: int | None,
+        approved: bool,
+        archived_at,
+        record_label: str = "Recap",
+    ) -> None:
+        """Gate one recap (or a file on it) for export. Raises
+        "<record_label> not found." when out of scope."""
+        scope = await self._export_scope()
+        if scope == EXPORT_SCOPE_ADMIN:
+            return
+        not_found = GraphQLError(f"{record_label} not found.")
+        if scope != EXPORT_SCOPE_CLIENT or tenant_id is None:
+            raise not_found
+        if not approved or archived_at is not None:
+            raise not_found
+        if tenant_id not in await self._export_member_tenant_ids():
+            raise not_found
+
+    async def _resolve_export_tenant(self, resolved_tenant_id: int | None):
+        """Tenant for a tenant-wide export, plus whether the caller is
+        limited to client-visible recaps."""
+        scope = await self._export_scope()
+        if scope == EXPORT_SCOPE_ADMIN:
+            if resolved_tenant_id is None:
+                raise GraphQLError("Tenant ID is required.")
+            tenant = await self._get_tenant_without_membership(
+                tenant_id=resolved_tenant_id
+            )
+            return tenant, False
+        if scope != EXPORT_SCOPE_CLIENT:
+            raise GraphQLError("You are not authorized to export recaps.")
+        tenant = await self.get_user_tenant(
+            self.info,
+            tenant_id=resolved_tenant_id,
+            user=self.user,
+        )
+        return tenant, True
+
     async def export_recaps_xlsx(self) -> str:
         """Generate an Excel report with all recaps for a tenant and return a signed URL."""
         if not isinstance(self.input, inputs.ExportRecapsXlsxInput):
@@ -32,18 +123,7 @@ class RecapExportMixin:
             except (TypeError, ValueError, GraphQLError):
                 raise GraphQLError("Invalid tenant ID.")
 
-        if self.is_spark_schema_request(self.info, user=self.user):
-            if resolved_tenant_id is None:
-                raise GraphQLError("Tenant ID is required.")
-            tenant = await self._get_tenant_without_membership(
-                tenant_id=resolved_tenant_id
-            )
-        else:
-            tenant = await self.get_user_tenant(
-                self.info,
-                tenant_id=resolved_tenant_id,
-                user=self.user,
-            )
+        tenant, client_only = await self._resolve_export_tenant(resolved_tenant_id)
         start_date = self.input.start_date
         end_date = self.input.end_date
 
@@ -56,7 +136,10 @@ class RecapExportMixin:
                 tenant_id=tenant.id,
                 start_date=start_date,
                 end_date=end_date,
+                approved=True if client_only else None,
             )
+            if client_only:
+                queryset = queryset.filter(archived_at__isnull=True)
             recaps = list(
                 queryset.select_related(
                     "event__request__retailer",
@@ -110,19 +193,20 @@ class RecapExportMixin:
         # StrictIsAuthenticated, so any authenticated user could export
         # another tenant's recap data by guessing the id.
         @sync_to_async
-        def fetch_recap_tenant_id():
+        def fetch_recap_scope():
             return (
-                models.Recap.objects.select_related("event")
-                .filter(id=recap_id)
-                .values_list("event__tenant_id", flat=True)
+                models.Recap.objects.filter(id=recap_id)
+                .values("event__tenant_id", "approved", "archived_at")
                 .first()
             )
 
-        recap_tenant_id = await fetch_recap_tenant_id()
-        if recap_tenant_id is None:
+        row = await fetch_recap_scope()
+        if row is None:
             raise GraphQLError("Recap not found.")
-        await self._assert_caller_authorized_for_recap_tenant(
-            recap_tenant_id, action="export"
+        await self._assert_recap_export_access(
+            tenant_id=row["event__tenant_id"],
+            approved=row["approved"],
+            archived_at=row["archived_at"],
         )
 
         @sync_to_async
@@ -197,18 +281,7 @@ class RecapExportMixin:
             except (TypeError, ValueError, GraphQLError):
                 raise GraphQLError("Invalid custom recap template ID.")
 
-        if self.is_spark_schema_request(self.info, user=self.user):
-            if resolved_tenant_id is None:
-                raise GraphQLError("Tenant ID is required.")
-            tenant = await self._get_tenant_without_membership(
-                tenant_id=resolved_tenant_id
-            )
-        else:
-            tenant = await self.get_user_tenant(
-                self.info,
-                tenant_id=resolved_tenant_id,
-                user=self.user,
-            )
+        tenant, client_only = await self._resolve_export_tenant(resolved_tenant_id)
 
         start_date = self.input.start_date
         end_date = self.input.end_date
@@ -222,7 +295,10 @@ class RecapExportMixin:
                 custom_recap_template_id=resolved_template_id,
                 start_date=start_date,
                 end_date=end_date,
+                approved=True if client_only else None,
             )
+            if client_only:
+                queryset = queryset.filter(archived_at__isnull=True)
             custom_recaps = list(queryset)
             return build_recaps_xlsx(
                 custom_recaps,
@@ -271,19 +347,20 @@ class RecapExportMixin:
         # export. Single-recap-by-id accessor previously gated only by
         # StrictIsAuthenticated. CustomRecap carries a direct tenant FK.
         @sync_to_async
-        def fetch_custom_recap_tenant_id():
+        def fetch_custom_recap_scope():
             return (
                 models.CustomRecap.objects.filter(id=custom_recap_id)
-                .values_list("tenant_id", flat=True)
+                .values("tenant_id", "approved", "archived_at")
                 .first()
             )
 
-        custom_recap_tenant_id = await fetch_custom_recap_tenant_id()
-        if custom_recap_tenant_id is None:
+        row = await fetch_custom_recap_scope()
+        if row is None:
             raise GraphQLError("Custom recap not found.")
-        await self._assert_caller_authorized_for_recap_tenant(
-            custom_recap_tenant_id,
-            action="export",
+        await self._assert_recap_export_access(
+            tenant_id=row["tenant_id"],
+            approved=row["approved"],
+            archived_at=row["archived_at"],
             record_label="Custom recap",
         )
 
@@ -339,14 +416,12 @@ class RecapExportMixin:
 
         Cross-tenant READ gate (follow-up to #708). This accessor returns a
         download URL for the file *content* of a recap file looked up by raw
-        uuid. The old code split on `is_spark_schema_request` (a role-slug
-        check that misses staff / superuser / @igniteproductions.co admins)
-        and otherwise scoped to the caller's default tenant only — neither
-        reused the authoritative admin model from #708. We now resolve the
-        file's owning tenant from its parent recap and authorize via the
-        shared gate: admins (resolved from the DB row) get any tenant, every
-        other role only their own. A file with no resolvable parent recap
-        (detached blob, recap=None) has no tenant and is denied.
+        uuid. We resolve the file's owning tenant from its parent recap and
+        authorize via ``_assert_recap_export_access``: admins (resolved from
+        the DB row) get any tenant; clients only approved, un-archived recaps
+        in their own tenants; everyone else is refused. A file with no
+        resolvable parent recap (detached blob, recap=None) has no tenant and
+        is denied.
         """
         if not isinstance(self.input, inputs.RecapFileDownloadUrlInput):
             raise GraphQLError("Invalid input type.")
@@ -393,8 +468,13 @@ class RecapExportMixin:
             file_tenant_id = getattr(event, "tenant_id", None)
             record_label = "Recap"
 
-        await self._assert_caller_authorized_for_recap_tenant(
-            file_tenant_id, action="download", record_label=record_label
+        # Clients only get files on approved, un-archived recaps in their
+        # own tenants; ambassadors are refused (see _export_scope).
+        await self._assert_recap_export_access(
+            tenant_id=file_tenant_id,
+            approved=bool(getattr(parent, "approved", False)),
+            archived_at=getattr(parent, "archived_at", None),
+            record_label=record_label,
         )
 
         file_field = getattr(recap_file, "file", None) or getattr(recap_file, "url", None)

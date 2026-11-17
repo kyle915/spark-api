@@ -116,7 +116,7 @@ class BaseQueriesService(SparkGraphQLMixin):
     ) -> int | None:
         """Return tenant id for queries; bypass for Spark unless explicitly provided."""
         user = await self.get_user(info)
-        is_spark_request = self.is_spark_schema_request(info, user=user)
+        is_spark_request = await self.is_admin_request(info, user=user)
         filters_tenant_id = getattr(filters, "tenant_id", None) if filters else None
         resolved_tenant_id: int | None = None
 
@@ -148,7 +148,7 @@ class BaseQueriesService(SparkGraphQLMixin):
     ) -> Model | None:
         """Fetch a single record, bypassing tenant filter for Spark admins."""
         user = await self.get_user(info)
-        if enforce_tenant and not self.is_spark_schema_request(info, user=user):
+        if enforce_tenant and not await self.is_admin_request(info, user=user):
             tenant = await self.get_user_tenant(info, user=user)
             return await self.get_record(id=id, tenant_id=tenant.id, uuid=uuid)
         return await self.get_record(id=id, uuid=uuid)

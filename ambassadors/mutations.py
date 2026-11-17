@@ -2938,8 +2938,6 @@ class AttendanceMutationService(TenantOptionalMutationService):
         """
         self.info = info
         self.user = await self.get_user(info)
-        self.is_spark_schema = self.is_spark_schema_request(
-            info, user=self.user)
         self.tenant_id = None
 
         role_slug, is_staff, is_super, email = await resolve_request_user_access(
@@ -2947,6 +2945,7 @@ class AttendanceMutationService(TenantOptionalMutationService):
         )
         self._db_role_slug = role_slug
         self._is_admin = _is_admin_access(role_slug, is_staff, is_super, email)
+        self.is_spark_schema = self._is_admin
         if self._is_admin:
             return self
         if role_slug != "ambassador":

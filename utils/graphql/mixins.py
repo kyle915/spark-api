@@ -92,22 +92,34 @@ class SparkGraphQLMixin:
         role = getattr(user, "role", None)
         return (getattr(role, "slug", None) or "").lower()
 
-    def is_spark_schema_request(
+    async def is_admin_request(
         self,
         info: strawberry.Info,
         user: User | None = None,
     ) -> bool:
-        """Determine if the current request is made by a Spark admin user."""
+        """True when the caller is an Ignite admin, decided from the DB.
+
+        Uses ``_is_admin_access(*resolve_request_user_access(user))``: staff,
+        superuser, the spark-admin role, or an @igniteproductions.co email,
+        with IGNITE_ADMIN_EXCLUDE denying outright. This replaces the old
+        ``is_spark_schema_request``, which read ``user.role`` synchronously.
+        That read doesn't hydrate inside async resolvers, so real admins were
+        refused ("not a member of this tenant"), and it ignored the exclude
+        list, so a removed admin with a stale spark-admin role still passed.
+        """
+        from utils.graphql.permissions import (
+            _is_admin_access,
+            resolve_request_user_access,
+        )
+
         if not user:
-            request = getattr(info.context, "request", None)
+            request = getattr(info.context, "request", None) if info else None
             user = getattr(request, "user", None) if request else None
 
         if not user or not getattr(user, "is_authenticated", False):
             return False
 
-        role = getattr(user, "role", None)
-        slug = getattr(role, "slug", None) if role else None
-        return (slug or "").lower() == "spark-admin"
+        return _is_admin_access(*await resolve_request_user_access(user))
 
     async def get_user_tenant(
         self,
@@ -126,7 +138,7 @@ class SparkGraphQLMixin:
             Tenant: The tenant for the user.
         """
         user = user or await self.get_user(info)
-        is_spark_request = self.is_spark_schema_request(info, user=user)
+        is_spark_request = await self.is_admin_request(info, user=user)
         has_explicit_tenant = tenant_id is not None or tenant_uuid is not None
         resolved_tenant_id: int | None = None
         if tenant_id is not None:
@@ -509,10 +521,10 @@ class BaseMutationService(SparkGraphQLMixin):
         """Set the user and tenant for the service."""
         self.info = info
         self.user = await self.get_user(info)
-        self.is_spark_schema = self.is_spark_schema_request(info, user=self.user)
+        self.is_spark_schema = await self._caller_is_admin()
         tenant_id = getattr(self.input, "tenant_id", None)
         row_id = getattr(self.input, "id", None)
-        is_admin = row_id is not None and await self._caller_is_admin()
+        is_admin = row_id is not None and self.is_spark_schema
 
         if row_id is not None and is_admin and not tenant_id:
             # Admin update without an explicit tenant: keep the row's own
