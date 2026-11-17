@@ -1550,6 +1550,15 @@ class DeclineRequestResponse:
 
 
 @strawberry.type
+class RescheduleEventResponse:
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    event: Event | None = None
+    request_moved: bool = False
+
+
+@strawberry.type
 class CancelDemoResponse:
     success: bool
     message: str

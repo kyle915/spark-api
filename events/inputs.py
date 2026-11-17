@@ -234,6 +234,21 @@ class SuspendEventInput(SparkGraphQLInput):
 
 
 @strawberry.input
+class RescheduleEventInput(SparkGraphQLInput):
+    """Move an event to a new day and times (clients: their own brand only).
+
+    ``event_id`` is the event's uuid, Relay id or numeric id. ``date`` is
+    ``YYYY-MM-DD``; ``start_time`` / ``end_time`` are ``HH:MM`` wall clock
+    at the venue. Nothing else on the event changes.
+    """
+
+    event_id: strawberry.ID
+    date: str
+    start_time: str
+    end_time: str
+
+
+@strawberry.input
 class ArchiveEventInput(SparkGraphQLInput):
     id: strawberry.ID
 
