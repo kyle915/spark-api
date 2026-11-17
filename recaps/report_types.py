@@ -1942,8 +1942,25 @@ class _CampaignReportService(SparkGraphQLMixin):
         )
 
         if not _is_admin_access(role_slug, is_staff, is_super, email):
-            # Non-admins (clients) are pinned to their own tenant, full stop.
-            tenant = await self.get_user_tenant(info)
+            # Non-admins (clients) only ever read a tenant they are an
+            # active member of. A client on several brands (FAMUS Energy +
+            # FAMUS Social) gets the brand they asked for when they belong
+            # to it; before, the "own tenant" lookup could not choose
+            # between two memberships and every KPI query failed with
+            # "not a member of this tenant".
+            requested = None
+            if requested_tenant_id is not None and str(requested_tenant_id).strip():
+                try:
+                    requested = resolve_id_to_int(str(requested_tenant_id).strip())
+                except Exception:
+                    requested = None
+            if requested is not None:
+                try:
+                    tenant = await self.get_tenant(user, tenant_id=requested)
+                    return tenant.id
+                except Exception:
+                    pass  # not theirs: fall back to their own tenant
+            tenant = await self.get_user_tenant(info, user=user)
             return tenant.id
 
         # Admin: honor the requested tenant id (global id or int).
