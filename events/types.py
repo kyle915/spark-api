@@ -1280,6 +1280,30 @@ class Event(Node):
         )
 
     @strawberry.field
+    def local_date(self) -> str | None:
+        """The shift's calendar day at the venue, "YYYY-MM-DD".
+
+        `date` and `startTime` are venue wall-clock strings, but day views
+        need one agreed day per event: this is it (start time first, else
+        date; Pacific when the event has no zone). Same rule the live board
+        and the BA's Active/Upcoming split use.
+        """
+        from events.venue_day import OPS_TZ
+        from utils.tz import resolve_zoneinfo
+
+        source = _get_field(self, "start_time") or _get_field(self, "date")
+        if not source:
+            return None
+        if not isinstance(source, datetime.datetime):
+            return source.isoformat()
+        if source.tzinfo is None:
+            source = source.replace(tzinfo=datetime.timezone.utc)
+        from zoneinfo import ZoneInfo
+
+        zone = resolve_zoneinfo(_get_tz_row_from_instance(self)) or ZoneInfo(OPS_TZ)
+        return source.astimezone(zone).date().isoformat()
+
+    @strawberry.field
     async def recaps(
         self,
         info: strawberry.Info,
