@@ -32,10 +32,34 @@ jobs:
             echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
             exit 1
           fi
-          STATUS=$(curl -sS --max-time 840 -o /tmp/cron-response.json -w '%{http_code}' -X POST "$CRON_URL?dry_run=$DRY_RUN&tenant=$TENANT&max_seconds=240" -H "X-Cron-Secret: $CRON_SECRET")
+          # Cloud Run cuts a request at 300 s. The command stops starting new
+          # date ranges with under 60 s of this budget left, and one range can
+          # take a few model calls, so 150 keeps the whole run well inside it.
+          STATUS=$(curl -sS --max-time 840 -o /tmp/cron-response.json -w '%{http_code}' -X POST "$CRON_URL?dry_run=$DRY_RUN&tenant=$TENANT&max_seconds=150" -H "X-Cron-Secret: $CRON_SECRET" || true)
           echo "HTTP $STATUS"
-          python3 -c "import json;d=json.load(open('/tmp/cron-response.json'));print(d.get('log') or d)"
+          # A 504 / 502 from Cloud Run is an HTML or text page, not JSON. Say
+          # so plainly instead of failing on a Python JSONDecodeError.
+          python3 - <<'PY'
+          import json
+          import os
+          path = "/tmp/cron-response.json"
+          raw = ""
+          if os.path.exists(path):
+              with open(path, encoding="utf-8", errors="replace") as f:
+                  raw = f.read()
+          try:
+              d = json.loads(raw)
+          except ValueError:
+              snippet = " ".join(raw.split())[:300] or "(empty body)"
+              print(f"The endpoint did not answer with JSON (likely a timeout before the run finished). First part of the reply: {snippet}")
+          else:
+              print(d.get("log") or d)
+          PY
           if [ "$STATUS" != "200" ]; then
-            echo "::error::Cron endpoint returned $STATUS"
+            if [ "$STATUS" = "504" ]; then
+              echo "::error::Cron endpoint timed out (HTTP 504): the run took longer than Cloud Run allows. Ranges already built are kept; the next run continues."
+            else
+              echo "::error::Cron endpoint returned $STATUS"
+            fi
             exit 1
           fi
