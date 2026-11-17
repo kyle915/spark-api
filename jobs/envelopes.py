@@ -4,26 +4,18 @@ from django.conf import settings
 
 from jobs import models
 from utils.mailer import Envelope, Mailer
+from utils.tz import format_venue_local
 
 
-def _apply_offset(
-    value: datetime.datetime | None, offset_minutes: int
-) -> datetime.datetime | None:
-    if not value:
-        return None
-    return value + datetime.timedelta(minutes=offset_minutes)
+def _format_dt_no_tz(value: datetime.datetime | None, fmt: str, tz_row=None) -> str:
+    """Shift time as the venue's wall clock, or "-" when there isn't one.
 
-
-def _format_dt_no_tz(
-    value: datetime.datetime | None, fmt: str, offset_minutes: int = 0
-) -> str:
-    if not value:
-        return "-"
-    value = _apply_offset(value, offset_minutes) or value
-    formatted = value.replace(tzinfo=None).strftime(fmt)
-    if fmt.startswith("%I"):
-        return formatted.lstrip("0")
-    return formatted
+    Used to add ``event.timezone.offset`` as minutes, which put every shift
+    email an hour off for half the year (a row storing the standard-time
+    offset, read during daylight time) and several hours off for rows that
+    store the offset in hours. Now resolved per date with ZoneInfo.
+    """
+    return format_venue_local(value, fmt, tz_row, empty="-")
 
 
 def _checkin_deep_link(*, tenant, event=None) -> str:
@@ -328,7 +320,6 @@ def _build_job_booking_email_context(job: "models.Job") -> dict[str, object]:
     retailer_is_national = bool(getattr(retailer, "is_national", False))
     tenant = getattr(job, "tenant", None)
     event_timezone = getattr(event, "timezone", None)
-    offset_minutes = int(getattr(event_timezone, "offset", 0) or 0)
 
     request_id = (
         f"REQ-{event.request_id}"
@@ -365,9 +356,9 @@ def _build_job_booking_email_context(job: "models.Job") -> dict[str, object]:
         else []
     )
     skus = ", ".join(dict.fromkeys(sku_names)) if sku_names else "-"
-    activation_date = _format_dt_no_tz(start_dt, "%m/%d/%Y", offset_minutes)
-    start_time = _format_dt_no_tz(start_dt, "%I:%M %p", offset_minutes)
-    end_time = _format_dt_no_tz(end_dt, "%I:%M %p", offset_minutes)
+    activation_date = _format_dt_no_tz(start_dt, "%m/%d/%Y", event_timezone)
+    start_time = _format_dt_no_tz(start_dt, "%I:%M %p", event_timezone)
+    end_time = _format_dt_no_tz(end_dt, "%I:%M %p", event_timezone)
 
     rate = getattr(job, "hourly_rate", None)
     hours = getattr(job, "total_hours", None)
@@ -746,7 +737,6 @@ def _build_ambassador_job_email_context(
     retailer_is_national = bool(getattr(retailer, "is_national", False))
     tenant = ambassador_job.tenant
     event_timezone = getattr(event, "timezone", None)
-    offset_minutes = int(getattr(event_timezone, "offset", 0) or 0)
 
     request_id = (
         f"REQ-{event.request_id}"
@@ -778,9 +768,9 @@ def _build_ambassador_job_email_context(
         else []
     )
     skus = ", ".join(dict.fromkeys(sku_names)) if sku_names else "-"
-    activation_date = _format_dt_no_tz(start_dt, "%m/%d/%Y", offset_minutes)
-    start_time = _format_dt_no_tz(start_dt, "%I:%M %p", offset_minutes)
-    end_time = _format_dt_no_tz(end_dt, "%I:%M %p", offset_minutes)
+    activation_date = _format_dt_no_tz(start_dt, "%m/%d/%Y", event_timezone)
+    start_time = _format_dt_no_tz(start_dt, "%I:%M %p", event_timezone)
+    end_time = _format_dt_no_tz(end_dt, "%I:%M %p", event_timezone)
     deep_link = _checkin_deep_link(tenant=tenant, event=event)
 
     return {

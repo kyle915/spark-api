@@ -636,6 +636,12 @@ class AmbassadorJob(models.Model):
     reminder_3h_sent_at = models.DateTimeField(null=True)
     reminder_15m_sent_at = models.DateTimeField(null=True)
     reminder_end_15m_sent_at = models.DateTimeField(null=True)
+    # Failed tries of the 24h / 3h reminder EMAIL. The *_sent_at stamp is only
+    # set when the email actually went out; each failed try bumps this so the
+    # cron retries on its next pass and gives up at
+    # jobs.tasks.REMINDER_EMAIL_MAX_ATTEMPTS.
+    reminder_24h_attempts = models.PositiveSmallIntegerField(default=0)
+    reminder_3h_attempts = models.PositiveSmallIntegerField(default=0)
 
     tenant = models.ForeignKey(
         Tenant,

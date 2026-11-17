@@ -19,8 +19,10 @@ Idempotency + safety:
     "after-end" reminder is bounded to shifts that ended within the last
     ``--end-lookback-minutes`` (default 120), so it also can't fire for ancient
     shifts whose column is still NULL.
-  * The senders re-validate (status still approved/accepted, still unsent) and
-    send INLINE via the OneSignal client — no worker needed.
+  * The senders re-validate (status still approved/accepted, event not
+    cancelled, still unsent) and send INLINE — no worker needed.
+  * A 24h/3h email that fails is not stamped; the next pass tries again, up
+    to REMINDER_EMAIL_MAX_ATTEMPTS tries per reminder.
 
 Dry-run (default OFF): ``--dry-run`` reports how many rows WOULD fire per
 reminder and sends/stamps nothing.
@@ -32,9 +34,11 @@ import datetime
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 
+from events.cancelled import active_event_q
 from jobs.models import AmbassadorJob
 from jobs.tasks import (
     REMINDER_ALLOWED_STATUS_SLUGS,
+    REMINDER_EMAIL_MAX_ATTEMPTS,
     send_ambassador_job_24h_reminder,
     send_ambassador_job_3h_reminder,
     send_ambassador_job_15m_reminder_push,
@@ -77,8 +81,12 @@ class Command(BaseCommand):
             f"dry_run={dry_run} end_lookback_min={end_lookback}"
         )
 
+        # Cancelling a demo leaves its bookings approved, so a cancelled or
+        # deleted event has to be dropped here or every reminder below still
+        # tells the BA to show up. The senders re-check right before sending.
         base = AmbassadorJob.objects.filter(
-            status__slug__in=REMINDER_ALLOWED_STATUS_SLUGS
+            active_event_q("job__event__"),
+            status__slug__in=REMINDER_ALLOWED_STATUS_SLUGS,
         ).select_related("status", "ambassador__user", "job__event")
 
         # The 24h/3h EMAIL reminders only. A tenant that sends its own shift
@@ -101,6 +109,7 @@ class Command(BaseCommand):
                 "24h",
                 emails.filter(
                     reminder_sent_at__isnull=True,
+                    reminder_24h_attempts__lt=REMINDER_EMAIL_MAX_ATTEMPTS,
                     job__event__start_time__gt=now,
                     job__event__start_time__lte=now + datetime.timedelta(hours=24),
                 ),
@@ -110,6 +119,7 @@ class Command(BaseCommand):
                 "3h",
                 emails.filter(
                     reminder_3h_sent_at__isnull=True,
+                    reminder_3h_attempts__lt=REMINDER_EMAIL_MAX_ATTEMPTS,
                     job__event__start_time__gt=now,
                     job__event__start_time__lte=now + datetime.timedelta(hours=3),
                 ),

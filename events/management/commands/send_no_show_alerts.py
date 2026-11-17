@@ -82,10 +82,15 @@ class Command(BaseCommand):
         start_ceiling = now - timedelta(minutes=threshold_minutes)
         start_floor = now - timedelta(hours=lookback_hours)
 
+        from events.cancelled import active_event_q
+
         candidates = list(
             AmbassadorEvent.objects
             .select_related("event", "event__timezone", "ambassador", "ambassador__user")
             .filter(
+                # A cancelled demo keeps its approved bookings, so without
+                # this every BA on it got "you're not clocked in".
+                active_event_q(),
                 is_approved=True,
                 event__isnull=False,
                 ambassador__isnull=False,

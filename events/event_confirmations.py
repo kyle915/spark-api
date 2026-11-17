@@ -43,6 +43,7 @@ from urllib.parse import quote_plus, urlparse, urlunparse
 
 from django.conf import settings
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from events.models import EventConfirmation, EventConfirmationSend
@@ -709,14 +710,21 @@ def send_confirmation_stage(
             return SendResult(stage=stage, sent=False, reason="already-sent")
         if not created and row.attempts >= EventConfirmationSend.MAX_ATTEMPTS:
             return SendResult(stage=stage, sent=False, reason="attempts-exhausted")
+        if not created and row.attempts > 0 and not row.last_error:
+            # Claimed by another run that has not finished (a failure always
+            # records last_error). Sending now could email the BA twice.
+            return SendResult(stage=stage, sent=False, reason="in-flight")
         row.attempts += 1
         row.to_email = confirmation.ba_email
-        row.save(update_fields=["attempts", "to_email", "updated_at"])
+        # Cleared while this try is in flight so a racing sweep sees it as
+        # claimed; a failure below writes it back.
+        row.last_error = ""
+        row.save(update_fields=["attempts", "to_email", "last_error", "updated_at"])
 
     try:
         # send_now, not send(): there is no Redis/RQ on Cloud Run, so the queue
         # path would fall back to inline anyway — this just says so plainly.
-        mailer_class(confirmation, stage).send_now()
+        accepted = mailer_class(confirmation, stage).send_now()
     except Exception as exc:  # noqa: BLE001 — recorded, retried next sweep
         logger.exception(
             "event confirmation send failed confirmation=%s stage=%s",
@@ -726,6 +734,16 @@ def send_confirmation_stage(
             last_error=str(exc)[:2000], updated_at=timezone.now()
         )
         return SendResult(stage=stage, sent=False, reason=f"error: {exc}")
+
+    if accepted is False:
+        # The provider answered but did not take the email (Resend returns no
+        # id on a bad key or unverified sender instead of raising). Not sent:
+        # leave sent_at empty so the next sweep tries again.
+        error = "email provider did not accept the message"
+        EventConfirmationSend.objects.filter(pk=row.pk).update(
+            last_error=error, updated_at=timezone.now()
+        )
+        return SendResult(stage=stage, sent=False, reason=f"error: {error}")
 
     EventConfirmationSend.objects.filter(pk=row.pk).update(
         sent_at=timezone.now(), last_error="", updated_at=timezone.now()
@@ -824,8 +842,10 @@ def due_reminders(now: datetime | None = None, *, grace_hours: int = 6):
     "in a few hours" reminder minutes behind it, and a same-week booking would
     get the "tomorrow" one too.
 
-    Excluded: shifts already started, cancelled rows, rows whose sender opted
-    out of reminders, and any (confirmation, stage) already in the ledger.
+    Excluded: shifts already started, cancelled rows, rows tied to a cancelled
+    or deleted demo, rows whose sender opted out of reminders, and any
+    (confirmation, stage) already sent or out of tries. A stage whose send
+    failed is due again on the next sweep, inside the same grace window.
     """
     now = now or timezone.now()
 
@@ -835,9 +855,15 @@ def due_reminders(now: datetime | None = None, *, grace_hours: int = 6):
     # confirmation ever written — this runs every 15 minutes forever.
     horizon = now + timedelta(hours=max(EventConfirmation.STAGE_LEAD_HOURS.values()))
 
+    from events.cancelled import active_event_q
+
     confirmations = (
         EventConfirmation.objects.select_related("tenant", "timezone")
         .filter(
+            # Cancelling the demo itself (events/demo_cancel.py) does not
+            # touch the confirmation row, so a confirmation tied to a
+            # cancelled or deleted event has to be dropped here too.
+            Q(event__isnull=True) | active_event_q("event__"),
             send_reminders=True,
             cancelled_at__isnull=True,
             # Never remind about a shift that has already begun.
@@ -847,11 +873,19 @@ def due_reminders(now: datetime | None = None, *, grace_hours: int = 6):
     )
 
     # One query for every stage already spoken for, so the per-row check below
-    # is a set lookup rather than N queries.
+    # is a set lookup rather than N queries. The one exception is a try that
+    # FAILED (unsent, error recorded) with tries left: that is due again, so
+    # the next sweep retries it instead of the BA never getting the email.
+    # send_confirmation_stage enforces the cap again under its row lock.
+    retryable = (
+        Q(sent_at__isnull=True)
+        & Q(attempts__lt=EventConfirmationSend.MAX_ATTEMPTS)
+        & ~Q(last_error="")
+    )
     claimed = set(
-        EventConfirmationSend.objects.filter(
-            confirmation__in=confirmations
-        ).values_list("confirmation_id", "stage")
+        EventConfirmationSend.objects.filter(confirmation__in=confirmations)
+        .exclude(retryable)
+        .values_list("confirmation_id", "stage")
     )
 
     due: list[tuple[EventConfirmation, str]] = []

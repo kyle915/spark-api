@@ -774,3 +774,118 @@ class TestSweepCommand:
         assert "4 reminders due" in log
         # Silent truncation would read as "all clear" in the Actions log.
         assert "2 deferred" in log
+
+
+# ---------------------------------------------------------------------------
+# Failed sends are retried; cancelled demos are not reminded
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestFailedRemindersAreRetried:
+    def _due_at_t24(self, **kwargs):
+        tenant = _tenant()
+        starts = djtz.now() + timedelta(hours=24)
+        c = _confirmation(tenant, starts_at=starts, **kwargs)
+        EventConfirmation.objects.filter(pk=c.pk).update(
+            created_at=starts - timedelta(days=5)
+        )
+        c.refresh_from_db()
+        return c
+
+    def test_a_send_the_provider_did_not_accept_is_not_marked_sent(self):
+        """Resend answers without an id on a bad key / unverified sender
+        instead of raising. That used to be stamped sent."""
+        c = self._due_at_t24()
+        with patch(SEND_PATH, return_value=False):
+            result = send_confirmation_stage(c, EventConfirmation.STAGE_T24)
+        assert result.sent is False
+        row = EventConfirmationSend.objects.get(
+            confirmation=c, stage=EventConfirmation.STAGE_T24
+        )
+        assert row.sent_at is None
+        assert "did not accept" in row.last_error
+
+    def test_the_next_sweep_retries_a_failed_stage(self):
+        c = self._due_at_t24()
+        with patch(SEND_PATH, side_effect=RuntimeError("resend down")):
+            call_command("send_event_confirmations", stdout=StringIO())
+        # Failed with tries left: due again on the next run.
+        assert [(x.id, s) for x, s in due_reminders()] == [
+            (c.id, EventConfirmation.STAGE_T24)
+        ]
+        with patch(SEND_PATH) as send:
+            call_command("send_event_confirmations", stdout=StringIO())
+            assert send.call_count == 1
+            call_command("send_event_confirmations", stdout=StringIO())
+            assert send.call_count == 1
+        row = EventConfirmationSend.objects.get(
+            confirmation=c, stage=EventConfirmation.STAGE_T24
+        )
+        assert row.sent_at is not None and row.attempts == 2
+
+    def test_a_stage_out_of_tries_is_not_offered_again(self):
+        self._due_at_t24()
+        with patch(SEND_PATH, side_effect=RuntimeError("resend down")) as send:
+            for _ in range(EventConfirmationSend.MAX_ATTEMPTS + 2):
+                call_command("send_event_confirmations", stdout=StringIO())
+        assert send.call_count == EventConfirmationSend.MAX_ATTEMPTS
+        assert due_reminders() == []
+
+    def test_a_stage_another_run_is_still_sending_is_left_alone(self):
+        c = self._due_at_t24()
+        EventConfirmationSend.objects.create(
+            confirmation=c, stage=EventConfirmation.STAGE_T24, attempts=1
+        )
+        assert due_reminders() == []
+        with patch(SEND_PATH) as send:
+            result = send_confirmation_stage(c, EventConfirmation.STAGE_T24)
+        assert result.reason == "in-flight"
+        assert send.call_count == 0
+
+    def _event_for(self, tenant, *, event_status=None, request_status=None):
+        from events.models import Event, EventStatus, Request, RequestStatus, RequestType
+
+        user = _system_user()
+        event = Event.objects.create(
+            name="Jewel Osco demo", tenant=tenant, address="x", created_by=user
+        )
+        if event_status:
+            event.status = EventStatus.objects.create(
+                name=event_status, slug=event_status, tenant=tenant, created_by=user
+            )
+            event.save(update_fields=["status"])
+        if request_status:
+            request = Request.objects.create(
+                name="Demo",
+                address="x",
+                tenant=tenant,
+                status=RequestStatus.objects.create(
+                    name=request_status, slug=request_status, tenant=tenant,
+                    created_by=user,
+                ),
+                request_type=RequestType.objects.create(
+                    name="Retail", tenant=tenant, created_by=user
+                ),
+                created_by=None,
+            )
+            event.request = request
+            event.save(update_fields=["request"])
+        return event
+
+    def test_a_confirmation_for_a_cancelled_demo_gets_no_reminder(self):
+        c = self._due_at_t24()
+        c.event = self._event_for(c.tenant, event_status="suspended")
+        c.save(update_fields=["event"])
+        assert due_reminders() == []
+
+    def test_a_declined_request_also_stops_the_reminder(self):
+        c = self._due_at_t24()
+        c.event = self._event_for(c.tenant, request_status="declined")
+        c.save(update_fields=["event"])
+        assert due_reminders() == []
+
+    def test_a_live_linked_event_is_still_reminded(self):
+        c = self._due_at_t24()
+        c.event = self._event_for(c.tenant, request_status="approved")
+        c.save(update_fields=["event"])
+        assert len(due_reminders()) == 1

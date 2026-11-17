@@ -7,7 +7,7 @@ from typing import Any
 
 import django_rq
 from asgiref.sync import async_to_sync
-from django.db.models import Q
+from django.db.models import F, Q
 from django.utils import timezone
 from django_rq import job
 from rq import Retry
@@ -38,6 +38,13 @@ REMINDER_3H_EXACT_SCHEDULE_PREFIX = "jobs.ambassador_event_reminders.3h"
 REMINDER_15M_EXACT_SCHEDULE_PREFIX = "jobs.ambassador_event_reminders.15m"
 END_REMINDER_15M_EXACT_SCHEDULE_PREFIX = "jobs.ambassador_event_end_reminders.15m"
 REMINDER_ALLOWED_STATUS_SLUGS = {"approved", "accepted"}
+# A 24h/3h reminder email that fails is retried on the next cron pass (every
+# ~10 min) until it goes out or this many tries have failed.
+REMINDER_EMAIL_MAX_ATTEMPTS = 5
+_REMINDER_ATTEMPTS_FIELD = {
+    "reminder_sent_at": "reminder_24h_attempts",
+    "reminder_3h_sent_at": "reminder_3h_attempts",
+}
 
 
 def _ambassador_job_schedule_description(
@@ -78,9 +85,37 @@ def _get_ambassador_job_for_reminder(ambassador_job_id: int) -> AmbassadorJob | 
             Q(ambassador__user__email__isnull=True)
             | Q(ambassador__user__email="")
         )
-        .select_related("status", "ambassador__user", "job__event", "job__event__timezone")
+        .select_related(
+            "status",
+            "ambassador__user",
+            "job__event",
+            "job__event__timezone",
+            "job__event__status",
+            "job__event__request",
+            "job__event__request__status",
+        )
         .first()
     )
+
+
+def _shift_called_off(ambassador_job: AmbassadorJob, label: str) -> bool:
+    """True (and logged) when the job's event was cancelled or deleted.
+
+    Cancelling a demo leaves the bookings approved, so the booking status alone
+    does not stop a reminder for a demo that is not happening.
+    """
+    from events.cancelled import event_is_called_off
+
+    event = getattr(getattr(ambassador_job, "job", None), "event", None)
+    if not event_is_called_off(event):
+        return False
+    logger.info(
+        "Skipping %s reminder for ambassador_job=%s: event %s was cancelled or deleted",
+        label,
+        ambassador_job.id,
+        getattr(event, "id", None),
+    )
+    return True
 
 
 def _event_trigger_at_hours_before_utc(
@@ -596,6 +631,15 @@ def _send_ambassador_job_exact_reminder(
     if status_slug not in REMINDER_ALLOWED_STATUS_SLUGS:
         return 0
 
+    if _shift_called_off(ambassador_job, reminder_label):
+        return 0
+
+    attempts_field = _REMINDER_ATTEMPTS_FIELD.get(reminder_field)
+    if attempts_field and (
+        getattr(ambassador_job, attempts_field, 0) or 0
+    ) >= REMINDER_EMAIL_MAX_ATTEMPTS:
+        return 0
+
     current_trigger_at_utc = _event_trigger_at_hours_before_utc(
         ambassador_job,
         hours_before=hours_before,
@@ -642,7 +686,34 @@ def _send_ambassador_job_exact_reminder(
         to_emails=[recipient_email],
         recipient_first_name=(ambassador_user.first_name or "").strip() or None,
     )
-    mailer.send()
+    try:
+        delivered = mailer.send()
+    except Exception:  # noqa: BLE001 — a failed try is retried, not fatal
+        logger.warning(
+            "%s reminder email raised for ambassador_job=%s",
+            reminder_label,
+            ambassador_job_id,
+            exc_info=True,
+        )
+        delivered = False
+
+    if delivered is False:
+        # Not sent: leave the *_sent_at stamp empty so the next cron pass
+        # tries again, and count the try so a permanently failing address
+        # stops after REMINDER_EMAIL_MAX_ATTEMPTS.
+        if attempts_field:
+            AmbassadorJob.objects.filter(pk=ambassador_job.pk).update(
+                **{attempts_field: F(attempts_field) + 1}
+            )
+            tried = (getattr(ambassador_job, attempts_field, 0) or 0) + 1
+            if tried >= REMINDER_EMAIL_MAX_ATTEMPTS:
+                logger.warning(
+                    "Giving up on %s reminder email for ambassador_job=%s after %s tries",
+                    reminder_label,
+                    ambassador_job_id,
+                    tried,
+                )
+        return 0
 
     setattr(ambassador_job, reminder_field, _to_utc_aware(timezone.now()))
     ambassador_job.save(update_fields=[reminder_field])
@@ -762,6 +833,9 @@ def send_ambassador_job_15m_reminder_push(
     if status_slug not in REMINDER_ALLOWED_STATUS_SLUGS:
         return 0
 
+    if _shift_called_off(ambassador_job, "15m"):
+        return 0
+
     current_trigger_at_utc = _event_trigger_at_hours_before_utc(
         ambassador_job,
         hours_before=0,
@@ -824,6 +898,9 @@ def send_ambassador_job_end_15m_reminder_push(
 
     status_slug = (getattr(ambassador_job.status, "slug", None) or "").strip().lower()
     if status_slug not in REMINDER_ALLOWED_STATUS_SLUGS:
+        return 0
+
+    if _shift_called_off(ambassador_job, "end-15m"):
         return 0
 
     current_event_end_utc = _to_utc_aware(_event_end_datetime(ambassador_job))

@@ -327,9 +327,13 @@ def _skip_if_no_recipients(envelope: Envelope) -> bool:
 class MailDriver:
     """
     The Mail Driver class.
+
+    ``send`` returns True when the provider accepted the message, False when
+    it answered without accepting it, and None when there was nobody valid
+    to send to. Callers that only fire-and-forget can ignore it.
     """
 
-    def send(self, envelope: Envelope) -> None:
+    def send(self, envelope: Envelope) -> bool | None:
         raise NotImplementedError("Subclasses must implement this method")
 
 
@@ -371,14 +375,14 @@ class ResendMailDriver(MailDriver):
     The Resend Mail Driver.
     """
 
-    def send(self, envelope: Envelope) -> None:
+    def send(self, envelope: Envelope) -> bool | None:
         to_emails = valid_recipient_emails(envelope.to_emails)
         if not to_emails:
             logger.info(
                 "Resend send skipped — no valid recipients for subject=%r",
                 envelope.subject,
             )
-            return
+            return None
         params: resend.Emails.SendParams = {
             "from": envelope.from_email,
             "to": to_emails,
@@ -413,11 +417,12 @@ class ResendMailDriver(MailDriver):
                 "Resend send FAILED (no id in response) to=%s subject=%r result=%s",
                 envelope.to_emails, envelope.subject, result,
             )
-            return
+            return False
         logger.info(
             "Resend send to=%s subject=%r id=%s",
             envelope.to_emails, envelope.subject, send_id,
         )
+        return True
 
 
 class MailpitMailDriver(MailDriver):
@@ -425,14 +430,14 @@ class MailpitMailDriver(MailDriver):
     The Mailpit Mail Driver.
     """
 
-    def send(self, envelope: Envelope) -> None:
+    def send(self, envelope: Envelope) -> bool | None:
         to_emails = valid_recipient_emails(envelope.to_emails)
         if not to_emails:
             logger.info(
                 "Mailpit send skipped — no valid recipients for subject=%r",
                 envelope.subject,
             )
-            return
+            return None
         html_content = envelope.render_template()
         email = EmailMultiAlternatives(
             subject=envelope.subject,
@@ -468,6 +473,7 @@ class MailpitMailDriver(MailDriver):
                 part.add_header("Content-Disposition", "attachment", filename=filename)
             email.attach(part)
         email.send()
+        return True
 
 
 class MailDrivers:
@@ -482,15 +488,15 @@ class MailDrivers:
             "mailpit": MailpitMailDriver(),
         }
 
-    def send(self, envelope: Envelope) -> None:
+    def send(self, envelope: Envelope) -> bool | None:
         if block_if_suppressed("email", envelope.subject):
-            return
+            return None
         had_recipients = bool(envelope.to_emails)
         drop_muted_recipients(envelope)
         if had_recipients and not envelope.to_emails:
             # Everyone on it muted this category.
-            return
-        self.drivers[self.driver].send(envelope)
+            return None
+        return self.drivers[self.driver].send(envelope)
 
 
 @job('default', retry=Retry(max=3, interval=[60, 120, 240]))
@@ -605,11 +611,14 @@ class Mailer:
         drop_muted_recipients(envelope)
         return envelope
 
-    def dispatch(self) -> None:
+    def dispatch(self) -> bool | None:
+        """Send inline. Same return contract as ``MailDriver.send``: False
+        when the provider answered without accepting the message. Exceptions
+        propagate."""
         envelope = self._prepare_envelope(self.envelope())
         if _skip_if_no_recipients(envelope):
-            return
-        self.get_driver().send(envelope)
+            return None
+        return self.get_driver().send(envelope)
 
     async def send_async(self) -> None:
         """Send the email asynchronously. (background processing)
@@ -621,14 +630,22 @@ class Mailer:
         """
         await sync_to_async(self.send_now)()
 
-    def send_now(self) -> None:
+    def send_now(self) -> bool | None:
         """Send the email now. (no background processing)
-        """
-        self.dispatch()
 
-    def send(self, delay_seconds: int | float | None = None) -> None:
+        Returns False when the provider did not accept it (see dispatch).
+        """
+        return self.dispatch()
+
+    def send(self, delay_seconds: int | float | None = None) -> bool | None:
         """
         It sends the email using rq workers so we send in the background.
+
+        Returns False when the email definitely did not go out (the provider
+        raised or answered without accepting it), True when it was sent or
+        queued, and None when there was nothing to send (no recipients,
+        suppressed, everyone muted). Existing callers ignore it; a caller that
+        records "sent" (the shift reminders) must not record a False.
 
         This method enqueues the email sending task to be processed
         asynchronously by RQ workers. The email will be sent in the background
@@ -641,15 +658,15 @@ class Mailer:
         envelope: Envelope = self.envelope()
         envelope = self._prepare_envelope(envelope)
         if _skip_if_no_recipients(envelope):
-            return
+            return None
         if block_if_suppressed("email", envelope.subject):
-            return
+            return None
 
         # Cloud Run has no Redis. Skip the queue entirely so we never
         # open localhost:6379 (connection-refused ERROR logs → Spark alerts).
         if not rq_is_enabled():
             try:
-                self.get_driver().send(envelope)
+                return self.get_driver().send(envelope)
             except Exception as inline_exc:
                 if _is_placeholder_resend_rejection(inline_exc):
                     logger.warning(
@@ -659,11 +676,13 @@ class Mailer:
                         _recipient_domains(envelope.to_emails),
                         inline_exc,
                     )
-                else:
-                    logger.exception(
-                        "Inline mail send failed: %s", inline_exc,
-                    )
-            return
+                    # A placeholder address will never take mail; retrying
+                    # would only repeat this.
+                    return None
+                logger.exception(
+                    "Inline mail send failed: %s", inline_exc,
+                )
+                return False
         try:
             queues = Queues()
             if delay_seconds and delay_seconds > 0:
@@ -673,8 +692,9 @@ class Mailer:
                     send_email_task,
                     payload=envelope.compile(),
                 )
-                return
+                return True
             queues.default.add(send_email_task, payload=envelope.compile())
+            return True
         except Exception as exc:
             # Redis ConnectionRefusedError / TimeoutError / any other
             # queue-layer failure → swallow and dispatch inline. Worst
@@ -686,7 +706,7 @@ class Mailer:
                 exc, envelope.subject, envelope.to_emails,
             )
             try:
-                self.get_driver().send(envelope)
+                return self.get_driver().send(envelope)
             except Exception as inline_exc:
                 if _is_placeholder_resend_rejection(inline_exc):
                     logger.warning(
@@ -696,10 +716,11 @@ class Mailer:
                         _recipient_domains(envelope.to_emails),
                         inline_exc,
                     )
-                else:
-                    logger.exception(
-                        "Inline mail fallback failed too: %s", inline_exc,
-                    )
+                    return None
+                logger.exception(
+                    "Inline mail fallback failed too: %s", inline_exc,
+                )
+                return False
 
 
 class MailChain:

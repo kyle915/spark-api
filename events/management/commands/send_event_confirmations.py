@@ -175,7 +175,9 @@ class Command(BaseCommand):
             if result.sent:
                 sent += 1
                 self.stdout.write(f"sent {label}")
-            elif result.reason in ("already-sent", "attempts-exhausted", "no-email"):
+            elif result.reason in (
+                "already-sent", "attempts-exhausted", "no-email", "in-flight"
+            ):
                 skipped += 1
                 self.stdout.write(f"skipped ({result.reason}) {label}")
             else:
