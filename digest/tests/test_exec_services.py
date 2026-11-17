@@ -26,8 +26,7 @@ from recaps.models import (
 NOW = datetime(2026, 11, 14, 12, 0, tzinfo=_tz.utc)
 
 
-@pytest.mark.django_db(transaction=True)
-class TestExecutiveSummaryRecapFamilies(AmbassadorsGraphQLTestCase):
+class _ExecSummaryFixtures(AmbassadorsGraphQLTestCase):
     @pytest.fixture(autouse=True)
     def setup(self, db):
         self.roles = self.setup_default_roles()
@@ -123,6 +122,10 @@ class TestExecutiveSummaryRecapFamilies(AmbassadorsGraphQLTestCase):
     def _summary(self):
         return build_executive_summary(self.tenant, now=NOW)
 
+
+@pytest.mark.django_db(transaction=True)
+class TestExecutiveSummaryRecapFamilies(_ExecSummaryFixtures):
+
     def test_a_custom_template_tenant_is_not_reported_as_an_empty_week(self):
         self._custom(consumers=40)
         self._custom(consumers=25)
@@ -199,3 +202,108 @@ class TestExecutiveSummaryRecapFamilies(AmbassadorsGraphQLTestCase):
 
         assert summary.recap_count == 1
         assert summary.consumer_reach == 0
+
+
+@pytest.mark.django_db(transaction=True)
+class TestExecutiveSummaryEmailRenders(_ExecSummaryFixtures):
+    """The template crashed at compile time on every Monday send
+    (``summary.delta_chip:"recaps"`` is not valid Django template syntax).
+    Render the real email from a realistic week -- legacy + custom-template
+    recaps, a prior week so the delta chips show -- and assert it renders.
+    """
+
+    def _realistic_week(self):
+        # Prior week: one custom recap, so both delta chips are populated.
+        self._custom(days_ago=9, consumers=20)
+        # This week: a custom-template recap pair plus a legacy recap, at
+        # two stores.
+        self._custom(consumers=40)
+        self._custom(event=self._event("Store B"), consumers=25)
+        self._legacy(consumers=10)
+        return self._summary()
+
+    def _render(self, summary, *, include_ba_names):
+        from digest.envelopes import ExecutiveSummaryMailer
+
+        mailer = ExecutiveSummaryMailer(
+            summary=summary,
+            to_emails=["someone@example.com"],
+            web_app_base_url="https://admin.example.com",
+            include_ba_names=include_ba_names,
+        )
+        return mailer.envelope().render_template()
+
+    def test_the_email_renders_with_custom_template_recaps(self):
+        summary = self._realistic_week()
+        assert summary.recap_count == 3
+        assert summary.recap_delta_chip and summary.reach_delta_chip
+
+        html = self._render(summary, include_ba_names=True)
+
+        assert summary.tenant_name in html
+        assert summary.recap_delta_chip in html
+        assert summary.reach_delta_chip in html
+        assert "Top stores by reach" in html
+        assert "samplings" in html
+        assert "Dana Reyes" in html
+        assert "Top ambassadors" in html
+
+    def test_a_client_copy_carries_no_ambassador_names(self):
+        summary = self._realistic_week()
+
+        html = self._render(summary, include_ba_names=False)
+
+        assert "Dana Reyes" not in html
+        assert "ba-exec@test.com" not in html
+        assert "Top ambassadors" not in html
+        # The rest of the email is intact.
+        assert "Top stores by reach" in html
+        assert str(summary.recap_count) in html
+
+    def test_no_cost_per_sample_in_the_email(self):
+        html = self._render(self._realistic_week(), include_ba_names=True).lower()
+        assert "cost per sample" not in html
+        assert "cost-per-sample" not in html
+
+    def test_cron_sends_names_to_staff_only(self):
+        from unittest import mock
+
+        from django.core.management import call_command
+
+        from digest.envelopes import ExecutiveSummaryMailer
+        from digest.management.commands.send_executive_summary import (
+            split_staff_recipients,
+        )
+
+        client = self.create_user(
+            username="client-exec@brand.com",
+            email="client-exec@brand.com",
+            role=self.roles["client"],
+        )
+        staff, others = split_staff_recipients(
+            ["actor-exec@test.com", client.email, "stranger@nowhere.com"]
+        )
+        assert staff == ["actor-exec@test.com"]
+        assert others == ["client-exec@brand.com", "stranger@nowhere.com"]
+
+        self._realistic_week()
+        rendered: list[tuple[list[str], str]] = []
+
+        def fake_send(mailer):
+            rendered.append((mailer.to_emails, mailer.envelope().render_template()))
+
+        with mock.patch(
+            "digest.management.commands.send_executive_summary.build_executive_summary",
+            return_value=self._summary(),
+        ), mock.patch.object(ExecutiveSummaryMailer, "send_now", fake_send):
+            call_command(
+                "send_executive_summary",
+                "--tenant-id",
+                str(self.tenant.id),
+                "--to",
+                f"actor-exec@test.com,{client.email}",
+            )
+
+        by_to = {tuple(to): html for to, html in rendered}
+        assert "Dana Reyes" in by_to[("actor-exec@test.com",)]
+        assert "Dana Reyes" not in by_to[(client.email,)]
