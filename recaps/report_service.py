@@ -41,6 +41,7 @@ from events.models import Request
 from recaps.types import (
     _samples_given_from_fields,
     _consumers_sampled_from_fields,
+    _is_giveaway_name,
     _is_image_url,
     _sold_units_from_fields,
 )
@@ -180,12 +181,11 @@ def _custom_field_pairs(
 
 
 def _leading_int(value) -> int | None:
-    """First non-negative integer in a free-text value ('70 cans' -> 70)."""
-    if value is None:
-        return None
-    m = re.search(r"\d+", str(value))
-    return int(m.group()) if m else None
+    """The count in a recap answer ('70', '70 cans', '1,234', '~30'), or
+    None. One reader for every recap number: :func:`recaps.numbers.parse_count`."""
+    from recaps.numbers import parse_count
 
+    return parse_count(value)
 
 def _custom_engagement_totals(pairs) -> dict[str, int]:
     """Map a custom recap's free-text engagement fields onto the four
@@ -300,6 +300,8 @@ def _accumulate_custom(
                 kpis.cans_sold += int(parsed)
             elif decided == metric_mapping.UNITS_SOLD_PACK:
                 kpis.packs_sold += int(parsed)
+        elif _is_giveaway_name(name):
+            continue  # cans handed out free are not sold
         elif re.search(r"\bcans?\b", label):
             kpis.cans_sold += int(parsed)
         elif re.search(r"\bpacks?\b", label):

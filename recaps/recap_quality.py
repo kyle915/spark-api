@@ -114,24 +114,12 @@ _CUSTOM_FEEDBACK_NAME_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Leading-integer parse for free-text numeric fields (mirrors
-# ``tenant_overview._leading_int`` / ``types._parse_recap_int``): pulls the
-# first integer out of strings like "120 consumers", "~30", "12 cans". Returns
-# None when there's no number.
-_LEADING_INT_RE = re.compile(r"-?\d+")
-
-
 def _leading_int(value) -> int | None:
-    """First integer embedded in ``value`` (e.g. ``"120 cans"`` -> 120), or None."""
-    if value is None:
-        return None
-    match = _LEADING_INT_RE.search(str(value))
-    if not match:
-        return None
-    try:
-        return int(match.group())
-    except (TypeError, ValueError):
-        return None
+    """The count in a recap answer ('70', '70 cans', '1,234', '~30'), or
+    None. One reader for every recap number: :func:`recaps.numbers.parse_count`."""
+    from recaps.numbers import parse_count
+
+    return parse_count(value)
 
 
 def _is_blank(text) -> bool:
@@ -311,6 +299,7 @@ def _gather_custom_facts(custom_recap) -> _RecapFacts:
     # Pull the recap's field (name, value) pairs once; classify both the
     # feedback snippets and the KPI numbers from the same in-memory list.
     from recaps import metric_mapping
+    from recaps.types import _is_giveaway_name
 
     rows = list(
         CustomFieldValue.objects.filter(custom_recap=custom_recap).values_list(
@@ -365,6 +354,8 @@ def _gather_custom_facts(custom_recap) -> _RecapFacts:
             consumers_reached += parsed
             saw_consumers = True
             saw_sold = True if "sold" in low else saw_sold
+        if _is_giveaway_name(label):
+            continue  # cans handed out free are not sold
         if re.search(r"\bcans?\b", low):
             cans_sold += parsed
             saw_sold = True

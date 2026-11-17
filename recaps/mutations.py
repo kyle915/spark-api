@@ -4164,28 +4164,36 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
 
         return await map_store()
 
-    async def bulk_approve_recaps(self) -> int:
+    async def bulk_approve_recaps(self) -> tuple[int, list[str]]:
         """Approve/decline many recaps. Reuses the single-row path so
-        hours-logging + notify stay identical."""
+        hours-logging + notify stay identical.
+
+        Returns ``(updated, errors)``. One recap that can't be approved no
+        longer stops the rest (or hides the ones already done behind a
+        bare failure): each is tried, and the reasons for the ones that
+        failed come back so the caller can say exactly how many moved."""
         if not isinstance(self.input, inputs.BulkApproveRecapsInput):
             raise GraphQLError("Invalid input type.")
         approved = bool(self.input.approved)
         count = 0
-        for rid in self.input.recap_ids or []:
-            svc = RecapMutationService.with_input(
-                inputs.ApproveRecapInput(id=rid, approved=approved)
-            )
+        errors: list[str] = []
+        targets = [
+            (inputs.ApproveRecapInput, "approve_recap", rid)
+            for rid in self.input.recap_ids or []
+        ] + [
+            (inputs.ApproveCustomRecapInput, "approve_custom_recap", rid)
+            for rid in self.input.custom_recap_ids or []
+        ]
+        for input_cls, method, rid in targets:
+            svc = RecapMutationService.with_input(input_cls(id=rid, approved=approved))
             svc.user = self.user
-            await svc.approve_recap()
+            try:
+                await getattr(svc, method)()
+            except GraphQLError as exc:
+                errors.append(str(exc) or "Could not be approved.")
+                continue
             count += 1
-        for rid in self.input.custom_recap_ids or []:
-            svc = RecapMutationService.with_input(
-                inputs.ApproveCustomRecapInput(id=rid, approved=approved)
-            )
-            svc.user = self.user
-            await svc.approve_custom_recap()
-            count += 1
-        return count
+        return count, errors
 
     async def mark_recaps_shared(self) -> int:
         """Stamp shared_at so the pipeline can show Shared."""
@@ -6646,7 +6654,20 @@ class RecapMutations:
         try:
             service = RecapMutationService.with_input(input)
             await service.set_user(info)
-            updated = await service.bulk_approve_recaps()
+            updated, errors = await service.bulk_approve_recaps()
+            if errors:
+                # updated_count is what actually moved; the message is the
+                # first reason (the web app says "Approved X of Y" itself).
+                reason = errors[0]
+                if len(errors) > 1:
+                    reason += f" (and {len(errors) - 1} more)"
+                return build_mutation_response(
+                    types.BulkRecapsResponse,
+                    success=False,
+                    message=reason,
+                    input_obj=input,
+                    updated_count=updated,
+                )
             return build_mutation_response(
                 types.BulkRecapsResponse,
                 success=True,

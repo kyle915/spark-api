@@ -59,7 +59,7 @@ from recaps.models import (
     Recap,
 )
 from recaps import metric_mapping
-from recaps.aggregates import exclude_non_aggregate_recaps
+from recaps.aggregates import client_counted_q, exclude_non_aggregate_recaps
 from recaps.report_service import (
     _confirmed_metrics_for,
     _format_date_range,
@@ -68,6 +68,7 @@ from recaps.report_service import (
 from recaps.types import (
     _consumers_sampled_from_fields,
     _is_dry_demo_from_fields,
+    _is_giveaway_name,
     _people_engaged_from_fields,
     _samples_given_from_fields,
     _sold_unit_lines,
@@ -317,7 +318,7 @@ def _approved_only(queryset, approved_prefix: str):
     flag (``""`` on Recap/CustomRecap itself, ``"recap__"`` /
     ``"custom_recap__"`` on children).
     """
-    return queryset.filter(**{f"{approved_prefix}approved": True})
+    return queryset.filter(client_counted_q(approved_prefix))
 
 
 def _filter_event_year(queryset, prefix: str, year: int | None):
@@ -608,6 +609,8 @@ def _custom_kpis_window(tenant_id: int, window: tuple | None) -> dict[str, int]:
                     out["cans_sold"] += parsed
                 elif decided == metric_mapping.UNITS_SOLD_PACK:
                     out["packs_sold"] += parsed
+            elif _is_giveaway_name(name):
+                continue  # cans handed out free are not sold
             elif re.search(r"\bcans?\b", label):
                 out["cans_sold"] += parsed
             elif re.search(r"\bpacks?\b", label):

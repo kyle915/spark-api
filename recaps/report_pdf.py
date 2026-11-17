@@ -327,8 +327,12 @@ def generate_campaign_report_pdf(request_id: int) -> bytes:
     if request_obj is None:
         raise CampaignReportPdfError(f"Request {request_id} not found.")
 
+    # The PDF is reached through the public share link, so it carries the
+    # client bar: approved, unarchived recaps only.
     data = report_service.build_campaign_report(
-        request_obj, generated_at=datetime.now(_tz.utc).isoformat()
+        request_obj,
+        generated_at=datetime.now(_tz.utc).isoformat(),
+        approved_only=True,
     )
     document_html = _build_report_html(data)
 

@@ -61,8 +61,10 @@ def _build_report_or_404(request_id: int):
         request_obj = report_service.get_report_request(request_id)
         if request_obj is None:
             return None
+        # Anyone holding a share link is a client audience: approved,
+        # unarchived recaps only.
         return report_service.build_campaign_report(
-            request_obj, generated_at=timezone.now().isoformat()
+            request_obj, generated_at=timezone.now().isoformat(), approved_only=True
         )
 
     data = _build()

@@ -128,6 +128,53 @@ class TestBulkApproveRecaps(AmbassadorsGraphQLTestCase):
         assert refreshed.approved is False
 
     @pytest.mark.asyncio
+    async def test_one_bad_id_does_not_hide_the_rest(self):
+        """The count is what actually moved, and the failure is reported."""
+        ok_one = await sync_to_async(self._make_recap)(self.event)
+        ok_two = await sync_to_async(self._make_recap)(self.event)
+        result = await self._execute_mutation_authenticated(
+            BULK_APPROVE,
+            {
+                "recapIds": [str(ok_one.id), "999999", str(ok_two.id)],
+                "customIds": [],
+                "approved": True,
+            },
+            self.spark_admin,
+            self.endpoint_path,
+        )
+        assert result.errors is None, result.errors
+        payload = result.data["bulkApproveRecaps"]
+        assert payload["success"] is False, payload
+        assert payload["updatedCount"] == 2
+        assert payload["message"]
+        for recap in (ok_one, ok_two):
+            refreshed = await sync_to_async(recap_models.Recap.objects.get)(id=recap.id)
+            assert refreshed.approved is True
+
+    @pytest.mark.asyncio
+    async def test_client_mixed_selection_counts_only_their_own(self):
+        mine = await sync_to_async(self._make_recap)(self.event)
+        foreign = await sync_to_async(self._make_recap)(self.other_event)
+        result = await self._execute_mutation_authenticated(
+            BULK_APPROVE,
+            {
+                "recapIds": [str(foreign.id), str(mine.id)],
+                "customIds": [],
+                "approved": True,
+            },
+            self.client_user,
+            self.endpoint_path,
+        )
+        assert result.errors is None, result.errors
+        payload = result.data["bulkApproveRecaps"]
+        assert payload["success"] is False
+        assert payload["updatedCount"] == 1
+        assert (await sync_to_async(recap_models.Recap.objects.get)(id=mine.id)).approved
+        assert not (
+            await sync_to_async(recap_models.Recap.objects.get)(id=foreign.id)
+        ).approved
+
+    @pytest.mark.asyncio
     async def test_admin_can_mark_shared(self):
         recap = await sync_to_async(self._make_recap)(self.event)
         result = await self._execute_mutation_authenticated(
