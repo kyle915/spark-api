@@ -77,6 +77,10 @@ class PayrollShiftRow:
     address: str | None = None
     clock_in_at: str | None = None
     clock_out_at: str | None = None
+    # The venue's IANA zone ("America/New_York"). Punch times are shown and
+    # edited in it, so a Pacific admin fixing an East Coast clock-out types
+    # the time the BA actually left. Pacific when the event has no zone.
+    time_zone: str | None = None
     # Attendance uuids so the admin punch editor can target the exact rows.
     clock_in_attendance_uuid: str | None = None
     clock_out_attendance_uuid: str | None = None
@@ -287,6 +291,7 @@ class PayrollQueries:
                 worked_hours,
             )
             from ambassadors.models import AmbassadorEvent, Attendance
+            from events.venue_day import venue_local_date, venue_zone
 
             try:
                 start = _date.fromisoformat(str(start_date))
@@ -299,7 +304,7 @@ class PayrollQueries:
                 is_approved=True,
                 event__date__date__gte=start,
                 event__date__date__lte=end,
-            ).select_related("event", "event__tenant")
+            ).select_related("event", "event__tenant", "event__timezone")
             if not is_admin:
                 qs = qs.filter(event__tenant_id__in=(allowed or set()))
             elif resolved_tid is not None:
@@ -350,9 +355,12 @@ class PayrollQueries:
                     PayrollShiftRow(
                         event_uuid=str(ev.uuid),
                         event_name=ev.name or "",
-                        date=ev.date.date().isoformat() if ev.date else None,
+                        date=(
+                            d.isoformat() if (d := venue_local_date(ev)) else None
+                        ),
                         tenant_name=getattr(ev.tenant, "name", None),
                         address=ev.address or None,
+                        time_zone=venue_zone(ev).key,
                         clock_in_at=t_in.isoformat() if t_in else None,
                         clock_out_at=(
                             t_out.isoformat() if t_out and not on_clock else None

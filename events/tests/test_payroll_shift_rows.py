@@ -12,7 +12,7 @@ from events.tests.base import EventsGraphQLTestCase
 SHIFTS_Q = """
 query Shifts($s: String!, $e: String!, $amb: String!, $tid: ID) {
   payrollTimesheetShifts(startDate: $s, endDate: $e, ambassadorUuid: $amb, tenantId: $tid) {
-    eventUuid eventName date clockInAt clockOutAt
+    eventUuid eventName date timeZone clockInAt clockOutAt
     clockInAttendanceUuid clockOutAttendanceUuid
     onTheClock scheduledHours hours estimated rate pay
   }
@@ -123,3 +123,32 @@ class TestPayrollShiftRows(EventsGraphQLTestCase):
         )
         assert res.errors is None, res.errors
         assert res.data["payrollTimesheetShifts"] == []
+
+
+    @pytest.mark.asyncio
+    async def test_rows_carry_the_venue_zone_and_the_venue_day(self):
+        """Punch times are shown and edited in the venue's zone, so the row
+        has to say which zone that is; the day is the venue's too."""
+        from zoneinfo import ZoneInfo
+
+        def seed():
+            ev = self._shift(tenant=self.tenant, days_ago=3)
+            ny = em.TimeZone.objects.create(name="Eastern", code="EST", offset=-300)
+            # 8 PM Eastern = 01:00 UTC the next day.
+            local = (self.day - timedelta(days=3)).astimezone(ZoneInfo("America/New_York"))
+            start = local.replace(hour=20, minute=0)
+            em.Event.objects.filter(pk=ev.pk).update(
+                timezone=ny, start_time=start, end_time=start + timedelta(hours=2)
+            )
+            return start.date().isoformat()
+
+        venue_day = await sync_to_async(seed)()
+        (row,) = await self._run(self.tenant)
+        assert row["timeZone"] == "America/New_York"
+        assert row["date"] == venue_day
+
+    @pytest.mark.asyncio
+    async def test_a_row_with_no_zone_falls_back_to_pacific(self):
+        await sync_to_async(self._shift)(tenant=self.tenant, days_ago=4)
+        (row,) = await self._run(self.tenant)
+        assert row["timeZone"] == "America/Los_Angeles"

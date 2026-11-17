@@ -408,16 +408,14 @@ def _build_system_health_sync() -> dict:
     }
 
 
-# Spark Schema
-@strawberry.type()
-class QuerySpark(GoogleCalendarQueries, TenantThemingQuery, TenantLaunchQueries):
-    @strawberry.field
-    def healthcheck(self) -> str:
-        return "ok"
+@strawberry.type
+class SystemHealthQueries:
+    """``systemHealth`` on BOTH the Spark and the Clients schema.
 
-    @strawberry.field
-    async def server_info(self) -> ServerInfoType:
-        return await _build_server_info()
+    The admin web app talks to /graphql/clients, but this field used to live
+    only on QuerySpark, so the System Health page got "Cannot query field
+    'systemHealth'" on every load.
+    """
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def system_health(self, info) -> SystemHealthType | None:
@@ -445,6 +443,20 @@ class QuerySpark(GoogleCalendarQueries, TenantThemingQuery, TenantLaunchQueries)
             walkup_orphan_filed_count=data["walkup_orphan_filed_count"],
             walkup_orphan_filed_famus_count=data["walkup_orphan_filed_famus_count"],
         )
+
+
+# Spark Schema
+@strawberry.type()
+class QuerySpark(
+    GoogleCalendarQueries, TenantThemingQuery, TenantLaunchQueries, SystemHealthQueries
+):
+    @strawberry.field
+    def healthcheck(self) -> str:
+        return "ok"
+
+    @strawberry.field
+    async def server_info(self) -> ServerInfoType:
+        return await _build_server_info()
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     def me(self, info) -> CustomUserType:
@@ -716,6 +728,8 @@ class QueryClients(
     SupportTicketQueries,
     # Tenant launch wizard donor picker (admin-gated inside the resolver).
     TenantLaunchQueries,
+    # Ignite-admin System Health page (admin-gated inside the resolver).
+    SystemHealthQueries,
 ):
     @strawberry.field
     def healthcheck(self) -> str:

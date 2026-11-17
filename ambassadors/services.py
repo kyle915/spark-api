@@ -1886,12 +1886,16 @@ class AmbassadorQueriesService(SparkGraphQLMixin):
                 if filters.email:
                     queryset = queryset.filter(user__email__icontains=filters.email)
 
-                # Search by user name
+                # Search by user name. Each word must match the first or
+                # last name, so "dana rey" finds Dana Reyes (the whole string
+                # never matches either column on its own).
                 if filters.name:
-                    queryset = queryset.filter(
-                        Q(user__first_name__icontains=filters.name)
-                        | Q(user__last_name__icontains=filters.name)
-                    )
+                    for word in filters.name.split():
+                        queryset = queryset.filter(
+                            Q(user__first_name__icontains=word)
+                            | Q(user__last_name__icontains=word)
+                            | Q(user__email__icontains=word)
+                        )
 
                 # Search by address
                 if filters.address:

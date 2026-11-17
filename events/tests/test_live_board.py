@@ -46,6 +46,7 @@ BOARD_QUERY = """
         eventName
         brandName
         date
+        localDate
         startTime
         endTime
         startLocal
@@ -445,3 +446,52 @@ class TestLiveShiftBoard(AmbassadorsGraphQLTestCase):
         assert shift["lastClockInTapAt"] is not None
         assert shift["assigned"][0]["clockInAt"] is None
 
+
+    # ---------- the venue's day, not the UTC day ----------
+
+    @pytest.mark.asyncio
+    async def test_an_evening_shift_out_west_is_on_todays_board(self):
+        """6 PM Pacific today is tomorrow in UTC. The board used to select by
+        the UTC date, so the evening shift fell off the day it happens."""
+        from events.models import Event, TimeZone
+
+        def seed():
+            zone = TimeZone.objects.create(name="Pacific", code="PST", offset=-480)
+            start = datetime.combine(
+                _ops_today(), _time(18, 0), tzinfo=ZoneInfo("America/Los_Angeles")
+            )
+            assert start.astimezone(_tz.utc).date() != _ops_today()
+            Event.objects.filter(id=self.event.id).update(
+                timezone=zone,
+                date=start,
+                start_time=start,
+                end_time=start + timedelta(hours=3),
+            )
+            self._book(self._ba("evening"), approved=True)
+
+        await self._seed(seed)
+        (shift,) = await self._board(self.tenant.id)
+        assert shift["localDate"] == _ops_today().isoformat()
+        assert "Evening Tester" in self._names([shift])
+
+    @pytest.mark.asyncio
+    async def test_tomorrow_mornings_shift_is_not_on_todays_board(self):
+        """1 AM UTC tomorrow is the UTC day after; 9 AM Eastern tomorrow is
+        the venue day after. Neither belongs on today's board."""
+        from events.models import Event, TimeZone
+
+        def seed():
+            zone = TimeZone.objects.create(name="Eastern", code="EST", offset=-300)
+            start = datetime.combine(
+                _ops_today() + timedelta(days=1),
+                _time(9, 0),
+                tzinfo=ZoneInfo("America/New_York"),
+            )
+            Event.objects.filter(id=self.event.id).update(
+                timezone=zone, date=start, start_time=start,
+                end_time=start + timedelta(hours=3),
+            )
+            self._book(self._ba("tomorrow"), approved=True)
+
+        await self._seed(seed)
+        assert await self._board(self.tenant.id) == []

@@ -218,6 +218,10 @@ class LiveBoardShift:
     event_name: str
     brand_name: str
     date: str | None = None
+    # The shift's calendar day AT THE VENUE ("2026-11-16"). `date` is a UTC
+    # instant whose first ten characters are the UTC day — an evening shift
+    # out west reads as tomorrow there.
+    local_date: str | None = None
     start_time: str | None = None
     end_time: str | None = None
     # The same instants as wall-clock time at the venue ("2026-11-14T16:00:00",
@@ -397,6 +401,7 @@ class LiveBoardQueries:
             from django.utils import timezone
             from ambassadors.attendance_hours import clock_facts, worked_hours
             from events.map_points import event_map_points
+            from events.venue_day import event_ids_on_venue_day, venue_local_date
 
             now = timezone.now()
             try:
@@ -411,16 +416,20 @@ class LiveBoardQueries:
             # before they clock out.
             open_ids = _open_shift_event_ids(now)
 
+            scoped = Event.objects.all()
+            if not is_admin:
+                scoped = scoped.filter(tenant_id__in=(allowed or set()))
+            elif resolved_tid is not None:
+                scoped = scoped.filter(tenant_id=resolved_tid)
+            # The venue's day, not the UTC day: an evening shift out west is
+            # stored on the next UTC date and used to drop off today's board.
+            day_ids = event_ids_on_venue_day(scoped, day)
             qs = (
-                Event.objects.filter(Q(date__date=day) | Q(id__in=open_ids))
+                scoped.filter(Q(id__in=day_ids) | Q(id__in=open_ids))
                 .select_related("tenant", "request", "retailer", "timezone")
                 .prefetch_related("ambassadors_events__ambassador__user")
                 .order_by("start_time", "name")
             )
-            if not is_admin:
-                qs = qs.filter(tenant_id__in=(allowed or set()))
-            elif resolved_tid is not None:
-                qs = qs.filter(tenant_id=resolved_tid)
 
             events = list(qs[:400])
             event_ids = [ev.id for ev in events]
@@ -522,6 +531,9 @@ class LiveBoardQueries:
                         event_name=ev.name,
                         brand_name=ev.tenant.name if ev.tenant_id else "",
                         date=_iso(getattr(ev, "date", None)),
+                        local_date=(
+                            d.isoformat() if (d := venue_local_date(ev)) else None
+                        ),
                         start_time=_iso(start),
                         end_time=_iso(end),
                         start_local=_venue_local(ev, start),
