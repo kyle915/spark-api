@@ -558,3 +558,61 @@ class TestTenantInsightBuckets(AmbassadorsGraphQLTestCase):
         payload = result.data["tenantInsights"]
         assert payload["items"] == []
         assert payload["generatedAt"] is None
+
+
+KPIS_QUERY = """
+query K($tenantId: ID!) {
+  tenantKpis(tenantId: $tenantId, year: null) { consumersReached }
+}
+"""
+
+
+@pytest.mark.django_db(transaction=True)
+class TestMultiBrandClientKpis(AmbassadorsGraphQLTestCase):
+    """A client on two brands reads the brand they ask for (was: "not a
+    member of this tenant" on every KPI query, e.g. My Requests)."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self, db):
+        from config.schema_client import schema_clients
+
+        self.roles = self.setup_default_roles()
+        self.schema = schema_clients
+        self.endpoint_path = "/api/v1/graphql/clients"
+        self.energy = self.create_tenant(name="Energy Brand")
+        self.social = self.create_tenant(name="Social Brand")
+        self.stranger = self.create_tenant(name="Someone Else")
+        self.client_user = self.create_user(
+            username="two-brand-client",
+            email="two-brand@test.com",
+            role=self.roles["client"],
+        )
+        self.create_tenanted_user(self.client_user, self.energy)
+        self.create_tenanted_user(self.client_user, self.social)
+
+    async def _kpis(self, tenant_id):
+        return await self._execute_query_authenticated(
+            KPIS_QUERY, {"tenantId": str(tenant_id)}, self.client_user, self.endpoint_path
+        )
+
+    @pytest.mark.asyncio
+    async def test_each_brand_they_belong_to_loads(self):
+        for tenant in (self.energy, self.social):
+            result = await self._kpis(tenant.id)
+            assert result.errors is None, f"errored: {result.errors}"
+
+    @pytest.mark.asyncio
+    async def test_brand_they_do_not_belong_to_is_refused(self):
+        from recaps.report_types import _CampaignReportService
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        service = _CampaignReportService()
+        service.get_user = AsyncMock(return_value=self.client_user)
+        info = SimpleNamespace(context=SimpleNamespace(request=SimpleNamespace(user=self.client_user)))
+        # Not a member of the stranger brand, and no single "own" brand to
+        # fall back to: it must refuse, never return the stranger's id.
+        with pytest.raises(Exception):
+            got = await service.resolve_target_tenant_id(info, self.stranger.id)
+            assert got != self.stranger.id
+            raise AssertionError(f"resolved to {got}")
