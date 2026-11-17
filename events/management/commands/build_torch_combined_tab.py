@@ -263,7 +263,7 @@ class Command(BaseCommand):
         stamp = _tz.now().strftime("%Y%m%d%H%M%S")
         blob = f"exports/torch-combined/{stamp}-conflicts.csv"
         upload_bytes(blob, buf.getvalue().encode(), content_type="text/csv")
-        self.stdout.write(f"\n  CONFLICTS CSV: {public_url(blob)}")
+        self.stdout.write(f"\n  CONFLICTS CSV: {public_url(blob, durable=True)}")
 
         if not apply:
             self.stdout.write(
@@ -312,7 +312,7 @@ class Command(BaseCommand):
             )
             self.stdout.write(
                 self.style.WARNING(
-                    f"\n  FULL BACKUP (all {len(present)} tabs): {public_url(blob2)}"
+                    f"\n  FULL BACKUP (all {len(present)} tabs): {public_url(blob2, durable=True)}"
                 )
             )
             # Clear the target so stale rows below the new data can't survive.
