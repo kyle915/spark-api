@@ -337,7 +337,12 @@ def compute_ld_program_kpis(tenant, year: int | None = None) -> ProgramKpis:
 
     from events.models import Event
     from recaps.models import ConsumerEngagements, CustomFieldValue, Recap
-    from recaps.types import _consumers_sampled_from_fields, _sold_units_from_fields
+    from recaps.numbers import parse_count
+    from recaps.types import (
+        _consumers_sampled_from_fields,
+        _is_giveaway_name,
+        _sold_units_from_fields,
+    )
 
     k = ProgramKpis()
     base = Event.objects.exclude(request__deleted_at__isnull=False).filter(tenant=tenant)
@@ -384,12 +389,8 @@ def compute_ld_program_kpis(tenant, year: int | None = None) -> ProgramKpis:
             name = metric_mapping.tag_name(name, field_id, confirmed)
             by_recap.setdefault(rid, []).append((name, value))
             low = (name or "").lower()
-            digits = re.sub(r"[^\d-]", "", str(value or ""))
-            if not digits or digits == "-":
-                continue
-            try:
-                num = int(digits)
-            except ValueError:
+            num = parse_count(value)
+            if num is None:
                 continue
             decided = metric_mapping.confirmed_metric_of(name)
             if decided is not None:
@@ -407,6 +408,8 @@ def compute_ld_program_kpis(tenant, year: int | None = None) -> ProgramKpis:
                 cust["brand"] += num
             elif "willing to purchase" in low and "not" not in low:
                 cust["willing"] += num
+            elif _is_giveaway_name(name):
+                pass  # cans handed out free are not sold
             elif "single can" in low:
                 cust["cans"] += num
             elif "pack" in low:

@@ -1768,13 +1768,11 @@ def _extract_body(single_html: str) -> str:
 
 
 def _leading_int(value) -> int | None:
-    """Pull a non-negative integer out of a free-text field value
-    ('70', '70 cans', '  68 '). None when there's no number."""
-    if value is None:
-        return None
-    m = re.search(r"\d+", str(value))
-    return int(m.group()) if m else None
+    """The count in a recap answer ('70', '70 cans', '1,234', '~30'), or
+    None. One reader for every recap number: :func:`recaps.numbers.parse_count`."""
+    from recaps.numbers import parse_count
 
+    return parse_count(value)
 
 def _custom_engagement_totals(recap) -> dict[str, int]:
     """Map a custom recap's free-text engagement fields onto the four

@@ -18,6 +18,7 @@ from utils.gcs import public_url, extract_blob_name_from_url
 from .heic_conversion import display_blob_name, is_heic_blob
 from .recap_types import recap_type_key
 from . import metric_mapping
+from .numbers import is_clean_count, parse_count
 from utils.graphql.permissions import _is_admin_access, resolve_request_user_access
 
 
@@ -81,9 +82,41 @@ _SOLD_ROLLUP_RE = re.compile(r"\btotal\b", re.IGNORECASE)
 # willing to purchase", "likely to purchase". The same Stone House Bread
 # template has both "...would be willing to purchase..." (intent) and "...did
 # consumers purchase during the event" (actual); only the latter is a sale.
+# "Reasons to decline to purchase" (Torch) is a prose question, never a count:
+# on a template with no cans/packs field it reached the fallback, and the old
+# digit-strip reader turned its answer into numbers like 253010.
 _SOLD_EXCLUDE_RE = re.compile(
-    r"willing|intent|would|interested|likely|plan\s+to", re.IGNORECASE
+    r"willing|intent|would|interested|likely|plan\s+to|declin|\breasons?\b",
+    re.IGNORECASE,
 )
+
+# Give-away wording. Torch's guerilla template asks "TOTAL - how many cans
+# did you give away?": the word "cans" made it a SOLD line, so free samples
+# were reported to the client as sales. A field worded as giving product away
+# (given / handed out / sampled / free / comped / donated / distributed) is
+# never a sale. A name that ALSO says sold / bought / purchased is still a
+# sale ("Cans sold to consumers who sampled"), so the exclusion only bites
+# names with no sale word at all. A field staff confirmed as units sold
+# (recaps.metric_mapping) is decided by that confirmation, not by this.
+_GIVEAWAY_RE = re.compile(
+    r"\b(?:give|gave|given|giving|giveaways?|hand(?:ed|ing)?\s*out|"
+    r"sampl(?:e|es|ed|ing)|free|comp(?:s|ed|limentary)|donat\w*|"
+    r"distribut\w*)\b",
+    re.IGNORECASE,
+)
+_SALE_WORD_RE = re.compile(r"\b(?:sold|sells?|sales?|bought|purchase[ds]?)\b", re.IGNORECASE)
+
+
+def _is_giveaway_name(name: str | None) -> bool:
+    """True when a field name counts product given away, not sold.
+
+    Shared by every SOLD reader (the recap list's soldUnits, the cans / packs
+    splits on the dashboard, Program KPIs and the campaign report), so free
+    samples never count as sales on one screen and not another."""
+    if not name:
+        return False
+    return bool(_GIVEAWAY_RE.search(name)) and not _SALE_WORD_RE.search(name)
+
 
 # First field whose NAME contains "consumer(s) sampled".
 #
@@ -164,24 +197,11 @@ _IMAGE_URL_RE = re.compile(r"\.(jpe?g|png|webp|gif)(\?|$)", re.IGNORECASE)
 
 
 def _parse_recap_int(value: str | None) -> int | None:
-    r"""Parse a custom-field value the way the frontend does.
-
-    Mirrors `parseInt(String(value ?? "").replace(/[^\d-]/g, ""), 10)`
-    followed by a `Number.isFinite` check:
-      1. Coerce to str, strip every char that isn't a digit or '-'.
-      2. parseInt-style: an optional single leading '-' then the run of
-         leading digits; parsing stops at the first non-digit (so
-         "12-34" -> 12, "-5" -> -5).
-      3. Return None when no integer can be parsed (frontend's NaN, which
-         fails Number.isFinite and is skipped).
-    """
-    if value is None:
-        return None
-    cleaned = re.sub(r"[^\d-]", "", str(value))
-    match = re.match(r"-?\d+", cleaned)
-    if not match:
-        return None
-    return int(match.group(0))
+    """The count in a recap answer, or None. Delegates to
+    :func:`recaps.numbers.parse_count`, the one reader every recap number
+    goes through ("1,234" -> 1234, "~30" -> 30, "20-30" -> 20, prose and
+    negatives -> None). Kept under this name for its many importers."""
+    return parse_count(value)
 
 
 def _sold_units_from_fields(
@@ -209,6 +229,8 @@ def _sold_units_from_fields(
 
 def _sold_unit_lines(
     fields: Iterable[tuple[str | None, str | None]],
+    *,
+    exclude_giveaway: bool = True,
 ) -> list[tuple[str, int]]:
     """The (field name, parsed count) pairs `_sold_units_from_fields` sums —
     each counted as-is (a pack is 1 unit, never multiplied by pack size).
@@ -216,7 +238,11 @@ def _sold_unit_lines(
     A field staff confirmed (:mod:`recaps.metric_mapping`) is decided by that
     confirmation alone: it is a sold line when confirmed as units sold and is
     left out otherwise. The name vocabulary below runs only over fields
-    nobody has confirmed."""
+    nobody has confirmed.
+
+    ``exclude_giveaway=False`` is the rule before give-away wording was
+    excluded; only the read-only impact audit
+    (:mod:`recaps.number_fixes_audit`) passes it."""
     decided, pairs = metric_mapping.split_decided(fields)
     confirmed_lines = []
     for name, value in decided:
@@ -233,6 +259,8 @@ def _sold_unit_lines(
                 continue
             if exclude is not None and exclude.search(name):
                 continue
+            if exclude_giveaway and _is_giveaway_name(name):
+                continue  # free product handed out is not a sale
             parsed = _parse_recap_int(value)
             if parsed is not None:
                 out.append((name, parsed))
@@ -251,14 +279,12 @@ def _sold_unit_lines(
 
 
 def _is_clean_count(value: str | None) -> bool:
-    """True when the value is just a number (digits, commas, spaces), not
-    prose. Guards the consumers-sampled matcher: a free-text field that merely
-    mentions 'consumers sampled' (a demographics answer like '...19 to 60s...')
-    must NOT be digit-mashed into a count (that produced a bogus 1960). A real
-    count field is always a clean number."""
-    if value is None:
-        return False
-    return bool(re.fullmatch(r"\s*\d[\d,\s]*", str(value)))
+    """True when the value is just a number, not prose. Guards the
+    consumers-sampled matcher: a free-text field that merely mentions
+    'consumers sampled' (a demographics answer like '...19 to 60s...') must
+    NOT be read as a count (that produced a bogus 1960). See
+    :func:`recaps.numbers.is_clean_count` for the accepted shapes."""
+    return is_clean_count(value)
 
 
 def _consumers_sampled_from_fields(

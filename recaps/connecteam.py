@@ -665,10 +665,8 @@ def map_legacy_fields(parsed: "ParsedRecap") -> tuple[dict[str, str], int]:
 
 
 def _leading_int(value) -> int | None:
-    """Pull a non-negative integer out of a value ('70', '70 cans',
-    '  68 '). None when there's no number. (Mirrors recaps.pdf so the
-    legacy mapping doesn't depend on importing the PDF module.)"""
-    if value is None:
-        return None
-    m = re.search(r"\d+", str(value))
-    return int(m.group()) if m else None
+    """The count in an imported answer ('70', '70 cans', '1,234'), or None.
+    Same reader as every recap number: :func:`recaps.numbers.parse_count`."""
+    from recaps.numbers import parse_count
+
+    return parse_count(value)

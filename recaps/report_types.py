@@ -2145,8 +2145,13 @@ class CampaignReportQueries:
             )
             if request_obj is None:
                 return None
+            # A brand user's report counts approved, unarchived recaps only
+            # (the same bar as its share link and PDF). scope_tenant_id is
+            # None only for Ignite staff, who still see every recap.
             return report_service.build_campaign_report(
-                request_obj, generated_at=generated_at
+                request_obj,
+                generated_at=generated_at,
+                approved_only=scope_tenant_id is not None,
             )
 
         data = await sync_to_async(_build, thread_sensitive=True)()

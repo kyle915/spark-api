@@ -135,12 +135,14 @@ class TestEventDashboardQueries(DashboardGraphQLTestCase):
         assert 0 <= data['metrics']['brandAwareness'] <= 100
         assert 0 <= data['metrics']['purchaseIntent'] <= 100
         assert data['globalKpis'] is not None
-        assert data['globalKpis']['singleCansSold'] == 72
-        assert data['globalKpis']['multiPacksSold'] == 36
+        # A brand user counts approved recaps only: recap2 (18 cans, 9
+        # packs) is still awaiting review, so 24+30 / 12+15.
+        assert data['globalKpis']['singleCansSold'] == 54
+        assert data['globalKpis']['multiPacksSold'] == 27
         assert data['globalKpis']['byRmm'] is not None
         assert len(data['globalKpis']['byRmm']) >= 1
-        assert data['globalKpis']['byRmm'][0]['singleCansSold'] == 72
-        assert data['globalKpis']['byRmm'][0]['multiPacksSold'] == 36
+        assert data['globalKpis']['byRmm'][0]['singleCansSold'] == 54
+        assert data['globalKpis']['byRmm'][0]['multiPacksSold'] == 27
         assert data['monthlyTrends'] is not None
         assert data['performanceInsights'] is not None
 
@@ -230,13 +232,15 @@ class TestEventDashboardQueries(DashboardGraphQLTestCase):
 
         assert result.errors is None
         kpis = result.data["eventDashboard"]["globalKpis"]
-        # Legacy recaps (products_sold 50 + 40 + 60 = 150) + the custom-recap
-        # PURCHASE field (12). The "willing to purchase" INTENT (20) is excluded.
-        assert kpis["productsSold"] == 162
+        # Approved legacy recaps (products_sold 50 + 60 = 110; recap2's 40 is
+        # awaiting review, and a brand user counts approved recaps only) +
+        # the custom-recap PURCHASE field (12). The "willing to purchase"
+        # INTENT (20) is excluded.
+        assert kpis["productsSold"] == 122
         # The custom recap has no cans/packs fields, so the drink tiles are
-        # unchanged at the legacy sums (24+18+30 / 12+9+15).
-        assert kpis["singleCansSold"] == 72
-        assert kpis["multiPacksSold"] == 36
+        # unchanged at the approved legacy sums (24+30 / 12+15).
+        assert kpis["singleCansSold"] == 54
+        assert kpis["multiPacksSold"] == 27
 
     @pytest.mark.asyncio
     async def test_purchase_intent_is_out_of_the_consumers_who_were_asked(self):
@@ -369,7 +373,8 @@ class TestEventDashboardQueries(DashboardGraphQLTestCase):
             "query { eventDashboard { globalKpis { productsSold } } }", {}, self.client_user
         )
         assert result.errors is None
-        assert result.data["eventDashboard"]["globalKpis"]["productsSold"] == 162
+        # 110 approved legacy + 12 custom (recap2 awaits review).
+        assert result.data["eventDashboard"]["globalKpis"]["productsSold"] == 122
 
     @pytest.mark.asyncio
     async def test_event_dashboard_with_quarter_filter(self):

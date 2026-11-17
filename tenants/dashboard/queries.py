@@ -15,7 +15,7 @@ import json
 from datetime import date
 from asgiref.sync import sync_to_async
 from django.db.models import (
-    Case, Count, Q, Sum, When, IntegerField
+    Case, Count, Prefetch, Q, Sum, When, IntegerField
 )
 from django.db.models.functions import (
     TruncMonth
@@ -29,7 +29,7 @@ from . import types, inputs
 from .services import DashboardQueriesService
 from .goals_service import build_goals_progress, get_goals, get_current_values_for_user
 from events import models as event_models
-from recaps.aggregates import exclude_non_aggregate_recaps
+from recaps.aggregates import client_counted_q, exclude_non_aggregate_recaps
 from tenants import models as tenant_models
 
 
@@ -456,6 +456,22 @@ class DashboardQueries:
             # count as activations or feed any KPI below.
             base_queryset = exclude_non_aggregate_recaps(base_queryset, "")
 
+            # A brand user is counted only approved recaps — the bar the
+            # Program-KPIs sections below the hero already use, so
+            # the client Home page can't disagree with itself. Ignite staff
+            # (allowed_tenant_ids is None) keep every recap, as before.
+            client_only = allowed_tenant_ids is not None
+
+            def _visible(prefix: str) -> Q:
+                return client_counted_q(prefix) if client_only else Q()
+
+            # An event "has a recap" when it has one this caller is shown.
+            has_recap = (
+                (Q(recaps__isnull=False) & _visible("recaps__"))
+                | (Q(custom_recap__isnull=False) & _visible("custom_recap__"))
+            )
+            has_legacy_recap = Q(recaps__isnull=False) & _visible("recaps__")
+
             # Section short-circuit: None → full dashboard; otherwise only
             # compute requested sections and stub the rest.
             wanted = _normalize_event_dashboard_sections(
@@ -505,7 +521,7 @@ class DashboardQueries:
             events_with_recaps = None
             if need_consumer_agg or need_monthly:
                 events_with_recaps = base_queryset.filter(
-                    recaps__isnull=False
+                    has_legacy_recap
                 ).distinct()
 
             # Key Metrics
@@ -517,16 +533,15 @@ class DashboardQueries:
             # Event->CustomRecap reverse relation; recaps is Event->Recap.
             if need_total_events:
                 total_events = await sync_to_async(
-                    lambda: base_queryset.filter(
-                        Q(recaps__isnull=False) | Q(custom_recap__isnull=False)
-                    ).distinct().count()
+                    lambda: base_queryset.filter(has_recap).distinct().count()
                 )()
 
             if need_consumer_agg:
                 # Aggregate ConsumerEngagements data
                 consumer_data = await sync_to_async(
                     lambda: recap_models.ConsumerEngagements.objects.filter(
-                        recap__event__in=events_with_recaps
+                        _visible("recap__"),
+                        recap__event__in=events_with_recaps,
                     ).aggregate(
                         total_consumers=Sum('total_consumer', default=0),
                         total_brand_aware=Sum('brand_aware_consumers', default=0),
@@ -546,15 +561,16 @@ class DashboardQueries:
                 # intact, and tenants without custom recaps add 0.
                 try:
                     def _sum_custom_recap_metrics():
-                        import re as _re
                         # Reuse the recap list's two-tier SOLD matcher so the
                         # dashboard "Products sold" headline can never drift from
                         # the recap list again (the recurring duplicate-matcher
                         # class: this resolver had its OWN cans/packs-only matcher
                         # that silently showed 0 for bread tenants like Stone House
                         # Bread, whose template says "...did consumers PURCHASE...").
+                        from recaps.numbers import parse_count
                         from recaps.types import (
                             _consumers_sampled_from_fields,
+                            _is_giveaway_name,
                             _sold_units_from_fields,
                         )
                         sums = {"consumers": 0, "brand": 0,
@@ -571,6 +587,7 @@ class DashboardQueries:
 
                         rows = list(
                             recap_models.CustomFieldValue.objects.filter(
+                                _visible("custom_recap__"),
                                 custom_recap__event__in=base_queryset,
                                 custom_recap__exclude_from_aggregates=False,
                             ).values_list(
@@ -598,12 +615,10 @@ class DashboardQueries:
                             name = metric_mapping.tag_name(name, field_id, confirmed)
                             by_recap.setdefault(recap_id, []).append((name, value))
                             low = (name or "").lower()
-                            digits = _re.sub(r"[^\d-]", "", str(value or ""))
-                            if not digits or digits == "-":
-                                continue
-                            try:
-                                num = int(digits)
-                            except ValueError:
+                            # Same reader as every other recap number
+                            # ("1,234" -> 1234, "~30" -> 30, prose -> skip).
+                            num = parse_count(value)
+                            if num is None:
                                 continue
                             decided = metric_mapping.confirmed_metric_of(name)
                             if decided is not None:
@@ -631,6 +646,8 @@ class DashboardQueries:
                                 sums["willing"] += num
                                 sums["willing_rows"] += 1
                                 asked_willing.add(recap_id)
+                            elif _is_giveaway_name(name):
+                                pass  # cans handed out free are not sold
                             elif "single can" in low:
                                 sums["cans"] += num
                             elif "pack" in low:
@@ -693,7 +710,8 @@ class DashboardQueries:
                 # custom awareness/intent field.
                 legacy_ce_exists = await sync_to_async(
                     recap_models.ConsumerEngagements.objects.filter(
-                        recap__event__in=events_with_recaps
+                        _visible("recap__"),
+                        recap__event__in=events_with_recaps,
                     ).exists
                 )()
                 has_brand_signal = legacy_ce_exists or custom_brand_rows > 0
@@ -761,16 +779,15 @@ class DashboardQueries:
                         # Same "events with a recap" basis as total_events, so the
                         # period-over-period comparison stays apples-to-apples.
                         prev_total_events = await sync_to_async(
-                            lambda: prev_events.filter(
-                                Q(recaps__isnull=False) | Q(custom_recap__isnull=False)
-                            ).distinct().count()
+                            lambda: prev_events.filter(has_recap).distinct().count()
                         )()
                         prev_events_with_recaps = prev_events.filter(
-                            recaps__isnull=False).distinct()
+                            has_legacy_recap).distinct()
 
                         prev_consumer_data = await sync_to_async(
                             lambda: recap_models.ConsumerEngagements.objects.filter(
-                                recap__event__in=prev_events_with_recaps
+                                _visible("recap__"),
+                                recap__event__in=prev_events_with_recaps,
                             ).aggregate(
                                 total_consumers=Sum('total_consumer', default=0),
                                 total_brand_aware=Sum(
@@ -824,7 +841,8 @@ class DashboardQueries:
                 # Group by month and aggregate consumer data
                 monthly_data = await sync_to_async(list)(
                     recap_models.ConsumerEngagements.objects.filter(
-                        recap__event__in=events_with_recaps
+                        _visible("recap__"),
+                        recap__event__in=events_with_recaps,
                     ).select_related('recap__event')
                     .annotate(
                         month=TruncMonth('recap__event__date')
@@ -911,9 +929,7 @@ class DashboardQueries:
                                 Q(start_time__date__gte=prev_start, start_time__date__lte=prev_end) |
                                 Q(request__date__date__gte=prev_start,
                                   request__date__date__lte=prev_end)
-                            ).filter(
-                                Q(recaps__isnull=False) | Q(custom_recap__isnull=False)
-                            ).distinct().count()
+                            ).filter(has_recap).distinct().count()
                         )()
 
                         if prev_events_count > 0:
@@ -946,7 +962,14 @@ class DashboardQueries:
                     Q(start_time__gt=now) | Q(date__gt=now)
                 ).select_related(
                     'request__retailer'
-                ).prefetch_related('recaps__consumer_engagements')[:10]
+                ).prefetch_related(
+                    Prefetch(
+                        'recaps',
+                        queryset=recap_models.Recap.objects.filter(
+                            _visible("")
+                        ).prefetch_related('consumer_engagements'),
+                    )
+                )[:10]
 
                 recent_events_list = await sync_to_async(list)(recent_events_qs)
 
@@ -993,10 +1016,11 @@ class DashboardQueries:
                 # Global KPIs for dashboard view (respecting active filters/date range)
                 if events_with_recaps is None:
                     events_with_recaps = base_queryset.filter(
-                        recaps__isnull=False
+                        has_legacy_recap
                     ).distinct()
                 recap_queryset = recap_models.Recap.objects.filter(
-                    event__in=events_with_recaps
+                    _visible(""),
+                    event__in=events_with_recaps,
                 )
 
                 global_kpis_data = await sync_to_async(

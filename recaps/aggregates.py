@@ -55,3 +55,20 @@ def aggregate_custom_recap_q(prefix: str = "") -> Q:
     ``"custom_recap__"`` on its children).
     """
     return Q(**{f"{prefix}exclude_from_aggregates": False})
+
+
+
+def client_counted_q(prefix: str = "") -> Q:
+    """``Q`` keeping recaps that count toward a brand user's totals: approved.
+
+    ``prefix`` is the ORM path to the Recap / CustomRecap (``""`` on the
+    recap itself, ``"recap__"`` / ``"custom_recap__"`` on children,
+    ``"recaps__"`` / ``"custom_recap__"`` from an Event). Recaps on a
+    soft-deleted Request are dropped separately, at the Event level.
+
+    The bar the client dashboard's Program-KPIs sections already use
+    (``recaps.tenant_overview._approved_only``). An approved recap that was
+    later archived still counts here, as it does there; the per-request
+    campaign report leaves archived recaps out (``report_service``).
+    """
+    return Q(**{f"{prefix}approved": True})
