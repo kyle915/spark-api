@@ -303,6 +303,31 @@ STORAGES = {
     },
 }
 
+# Private storage with signed reads (utils/private_media.py). Default OFF:
+# with the flag off every URL is the plain public storage.googleapis.com link,
+# exactly as before. With it on, keys outside the public catalog prefixes are
+# served as /api/public/media/o/<hmac-token>/<name>, which 302s to a
+# short-lived V4 signed URL (Cloud Run SA via IAM signBlob, no key file).
+# Flip order + rollback: `manage.py private_media_audit --runbook`.
+PRIVATE_MEDIA_ENABLED = env.bool("PRIVATE_MEDIA_ENABLED", default=False)
+# Keep direct public URLs for products/, tenants/images/,
+# receipt-campaign-images/ while the bucket still grants allUsers. Set to
+# False BEFORE removing allUsers, so catalog assets get (durable) tokens too.
+PRIVATE_MEDIA_DIRECT_PUBLIC_PREFIXES = env.bool(
+    "PRIVATE_MEDIA_DIRECT_PUBLIC_PREFIXES", default=True
+)
+# "kid:secret[,kid:secret...]" — first signs, all verify. Unset → derived
+# from SECRET_KEY (kid s0). Dropping a key revokes every link it signed.
+PRIVATE_MEDIA_TOKEN_KEYS = env("PRIVATE_MEDIA_TOKEN_KEYS", default="")
+# Interactive tokens are valid for 1-2 of these windows (stable URL within one).
+PRIVATE_MEDIA_URL_WINDOW_HOURS = env.int("PRIVATE_MEDIA_URL_WINDOW_HOURS", default=12)
+# Origin the media URLs point at. Empty → PUBLIC_API_BASE_URL (the API).
+PRIVATE_MEDIA_BASE_URL = env("PRIVATE_MEDIA_BASE_URL", default="")
+# Lifetime of the signed GCS URL the media endpoint redirects to.
+PRIVATE_MEDIA_SIGNED_TTL_MINUTES = env.int(
+    "PRIVATE_MEDIA_SIGNED_TTL_MINUTES", default=60
+)
+
 # Media files configuration
 MEDIA_URL = f"https://storage.googleapis.com/{GS_BUCKET_NAME}/"
 MEDIA_ROOT = "media/"

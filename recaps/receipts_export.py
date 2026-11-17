@@ -128,7 +128,7 @@ def collect_expense_rows(
                 {
                     "name": f.name or blob.rsplit("/", 1)[-1],
                     "blob": blob,
-                    "url": public_url(blob) or "",
+                    "url": public_url(blob, durable=True) or "",  # CSV deliverable
                 }
             )
         amount = amount_by_recap.get(recap.id)

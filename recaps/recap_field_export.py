@@ -233,7 +233,9 @@ def _file_rows_for(recap, *, resolve_heic: bool = True) -> list[dict]:
                 # A GCS hiccup must never sink the export — fall back to the
                 # original blob, which still resolves for non-HEIC files.
                 pass
-        url = public_url(blob)
+        # Durable: this link is delivered in a client spreadsheet/CSV and
+        # opened weeks later — an interactive token would rot.
+        url = public_url(blob, durable=True)
         if not url:
             unlinkable += 1
             continue

@@ -206,7 +206,7 @@ class Command(BaseCommand):
             f"{start.isoformat()}_{end.isoformat()}_{ts}.pdf"
         )
         upload_bytes(blob, pdf, content_type="application/pdf")
-        url = public_url(blob)
+        url = public_url(blob, durable=True)
 
         self.stdout.write("")
         self.stdout.write("=" * 72)

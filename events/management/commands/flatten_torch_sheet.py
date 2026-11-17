@@ -119,7 +119,7 @@ class Command(BaseCommand):
         ).encode()
         upload_bytes(blob, payload, content_type="application/json")
         self.stdout.write(
-            f"\n  BACKUP: {public_url(blob)}\n"
+            f"\n  BACKUP: {public_url(blob, durable=True)}\n"
             f"          ({len(payload) // 1024}KB — values AND formulas, both tabs)"
         )
 

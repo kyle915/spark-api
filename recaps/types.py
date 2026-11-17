@@ -2030,6 +2030,26 @@ class CustomRecap(Node):
         return await _get()
 
 
+# Custom-field IMAGE answers store a raw blob key in ``value`` and the web
+# app used to prepend the bucket URL itself — which stops working once the
+# bucket is private. ``mediaUrl`` resolves such a value server-side. Only
+# recap upload keys qualify, so a free-text answer (or a key pasted from
+# another prefix like documents/) never mints a media URL.
+_MEDIA_VALUE_RE = re.compile(
+    r"^(recaps|recap_files)/[A-Za-z0-9._/%-]+\.[A-Za-z0-9]{2,5}$"
+)
+
+
+def custom_field_value_media_url(value: str | None) -> str | None:
+    raw = (value or "").strip()
+    if not raw:
+        return None
+    blob = extract_blob_name_from_url(raw) if "://" in raw else raw.lstrip("/")
+    if not blob or ".." in blob or not _MEDIA_VALUE_RE.match(blob):
+        return None
+    return public_url(display_blob_name(blob))
+
+
 @strawberry_django.type(models.CustomFieldValue)
 class CustomFieldValue(Node):
     uuid: str
@@ -2038,6 +2058,12 @@ class CustomFieldValue(Node):
     custom_field: "CustomField"
     created_at: str
     updated_at: str
+
+    @strawberry_django.field(name="mediaUrl", only=["value"])
+    def media_url(self) -> str | None:
+        """Browser-loadable URL when ``value`` is a recap photo key, else
+        null. HEIC keys resolve to their converted .jpg sibling."""
+        return custom_field_value_media_url(self.__dict__.get("value"))
 
 
 @strawberry_django.type(models.CustomRecapProductSample)
@@ -2350,6 +2376,15 @@ class CustomField(Node):
     def custom_field_value_id(self) -> strawberry.ID | None:
         """Custom field value ID for this recap context, if present."""
         return getattr(self, "_custom_field_value_id", None)
+
+    @strawberry.field(name="mediaUrl")
+    def media_url(self) -> str | None:
+        """Browser-loadable URL when this recap's ``value`` is a recap photo
+        key (IMAGE fields), else null. The web app used to build a bucket
+        URL from the raw key, which stops working on a private bucket."""
+        return custom_field_value_media_url(
+            getattr(self, "_custom_recap_value", None)
+        )
 
 
 @strawberry.type

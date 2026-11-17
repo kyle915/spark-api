@@ -145,7 +145,7 @@ class Command(BaseCommand):
 
         blob_val = getattr(stored, "url", None) or getattr(stored, "file", None)
         blob = str(blob_val or "")
-        url = public_url(blob)
+        url = public_url(blob, durable=True)
 
         self.stdout.write("")
         self.stdout.write("=" * 72)

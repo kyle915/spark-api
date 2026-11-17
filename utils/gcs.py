@@ -22,6 +22,14 @@ def get_gcs_client():
     return storage.Client(project=settings.GS_PROJECT_ID)
 
 
+# Cached workload-identity credentials for IAM signBlob signing. Refreshing
+# them on every signature was a metadata-server round trip per URL on top of
+# the signBlob call itself; the token is good for ~1h, so refresh only when
+# google-auth says it is no longer valid.
+_SIGNING_CREDS_LOCK = __import__("threading").Lock()
+_SIGNING_CREDS: dict = {"credentials": None, "email": None}
+
+
 def _iam_signing_args_for_default_credentials():
     """Return (service_account_email, access_token) suitable for
     v4 signing via the GCS library's IAM-Credentials-API delegated
@@ -50,9 +58,18 @@ def _iam_signing_args_for_default_credentials():
     from google.auth import default as auth_default
     from google.auth.transport import requests as g_requests
 
-    credentials, _ = auth_default()
-    auth_request = g_requests.Request()
-    credentials.refresh(auth_request)
+    with _SIGNING_CREDS_LOCK:
+        credentials = _SIGNING_CREDS["credentials"]
+        cached_email = _SIGNING_CREDS["email"]
+        if credentials is None:
+            credentials, _ = auth_default()
+            _SIGNING_CREDS["credentials"] = credentials
+            cached_email = None
+        if not getattr(credentials, "valid", False):
+            credentials.refresh(g_requests.Request())
+        token = getattr(credentials, "token", None)
+        if cached_email and token:
+            return cached_email, token
     sa_email = getattr(credentials, "service_account_email", None)
     if not sa_email or sa_email == "default":
         # Cloud Run's compute_engine Credentials sometimes report
@@ -76,6 +93,8 @@ def _iam_signing_args_for_default_credentials():
     token = getattr(credentials, "token", None)
     if not token:
         return None, None
+    with _SIGNING_CREDS_LOCK:
+        _SIGNING_CREDS["email"] = sa_email
     return sa_email, token
 
 
@@ -251,22 +270,24 @@ def blob_exists(blob_name: str | None) -> bool:
         return False
 
 
-def public_url(blob_name: str | None) -> str | None:
+def public_url(blob_name: str | None, *, durable: bool = False) -> str | None:
     """
-    Return a non-signed, publicly-loadable URL for a blob.
+    The URL to hand a reader for a blob.
 
-    Use this for tenant logos, product images, and recap files where the
-    bucket grants allUsers:objectViewer (uniform bucket access). Avoids
-    the "you need a private key to sign credentials" failure that
-    generate_signed_url() triggers on Cloud Run service accounts.
+    With ``PRIVATE_MEDIA_ENABLED`` off (the default) this is the plain
+    ``https://storage.googleapis.com/<bucket>/<key>`` URL the public-read
+    bucket serves — unchanged from before. With it on, private prefixes
+    become an app URL (``/api/public/media/o/<token>/<name>``) that 302s to a
+    short-lived signed URL; see ``utils.private_media``.
+
+    ``durable=True`` is for links written somewhere that is read later
+    (client spreadsheets/CSVs, emailed or printed links): the token does not
+    expire. Anything rendered per request (GraphQL, REST, share pages) uses
+    the default interactive token. Pure CPU either way — no GCS/IAM call.
     """
-    if not blob_name:
-        return None
-    bucket = getattr(__import__("django.conf", fromlist=["settings"]).settings, "GS_BUCKET_NAME", "")
-    if not bucket:
-        return None
-    cleaned = blob_name.lstrip("/")
-    return f"https://storage.googleapis.com/{bucket}/{cleaned}"
+    from utils.private_media import media_url
+
+    return media_url(blob_name, durable=durable)
 
 
 def extract_blob_name_from_url(url_or_path: str | None) -> str | None:
@@ -275,6 +296,16 @@ def extract_blob_name_from_url(url_or_path: str | None) -> str | None:
     """
     if not url_or_path:
         return url_or_path
+
+    # App media URLs (/api/public/media/o/<token>/<name>) decode back to the
+    # key they were minted for — signature checked, expiry ignored — so a
+    # client echoing a URL it was given into a write (mobile
+    # updateBaProfile.eventPhotos does) keeps storing the real key. A forged
+    # or foreign-key token yields None, never the raw path.
+    from utils.private_media import blob_from_media_url, is_media_url
+
+    if is_media_url(url_or_path):
+        return blob_from_media_url(url_or_path)
 
     parsed = urlparse(url_or_path)
     if not parsed.scheme:
