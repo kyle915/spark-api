@@ -1291,6 +1291,81 @@ class EventMutations:
             )
 
     @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def reschedule_event(
+        self,
+        info: strawberry.Info,
+        input: inputs.RescheduleEventInput,
+    ) -> types.RescheduleEventResponse:
+        """Change an event's date and start/end times (and its request's).
+
+        Admins, or active members of the event's brand (not ambassadors).
+        Refused when the event is cancelled, has a clock-in or a recap, or
+        the new time is in the past. A non-admin move emails the Ignite
+        request CC list; nobody else is messaged.
+        """
+        from events.client_reschedule import (
+            RescheduleError,
+            notify_admins_of_client_reschedule,
+            reschedule_event_sync,
+        )
+        from utils.graphql.permissions import (
+            _is_admin_access,
+            resolve_request_user_access,
+        )
+
+        try:
+            actor = await EventMutationService().get_user(info)
+            is_admin = _is_admin_access(*await resolve_request_user_access(actor))
+            outcome = await sync_to_async(reschedule_event_sync)(
+                event_id=input.event_id,
+                actor=actor,
+                is_admin=is_admin,
+                date=input.date,
+                start_time=input.start_time,
+                end_time=input.end_time,
+            )
+            if not is_admin:
+                outcome.notified = await sync_to_async(
+                    notify_admins_of_client_reschedule
+                )(
+                    actor=actor,
+                    tenant=outcome.event.tenant,
+                    zone=outcome.zone,
+                    old_start=outcome.old_start,
+                    old_end=outcome.old_end,
+                    new_start=outcome.new_start,
+                    new_end=outcome.new_end,
+                    event=outcome.event,
+                    request=outcome.request,
+                    booked_count=outcome.booked_count,
+                    source="event",
+                    unmoved_events=len(outcome.other_event_ids),
+                )
+            event = await sync_to_async(
+                models.Event.objects.select_related(
+                    "tenant", "retailer", "request", "timezone"
+                ).get
+            )(id=outcome.event.id)
+            message = "Date changed."
+            if not is_admin:
+                message = "Date changed. Ignite has been notified."
+            return build_mutation_response(
+                types.RescheduleEventResponse,
+                success=True,
+                message=message,
+                input_obj=input,
+                event=event,
+                request_moved=outcome.request_moved,
+            )
+        except (RescheduleError, GraphQLError) as e:
+            return build_mutation_response(
+                types.RescheduleEventResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
     async def suspend_event(
         self,
         info: strawberry.Info,
@@ -4487,11 +4562,41 @@ class RequestMutations:
             )()
             request_service = RequestMutationService()
             actor = await request_service.get_user(info)
+
+            # A brand (non-admin) changing the date/times: refuse when the
+            # request already has live events (those move via rescheduleEvent
+            # so event + request stay in sync), else email Ignite after save.
+            from events.client_reschedule import (
+                RescheduleError,
+                check_client_request_date_change,
+                notify_after_client_request_update,
+            )
+            from utils.graphql.permissions import (
+                _is_admin_access,
+                resolve_request_user_access,
+            )
+
+            actor_is_admin = _is_admin_access(
+                *await resolve_request_user_access(actor)
+            )
+            date_snapshot = None
+            if not actor_is_admin:
+                try:
+                    date_snapshot = await sync_to_async(
+                        check_client_request_date_change
+                    )(request_id=request_id, actor=actor, input_obj=input)
+                except RescheduleError as exc:
+                    raise GraphQLError(str(exc)) from exc
+
             request: models.Request = (
                 await RequestMutationService.process_create_or_update(
                     input=input, info=info
                 )
             )
+            if date_snapshot is not None and date_snapshot.changed:
+                await sync_to_async(notify_after_client_request_update)(
+                    snapshot=date_snapshot, request_id=request.id, actor=actor
+                )
             request = await sync_to_async(
                 models.Request.objects.select_related(
                     "timezone", "rmm_asigned", "tenant", "retailer"
