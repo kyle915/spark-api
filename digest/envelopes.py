@@ -80,9 +80,13 @@ class ExecutiveSummaryMailer(Mailer):
         *,
         to_emails: list[str],
         web_app_base_url: str | None = None,
+        include_ba_names: bool = False,
     ):
         self.summary = summary
         self.to_emails = to_emails
+        # Off by default: anything a client receives carries no ambassador
+        # names. The cron turns it on only for an all-Ignite-staff send.
+        self.include_ba_names = include_ba_names
         self.web_app_base_url = (web_app_base_url or _admin_frontend_url()).rstrip("/")
 
     def _link(self, path: str) -> str:
@@ -106,6 +110,7 @@ class ExecutiveSummaryMailer(Mailer):
             to_emails=self.to_emails,
             context={
                 "summary": s,
+                "include_ba_names": self.include_ba_names,
                 "web_app_base_url": self.web_app_base_url,
                 "tracker_url": self._link("/requests/list"),
                 "recaps_url": self._link("/recaps/list"),
