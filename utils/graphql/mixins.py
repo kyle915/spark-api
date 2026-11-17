@@ -16,6 +16,27 @@ from utils.graphql.inputs import SparkGraphQLInput
 User = get_user_model()
 logger = logging.getLogger(__name__)
 
+# The brand the person has selected in the app (tenant uuid). Only a hint:
+# get_user_tenant still requires an active membership of that tenant.
+SELECTED_TENANT_HEADER = "X-Spark-Tenant"
+
+
+def selected_tenant_uuid(info) -> str | None:
+    """The selected-tenant uuid the app sent, or None if absent/malformed."""
+    import uuid as _uuid
+
+    request = getattr(getattr(info, "context", None), "request", None)
+    headers = getattr(request, "headers", None)
+    if not headers:
+        return None
+    raw = (headers.get(SELECTED_TENANT_HEADER) or "").strip()
+    if not raw:
+        return None
+    try:
+        return str(_uuid.UUID(raw))
+    except (ValueError, TypeError):
+        return None
+
 
 def decode_global_id(global_id: str) -> int:
     """
@@ -146,6 +167,19 @@ class SparkGraphQLMixin:
                 resolved_tenant_id = resolve_id_to_int(tenant_id)
             except (TypeError, ValueError, GraphQLError):
                 raise GraphQLError("Invalid tenant ID.")
+
+        if not has_explicit_tenant:
+            # A user on several brands has no single "own" tenant, so every
+            # lookup that doesn't name one failed with "not a member of this
+            # tenant". The app sends the brand the person has selected; use
+            # it when they are an active member of it, else fall through to
+            # the old single-membership lookup.
+            selected = selected_tenant_uuid(info)
+            if selected:
+                try:
+                    return await self.get_tenant(user, tenant_uuid=selected)
+                except GraphQLError:
+                    pass
 
         if is_spark_request and has_explicit_tenant:
             tenant = await self._get_tenant_without_membership(
