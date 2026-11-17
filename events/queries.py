@@ -228,6 +228,44 @@ class BaseEventQueriesService(SparkGraphQLMixin):
                 raise GraphQLError("Tenant access denied.") from exc
             raise
 
+    async def get_detail_record(
+        self,
+        info: strawberry.Info,
+        *,
+        id: strawberry.ID | None = None,
+        uuid: str | None = None,
+    ) -> Model | None:
+        """One record for a detail page, across every brand the caller is in.
+
+        The normal lookup is scoped to the caller's current tenant. A person
+        on several brands (FAMUS Energy + FAMUS Social) opening a link to the
+        other brand's event got "not found" even though they belong to it.
+        When the scoped lookup fails, fetch the record unscoped and return it
+        only if its tenant is one of the caller's ACTIVE memberships; the app
+        then switches to that brand. Anyone else still gets "not found".
+        """
+        try:
+            tenant_id = await self.resolve_tenant_id(info)
+            return await self.get_record(id=id, uuid=uuid, tenant_id=tenant_id)
+        except GraphQLError as scoped_error:
+            user = await self.get_user(info)
+            try:
+                record = await self.get_record(id=id, uuid=uuid)
+            except GraphQLError:
+                raise scoped_error
+            record_tenant_id = getattr(record, "tenant_id", None)
+            if record_tenant_id is None:
+                raise scoped_error
+
+            def _is_member() -> bool:
+                return TenantedUser.objects.filter(
+                    user=user, tenant_id=record_tenant_id, is_active=True
+                ).exists()
+
+            if await sync_to_async(_is_member)():
+                return record
+            raise scoped_error
+
 
 class EventQueriesService(BaseEventQueriesService):
     """Service for event queries."""
@@ -696,11 +734,9 @@ class EventQueries:
         """
         try:
             service = EventQueriesService()
-            tenant_id = await service.resolve_tenant_id(info)
-            event = await service.get_record(
-                id=id, uuid=str(uuid) if uuid else None, tenant_id=tenant_id
+            return await service.get_detail_record(
+                info, id=id, uuid=str(uuid) if uuid else None
             )
-            return event
         except GraphQLError:
             return None
 
@@ -1996,12 +2032,9 @@ class RequestQueries:
         """Get a single request."""
         try:
             service = RequestQueriesService()
-            tenant_id = await service.resolve_tenant_id(info)
-
-            request = await service.get_record(
-                id=id, uuid=str(uuid) if uuid else None, tenant_id=tenant_id
+            return await service.get_detail_record(
+                info, id=id, uuid=str(uuid) if uuid else None
             )
-            return request
         except GraphQLError:
             raise GraphQLError
 
