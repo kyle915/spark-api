@@ -999,3 +999,27 @@ class TestAmbassadorsQuery(AmbassadorsGraphQLTestCase):
                 }
             }
         ]
+
+    @pytest.mark.asyncio
+    async def test_name_filter_matches_a_full_name(self):
+        """The bulk BA picker searches by name on the server. "maria garc"
+        is two words; neither column holds the whole string."""
+        query = """
+            query Ambassadors($first: Int, $filters: AmbassadorFiltersInput) {
+                ambassadors(first: $first, filters: $filters) {
+                    totalCount
+                    edges { node { id } }
+                }
+            }
+        """
+        result = await self._execute_query_authenticated(
+            query,
+            {"first": 50, "filters": {"isActive": True, "name": "maria garc"}},
+            self.client_user,
+            self.endpoint_path,
+        )
+        assert result.errors is None, result.errors
+        assert result.data["ambassadors"]["totalCount"] == 1
+        assert result.data["ambassadors"]["edges"][0]["node"]["id"] == to_base64(
+            "Ambassador", self.match_ambassador.id
+        )

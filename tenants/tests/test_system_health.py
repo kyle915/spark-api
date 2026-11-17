@@ -70,3 +70,36 @@ class TestSystemHealth(EventsGraphQLTestCase):
 
     def test_client_gets_null(self):
         assert self._health(self.client_user) is None
+
+    # The admin web app posts this exact query (SparkSystemHealth.tsx) to
+    # /graphql/clients. The resolver used to exist only on the Spark schema,
+    # so the page failed with "Cannot query field 'systemHealth'" every load.
+    FE_QUERY = """query SystemHealth {
+      systemHealth {
+        serverTime gitSha revision databaseOk
+        errors24h errors7d distinctSignatures
+        recentErrors { signature message location count firstSeen lastSeen }
+        cronRuns { name lastRunAt lastOk lastStatus runCount hoursSince }
+      }
+    }"""
+
+    def _run_on_clients_schema(self, as_user):
+        from config.schema_client import schema_clients
+
+        self.schema = schema_clients
+        return async_to_sync(self._execute_mutation)(
+            self.FE_QUERY, {}, endpoint_path="/api/v1/graphql/clients", user=as_user
+        )
+
+    def test_the_web_apps_query_resolves_on_the_clients_schema(self):
+        result = self._run_on_clients_schema(self.admin)
+        assert result.errors is None, result.errors
+        health = result.data["systemHealth"]
+        assert health["distinctSignatures"] == 1
+        assert health["recentErrors"][0]["count"] == 3
+        assert health["cronRuns"][0]["name"] == "activation-autopilot"
+
+    def test_clients_schema_still_hides_it_from_non_admins(self):
+        result = self._run_on_clients_schema(self.client_user)
+        assert result.errors is None, result.errors
+        assert result.data["systemHealth"] is None

@@ -28,11 +28,9 @@
               <p style="margin: 4px 0 0 0; font-size: 28px; font-weight: 700; color: #1a1a1a;">
                 {{ summary.recap_count }}
               </p>
-              {% with chip=summary.delta_chip:"recaps" %}
-              {% if chip %}
-              <p style="margin: 4px 0 0 0; font-size: 11px; color: #666666;">{{ chip }}</p>
+              {% if summary.recap_delta_chip %}
+              <p style="margin: 4px 0 0 0; font-size: 11px; color: #666666;">{{ summary.recap_delta_chip }}</p>
               {% endif %}
-              {% endwith %}
             </div>
           </td>
           <td width="33%" style="padding: 0 4px;">
@@ -43,11 +41,9 @@
               <p style="margin: 4px 0 0 0; font-size: 28px; font-weight: 700; color: #1a1a1a;">
                 {{ summary.consumer_reach }}
               </p>
-              {% with chip=summary.delta_chip:"reach" %}
-              {% if chip %}
-              <p style="margin: 4px 0 0 0; font-size: 11px; color: #666666;">{{ chip }}</p>
+              {% if summary.reach_delta_chip %}
+              <p style="margin: 4px 0 0 0; font-size: 11px; color: #666666;">{{ summary.reach_delta_chip }}</p>
               {% endif %}
-              {% endwith %}
             </div>
           </td>
           <td width="33%" style="padding-left: 8px;">
@@ -93,7 +89,9 @@
   {% endif %}
 
   {# ====== TOP BAS ====== #}
-  {% if summary.top_bas %}
+  {# Ambassador names go to Ignite staff only. A client recipient gets the #}
+  {# same email without this section (include_ba_names is False).         #}
+  {% if include_ba_names and summary.top_bas %}
   <tr>
     <td style="padding-top: 22px;">
       <p style="margin: 0 0 10px 0; font-size: 11px; letter-spacing: 0.16em; color: #888888; text-transform: uppercase;">

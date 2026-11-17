@@ -22,6 +22,13 @@ from django.core.management.base import BaseCommand
 # year to date. The page sends inclusive dates ending today.
 RANGE_DAYS = (7, 30, 90, 182)
 
+# One range can make up to three model calls (themes, other brands, what
+# sells where). The run is called over HTTP and Cloud Run cuts a request at
+# 300 s, so a range is only started with at least this long left; checking
+# only "past the deadline" let the last range start with seconds to spare and
+# run the request into a 504.
+RANGE_HEADROOM_SECONDS = 60
+
 
 def ranges_for(today: date) -> list[tuple[date, date]]:
     out = [(today - timedelta(days=days), today) for days in RANGE_DAYS]
@@ -36,7 +43,11 @@ class Command(BaseCommand):
         parser.add_argument("--tenant", type=int, default=None)
         parser.add_argument("--days", type=int, default=120,
                             help="Only brands with an approved recap this recently.")
-        parser.add_argument("--max-seconds", type=int, default=240)
+        parser.add_argument(
+            "--max-seconds", type=int, default=150,
+            help="Stop starting new ranges once fewer than "
+                 f"{RANGE_HEADROOM_SECONDS}s of this budget are left.",
+        )
         parser.add_argument("--dry-run", action="store_true")
 
     def handle(self, *args, **opts):
@@ -71,7 +82,7 @@ class Command(BaseCommand):
         built = fresh = thin = failed = 0
         for tenant_id in tenant_ids:
             for start, end in ranges_for(today):
-                if time.monotonic() > deadline:
+                if deadline - time.monotonic() < RANGE_HEADROOM_SECONDS:
                     self.stdout.write("time limit reached; the rest waits for the next run")
                     self._summary(built, fresh, thin, failed)
                     return

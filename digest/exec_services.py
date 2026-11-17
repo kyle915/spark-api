@@ -84,6 +84,18 @@ class ExecutiveSummary:
     def is_empty(self) -> bool:
         return self.recap_count == 0
 
+    # Django templates cannot call a method with an argument, so the
+    # template reads these two properties. Writing
+    # ``summary.delta_chip:"recaps"`` in the template is a
+    # TemplateSyntaxError at compile time -- it crashed every send.
+    @property
+    def recap_delta_chip(self) -> str | None:
+        return self.delta_chip("recaps")
+
+    @property
+    def reach_delta_chip(self) -> str | None:
+        return self.delta_chip("reach")
+
     def delta_chip(self, kind: str) -> str | None:
         """Human-readable chip text like '↑ 12% vs last week' or
         '↓ 3' for the email template to render alongside each

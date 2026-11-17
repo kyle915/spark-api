@@ -5047,6 +5047,63 @@ class AuditLegacyRecapsView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class AuditAccessMisuseView(View):
+    """GET/POST `/internal/cron/audit-access-misuse` — READ-ONLY.
+
+    What the database still shows about use of the access holes closed in
+    #1424/#1426/#1427, for the window before each fix. Fires
+    ``audit_access_misuse --json``. Ambassadors and clients are ids only;
+    emails appear only for accounts carrying an admin marker.
+
+    Params: start / end (YYYY-MM-DD or ISO, optional), cap (rows per list).
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _param(name: str) -> str:
+            return (request.GET.get(name) or request.POST.get(name) or "").strip()
+
+        kwargs: dict = {"as_json": True}
+        for name in ("start", "end"):
+            if _param(name):
+                kwargs[name] = _param(name)
+        if _param("cap"):
+            try:
+                kwargs["cap"] = int(_param("cap"))
+            except ValueError:
+                return JsonResponse({"ok": False, "error": "cap must be an integer"}, status=400)
+
+        out = io.StringIO()
+        try:
+            call_command("audit_access_misuse", stdout=out, **kwargs)
+            raw = out.getvalue()
+            blob = raw.split("MISUSEAUDIT_JSON_START", 1)[1].split("MISUSEAUDIT_JSON_END", 1)[0]
+            data = json.loads(blob)
+        except CommandError as exc:
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc), "report": out.getvalue()},
+                status=400,
+            )
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("audit_access_misuse cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": f"{type(exc).__name__}: {exc}"},
+                status=500,
+            )
+        report = raw.split("MISUSEAUDIT_JSON_START", 1)[0].strip()
+        return JsonResponse({"ok": True, "report": report, "data": data})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class AuditNumberFixesView(View):
     """GET/POST `/internal/cron/audit-number-fixes` — READ-ONLY.
 
@@ -12142,6 +12199,7 @@ def _registered_views() -> dict[str, Any]:
         "dump-recap-fields": DumpRecapFieldsView,
         "audit-legacy-recaps": AuditLegacyRecapsView,
         "audit-number-fixes": AuditNumberFixesView,
+        "audit-access-misuse": AuditAccessMisuseView,
         "export-recaps-to-sheet": ExportRecapsToSheetView,
         "export-ld-summary": ExportLdSummaryView,
         "export-girlbeer-summary": ExportGirlbeerSummaryView,

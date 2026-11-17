@@ -18,11 +18,42 @@ Usage:
 from __future__ import annotations
 
 from django.core.management.base import BaseCommand
+from django.db.models.functions import Lower
 
 from digest.envelopes import ExecutiveSummaryMailer
 from digest.exec_services import build_executive_summary
 from digest.services import active_tenants, admin_recipients_for_tenant
-from tenants.models import Tenant
+from tenants.models import Tenant, User
+from utils.graphql.permissions import _is_admin_access
+
+
+def split_staff_recipients(emails: list[str]) -> tuple[list[str], list[str]]:
+    """Split recipients into (Ignite staff, everyone else).
+
+    Staff = the platform-admin test the schema uses (``_is_admin_access``:
+    is_staff / superuser / spark-admin role / Ignite domain, minus
+    IGNITE_ADMIN_EXCLUDE). An address with no user row is judged on its
+    domain alone, so an unknown ``--to`` address lands in "everyone else".
+    Only the staff list may see ambassador names.
+    """
+    users = {
+        (u.email or "").lower(): u
+        for u in User.objects.annotate(email_lower=Lower("email"))
+        .filter(email_lower__in=[e.lower() for e in emails])
+        .select_related("role")
+    }
+    staff: list[str] = []
+    others: list[str] = []
+    for email in emails:
+        u = users.get(email.lower())
+        is_staff = _is_admin_access(
+            getattr(getattr(u, "role", None), "slug", None) if u else None,
+            bool(u and u.is_staff),
+            bool(u and u.is_superuser),
+            email,
+        )
+        (staff if is_staff else others).append(email)
+    return staff, others
 
 
 class Command(BaseCommand):
@@ -109,18 +140,27 @@ class Command(BaseCommand):
                 skipped += 1
                 continue
 
+            # Ignite staff get the ambassador leaderboard; anyone else (a
+            # client admin, an unknown --to address) gets the same email
+            # without ambassador names.
+            staff, others = split_staff_recipients(recipients)
+
             if dry_run:
                 self.stdout.write(
-                    f"    ↳ would email {len(recipients)} recipients (dry-run)"
+                    f"    ↳ would email {len(staff)} staff (with BA names) + "
+                    f"{len(others)} other (no BA names) recipients (dry-run)"
                 )
                 continue
 
-            mailer = ExecutiveSummaryMailer(
-                summary=summary,
-                to_emails=recipients,
-            )
-            mailer.send_now()
-            sent += 1
+            for group, include_ba_names in ((staff, True), (others, False)):
+                if not group:
+                    continue
+                ExecutiveSummaryMailer(
+                    summary=summary,
+                    to_emails=group,
+                    include_ba_names=include_ba_names,
+                ).send_now()
+                sent += 1
 
         self.stdout.write(
             self.style.SUCCESS(
