@@ -1942,7 +1942,19 @@ class JobApplicationQueries:
         """Every application row attached to a Job, ordered newest
         first. Includes the BA's name/email/uuid via the type resolver,
         so the admin Jobs page can render the applicant list without
-        an N+1 round-trip."""
+        an N+1 round-trip.
+
+        Access: Ignite staff (``_is_admin_access``) see every job's
+        applicants with contact details. Anyone else (brand/client users —
+        the Job detail page is not admin-only) sees only applications on
+        their OWN tenants' jobs, with the applicant's email and phone
+        stripped (empty strings). A caller with no tenant membership (e.g.
+        a BA) gets ``[]``."""
+        from jobs.job_scope import JobScope
+
+        allowed_tenant_ids = await JobScope().accessible_tenant_ids(info)
+        is_staff_caller = allowed_tenant_ids is None
+
         def _list():
             from utils.graphql.mixins import resolve_id_to_int
             try:
@@ -1955,7 +1967,16 @@ class JobApplicationQueries:
                 .filter(job_id=job_pk)
                 .order_by("-applied_at")
             )
-            return list(qs)
+            if not is_staff_caller:
+                if not allowed_tenant_ids:
+                    return []
+                qs = qs.filter(tenant_id__in=allowed_tenant_ids)
+            rows = list(qs)
+            if not is_staff_caller:
+                for row in rows:
+                    # Read by JobApplication.ambassador_email/_phone.
+                    row._redact_applicant_contact = True
+            return rows
         return await sync_to_async(_list)()
 
 

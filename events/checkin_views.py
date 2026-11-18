@@ -156,12 +156,17 @@ def _body(request: HttpRequest) -> dict:
 
 
 def _client_ip(request: HttpRequest) -> str:
-    """Best-effort client IP. Cloud Run sits behind a proxy, so the real client
-    is the first hop in X-Forwarded-For; fall back to REMOTE_ADDR."""
-    xff = request.META.get("HTTP_X_FORWARDED_FOR", "")
-    if xff:
-        return xff.split(",")[0].strip() or "?"
-    return request.META.get("REMOTE_ADDR", "") or "?"
+    """Real client IP for the check-in throttles.
+
+    Delegates to the shared helper (utils.abuse.identity.client_ip): the
+    right-most ``ABUSE_TRUSTED_PROXY_COUNT`` X-Forwarded-For hop, i.e. the
+    address Google's front end appended. The left-most entry used before is
+    client-controlled, so a bot could rotate it to dodge every limit below.
+    Same approach as the MCP throttle (MCP_TRUSTED_PROXY_HOPS)."""
+    from utils.abuse.identity import client_ip
+
+    ip = client_ip(request)
+    return ip if ip and ip != "unknown" else "?"
 
 
 def _over_limit(scope: str, ident: str, *, limit: int, window: int) -> bool:

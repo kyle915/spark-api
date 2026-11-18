@@ -49,6 +49,12 @@ class TestAdminCreatesGlobalLocation(EventsGraphQLTestCase):
             email="founder@igniteproductions.co",
             role=self.roles["client"],
         )
+        # The domain grant needs a verified (inbox-proven) account.
+        from gqlauth.models import UserStatus
+
+        UserStatus.objects.update_or_create(
+            user=self.ignite_admin, defaults={"verified": True, "archived": False}
+        )
 
     @pytest.mark.asyncio
     async def test_ignite_admin_adds_town_without_tenant_membership(self):
