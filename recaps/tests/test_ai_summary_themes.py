@@ -663,7 +663,7 @@ class TestSummaryAndThemes(AmbassadorsGraphQLTestCase):
         )
         payload = await self._generate(self.admin)
         assert payload["ok"] is True, payload
-        assert payload["summary"]["status"] == "draft"
+        assert payload["summary"]["status"] == "reviewed"  # weekly: published at once
         assert payload["summary"]["text"] == (
             "Three events ran this week.\n\nShoppers liked the citrus flavor."
         )
@@ -755,7 +755,8 @@ class TestSummaryAndThemes(AmbassadorsGraphQLTestCase):
         )
         assert data["setWeeklyClientSummaryReviewed"]["ok"] is False
         row = (await self._summaries())[0]
-        assert row.edited_body == "" and row.status == "draft"
+        # Untouched by the brand user: still the auto-published weekly text.
+        assert row.edited_body == "" and row.status == "reviewed"
 
     @pytest.mark.asyncio
     async def test_staff_see_each_brand_edit_and_mark_reviewed(self):
@@ -813,7 +814,12 @@ class TestSummaryAndThemes(AmbassadorsGraphQLTestCase):
         summary_id = made["summary"]["id"]
         calls = self.post.call_count
 
-        # A draft: staff see it, labelled; the brand sees nothing.
+        # Weekly summaries are published as soon as they're written.
+        live = await card(self.client_user, self.tenant)
+        assert live["isDraft"] is False and live["text"] == "Three events ran."
+
+        # Staff can pull one back to draft: staff see it labelled, the brand nothing.
+        await self._run(REVIEWED, {"id": summary_id, "reviewed": False}, self.admin)
         assert await card(self.client_user, self.tenant) is None
         draft = await card(self.admin, self.tenant)
         assert draft["isDraft"] is True and draft["text"] == "Three events ran."
@@ -826,7 +832,7 @@ class TestSummaryAndThemes(AmbassadorsGraphQLTestCase):
         assert seen["isDraft"] is False
         assert seen["text"] == "Three stores ran."
         assert (seen["weekStart"], seen["weekEnd"]) == (self.start, self.end)
-        # Asking for another brand returns their own; Beta's is a draft anyway.
+        # Asking for another brand they don't belong to returns their own.
         assert (await card(self.client_user, self.other))["text"] == "Three stores ran."
 
         # Back to draft: gone for the brand again.
@@ -984,7 +990,10 @@ class TestSummaryAndThemes(AmbassadorsGraphQLTestCase):
         assert self.post.call_count == calls + 1
         rows = {r.tenant_id: r for r in await self._summaries()}
         assert rows[self.tenant.id].edited_body == "Staff wording."
-        assert rows[self.other.id].status == "draft"
+        # Weekly summaries are published to the brand as soon as they're written.
+        assert rows[self.other.id].status == "reviewed"
+        assert rows[self.other.id].reviewed_at is not None
+        assert rows[self.other.id].reviewed_by_id is None
         assert len(mail.outbox) == 0
 
     @pytest.mark.asyncio
