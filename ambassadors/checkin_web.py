@@ -2206,6 +2206,11 @@ def build_public_context(event, ambassador=None) -> dict:
         # and hides Log this stop.
         "locationMode": tenant_location_mode(tenant),
     }
+    if ambassador is not None:
+        # The product-questions box only shows once the BA has identified.
+        from ambassadors.product_qa import public_state
+
+        payload["productQa"] = public_state(tenant)
     if requires_store_identity(tenant, event):
         payload["storeIdentity"] = store_identity_prefill(event)
     # Which program this event is — so a BA who picked one can see the page

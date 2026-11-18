@@ -92,6 +92,12 @@ urlpatterns = [
         checkin_views.public_checkin_tally_read,
         name="events.public_checkin_tally_read",
     ),
+    # Product questions, answered from the brand's own notes only.
+    path(
+        "checkin/<str:code>/product-question",
+        checkin_views.public_checkin_product_question,
+        name="events.public_checkin_product_question",
+    ),
     path(
         "checkin/<str:code>/where",
         checkin_views.public_checkin_where,
