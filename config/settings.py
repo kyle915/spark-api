@@ -93,9 +93,12 @@ INSTALLED_APPS = [
     "announcements",
     "jobboard",
     "timeclock",
+    "recap_decks",
+    "consumer_mentions",
     # Cloud Tasks handler endpoints (no models). Registered so its app label
     # resolves; the routes are mounted under `api/tasks/` in config/urls.py.
     "tasks",
+    "brand_insights",
     # Official Spark MCP server (AI app connections): OAuth 2.1 + /mcp.
     "spark_mcp",
     # What the BA product-questions box can answer from beyond staff notes:

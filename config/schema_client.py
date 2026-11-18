@@ -9,7 +9,9 @@ from recaps.schema import RecapQueryClient, RecapMutationsClient
 from recaps.recap_ai import RecapAiMutations, RecapAiQueries
 from recaps.feedback_themes import FeedbackThemeMutations, FeedbackThemeQueries
 from recaps.comment_insights import CommentInsightQueries
+from consumer_mentions.trends import MentionTrendQueries
 from recaps.weekly_summary import WeeklySummaryMutations, WeeklySummaryQueries
+from brand_insights.schema import BrandInsightMutations, BrandInsightQueries
 from recaps.flag_explanation import RecapFlagExplanationQueries
 from recaps.metric_mapping_schema import (
     RecapMetricMappingMutations,
@@ -49,6 +51,7 @@ from recaps.client_deck_schema import (
     ClientRecapDraftMutations,
     ClientRecapDraftQueries,
 )
+from recap_decks.schema import ClientRecapDeckMutations, ClientRecapDeckQueries
 from tenants.notification_pref_schema import (
     NotificationPreferenceMutations,
     NotificationPreferenceQueries,
@@ -71,6 +74,7 @@ QueryClients = merge_types(
         DashboardExplainQueries,
         BestPhotoQueries,
         ClientRecapDraftQueries,
+        ClientRecapDeckQueries,
         ListSearchQueries,
         StoreProfileQueries,
         MonthHighlightQueries,
@@ -78,7 +82,9 @@ QueryClients = merge_types(
         RecapAiQueries,
         FeedbackThemeQueries,
         CommentInsightQueries,
+        MentionTrendQueries,
         WeeklySummaryQueries,
+        BrandInsightQueries,
         RecapFlagExplanationQueries,
         RecapMetricMappingQueries,
         AmbassadorQueryClient,
@@ -107,6 +113,7 @@ MutationClients = merge_types(
         FeedbackThemeMutations,
         ShelfCheckMutations,
         WeeklySummaryMutations,
+        BrandInsightMutations,
         RecapMetricMappingMutations,
         TenantGoalsMutations,
         ScheduledReportMutations,
@@ -114,6 +121,7 @@ MutationClients = merge_types(
         FieldSamplingReportMutations,
         BestPhotoMutations,
         ClientRecapDraftMutations,
+        ClientRecapDeckMutations,
         MutationClients,
         ClientJobMutations,
         AmbassadorMutationsClient,

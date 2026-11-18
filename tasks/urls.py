@@ -31,6 +31,11 @@ urlpatterns = [
         name="tasks.clock_sheet_sync",
     ),
     path(
+        "recap-deck-build",
+        views.recap_deck_build_view,
+        name="tasks.recap_deck_build",
+    ),
+    path(
         "connecteam-import-recap",
         views.connecteam_import_recap_view,
         name="tasks.connecteam_import_recap",
