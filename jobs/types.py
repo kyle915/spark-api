@@ -577,6 +577,10 @@ class JobApplication:
 
     @strawberry.field
     def ambassador_email(self) -> str:
+        # Brand/client callers get contact fields stripped (set by the
+        # jobApplications resolver); only Ignite staff see them.
+        if getattr(self, "_redact_applicant_contact", False):
+            return ""
         a = getattr(self, "ambassador", None)
         u = getattr(a, "user", None) if a else None
         return (getattr(u, "email", None) or "") if u else ""
@@ -588,7 +592,9 @@ class JobApplication:
 
     @strawberry.field
     def ambassador_phone(self) -> str:
-        """BA's phone for the admin contact card."""
+        """BA's phone for the admin contact card (stripped for brand users)."""
+        if getattr(self, "_redact_applicant_contact", False):
+            return ""
         a = getattr(self, "ambassador", None)
         return (getattr(a, "phone", None) or "") if a else ""
 

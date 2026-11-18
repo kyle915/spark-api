@@ -6,8 +6,9 @@ request body it would have sent is checked for people data.
 
 from __future__ import annotations
 
+import itertools
 import json
-from datetime import datetime
+from datetime import date, datetime
 from io import StringIO
 from unittest.mock import patch
 
@@ -22,7 +23,8 @@ from ambassadors.tests.base import AmbassadorsGraphQLTestCase
 from config.schema_client import schema_clients
 from events import models as event_models
 from recaps import models as recap_models
-from recaps.recap_location import chain_in_text, run, scrub, state_code_of
+from recaps import recap_location
+from recaps.recap_location import ChainIndex, chain_in_text, run, scrub, state_code_of
 from recaps.us_state_geo import state_at
 
 # ─── Pure text rules ────────────────────────────────────────────────
@@ -61,6 +63,21 @@ def test_scrub_blanks_people_data():
     assert "Claire" not in out and "Thornhill" not in out
     assert "555" not in out and "@" not in out
     assert "HEB" in out
+
+
+def test_chain_index_target_picks_the_numbered_store_then_the_canonical_row():
+    index = ChainIndex.for_tenant(
+        None, [(1, "heb"), (2, "HEB #614"), (3, "H-E-B"), (4, "Kroger 12"), (5, "H-E-B")]
+    )
+    assert index.target("H-E-B", "614") == (2, "HEB #614")
+    assert index.target("H-E-B", "999") == (3, "H-E-B")
+    assert index.target("H-E-B") == (3, "H-E-B")
+    assert index.target("Kroger", "12") == (4, "Kroger 12")
+    assert index.target("Kroger") == (None, "Kroger")
+    assert index.target("Publix") == (None, "Publix")
+    # Memoized: the same answer on a second read.
+    assert index.target("H-E-B", "614") == (2, "HEB #614")
+    assert index.canonical("heb #614") == index.canonical("heb #614") == "H-E-B"
 
 
 # ─── Point → state, offline ─────────────────────────────────────────
@@ -616,6 +633,148 @@ class TestRecapLocation(AmbassadorsGraphQLTestCase):
         keys = [c["key"] for c in payload["columns"]]
         row = dict(zip(keys, payload["rows"][0]))
         assert (row["city"], row["state"], row["retailer"]) == ("Austin", "Texas", "H-E-B")
+
+    # Paging and the time budget (big tenants)
+
+    def _five(self):
+        """Five recaps, event days 2, 4, 6, 8, 10, each fillable."""
+        return [
+            self._recap(
+                self._event(day=day, request=self._request(address="1 Congress Ave, Austin, TX 78701")),
+                {"Store": f"heb #{day}"},
+            )
+            for day in (2, 4, 6, 8, 10)
+        ]
+
+    def test_until_filters_by_event_date(self):
+        recaps = self._five()
+        report = self._run(until=date(2026, 10, 6))
+        assert report["scanned"] == 3 and report["partial"] is False
+        assert {r["recap_id"] for r in report["rows"]} == {r.id for r in recaps[:3]}
+        window = self._run(since=date(2026, 10, 4), until=date(2026, 10, 8))
+        assert {r["recap_id"] for r in window["rows"]} == {r.id for r in recaps[1:4]}
+        assert window["since"] == "2026-10-04" and window["until"] == "2026-10-08"
+
+    def test_after_id_pages_cover_every_recap_once_with_consistent_counts(self):
+        recaps = self._five()
+        whole = self._run()
+        assert whole["partial"] is False and whole["next_after_id"] is None
+        assert whole["last_recap_id"] == recaps[-1].id
+
+        pages, cursor = [], None
+        while True:
+            page = self._run(after_id=cursor, limit=2)
+            pages.append(page)
+            if not page["partial"]:
+                assert page["next_after_id"] is None
+                break
+            assert page["next_after_id"] == page["last_recap_id"]
+            cursor = page["next_after_id"]
+        assert [p["scanned"] for p in pages] == [2, 2, 1]
+        seen = [r["recap_id"] for p in pages for r in p["rows"]]
+        assert seen == [r.id for r in recaps]
+        for key in ("scanned", "recaps_with_changes"):
+            assert sum(p[key] for p in pages) == whole[key]
+        for key in ("fills", "blank_before", "blank_after"):
+            for f in recap_location.FIELDS:
+                assert sum(p[key][f] for p in pages) == whole[key][f], (key, f)
+        # A limit that ends exactly at the last recap is not partial.
+        assert self._run(after_id=recaps[2].id, limit=2)["partial"] is False
+
+    def test_time_budget_stops_between_segments_and_keeps_what_was_written(self):
+        recaps = self._five()
+        # Start at t=0; every later read of the clock is far past the budget.
+        clock = itertools.chain([0.0], itertools.repeat(500.0))
+        with patch.object(recap_location, "SEGMENT_MAX", 2), patch.object(
+            recap_location, "_monotonic", side_effect=lambda: next(clock)
+        ):
+            first = self._run(apply=True, time_budget_s=200)
+        # The first segment always runs (progress); no new one after that.
+        assert first["scanned"] == 2 and first["recaps_written"] == 2
+        assert first["partial"] is True and first["stopped"] == "time_budget"
+        assert first["next_after_id"] == recaps[1].id
+        for recap in recaps[:2]:
+            recap.refresh_from_db()
+            assert recap.retailer.name == "H-E-B" and recap.state.code == "TX"
+        recaps[2].refresh_from_db()
+        assert recaps[2].retailer_id is None
+
+        rest = self._run(apply=True, after_id=first["next_after_id"], time_budget_s=200)
+        assert rest["partial"] is False and rest["scanned"] == 3 and rest["recaps_written"] == 3
+        assert first["fills"]["state_code"] + rest["fills"]["state_code"] == 5
+        # Idempotent: the whole tenant again proposes nothing new.
+        again = self._run(apply=True)
+        assert again["recaps_with_changes"] == 0 and again["recaps_written"] == 0
+        assert event_models.Retailer.objects.filter(tenant=self.tenant, name="H-E-B").count() == 1
+
+    def test_paged_apply_matches_a_single_apply(self):
+        self._five()
+        cursor, written = None, 0
+        while True:
+            page = self._run(apply=True, after_id=cursor, limit=1)
+            written += page["recaps_written"]
+            if not page["partial"]:
+                break
+            cursor = page["next_after_id"]
+        assert written == 5
+        assert self._run()["recaps_with_changes"] == 0
+
+    @override_settings(OPENAI_API_KEY="test-key")
+    def test_ai_call_cap_applies_per_call(self):
+        recaps = [
+            self._recap(self._event(day=day, name=f"Sampling at shop {day}, Austin TX"), {"Store": "a shop"})
+            for day in (2, 4, 6)
+        ]
+        calls = []
+
+        def _post(url, payload, headers, *, timeout):
+            calls.append(payload)
+            return _reply({"recaps": []})
+
+        with patch.object(recap_location, "AI_BATCH", 1), patch(
+            "utils.ai_text._post_json", side_effect=_post
+        ):
+            first = self._run(use_ai=True, max_ai_calls=2)
+            assert first["ai"]["calls"] == 2 and len(calls) == 2
+            assert first["ai"]["status"].startswith("stopped after 2 calls")
+            assert first["scanned"] == 3  # the rest still get the deterministic rules
+            nxt = self._run(use_ai=True, max_ai_calls=2, after_id=recaps[1].id)
+            assert nxt["ai"]["calls"] == 1 and len(calls) == 3
+
+    @override_settings(INTERNAL_CRON_SECRET="s3cret")
+    def test_cron_endpoint_pages_with_until_after_id_and_time_budget(self):
+        recaps = self._five()
+        http = DjangoClient()
+        url = "/internal/cron/normalize-recap-locations"
+        auth = {"HTTP_X_CRON_SECRET": "s3cret"}
+        res = http.post(url, {"tenant": "location-brand", "use_ai": "false", "until": "2026-10-06", "limit": "2"}, **auth)
+        assert res.status_code == 200, res.content
+        body = res.json()
+        assert body["scanned"] == 2 and body["partial"] is True
+        assert body["next_after_id"] == recaps[1].id and body["time_budget_s"] == 200.0
+        res = http.post(
+            url,
+            {"tenant": "location-brand", "use_ai": "false", "until": "2026-10-06",
+             "after_id": str(body["next_after_id"]), "time_budget": "9999"},
+            **auth,
+        )
+        body = res.json()
+        assert body["scanned"] == 1 and body["partial"] is False and body["next_after_id"] is None
+        assert body["time_budget_s"] == 240.0
+        for bad in ({"until": "06/10/2026"}, {"after_id": "abc"}, {"time_budget": "soon"}):
+            res = http.post(url, {"tenant": "location-brand", **bad}, **auth)
+            assert res.status_code == 400, bad
+
+    def test_command_takes_until_and_after_id(self):
+        recaps = self._five()
+        out = StringIO()
+        call_command(
+            "normalize_recap_locations", tenant="location-brand", no_ai=True,
+            until="2026-10-08", after_id=recaps[0].id, limit=2, stdout=out,
+        )
+        text = out.getvalue()
+        assert "scanned=2" in text and "partial=True" in text
+        assert f"next_after_id={recaps[2].id}" in text
 
     # Command and endpoint
 

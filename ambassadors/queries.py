@@ -3210,7 +3210,7 @@ class ShiftExtensionAdminQueries:
         from ambassadors.extensions import user_is_ignite_admin
 
         user = info.context.request.user
-        if not user_is_ignite_admin(user):
+        if not await user_is_ignite_admin(user):
             return []
         capped = max(1, min(int(limit or 50), 200))
 

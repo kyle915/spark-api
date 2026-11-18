@@ -61,10 +61,10 @@ from __future__ import annotations
 import logging
 import math
 import re
+import time
 from dataclasses import dataclass, field
 from datetime import date
 
-from django.db import transaction
 from django.utils import timezone
 
 from events.market import parse_address_geo
@@ -274,32 +274,60 @@ class ChainIndex:
             idx.keys[key] = base
         return idx
 
+    # Memo of canonical() and the retailer rows grouped by chain. Both are
+    # pure functions of the index, and a big tenant (thousands of retailer
+    # rows, tens of thousands of recaps) otherwise re-reads every retailer
+    # name for every recap: O(recaps x retailers), minutes per run.
+    _canonical_memo: dict[str, str] = field(default_factory=dict, repr=False)
+    _by_chain: dict[str, tuple[list, list]] | None = field(default=None, repr=False)
+
     def canonical(self, name: str | None) -> str:
         """The canonical chain for a written store name, or "" when the
         name is not a chain this tenant or the fixed list knows."""
         cleaned = _clean(name)
         if not cleaned:
             return ""
+        memo = self._canonical_memo.get(cleaned)
+        if memo is not None:
+            return memo
+        out = ""
         resolved = resolve_store_name(cleaned, self.aliases)
         base, _num, _marked = split_store_number(resolved)
         for candidate in (resolved, base):
             hit = self.keys.get(chain_key(candidate))
             if hit:
-                return _CHAIN_BY_KEY.get(chain_key(hit), hit)
-        return ""
+                out = _CHAIN_BY_KEY.get(chain_key(hit), hit)
+                break
+        self._canonical_memo[cleaned] = out
+        return out
+
+    def _retailers_by_chain(self) -> dict[str, tuple[list, list]]:
+        """``{chain: (numbered rows, plain rows)}`` over the tenant's
+        retailers, built once: numbered ``(id, name, number)`` rows are
+        stores of that chain with a number, plain ``(id, name)`` rows are the
+        chain itself."""
+        if self._by_chain is None:
+            grouped: dict[str, tuple[list, list]] = {}
+            for rid, name in self.retailers:
+                base, num, _marked = split_store_number(_clean(name))
+                if num:
+                    chain = self.canonical(base)
+                    if chain:
+                        grouped.setdefault(chain, ([], []))[0].append((rid, name, num.lstrip("0")))
+                else:
+                    chain = self.canonical(name)
+                    if chain:
+                        grouped.setdefault(chain, ([], []))[1].append((rid, name))
+            self._by_chain = grouped
+        return self._by_chain
 
     def target(self, chain: str, number: str = "") -> tuple[int | None, str]:
         """The tenant retailer row a chain resolves to: the row for that
         numbered store when one exists, else the chain's row (its canonical
         spelling first, then a properly cased one, then the oldest), else
         ``(None, chain)``: a row to create with the canonical name."""
-        numbered, plain = [], []
-        for rid, name in self.retailers:
-            base, num, _marked = split_store_number(_clean(name))
-            if self.canonical(base) == chain and num:
-                numbered.append((rid, name, num.lstrip("0")))
-            elif self.canonical(name) == chain and not num:
-                plain.append((rid, name))
+        numbered, plain = self._retailers_by_chain().get(chain, ([], []))
+        plain = list(plain)
         for rid, name, num in numbered:
             if number and num == number:
                 return rid, name
@@ -1006,20 +1034,32 @@ def apply_ai_answer(prop: Proposal, answer: dict, texts: list[str], index: Chain
     finalize_retailer(prop, index)
 
 
-def _city_states(cities: set[str]) -> dict[str, set[str]]:
-    """``{city: {state codes}}`` from the Location catalog, for corroboration."""
+def _city_states(cities: set[str], cache: dict[str, set[str]] | None = None) -> dict[str, set[str]]:
+    """``{city: {state codes}}`` from the Location catalog, for corroboration.
+    Reads only the asked-for names (not the whole catalog). ``cache`` keeps
+    answers across the batches of one run: cities already looked up (found
+    or not) are not read again."""
+    from django.db.models.functions import Lower, Trim
+
     from events.models import Location
 
-    if not cities:
-        return {}
-    out: dict[str, set[str]] = {}
-    rows = Location.objects.filter(state__isnull=False).values_list("name", "state__code")
-    wanted = {c.casefold() for c in cities}
-    for name, code in rows.iterator():
-        key = (name or "").strip().casefold()
-        if key in wanted and code:
-            out.setdefault(key, set()).add(code.strip().upper())
-    return out
+    cache = {} if cache is None else cache
+    wanted = {c.strip().casefold() for c in cities if c and c.strip()}
+    missing = wanted - cache.keys()
+    if missing:
+        for key in missing:
+            cache[key] = set()
+        rows = (
+            Location.objects.filter(state__isnull=False)
+            .annotate(_key=Lower(Trim("name")))
+            .filter(_key__in=sorted(missing))
+            .values_list("name", "state__code")
+        )
+        for name, code in rows:
+            key = (name or "").strip().casefold()
+            if key in cache and code:
+                cache[key].add(code.strip().upper())
+    return {k: cache[k] for k in wanted if cache.get(k)}
 
 
 # ─── Writing ────────────────────────────────────────────────────────
@@ -1031,6 +1071,7 @@ class _Writer:
     actor: object
     states: dict[str, int] = field(default_factory=dict)
     _made: dict[str, int] = field(default_factory=dict)
+    _locations: dict[tuple[str, int, str], int] = field(default_factory=dict)
     created_retailers: list[str] = field(default_factory=list)
     created_locations: list[str] = field(default_factory=list)
 
@@ -1059,11 +1100,17 @@ class _Writer:
         return self._made[name.casefold()]
 
     def location_id(self, city: str, state_code: str, zip_code: str) -> int | None:
-        from events.models import Location
-
         state_id = self.states.get(state_code)
         if not state_id:
             return None
+        memo_key = (city.casefold(), state_id, zip_code or "")
+        if memo_key not in self._locations:
+            self._locations[memo_key] = self._location_id(city, state_code, state_id, zip_code)
+        return self._locations[memo_key]
+
+    def _location_id(self, city: str, state_code: str, state_id: int, zip_code: str) -> int:
+        from events.models import Location
+
         rows = list(
             Location.objects.filter(name__iexact=city, state_id=state_id)
             .order_by("id")
@@ -1151,7 +1198,17 @@ def resolve_tenant(value):
     return tenant
 
 
-def recaps_for(tenant_id: int, since: date | None = None, limit: int | None = None):
+def recaps_for(
+    tenant_id: int,
+    since: date | None = None,
+    limit: int | None = None,
+    *,
+    until: date | None = None,
+    after_id: int | None = None,
+):
+    """A tenant's recaps in id order. ``since`` / ``until``: the EVENT date
+    window (inclusive); ``after_id``: only recaps with a larger id (the
+    cursor a partial run hands back)."""
     from django.db.models import Q
     from django.db.models.functions import Coalesce
 
@@ -1168,71 +1225,83 @@ def recaps_for(tenant_id: int, since: date | None = None, limit: int | None = No
         .prefetch_related("custom_field_value__custom_field")
         .order_by("id")
     )
-    if since is not None:
-        qs = qs.annotate(_day=Coalesce("event__date", "event__start_time")).filter(_day__date__gte=since)
+    if since is not None or until is not None:
+        qs = qs.annotate(_day=Coalesce("event__date", "event__start_time"))
+        if since is not None:
+            qs = qs.filter(_day__date__gte=since)
+        if until is not None:
+            qs = qs.filter(_day__date__lte=until)
+    if after_id:
+        qs = qs.filter(id__gt=int(after_id))
     if limit:
         qs = qs[: int(limit)]
     return qs
+
+
+# Recaps read from the database at a time. Each page is one query for the
+# recaps plus one for their answers and three for clock-in GPS.
+PAGE_SIZE = 200
+# Most recaps in one write/budget segment when none of them needs the model.
+SEGMENT_MAX = 50
+# Default server-side time budget of one HTTP call (Cloud Run kills the
+# request at 300 s): no new segment is started after this many seconds.
+CRON_TIME_BUDGET_S = 200.0
+
+# Indirection so tests can drive the clock.
+_monotonic = time.monotonic
+
+
+def _segments(items: list, ai_on: bool) -> list[list]:
+    """Consecutive runs of ``(recap, proposal, ai texts or None)`` holding at
+    most ``AI_BATCH`` recaps that want the model (one model call each) and
+    at most ``SEGMENT_MAX`` recaps in all. A run stops between segments."""
+    out, seg, wanting = [], [], 0
+    for item in items:
+        seg.append(item)
+        if ai_on and item[2]:
+            wanting += 1
+        if wanting >= AI_BATCH or len(seg) >= SEGMENT_MAX:
+            out.append(seg)
+            seg, wanting = [], 0
+    if seg:
+        out.append(seg)
+    return out
 
 
 def run(
     tenant,
     *,
     since: date | None = None,
+    until: date | None = None,
+    after_id: int | None = None,
     limit: int | None = None,
     apply: bool = False,
     use_ai: bool = True,
     max_ai_calls: int = DEFAULT_MAX_AI_CALLS,
+    time_budget_s: float | None = None,
     actor=None,
 ) -> dict:
     """Propose (and with ``apply`` write) locations for a tenant's recaps.
-    Dry run by default. Returns a JSON-safe report."""
+    Dry run by default. Returns a JSON-safe report.
+
+    Recaps are walked in id order, a page at a time, and each segment of a
+    page is proposed, sent to the model (what is still blank) and written
+    before the next one starts, so every write stands on its own. With
+    ``time_budget_s`` no new segment starts once that many seconds have
+    passed (at least one segment always runs, so a caller always makes
+    progress). ``partial`` is true when recaps in the window are left (time
+    budget or ``limit``); ``next_after_id`` is then the ``after_id`` of the
+    next call. ``max_ai_calls`` caps the model calls of this call."""
     from events.models import Retailer, State
 
+    started = _monotonic()
     retailers = list(
         Retailer.objects.filter(tenant_id=tenant.id).exclude(name="").order_by("id").values_list("id", "name")
     )
     index = ChainIndex.for_tenant(tenant.id, retailers)
-    recaps = list(recaps_for(tenant.id, since=since, limit=limit))
-    gps = clockin_gps_for([r for r in recaps if not current_values(r).state_code])
-    proposals: list[tuple[object, Proposal]] = [(r, propose(r, index, gps.get(r.id))) for r in recaps]
+    base_qs = recaps_for(tenant.id, since=since, until=until)
 
-    ai_status = "off"
-    ai_calls = 0
-    if use_ai:
-        wanting = []
-        for recap, prop in proposals:
-            if _needs_ai(prop):
-                texts = ai_texts(recap, gather_snippets(recap))
-                if texts:
-                    wanting.append((recap, prop, texts))
-        ai_status = "not needed" if not wanting else "used"
-        mentioned = set()
-        for _r, _p, texts in wanting:
-            for t in texts:
-                for part in re.split(r"[,|·•\-–—()]", t):
-                    if _city_value(part):
-                        mentioned.add(_city_value(part))
-        city_states = _city_states(mentioned) if wanting else {}
-        for start in range(0, len(wanting), AI_BATCH):
-            if ai_calls >= max_ai_calls:
-                ai_status = f"stopped after {ai_calls} calls (max_ai_calls)"
-                break
-            chunk = wanting[start : start + AI_BATCH]
-            answers = ask_ai([(r.id, texts) for r, _p, texts in chunk])
-            ai_calls += 1
-            if answers is None:
-                ai_status = "unavailable (no OPENAI_API_KEY or the call failed)"
-                break
-            for recap, prop, texts in chunk:
-                if recap.id in answers:
-                    apply_ai_answer(prop, answers[recap.id], texts, index, city_states)
-
-    counts = {f: 0 for f in FIELDS}
-    by_source: dict[str, int] = {}
-    rows = []
     writer = None
-    written = 0
     if apply:
         actor = actor or _system_actor(tenant.id)
         writer = _Writer(
@@ -1244,21 +1313,107 @@ def run(
                 if code
             },
         )
-    for recap, prop in proposals:
-        changes = prop.changes
-        if not changes and not prop.notes:
-            continue
-        for f in changes:
-            counts[f] += 1
-            src = prop.sources.get(f, "")
-            by_source[src] = by_source.get(src, 0) + 1
-        row = prop.as_dict()
-        if apply and changes:
-            with transaction.atomic():
-                did = write_proposal(recap, prop, writer)
-            row["written"] = sorted(did)
-            written += 1 if did else 0
-        rows.append(row)
+
+    ai_status = "off" if not use_ai else "not needed"
+    ai_on = bool(use_ai)
+    ai_calls = 0
+    city_cache: dict[str, set[str]] = {}
+
+    counts = {f: 0 for f in FIELDS}
+    by_source: dict[str, int] = {}
+    blank_before = {f: 0 for f in FIELDS}
+    blank_after = {f: 0 for f in FIELDS}
+    rows: list[dict] = []
+    written = 0
+    scanned = 0
+    cursor = int(after_id) if after_id else None
+    stopped = ""  # "time_budget" | "limit" | "" (window done)
+    exhausted = False
+
+    while not stopped and not exhausted:
+        want = PAGE_SIZE
+        if limit:
+            left = int(limit) - scanned
+            if left <= 0:
+                stopped = "limit"
+                break
+            want = min(want, left)
+        page_qs = base_qs.filter(id__gt=cursor) if cursor else base_qs
+        page = list(page_qs[:want])
+        if len(page) < want:
+            exhausted = True
+        if not page:
+            break
+        gps = clockin_gps_for([r for r in page if not current_values(r).state_code])
+        items = []
+        for recap in page:
+            prop = propose(recap, index, gps.get(recap.id))
+            texts = None
+            if ai_on and _needs_ai(prop):
+                texts = ai_texts(recap, gather_snippets(recap)) or None
+            items.append((recap, prop, texts))
+
+        for seg in _segments(items, ai_on):
+            if (
+                time_budget_s is not None
+                and scanned > 0
+                and _monotonic() - started >= time_budget_s
+            ):
+                stopped = "time_budget"
+                exhausted = False
+                break
+            wanting = [(r, p, t) for r, p, t in seg if t] if ai_on else []
+            if wanting:
+                if ai_calls >= max_ai_calls:
+                    ai_status = f"stopped after {ai_calls} calls (max_ai_calls)"
+                    ai_on = False
+                else:
+                    ai_status = "used"
+                    mentioned = set()
+                    for _r, _p, texts in wanting:
+                        for t in texts:
+                            for part in re.split(r"[,|·•\-–—()]", t):
+                                if _city_value(part):
+                                    mentioned.add(_city_value(part))
+                    city_states = _city_states(mentioned, city_cache)
+                    answers = ask_ai([(r.id, texts) for r, _p, texts in wanting])
+                    ai_calls += 1
+                    if answers is None:
+                        ai_status = "unavailable (no OPENAI_API_KEY or the call failed)"
+                        ai_on = False
+                    else:
+                        for recap, prop, texts in wanting:
+                            if recap.id in answers:
+                                apply_ai_answer(prop, answers[recap.id], texts, index, city_states)
+
+            for recap, prop, _texts in seg:
+                changes = prop.changes
+                for f in FIELDS:
+                    blank_before[f] += 0 if prop.before.get(f) else 1
+                    blank_after[f] += 0 if ({**prop.before, **changes}).get(f) else 1
+                if changes or prop.notes:
+                    for f in changes:
+                        counts[f] += 1
+                        src = prop.sources.get(f, "")
+                        by_source[src] = by_source.get(src, 0) + 1
+                    row = prop.as_dict()
+                    if apply and changes:
+                        # One autocommitted UPDATE per recap (no wrapping
+                        # transaction): each write stands on its own, so a
+                        # run cut short keeps everything written before it.
+                        did = write_proposal(recap, prop, writer)
+                        row["written"] = sorted(did)
+                        written += 1 if did else 0
+                    rows.append(row)
+            scanned += len(seg)
+            cursor = seg[-1][0].id
+        if not stopped and limit and scanned >= int(limit) and not exhausted:
+            stopped = "limit"
+
+    more = False
+    if stopped and cursor is not None:
+        more = base_qs.filter(id__gt=cursor).exists()
+    partial = bool(more)
 
     with_changes = sum(1 for r in rows if r["changes"])
     return {
@@ -1266,23 +1421,27 @@ def run(
         "tenant": {"id": tenant.id, "slug": getattr(tenant, "slug", "")},
         "applied": bool(apply),
         "since": since.isoformat() if since else None,
+        "until": until.isoformat() if until else None,
+        "after_id": int(after_id) if after_id else None,
         "limit": limit,
-        "scanned": len(recaps),
+        "scanned": scanned,
+        "partial": partial,
+        "stopped": stopped if partial else "",
+        "last_recap_id": cursor,
+        "next_after_id": cursor if partial else None,
+        "elapsed_s": round(_monotonic() - started, 2),
+        "time_budget_s": time_budget_s,
         "recaps_with_changes": with_changes,
         "recaps_written": written,
         "fills": counts,
         "by_source": dict(sorted(by_source.items())),
-        "blank_before": _blank_counts([p.before for _r, p in proposals]),
-        "blank_after": _blank_counts([{**p.before, **p.changes} for _r, p in proposals]),
+        "blank_before": blank_before,
+        "blank_after": blank_after,
         "ai": {"status": ai_status, "calls": ai_calls},
         "created_retailers": writer.created_retailers if writer else [],
         "created_locations": writer.created_locations if writer else [],
         "rows": rows,
     }
-
-
-def _blank_counts(values: list[dict]) -> dict:
-    return {f: sum(1 for v in values if not v.get(f)) for f in FIELDS}
 
 
 def _system_actor(tenant_id: int):

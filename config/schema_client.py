@@ -9,7 +9,10 @@ from recaps.schema import RecapQueryClient, RecapMutationsClient
 from recaps.recap_ai import RecapAiMutations, RecapAiQueries
 from recaps.feedback_themes import FeedbackThemeMutations, FeedbackThemeQueries
 from recaps.comment_insights import CommentInsightQueries
+from consumer_mentions.trends import MentionTrendQueries
 from recaps.weekly_summary import WeeklySummaryMutations, WeeklySummaryQueries
+from brand_insights.schema import BrandInsightMutations, BrandInsightQueries
+from brand_chat.schema import BrandChatMutations, BrandChatQueries
 from recaps.flag_explanation import RecapFlagExplanationQueries
 from recaps.metric_mapping_schema import (
     RecapMetricMappingMutations,
@@ -49,6 +52,7 @@ from recaps.client_deck_schema import (
     ClientRecapDraftMutations,
     ClientRecapDraftQueries,
 )
+from recap_decks.schema import ClientRecapDeckMutations, ClientRecapDeckQueries
 from tenants.notification_pref_schema import (
     NotificationPreferenceMutations,
     NotificationPreferenceQueries,
@@ -56,6 +60,7 @@ from tenants.notification_pref_schema import (
 from spark_mcp.schema import AiConnectionMutations, AiConnectionQueries
 from utils.utils import BlockIntrospectionForAnonymous
 from utils.graphql.gcs_schema import GCSQuery
+from utils.abuse.graphql_extension import guardrail_extensions
 
 # Clients Schemas
 QueryClients = merge_types(
@@ -71,6 +76,7 @@ QueryClients = merge_types(
         DashboardExplainQueries,
         BestPhotoQueries,
         ClientRecapDraftQueries,
+        ClientRecapDeckQueries,
         ListSearchQueries,
         StoreProfileQueries,
         MonthHighlightQueries,
@@ -78,7 +84,10 @@ QueryClients = merge_types(
         RecapAiQueries,
         FeedbackThemeQueries,
         CommentInsightQueries,
+        MentionTrendQueries,
         WeeklySummaryQueries,
+        BrandInsightQueries,
+        BrandChatQueries,
         RecapFlagExplanationQueries,
         RecapMetricMappingQueries,
         AmbassadorQueryClient,
@@ -107,6 +116,8 @@ MutationClients = merge_types(
         FeedbackThemeMutations,
         ShelfCheckMutations,
         WeeklySummaryMutations,
+        BrandInsightMutations,
+        BrandChatMutations,
         RecapMetricMappingMutations,
         TenantGoalsMutations,
         ScheduledReportMutations,
@@ -114,6 +125,7 @@ MutationClients = merge_types(
         FieldSamplingReportMutations,
         BestPhotoMutations,
         ClientRecapDraftMutations,
+        ClientRecapDeckMutations,
         MutationClients,
         ClientJobMutations,
         AmbassadorMutationsClient,
@@ -137,5 +149,8 @@ schema_clients = JwtSchema(
     extensions=[
         DjangoOptimizerExtension,
         BlockIntrospectionForAnonymous,
+        # Anti-scraping guardrails: token/depth/alias limits, per-user rate
+        # limits, brand page-size cap, export/bulk caps + audit, usage log.
+        *guardrail_extensions(),
     ],
 )
