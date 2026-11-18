@@ -72,7 +72,10 @@ def _format_user_name(user) -> str:
     full_name = f"{first_name} {last_name}".strip()
     if full_name:
         return full_name
-    return getattr(user, "username", None) or str(user)
+    # Only used for the BA column, and recap workbooks go to brands: never
+    # fall back to the login (a BA's username is usually their email, and a
+    # walk-up placeholder email embeds their phone number).
+    return "(ambassador)"
 
 
 def _get_retailer_name(recap) -> str:

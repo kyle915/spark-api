@@ -7,6 +7,20 @@ from . import models
 from tenants.types import SparkUserType
 from events.types import Event, Location
 from utils.gcs import public_url
+from utils.graphql.permissions import (
+    HideBaPii,
+    HideEmailLikeName,
+    _dict_attr,
+    ba_pii_field,
+)
+
+# BA personal data on the Ambassador row: admins and the BA themselves only.
+# Brand users get the blank (same GraphQL type) — see utils.graphql.permissions.
+_AMB_OWNER = {"owner_user": _dict_attr("user_id")}
+
+
+def _amb_pii(blank=None):
+    return strawberry_django.field(extensions=[HideBaPii(blank, **_AMB_OWNER)])
 
 
 @strawberry_django.type(models.FileType)
@@ -22,21 +36,24 @@ class FileType(Node):
 class Ambassador(Node):
     uuid: str
     rating: int
-    address: str | None
-    phone: str | None
-    about_me: str | None
-    bio: str
-    college: str
-    in_college: bool
-    coordinates: list[float]
+    address: str | None = _amb_pii(None)
+    phone: str | None = _amb_pii(None)
+    about_me: str | None = _amb_pii(None)
+    bio: str = _amb_pii("")
+    college: str = _amb_pii("")
+    in_college: bool = _amb_pii(False)
+    coordinates: list[float] = _amb_pii(list)
     is_active: bool
-    location: Location | None
-    t_shirt_size: str | None
+    location: Location | None = _amb_pii(None)
+    t_shirt_size: str | None = _amb_pii(None)
     user: SparkUserType
     created_at: str
     updated_at: str
 
-    @strawberry.field
+    # only=[...] so the optimizer loads the blob column; a bare
+    # strawberry.field read it from __dict__ and came back None whenever the
+    # optimizer had deferred it.
+    @strawberry_django.field(only=["headshot"])
     def headshot_url(self) -> str | None:
         """Public (non-signed) URL for the BA headshot blob, or None."""
         blob = self.__dict__.get("headshot")
@@ -47,9 +64,12 @@ class Ambassador(Node):
                 return None
         return public_url(blob) if blob else None
 
-    @strawberry.field
+    @strawberry_django.field(
+        only=["resume", "user_id"], extensions=[HideBaPii(None, **_AMB_OWNER)]
+    )
     def resume_url(self) -> str | None:
-        """Public (non-signed) URL for the BA résumé blob, or None."""
+        """Public (non-signed) URL for the BA résumé blob, or None.
+        Admins and the BA only."""
         blob = self.__dict__.get("resume")
         if blob is None:
             try:
@@ -335,7 +355,8 @@ class FileTypeDetailResponse:
 @strawberry_django.type(models.AmbassadorInvitation)
 class AmbassadorInvitationType(Node):
     uuid: str
-    email: str
+    # The invited BA's email: admins only.
+    email: str = strawberry_django.field(extensions=[HideBaPii("")])
     token: str
     expires_at: str
     is_used: bool
@@ -778,15 +799,16 @@ class AmbassadorProfileDetail:
 
     ambassador: Ambassador
     # ---- identity / contact ----
-    full_name: str
-    email: str | None = None
-    phone: str | None = None
+    # Contact + profile content are admin-only (brand users get blanks).
+    full_name: str = strawberry.field(extensions=[HideEmailLikeName()])
+    email: str | None = ba_pii_field(None, default=None)
+    phone: str | None = ba_pii_field(None, default=None)
     # ---- profile content ----
-    bio: str = ""
-    college: str = ""
-    in_college: bool = False
+    bio: str = ba_pii_field("", default="")
+    college: str = ba_pii_field("", default="")
+    in_college: bool = ba_pii_field(False, default=False)
     headshot_url: str | None = None
-    resume_url: str | None = None
+    resume_url: str | None = ba_pii_field(None, default=None)
     photos: list[AmbassadorPhotoType] = strawberry.field(default_factory=list)
     gig_history: list[GigHistoryRow] = strawberry.field(default_factory=list)
     # ---- stats ----
@@ -865,7 +887,10 @@ class SourceDetailResponse:
 class Attendance(Node):
     uuid: str
     clock_time: str
-    coordinates: list[float] | None
+    # GPS fix stamped on the punch: admins and the BA themselves only.
+    coordinates: list[float] | None = strawberry_django.field(
+        extensions=[HideBaPii(None, owner_ambassador=_dict_attr("ambassador_id"))]
+    )
     ambassador_id: strawberry.ID | None
     job_id: strawberry.ID | None
     event_id: strawberry.ID | None
@@ -1223,9 +1248,9 @@ class BaActivationRow:
     person actually signed into the account we booked their shifts on?"""
 
     ambassador_uuid: strawberry.ID
-    name: str
-    email: str
-    phone: str | None
+    name: str = strawberry.field(extensions=[HideEmailLikeName()])
+    email: str = ba_pii_field("")
+    phone: str | None = ba_pii_field(None)
     last_login: str | None
     signed_in: bool
     bookings: int

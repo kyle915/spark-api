@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import strawberry
 
+from utils.graphql.permissions import ba_pii_field
+
 
 @strawberry.type
 class WingspanPayrollPeriod:
@@ -19,7 +21,8 @@ class WingspanPayrollPeriod:
 class WingspanPayment:
     id: strawberry.ID
     contractor_name: str | None = None
-    contractor_email: str | None = None
+    # Ignite admins only.
+    contractor_email: str | None = ba_pii_field(None, default=None)
     amount: float | None = None
     status: str | None = None
     pay_date: str | None = None

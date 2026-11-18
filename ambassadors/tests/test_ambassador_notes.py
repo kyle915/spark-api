@@ -778,7 +778,7 @@ class TestAmbassadorNoteQueries(AmbassadorsGraphQLTestCase):
         variables = {"first": 10}
 
         result = await self._execute_query_authenticated(
-            self.list_query, variables, self.client_user, self.endpoint_path_client
+            self.list_query, variables, self.spark_admin_user, self.endpoint_path_client
         )
 
         assert result.errors is None
@@ -807,7 +807,7 @@ class TestAmbassadorNoteQueries(AmbassadorsGraphQLTestCase):
         }
 
         result = await self._execute_query_authenticated(
-            self.list_query, variables, self.client_user, self.endpoint_path_client
+            self.list_query, variables, self.spark_admin_user, self.endpoint_path_client
         )
 
         assert result.errors is None
@@ -829,7 +829,7 @@ class TestAmbassadorNoteQueries(AmbassadorsGraphQLTestCase):
         }
 
         result = await self._execute_query_authenticated(
-            self.list_query, variables, self.client_user, self.endpoint_path_client
+            self.list_query, variables, self.spark_admin_user, self.endpoint_path_client
         )
 
         assert result.errors is None
@@ -850,7 +850,7 @@ class TestAmbassadorNoteQueries(AmbassadorsGraphQLTestCase):
         }
 
         result = await self._execute_query_authenticated(
-            self.list_query, variables, self.client_user, self.endpoint_path_client
+            self.list_query, variables, self.spark_admin_user, self.endpoint_path_client
         )
 
         assert result.errors is None
@@ -886,7 +886,7 @@ class TestAmbassadorNoteQueries(AmbassadorsGraphQLTestCase):
         }
 
         result = await self._execute_query_authenticated(
-            self.list_query, variables, self.client_user, self.endpoint_path_client
+            self.list_query, variables, self.spark_admin_user, self.endpoint_path_client
         )
 
         assert result.errors is None
@@ -941,7 +941,7 @@ class TestAmbassadorNoteQueries(AmbassadorsGraphQLTestCase):
         variables = {"noteId": str(self.note1.id)}
 
         result = await self._execute_query_authenticated(
-            self.single_query, variables, self.client_user, self.endpoint_path_client
+            self.single_query, variables, self.spark_admin_user, self.endpoint_path_client
         )
 
         assert result.errors is None
@@ -1022,7 +1022,7 @@ class TestAmbassadorNoteQueries(AmbassadorsGraphQLTestCase):
         variables = {"first": 2}
 
         result = await self._execute_query_authenticated(
-            self.list_query, variables, self.client_user, self.endpoint_path_client
+            self.list_query, variables, self.spark_admin_user, self.endpoint_path_client
         )
 
         assert result.errors is None

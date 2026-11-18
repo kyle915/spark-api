@@ -29,7 +29,11 @@ from strawberry import relay
 
 from events.staffing_board import _accessible_tenants, _iso
 from utils.graphql.mixins import resolve_id_to_int
-from utils.graphql.permissions import IsClientOrSparkAdmin
+from utils.graphql.permissions import (
+    HideEmailLikeName,
+    IsClientOrSparkAdmin,
+    ba_pii_field,
+)
 
 DEFAULT_TIMEZONE_NAME = "America/Los_Angeles"
 # The picker is a convenience, not a report — one screen of upcoming shifts.
@@ -101,8 +105,9 @@ class ConfirmationShiftOption:
     timezone_id: strawberry.ID | None
     timezone_name: str
     products: list[str]
-    ba_name: str
-    ba_email: str
+    ba_name: str = strawberry.field(extensions=[HideEmailLikeName()])
+    # Ignite admins only (brand users get "").
+    ba_email: str = ba_pii_field("")
     ambassador_event_uuid: strawberry.ID | None
 
 
@@ -117,8 +122,9 @@ class EventConfirmationStageStatus:
 @strawberry.type
 class EventConfirmationRow:
     uuid: strawberry.ID
-    ba_name: str
-    ba_email: str
+    ba_name: str = strawberry.field(extensions=[HideEmailLikeName()])
+    # Ignite admins only (brand users get "").
+    ba_email: str = ba_pii_field("")
     store_name: str
     address: str
     event_type_label: str

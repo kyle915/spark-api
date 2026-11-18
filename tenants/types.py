@@ -5,6 +5,7 @@ from asgiref.sync import sync_to_async
 from utils.gcs import extract_blob_name_from_url, public_url
 from .models import ARCHIVED_NAME_PREFIX, Tenant, Role, User, TenantTheme, SupportTicket
 from strawberry.relay import Node
+from utils.graphql.permissions import HideBaPii, _dict_attr
 
 
 def _checkin_bucket_labels(raw) -> list[str]:
@@ -222,11 +223,20 @@ class TenantType(Node):
         return public_url(blob_name)
 
 
+# A BA's login email/username (walk-up placeholders embed their phone) is
+# admin-only; brand users get "" for a BA. Their own colleagues are untouched.
+_HIDE_IF_BA_USER = dict(only_if_ambassador_user=_dict_attr("id"), owner_user=_dict_attr("id"))
+
+
 @strawberry_django.type(User)
 class SparkUserType(Node):
     uuid: strawberry.auto
-    username: strawberry.auto
-    email: strawberry.auto
+    username: str = strawberry_django.field(
+        extensions=[HideBaPii("", **_HIDE_IF_BA_USER)]
+    )
+    email: str = strawberry_django.field(
+        extensions=[HideBaPii("", **_HIDE_IF_BA_USER)]
+    )
     first_name: strawberry.auto
     last_name: strawberry.auto
     image: strawberry.auto

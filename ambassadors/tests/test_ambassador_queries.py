@@ -132,8 +132,9 @@ class TestSentInvitationsQuery(AmbassadorsGraphQLTestCase):
         """
 
     @pytest.mark.asyncio
-    async def test_sent_invitations_success_by_client(self):
-        """Test successful sent invitations query by client."""
+    async def test_sent_invitations_empty_for_client(self):
+        """Brand users get no invitations: each row is a BA's email (BA PII
+        lockdown). Admins still see them (next test)."""
         variables = {
             "first": 10
         }
@@ -143,17 +144,8 @@ class TestSentInvitationsQuery(AmbassadorsGraphQLTestCase):
         )
 
         assert result.errors is None
-        assert result.data is not None
-        assert result.data["sentInvitations"] is not None
-        # At least 3 invitations for this tenant
-        assert result.data["sentInvitations"]["totalCount"] >= 3
-
-        # Verify we get invitations for the client's tenant
-        edges = result.data["sentInvitations"]["edges"]
-        assert len(edges) >= 3
-        # All invitations should belong to the client's tenant
-        for edge in edges:
-            assert edge["node"]["tenantId"] == str(self.tenant.id)
+        assert result.data["sentInvitations"]["totalCount"] == 0
+        assert result.data["sentInvitations"]["edges"] == []
 
     @pytest.mark.asyncio
     async def test_sent_invitations_success_by_spark_admin(self):
@@ -228,7 +220,7 @@ class TestSentInvitationsQuery(AmbassadorsGraphQLTestCase):
         }
 
         result = await self._execute_query_authenticated(
-            self.query, variables, self.client_user, self.endpoint_path
+            self.query, variables, self.spark_admin_user, self.endpoint_path
         )
 
         assert result.errors is None
@@ -291,7 +283,7 @@ class TestSentInvitationsQuery(AmbassadorsGraphQLTestCase):
         }
 
         result = await self._execute_query_authenticated(
-            self.query, variables, self.client_user, self.endpoint_path
+            self.query, variables, self.spark_admin_user, self.endpoint_path
         )
 
         assert result.errors is None
@@ -470,8 +462,8 @@ class TestAvailableAmbassadorsQuery(AmbassadorsGraphQLTestCase):
         """
 
     @pytest.mark.asyncio
-    async def test_available_ambassadors_success_by_client(self):
-        """Test successful available ambassadors query by client."""
+    async def test_available_ambassadors_empty_for_client(self):
+        """Brand users can't list BAs (BA PII lockdown)."""
         variables = {
             "first": 10
         }
@@ -481,14 +473,8 @@ class TestAvailableAmbassadorsQuery(AmbassadorsGraphQLTestCase):
         )
 
         assert result.errors is None
-        assert result.data is not None
-        assert result.data["availableAmbassadors"] is not None
-        # At least 2 ambassadors for this tenant
-        assert result.data["availableAmbassadors"]["totalCount"] >= 2
-
-        # Verify we get ambassadors for the client's tenant
-        edges = result.data["availableAmbassadors"]["edges"]
-        assert len(edges) >= 2
+        assert result.data["availableAmbassadors"]["totalCount"] == 0
+        assert result.data["availableAmbassadors"]["edges"] == []
 
     @pytest.mark.asyncio
     async def test_available_ambassadors_success_by_spark_admin(self):
@@ -620,7 +606,7 @@ class TestAvailableAmbassadorsQuery(AmbassadorsGraphQLTestCase):
         }
 
         result = await self._execute_query_authenticated(
-            self.query, variables, self.client_user, self.endpoint_path
+            self.query, variables, self.spark_admin_user, self.endpoint_path
         )
 
         assert result.errors is None
@@ -849,7 +835,7 @@ class TestInvitedGroupsByJobQuery(AmbassadorsGraphQLTestCase):
         result = await self._execute_query_authenticated(
             self.query,
             {"filters": {"jobId": str(self.job.id)}, "first": 10},
-            self.client_user,
+            self.spark_admin_user,
             self.endpoint_path,
         )
 
@@ -983,7 +969,7 @@ class TestAmbassadorsQuery(AmbassadorsGraphQLTestCase):
         result = await self._execute_query_authenticated(
             self.query,
             {"first": 10, "q": "Maria"},
-            self.client_user,
+            self.spark_admin_user,
             self.endpoint_path,
         )
 
@@ -1015,7 +1001,7 @@ class TestAmbassadorsQuery(AmbassadorsGraphQLTestCase):
         result = await self._execute_query_authenticated(
             query,
             {"first": 50, "filters": {"isActive": True, "name": "maria garc"}},
-            self.client_user,
+            self.spark_admin_user,
             self.endpoint_path,
         )
         assert result.errors is None, result.errors

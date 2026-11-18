@@ -165,11 +165,13 @@ class TestAdminRequestGateSweep(AmbassadorsGraphQLTestCase):
         assert {"A group", "B group"} <= names
 
     @pytest.mark.asyncio
-    async def test_list_client_still_scoped_to_own_tenant(self):
+    async def test_list_client_gets_no_groups(self):
+        """Brand users no longer list BA groups at all (BA PII lockdown) —
+        not even their own tenant's."""
         result = await self._run(GROUPS, self.client_a)
         assert result.errors is None, result.errors
         names = {e["node"]["name"] for e in result.data["ambassadorGroups"]["edges"]}
-        assert names == {"A group"}
+        assert names == set()
 
     # ── utils/graphql/queries.py: get_single_record ──────────────────
 
@@ -210,7 +212,8 @@ class TestAdminRequestGateSweep(AmbassadorsGraphQLTestCase):
                 NOTES, self.removed,
                 {"filters": {"tenantId": str(self.tenant_b.id)}},
             )
-        assert result.errors, "removed admin must not read tenant B's notes"
+        # A removed admin is a plain user now: BA notes are refused outright
+        # (BA PII lockdown) — an empty list, and never tenant B's.
         assert "B note" not in str(result.data)
 
     @pytest.mark.asyncio
@@ -228,7 +231,6 @@ class TestAdminRequestGateSweep(AmbassadorsGraphQLTestCase):
         result = await self._run(
             NOTES, self.client_a, {"filters": {"tenantId": str(self.tenant_b.id)}}
         )
-        assert result.errors
         assert "B note" not in str(result.data)
 
     # ── utils/graphql/mixins.py: set_user_and_tenant (create path) ───
@@ -273,12 +275,14 @@ class TestAdminRequestGateSweep(AmbassadorsGraphQLTestCase):
         assert result.data[field]["totalCount"] >= 0
 
     @pytest.mark.asyncio
-    async def test_ambassador_notes_removed_admin_scoped_to_own_tenant(self):
+    async def test_ambassador_notes_removed_admin_gets_none(self):
+        """A removed admin is a plain (non-BA) user: BA notes are refused
+        (BA PII lockdown), even their own tenant's."""
         with _excluded(self.removed_email):
             result = await self._run(NOTES, self.removed)
         assert result.errors is None, result.errors
         notes = {e["node"]["note"] for e in result.data["ambassadorNotes"]["edges"]}
-        assert notes == {"A note"}
+        assert notes == set()
 
     @pytest.mark.asyncio
     async def test_ambassador_notes_admin_sees_all(self):

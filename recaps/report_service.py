@@ -391,9 +391,9 @@ def _ba_display_name(ambassador) -> str:
         ).strip()
         if full:
             return full
-        email = getattr(user, "email", None)
-        if email:
-            return email
+        # Never fall back to the login email: this roster is client-facing
+        # (campaign report) and walk-up placeholder emails embed the BA's
+        # phone number.
     return "(ambassador)"
 
 

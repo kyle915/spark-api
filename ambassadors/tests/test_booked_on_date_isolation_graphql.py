@@ -83,18 +83,19 @@ class TestBookedOnDateIsolationGraphQL(AmbassadorsGraphQLTestCase):
         return amb
 
     @pytest.mark.asyncio
-    async def test_client_no_arg_does_not_span_other_tenants(self):
-        """With no tenantId, a client sees only their OWN tenant's booked BAs."""
+    async def test_client_gets_nothing(self):
+        """Brand users get [] — even for their own tenant. Which BAs are
+        booked when is Ignite staffing data (BA PII lockdown); the only
+        caller is the admin Invite-BA modal."""
         user = await self._client_user_for("bk-c", "bkc@test.com", self.tenant)
-        mine = await self._booked_ambassador("bk-mine", "bkmine@test.com", self.tenant)
+        await self._booked_ambassador("bk-mine", "bkmine@test.com", self.tenant)
         await self._booked_ambassador("bk-theirs", "bktheirs@test.com", self.other_tenant)
 
         result = await self._execute_mutation(
             BOOKED_QUERY, {"onDate": self.on_date}, self.endpoint_path, user=user,
         )
         assert result.errors is None
-        ids = set(result.data["ambassadorsBookedOnDate"])
-        assert ids == {str(mine.id)}
+        assert result.data["ambassadorsBookedOnDate"] == []
 
     @pytest.mark.asyncio
     async def test_client_foreign_tenant_id_returns_empty(self):

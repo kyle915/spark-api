@@ -42,7 +42,9 @@ from utils.graphql.mixins import SparkGraphQLMixin
 from utils.graphql.permissions import (
     IGNITE_EMAIL_DOMAIN,
     StrictIsAuthenticated,
+    ba_pii_field,
     email_grants_ignite_admin,
+    viewer_is_admin,
     resolve_request_user_access,
 )
 
@@ -69,8 +71,9 @@ class SuggestedAmbassador:
     is_available: bool | None = None
     already_invited: bool
     already_assigned: bool
-    email: str | None = None
-    phone: str | None = None
+    # Contact details: Ignite admins only.
+    email: str | None = ba_pii_field(None, default=None)
+    phone: str | None = ba_pii_field(None, default=None)
 
 
 @strawberry.type
@@ -219,6 +222,10 @@ class StaffingQueries:
         """
         identifier = str(event_id).strip()
         if not identifier:
+            return None
+        # Staffing (who could work this shift, with contact details and
+        # distance from home) is Ignite's: brand users get null.
+        if not await viewer_is_admin(info):
             return None
 
         service = _StaffingService()
@@ -408,6 +415,10 @@ class StaffingSuggestionQueries:
         """
         identifier = str(event_id).strip()
         if not identifier:
+            return []
+        # Ignite admins only: brand users get [] (BA ranking uses each BA's
+        # home location, ratings and history).
+        if not await viewer_is_admin(info):
             return []
 
         service = _StaffingService()

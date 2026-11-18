@@ -112,6 +112,26 @@ class TestFavoriteAmbassadorsGraphQL(JobsGraphQLTestCase):
             password="password123",
         )
 
+    async def _list_as_admin(self, tenant):
+        """favoriteAmbassadors is Ignite-admin only (BA PII lockdown): brand
+        users get []. Read the roster back as an admin."""
+        admin = await self._admin_user(
+            f"fav-reader-{tenant.id}", f"fav-reader-{tenant.id}@test.com"
+        )
+        return await self._execute_mutation(
+            FAVORITE_AMBASSADORS_QUERY,
+            {"tenantId": str(tenant.id)},
+            self.endpoint_path,
+            user=admin,
+        )
+
+    async def _tenant_admin(self, username, email, tenant) -> User:
+        """An admin whose only membership is ``tenant`` (isFavorited reads the
+        caller's own tenant)."""
+        user = await self._admin_user(username, email)
+        await sync_to_async(self.create_tenanted_user)(user=user, tenant=tenant)
+        return user
+
     async def _ambassador(self, username, email, first="Bay", last="Area"):
         """Create a BA (its own user + Ambassador row)."""
         ba_user = await sync_to_async(self.create_user)(
@@ -158,13 +178,18 @@ class TestFavoriteAmbassadorsGraphQL(JobsGraphQLTestCase):
         assert fav.note == "Great at demos"
         assert fav.added_by_id == user.id
 
-        # Query reflects it, with denormalized BA fields.
-        list_result = await self._execute_mutation(
+        # The brand user can't read the roster back (BA PII lockdown)...
+        brand_list = await self._execute_mutation(
             FAVORITE_AMBASSADORS_QUERY,
             {"tenantId": str(self.tenant.id)},
             self.endpoint_path,
             user=user,
         )
+        assert brand_list.errors is None
+        assert brand_list.data["favoriteAmbassadors"] == []
+
+        # ...an admin sees it, with denormalized BA fields.
+        list_result = await self._list_as_admin(self.tenant)
         assert list_result.errors is None
         favs = list_result.data["favoriteAmbassadors"]
         assert len(favs) == 1
@@ -211,12 +236,7 @@ class TestFavoriteAmbassadorsGraphQL(JobsGraphQLTestCase):
         )()
         assert exists is False
 
-        list_result = await self._execute_mutation(
-            FAVORITE_AMBASSADORS_QUERY,
-            {"tenantId": str(self.tenant.id)},
-            self.endpoint_path,
-            user=user,
-        )
+        list_result = await self._list_as_admin(self.tenant)
         assert list_result.data["favoriteAmbassadors"] == []
 
     @pytest.mark.asyncio
@@ -277,12 +297,7 @@ class TestFavoriteAmbassadorsGraphQL(JobsGraphQLTestCase):
             tenant=self.other_tenant, ambassador=theirs
         )
 
-        result = await self._execute_mutation(
-            FAVORITE_AMBASSADORS_QUERY,
-            {"tenantId": str(self.tenant.id)},
-            self.endpoint_path,
-            user=user,
-        )
+        result = await self._list_as_admin(self.tenant)
         favs = result.data["favoriteAmbassadors"]
         assert len(favs) == 1
         assert favs[0]["ambassadorId"] == str(mine.id)
@@ -416,7 +431,7 @@ class TestFavoriteAmbassadorsGraphQL(JobsGraphQLTestCase):
     async def test_is_favorited_true_for_starred_ba(self):
         """Ambassador.isFavorited is True for a BA on the caller's own tenant
         roster."""
-        user = await self._client_user_for("fav-flag", "flag@test.com", self.tenant)
+        user = await self._tenant_admin("fav-flag", "flag@test.com", self.tenant)
         starred = await self._ambassador("ba-star", "star@test.com", "Star", "BA")
         await sync_to_async(TenantFavoriteAmbassador.objects.create)(
             tenant=self.tenant, ambassador=starred, added_by=user
@@ -434,7 +449,7 @@ class TestFavoriteAmbassadorsGraphQL(JobsGraphQLTestCase):
     @pytest.mark.asyncio
     async def test_is_favorited_false_for_unstarred_ba(self):
         """Ambassador.isFavorited is False for a BA not on the caller's roster."""
-        user = await self._client_user_for("fav-flag2", "flag2@test.com", self.tenant)
+        user = await self._tenant_admin("fav-flag2", "flag2@test.com", self.tenant)
         plain = await self._ambassador("ba-plain", "plain@test.com", "Plain", "BA")
 
         result = await self._execute_mutation(
@@ -449,7 +464,7 @@ class TestFavoriteAmbassadorsGraphQL(JobsGraphQLTestCase):
     @pytest.mark.asyncio
     async def test_is_favorited_scoped_to_caller_tenant(self):
         """A BA favorited by ANOTHER tenant is not isFavorited for this caller."""
-        user = await self._client_user_for("fav-flag3", "flag3@test.com", self.tenant)
+        user = await self._tenant_admin("fav-flag3", "flag3@test.com", self.tenant)
         amb = await self._ambassador("ba-other-fav", "otherfav@test.com")
         # Starred by the OTHER tenant, not the caller's.
         await sync_to_async(TenantFavoriteAmbassador.objects.create)(

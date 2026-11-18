@@ -19,7 +19,12 @@ from .heic_conversion import display_blob_name, is_heic_blob
 from .recap_types import recap_type_key
 from . import metric_mapping
 from .numbers import is_clean_count, parse_count
-from utils.graphql.permissions import _is_admin_access, resolve_request_user_access
+from utils.graphql.permissions import (
+    HideEmailLikeName,
+    _is_admin_access,
+    ba_pii_field,
+    resolve_request_user_access,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -903,8 +908,10 @@ class MissingRecapAmbassadorInfo:
     # Ambassador.uuid — passed to /recap/create?event=…&ambassador=…
     # when admin clicks "File for them".
     ambassador_uuid: strawberry.ID
-    name: str
-    email: str | None = None
+    # Name may fall back to the login email; non-admins get "Ambassador".
+    name: str = strawberry.field(extensions=[HideEmailLikeName()])
+    # Ignite admins only.
+    email: str | None = ba_pii_field(None, default=None)
     # Whether the BA accepted the invite (is_approved). Pending invites
     # haven't formally said yes; the admin may want to nudge them
     # differently or skip nudging entirely.
@@ -958,8 +965,10 @@ class DismissedMissingRecapType:
     end_time: str | None = None
     # Null when the whole event was dismissed (a shift with nobody on it).
     ambassador_uuid: strawberry.ID | None = None
-    ambassador_name: str | None = None
-    ambassador_email: str | None = None
+    ambassador_name: str | None = strawberry.field(
+        default=None, extensions=[HideEmailLikeName()]
+    )
+    ambassador_email: str | None = ba_pii_field(None, default=None)
     reason: str
     reason_label: str
     note: str = ""

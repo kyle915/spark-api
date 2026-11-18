@@ -15,6 +15,7 @@ from asgiref.sync import sync_to_async
 
 from chats import models
 from utils.gcs import public_url, extract_blob_name_from_url
+from utils.graphql.permissions import HideEmailLikeName, ba_pii_field
 
 
 @strawberry_django.type(models.ChatMessageAttachment)
@@ -147,8 +148,9 @@ class ChatRecipient:
 
     id: strawberry.ID
     uuid: str
-    name: str
-    email: str
+    name: str = strawberry.field(extensions=[HideEmailLikeName()])
+    # Ignite admins only.
+    email: str = ba_pii_field("")
 
 
 @strawberry.type

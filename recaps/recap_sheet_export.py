@@ -153,9 +153,8 @@ def _ba_name(recap) -> str:
             ).strip()
             if full:
                 return full
-            email = getattr(user, "email", None)
-            if email:
-                return str(email)
+            # No login-email fallback: this row lands in the client's own
+            # Google Sheet (walk-up placeholder emails embed the BA's phone).
         name = getattr(amb, "name", None)
         if name:
             return str(name)

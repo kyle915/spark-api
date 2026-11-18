@@ -143,8 +143,20 @@ class TestWalkupFlow(AmbassadorsGraphQLTestCase):
                 }
             }
         """
+        # A brand user gets an empty queue (BA contact details are Ignite's).
         res = await self._execute_query_authenticated(
             list_q, {"status": "pending"}, self.client_user, self.endpoint_clients
+        )
+        assert res.errors is None, res.errors
+        assert res.data["walkupShifts"] == []
+
+        admin = await sync_to_async(self.create_user)(
+            username=f"walkup_admin_{ae_uuid[:8]}@test.com",
+            email=f"walkup_admin_{ae_uuid[:8]}@test.com",
+            role=self.roles["spark_admin"],
+        )
+        res = await self._execute_query_authenticated(
+            list_q, {"status": "pending"}, admin, self.endpoint_clients
         )
         assert res.errors is None, res.errors
         rows = res.data["walkupShifts"]

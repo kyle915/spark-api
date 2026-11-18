@@ -13,6 +13,7 @@ from ambassadors import inputs
 from jobs import models as job_models
 from utils.graphql.permissions import (
     StrictIsAuthenticated,
+    viewer_is_admin,
     IsClientOrSparkAdmin,
     email_grants_ignite_admin,
     _is_admin_access,
@@ -38,6 +39,29 @@ async def _ba_data_access(info) -> tuple[bool, bool, object]:
     role_slug, is_staff, is_super, email = await resolve_request_user_access(user)
     is_admin = _is_admin_access(role_slug, is_staff, is_super, email)
     return is_admin, (not is_admin and role_slug == "ambassador"), user
+
+
+# Hard ceiling for BA list pages (activeAmbassadors used to hand back every
+# active BA in one page when called without pagination arguments).
+BA_LIST_MAX_PAGE = 200
+
+
+async def _empty_connection(model):
+    """An empty relay connection of ``model`` — what a brand user gets from
+    a BA listing (keeps the non-null connection the web app expects)."""
+    return await connection_from_queryset_async(
+        model.objects.none(), first=0, after=None, last=None, before=None
+    )
+
+
+async def _brand_blocked(info) -> bool:
+    """True when the caller is neither an Ignite admin nor a BA.
+
+    For BA reads shared with the mobile app (BAs keep their current access);
+    brand users and anonymous callers are blocked.
+    """
+    is_admin, is_ambassador, _user = await _ba_data_access(info)
+    return not (is_admin or is_ambassador)
 from utils.graphql.queries import BaseQueriesService
 from utils.graphql.inputs import SparkGraphQLInput
 from utils.graphql.relay import (
@@ -1840,6 +1864,10 @@ class AmbassadorEventQueries:
         user = info.context.request.user
         _rs, _st, _su, _em = await resolve_request_user_access(user)
         is_admin = _is_admin_access(_rs, _st, _su, _em)
+        if not is_admin:
+            # Which BAs are booked when is Ignite's staffing data; the only
+            # caller is the admin Invite-BA modal. Brand users get nothing.
+            return []
 
         def _fetch() -> List[strawberry.ID]:
             # Only the ambassador FK id is needed, and it's a LOCAL column on
@@ -1908,8 +1936,12 @@ class AmbassadorManagementQueries:
         before: str | None = None,
         filters: inputs.AmbassadorInvitationFiltersInput | None = None,
     ) -> CountableConnection[types.AmbassadorInvitationType]:
-        """Get sent invitations for a tenant (client/spark-admin only)."""
+        """Sent BA invitations (Ignite admins only: each row is a BA's email).
+        Brand users get an empty list."""
         from .services import AmbassadorInvitationQueriesService
+
+        if not await viewer_is_admin(info):
+            return await _empty_connection(models.AmbassadorInvitation)
 
         service = AmbassadorInvitationQueriesService()
         return await service.get_sent_invitations(
@@ -1931,9 +1963,12 @@ class AmbassadorManagementQueries:
         before: str | None = None,
         filters: inputs.AmbassadorFiltersInput | None = None,
     ) -> CountableConnection[types.Ambassador]:
-        """Get available ambassadors for a tenant (client/spark-admin only)."""
+        """Available ambassadors (Ignite admins only; brand users get an
+        empty list — BA records are not brand data)."""
         from .services import AmbassadorQueriesService
 
+        if not await viewer_is_admin(info):
+            return await _empty_connection(models.Ambassador)
         service = AmbassadorQueriesService()
         return await service.get_available_ambassadors(
             info=info,
@@ -1956,9 +1991,14 @@ class AmbassadorManagementQueries:
         Pulls every Ambassador with is_active=False whose user is
         also active (i.e. signed up but not yet approved). Admin
         front-end uses this to render the Pending queue on /people.
+
+        Ignite admins only; brand users get an empty list.
         """
         from utils.graphql.relay import connection_from_queryset_async
         from ambassadors.models import Ambassador as AmbassadorModel
+
+        if not await viewer_is_admin(info):
+            return await _empty_connection(AmbassadorModel)
 
         qs = (
             AmbassadorModel.objects.filter(
@@ -1969,7 +2009,13 @@ class AmbassadorManagementQueries:
             .order_by("-created_at")
         )
         return await connection_from_queryset_async(
-            qs, first=first, after=after, last=None, before=None
+            qs,
+            first=first,
+            after=after,
+            last=None,
+            before=None,
+            default_limit=50,
+            max_limit=BA_LIST_MAX_PAGE,
         )
 
     @strawberry.field(permission_classes=[IsClientOrSparkAdmin])
@@ -1982,8 +2028,12 @@ class AmbassadorManagementQueries:
         last: int | None = None,
         before: str | None = None,
     ) -> CountableConnection[types.AmbassadorGroup]:
-        """Get groups that include ambassadors invited to a given job."""
+        """Get groups that include ambassadors invited to a given job
+        (Ignite admins only; brand users get an empty list)."""
         from .services import AmbassadorInvitationQueriesService
+
+        if not await viewer_is_admin(info):
+            return await _empty_connection(models.AmbassadorGroup)
 
         service = AmbassadorInvitationQueriesService()
         return await service.get_invited_groups_by_job(
@@ -2006,8 +2056,15 @@ class AmbassadorManagementQueries:
         q: str | None = None,
         filters: inputs.ActiveAmbassadorFiltersInput | None = None,
     ) -> CountableConnection[types.Ambassador]:
-        """Get all active ambassadors (client/spark-admin only)."""
+        """Active ambassadors, paged (at most BA_LIST_MAX_PAGE a page).
+
+        Ignite admins only. Brand users get an empty list: this spans every
+        tenant's BAs and their contact details.
+        """
         from .services import AmbassadorQueriesService
+
+        if not await viewer_is_admin(info):
+            return await _empty_connection(models.Ambassador)
 
         service = AmbassadorQueriesService()
         return await service.get_active_ambassadors(
@@ -2031,8 +2088,13 @@ class AmbassadorManagementQueries:
         q: str | None = None,
         filters: inputs.AmbassadorFiltersInput | None = None,
     ) -> CountableConnection[types.Ambassador]:
-        """List ambassadors with filters for status, rating, name, email, address and about_me."""
+        """List ambassadors with filters for status, rating, name, email,
+        address and about_me. Ignite admins only (brand users get an empty
+        list — the filters alone would let them probe BA emails/addresses)."""
         from .services import AmbassadorQueriesService
+
+        if not await viewer_is_admin(info):
+            return await _empty_connection(models.Ambassador)
 
         service = AmbassadorQueriesService()
         return await service.get_ambassadors(
@@ -2052,11 +2114,14 @@ class AmbassadorManagementQueries:
         id: strawberry.ID | None = None,
         uuid: strawberry.ID | None = None,
     ) -> types.Ambassador | None:
-        """Get a single ambassador by id or uuid (client/spark-admin only)."""
+        """Get a single ambassador by id or uuid (Ignite admins only; brand
+        users get null)."""
         from .services import AmbassadorQueriesService
 
         if not id and not uuid:
             raise GraphQLError("Either id or uuid must be provided")
+        if not await viewer_is_admin(info):
+            return None
 
         service = AmbassadorQueriesService()
 
@@ -2357,9 +2422,12 @@ class AmbassadorGigHistoryQueries:
 
         Tenant-scoped exactly like recapEventOptions: resolve the active
         tenant, return an EMPTY list when none is in scope, never
-        all-tenants. Clients resolve to their own tenant.
+        all-tenants. Ignite admins only: brand users get an empty list.
         """
         from events.queries import EventQueriesService
+
+        if not await viewer_is_admin(info):
+            return []
 
         service = EventQueriesService()
         try:
@@ -2408,8 +2476,14 @@ class TalentProfileDetailQueries:
         Tenant-scoped like recapEventOptions — resolve the active tenant,
         return None when none is in scope, and only surface a BA reachable
         in that tenant (worked/assigned a gig there).
+
+        Ignite admins only: brand users get null (contact details, résumé,
+        photos and history are not brand data).
         """
         from events.queries import EventQueriesService
+
+        if not await viewer_is_admin(info):
+            return None
 
         service = EventQueriesService()
         try:
@@ -2517,8 +2591,12 @@ class AmbassadorReviewQueries:
         before: str | None = None,
         filters: inputs.AmbassadorReviewFiltersInput | None = None,
     ) -> CountableConnection[types.AmbassadorReviewType]:
-        """Get ambassador reviews with filters (authenticated users only)."""
+        """Get ambassador reviews with filters (admins and BAs; brand users
+        get an empty list)."""
         from .services import AmbassadorReviewQueriesService
+
+        if await _brand_blocked(info):
+            return await _empty_connection(models.AmbassadorReview)
 
         service = AmbassadorReviewQueriesService()
         return await service.get_ambassador_reviews(
@@ -2536,8 +2614,12 @@ class AmbassadorReviewQueries:
         info: strawberry.Info,
         review_id: strawberry.ID,
     ) -> types.AmbassadorReviewType | None:
-        """Get a single ambassador review by ID (authenticated users only)."""
+        """Get a single ambassador review by ID (admins and BAs; brand users
+        get null)."""
         from .models import AmbassadorReview
+
+        if await _brand_blocked(info):
+            return None
 
         try:
 
@@ -2612,8 +2694,12 @@ class AmbassadorNoteQueries:
         before: str | None = None,
         filters: inputs.AmbassadorNoteFiltersInput | None = None,
     ) -> CountableConnection[types.AmbassadorNoteType]:
-        """Get ambassador notes with filters (authenticated users only)."""
+        """Get ambassador notes with filters (admins and BAs; brand users
+        get an empty list)."""
         from .services import AmbassadorNoteQueriesService
+
+        if await _brand_blocked(info):
+            return await _empty_connection(models.AmbassadorNote)
 
         service = AmbassadorNoteQueriesService()
         return await service.get_ambassador_notes(
@@ -2631,8 +2717,12 @@ class AmbassadorNoteQueries:
         info: strawberry.Info,
         note_id: strawberry.ID,
     ) -> types.AmbassadorNoteType | None:
-        """Get a single ambassador note by ID (authenticated users only)."""
+        """Get a single ambassador note by ID (admins and BAs; brand users
+        get null)."""
         from .models import AmbassadorNote
+
+        if await _brand_blocked(info):
+            return None
 
         try:
 
@@ -2716,8 +2806,12 @@ class AmbassadorSkillQueries:
         before: str | None = None,
         filters: inputs.AmbassadorSkillFiltersInput | None = None,
     ) -> CountableConnection[types.AmbassadorSkillType]:
-        """Get ambassador skills with filters (authenticated users only)."""
+        """Get ambassador skills with filters (admins and BAs; brand users
+        get an empty list)."""
         from .services import AmbassadorSkillQueriesService
+
+        if await _brand_blocked(info):
+            return await _empty_connection(models.AmbassadorSkill)
 
         service = AmbassadorSkillQueriesService()
         return await service.get_ambassador_skills(
@@ -2735,8 +2829,12 @@ class AmbassadorSkillQueries:
         info: strawberry.Info,
         ambassador_skill_id: strawberry.ID,
     ) -> types.AmbassadorSkillType | None:
-        """Get a single ambassador skill by ID (authenticated users only)."""
+        """Get a single ambassador skill by ID (admins and BAs; brand users
+        get null)."""
         from .models import AmbassadorSkill
+
+        if await _brand_blocked(info):
+            return None
 
         try:
             ambassador_skill = await AmbassadorSkill.objects._by_id(ambassador_skill_id)
@@ -2991,6 +3089,10 @@ class AttendanceQueries:
         before: str | None = None,
         filters: inputs.AttendanceFiltersInput | None = None,
     ) -> CountableConnection[types.Attendance]:
+        """Clock punches (with GPS). Ignite admins only; anyone else gets an
+        empty list (this list is not tenant-scoped)."""
+        if not await viewer_is_admin(info):
+            return await _empty_connection(models.Attendance)
         service = AttendanceQueriesService()
         await service.get_user(info)
         queryset = service.get_queryset()
@@ -3009,6 +3111,8 @@ class AttendanceQueries:
     async def attendance(
         self, info: strawberry.Info, id: strawberry.ID
     ) -> types.Attendance | None:
+        if not await viewer_is_admin(info):
+            return None
         try:
             service = AttendanceQueriesService()
             await service.get_user(info)
@@ -3074,7 +3178,10 @@ class AmbassadorGroupQueries:
         before: str | None = None,
         filters: inputs.AmbassadorGroupFiltersInput | None = None,
     ) -> CountableConnection[types.AmbassadorGroup]:
-        """Get ambassador groups with filters (client/spark-admin only)."""
+        """Ambassador groups (Ignite admins only; brand users get an empty
+        list — groups list BAs and their contact details)."""
+        if not await viewer_is_admin(info):
+            return await _empty_connection(models.AmbassadorGroup)
         service = AmbassadorGroupQueriesService()
         tenant_id = await service.resolve_query_tenant_id(info, filters=filters)
         await service.get_user(info)
@@ -3099,7 +3206,10 @@ class AmbassadorGroupQueries:
         info: strawberry.Info,
         group_id: strawberry.ID,
     ) -> types.AmbassadorGroup | None:
-        """Get a single ambassador group by ID (client/spark-admin only)."""
+        """A single ambassador group (Ignite admins only; brand users get
+        null)."""
+        if not await viewer_is_admin(info):
+            return None
         try:
             service = AmbassadorGroupQueriesService()
             tenant_id = await service.resolve_query_tenant_id(info)

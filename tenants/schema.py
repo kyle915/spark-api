@@ -11,8 +11,11 @@ from django.db.models import Q
 from asgiref.sync import sync_to_async
 from utils.gcs import extract_blob_name_from_url, public_url
 from utils.graphql.permissions import (
+    HideBaPii,
     StrictIsAuthenticated,
+    _dict_attr,
     _is_admin_access,
+    can_view_ba_pii,
     email_grants_ignite_admin,
     resolve_request_user_access,
 )
@@ -53,8 +56,26 @@ User = get_user_model()
 @strawberry_django.type(User)
 class CustomUserType(Node):
     uuid: strawberry.auto
-    username: strawberry.auto
-    email: strawberry.auto
+    # A BA's login email/username is admin-only (brand users get ""); the
+    # viewer's own row and non-BA users (brand colleagues) are untouched.
+    username: str = strawberry_django.field(
+        extensions=[
+            HideBaPii(
+                "",
+                owner_user=_dict_attr("id"),
+                only_if_ambassador_user=_dict_attr("id"),
+            )
+        ]
+    )
+    email: str = strawberry_django.field(
+        extensions=[
+            HideBaPii(
+                "",
+                owner_user=_dict_attr("id"),
+                only_if_ambassador_user=_dict_attr("id"),
+            )
+        ]
+    )
     first_name: strawberry.auto
     last_name: strawberry.auto
     role: RoleType
@@ -103,13 +124,20 @@ class CustomUserType(Node):
         return public_url(blob_name)
 
     @strawberry.field
-    async def ambassador(self) -> BaSelfProfileType | None:
+    async def ambassador(self, info: strawberry.Info) -> BaSelfProfileType | None:
         """The authenticated user's own BA TALENT profile, if they have
         one. Backs the mobile `me { ambassador { ... } }` query. Returns
         None for non-BA users (admins/clients have no Ambassador row).
+
+        The profile carries the BA's phone, address and shirt size, so it is
+        returned only to the BA themselves or an Ignite admin — never to a
+        brand user reading a BA through ``users``/``user``.
         """
         from ambassadors.models import Ambassador as AmbassadorModel
         from ambassadors.models import AmbassadorPhoto
+
+        if not await can_view_ba_pii(info, owner_user_id=self.pk):
+            return None
 
         def _load():
             try:
@@ -510,6 +538,14 @@ class QuerySpark(
             )()
             if not has_shared_tenant:
                 raise GraphQLError("You do not have permission to view this user.")
+            # Brand users don't read Brand Ambassadors' user records.
+            is_ba_target = await sync_to_async(
+                User.objects.filter(pk=target_user.pk)
+                .filter(Q(ambassador__isnull=False) | Q(role__slug=Role.AMBASSADOR_SLUG))
+                .exists
+            )()
+            if is_ba_target:
+                raise GraphQLError("You do not have permission to view this user.")
 
         return target_user
 
@@ -578,6 +614,12 @@ class QuerySpark(
             queryset = queryset.filter(
                 tenanted_users__is_active=True,
                 tenanted_users__tenant_id__in=requester_tenant_ids,
+            )
+            # Brand users list their own team, never Brand Ambassadors (BA
+            # personal data is admin-only; this also closes the email
+            # filter as a way to probe BA addresses).
+            queryset = queryset.exclude(ambassador__isnull=False).exclude(
+                role__slug=Role.AMBASSADOR_SLUG
             )
 
         if filters:
@@ -799,6 +841,14 @@ class QueryClients(
             )()
             if not has_shared_tenant:
                 raise GraphQLError("You do not have permission to view this user.")
+            # Brand users don't read Brand Ambassadors' user records.
+            is_ba_target = await sync_to_async(
+                User.objects.filter(pk=target_user.pk)
+                .filter(Q(ambassador__isnull=False) | Q(role__slug=Role.AMBASSADOR_SLUG))
+                .exists
+            )()
+            if is_ba_target:
+                raise GraphQLError("You do not have permission to view this user.")
 
         return target_user
 
@@ -874,6 +924,12 @@ class QueryClients(
             queryset = queryset.filter(
                 tenanted_users__is_active=True,
                 tenanted_users__tenant_id__in=requester_tenant_ids,
+            )
+            # Brand users list their own team, never Brand Ambassadors (BA
+            # personal data is admin-only; this also closes the email
+            # filter as a way to probe BA addresses).
+            queryset = queryset.exclude(ambassador__isnull=False).exclude(
+                role__slug=Role.AMBASSADOR_SLUG
             )
 
         if filters:

@@ -1146,9 +1146,10 @@ class TestUpdateAmbassador(AmbassadorsGraphQLTestCase):
         assert result.data["updateAmbassador"]["success"] is True
         assert "updated successfully" in result.data["updateAmbassador"]["message"].lower(
         )
-        assert result.data["updateAmbassador"]["ambassador"]["address"] == "Updated Address"
-        assert result.data["updateAmbassador"]["ambassador"]["coordinates"] == [
-            34.0522, -118.2437]
+        # The write lands, but a brand user never reads BA personal data
+        # back (BA PII lockdown): the returned address/coordinates are blank.
+        assert result.data["updateAmbassador"]["ambassador"]["address"] is None
+        assert result.data["updateAmbassador"]["ambassador"]["coordinates"] == []
 
         # Verify changes in DB
         ambassador = await sync_to_async(Ambassador.objects.get)(pk=self.ambassador.id)

@@ -332,11 +332,24 @@ class TestStaffingSuggestions(AmbassadorsGraphQLTestCase):
         assert int(rows[0]["baId"]) == self.high.id
 
     @pytest.mark.asyncio
-    async def test_graphql_client_can_see_own_tenant_event(self):
+    async def test_graphql_client_gets_nothing_even_own_tenant(self):
+        """Brand users get [] even for their own event: the ranking is built
+        from BA home locations, ratings and history (BA PII lockdown)."""
         result = await self._execute_query_authenticated(
             SUGGESTIONS_QUERY,
             {"eventId": str(self.event.uuid), "limit": 20},
             self.client_user,
+            self.endpoint_path,
+        )
+        assert result.errors is None, f"errored: {result.errors}"
+        assert result.data["staffingSuggestions"] == []
+
+    @pytest.mark.asyncio
+    async def test_graphql_admin_can_see_event(self):
+        result = await self._execute_query_authenticated(
+            SUGGESTIONS_QUERY,
+            {"eventId": str(self.event.uuid), "limit": 20},
+            self.spark_admin,
             self.endpoint_path,
         )
         assert result.errors is None, f"errored: {result.errors}"

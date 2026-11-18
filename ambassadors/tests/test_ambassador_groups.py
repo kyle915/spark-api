@@ -865,6 +865,13 @@ class TestAmbassadorGroupQueries(AmbassadorsGraphQLTestCase):
             role=self.roles["client"],
         )
         self.create_tenanted_user(self.client_user, self.tenant)
+        # Group reads are Ignite-admin only (BA PII lockdown).
+        self.spark_admin_user = self.create_user(
+            username=f"admin_query_ag_{unique_id}@test.com",
+            email=f"admin_query_ag_{unique_id}@test.com",
+            role=self.roles["spark_admin"],
+        )
+        self.create_tenanted_user(self.spark_admin_user, self.tenant)
 
         system_user = self.get_system_user()
         self.group_type1 = GroupType.objects.create(
@@ -962,7 +969,7 @@ class TestAmbassadorGroupQueries(AmbassadorsGraphQLTestCase):
         """
 
         result = await self._execute_query_authenticated(
-            query, None, self.client_user, self.endpoint_path
+            query, None, self.spark_admin_user, self.endpoint_path
         )
 
         assert result.errors is None
@@ -991,7 +998,7 @@ class TestAmbassadorGroupQueries(AmbassadorsGraphQLTestCase):
         """
 
         result = await self._execute_query_authenticated(
-            query, None, self.client_user, self.endpoint_path
+            query, None, self.spark_admin_user, self.endpoint_path
         )
 
         assert result.errors is None
@@ -1020,7 +1027,7 @@ class TestAmbassadorGroupQueries(AmbassadorsGraphQLTestCase):
         """
 
         result = await self._execute_query_authenticated(
-            query, None, self.client_user, self.endpoint_path
+            query, None, self.spark_admin_user, self.endpoint_path
         )
 
         assert result.errors is None
@@ -1058,7 +1065,7 @@ class TestAmbassadorGroupQueries(AmbassadorsGraphQLTestCase):
         """
 
         result = await self._execute_query_authenticated(
-            query, None, self.client_user, self.endpoint_path
+            query, None, self.spark_admin_user, self.endpoint_path
         )
 
         assert result.errors is None
@@ -1096,7 +1103,7 @@ class TestAmbassadorGroupQueries(AmbassadorsGraphQLTestCase):
         """
 
         result = await self._execute_query_authenticated(
-            query, None, self.client_user, self.endpoint_path
+            query, None, self.spark_admin_user, self.endpoint_path
         )
 
         assert result.errors is None
@@ -1128,7 +1135,7 @@ class TestAmbassadorGroupQueries(AmbassadorsGraphQLTestCase):
         """
 
         result = await self._execute_query_authenticated(
-            query, None, self.client_user, self.endpoint_path
+            query, None, self.spark_admin_user, self.endpoint_path
         )
 
         assert result.errors is None

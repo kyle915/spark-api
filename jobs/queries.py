@@ -8,6 +8,8 @@ from utils.graphql.inputs import BaseTenantInput, SparkGraphQLInput
 from utils.graphql.permissions import (
     StrictIsAuthenticated,
     _is_admin_access,
+    _viewer_ambassador_id,
+    viewer_is_admin,
     resolve_request_user_access,
 )
 from utils.graphql.relay import CountableConnection
@@ -1732,11 +1734,16 @@ class FavoriteAmbassadorQueries:
     ) -> list[types.TenantFavoriteAmbassador]:
         """Return every favorited BA for the caller's tenant.
 
+        Ignite admins only: brand users get ``[]`` (the roster carries BA
+        names and contact details, and the Favorites page is admin-only).
+
         Tenant-scoped: clients see only their OWN tenant's roster (the
         ``tenantId`` argument is overridden to their tenant); admins see
         the requested tenant's roster. Never raises past the auth gate —
         returns ``[]`` for an out-of-scope/garbage request or on error.
         """
+        if not await viewer_is_admin(info):
+            return []
         try:
             resolved = await _FavoriteAmbassadorScope().resolve_target_tenant_id(
                 info, tenant_id
@@ -1942,7 +1949,18 @@ class JobApplicationQueries:
         """Every application row attached to a Job, ordered newest
         first. Includes the BA's name/email/uuid via the type resolver,
         so the admin Jobs page can render the applicant list without
-        an N+1 round-trip."""
+        an N+1 round-trip.
+
+        Ignite admins see every application; a BA sees only their own;
+        brand users and anyone else get ``[]`` (each row carries the BA's
+        email and phone)."""
+        is_admin = await viewer_is_admin(info)
+        own_ambassador_id = None
+        if not is_admin:
+            own_ambassador_id = await _viewer_ambassador_id(info)
+            if own_ambassador_id is None:
+                return []
+
         def _list():
             from utils.graphql.mixins import resolve_id_to_int
             try:
@@ -1955,6 +1973,8 @@ class JobApplicationQueries:
                 .filter(job_id=job_pk)
                 .order_by("-applied_at")
             )
+            if own_ambassador_id is not None:
+                qs = qs.filter(ambassador_id=own_ambassador_id)
             return list(qs)
         return await sync_to_async(_list)()
 

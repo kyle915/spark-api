@@ -10,6 +10,7 @@ from . import models
 from events.types import Location, Event
 from tenants.types import TenantType as Tenant
 from ambassadors.types import Ambassador, Attendance
+from utils.graphql.permissions import HideBaPii, _dict_attr
 
 
 @strawberry_django.type(models.Status)
@@ -575,8 +576,11 @@ class JobApplication:
         u = getattr(a, "user", None) if a else None
         return (getattr(u, "last_name", None) or "") if u else ""
 
-    @strawberry.field
+    @strawberry.field(
+        extensions=[HideBaPii("", owner_ambassador=_dict_attr("ambassador_id"))]
+    )
     def ambassador_email(self) -> str:
+        """BA's email: admins and the applicant only (brand users get "")."""
         a = getattr(self, "ambassador", None)
         u = getattr(a, "user", None) if a else None
         return (getattr(u, "email", None) or "") if u else ""
@@ -586,9 +590,12 @@ class JobApplication:
         a = getattr(self, "ambassador", None)
         return str(a.uuid) if a and getattr(a, "uuid", None) else ""
 
-    @strawberry.field
+    @strawberry.field(
+        extensions=[HideBaPii("", owner_ambassador=_dict_attr("ambassador_id"))]
+    )
     def ambassador_phone(self) -> str:
-        """BA's phone for the admin contact card."""
+        """BA's phone for the admin contact card (admins and the applicant
+        only; brand users get "")."""
         a = getattr(self, "ambassador", None)
         return (getattr(a, "phone", None) or "") if a else ""
 
@@ -841,8 +848,9 @@ class TenantFavoriteAmbassador:
         u = getattr(a, "user", None) if a else None
         return (getattr(u, "last_name", None) or "") if u else ""
 
-    @strawberry.field
+    @strawberry.field(extensions=[HideBaPii("")])
     def email(self) -> str:
+        """The favorited BA's email (Ignite admins only)."""
         a = self.__dict__.get("ambassador")
         if not a:
             try:

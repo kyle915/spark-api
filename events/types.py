@@ -11,6 +11,7 @@ from django.utils import timezone
 from asgiref.sync import sync_to_async
 from tenants.types import SparkUserType, TenantType
 from utils.gcs import extract_blob_name_from_url, public_url
+from utils.graphql.permissions import HideEmailLikeName, ba_pii_field
 
 from . import models
 from .co_brands import co_brand_lines, co_brand_rows
@@ -1129,8 +1130,10 @@ class EventAmbassador:
     """
 
     uuid: strawberry.ID
-    name: str
-    email: str
+    # Name falls back to the login email when none is on file; non-admins
+    # get "Ambassador" instead. The email itself is Ignite-admin only.
+    name: str = strawberry.field(extensions=[HideEmailLikeName()])
+    email: str = ba_pii_field("")
     is_approved: bool
     # Day-before confirmation stamps (ISO 8601, null until set):
     # `confirmation_requested_at` — the T-24h "confirm you're in" push went

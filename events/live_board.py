@@ -19,7 +19,11 @@ import strawberry
 from asgiref.sync import sync_to_async
 
 from events.models import Event
-from utils.graphql.permissions import IsClientOrSparkAdmin
+from utils.graphql.permissions import (
+    HideEmailLikeName,
+    IsClientOrSparkAdmin,
+    ba_pii_field,
+)
 from utils.graphql.mixins import resolve_id_to_int
 from events.staffing_board import _accessible_tenants, _iso, _venue_local
 
@@ -182,7 +186,9 @@ def _last_clock_in_taps(event_ids) -> dict:
 @strawberry.type
 class LiveBoardBA:
     ambassador_uuid: str
-    name: str
+    # Falls back to the login email when no name is on file; non-admins get
+    # "Ambassador" instead of an email.
+    name: str = strawberry.field(extensions=[HideEmailLikeName()])
     # upcoming | awaiting | clocked_in | clocked_out | no_show | missed
     status: str
     clock_in_at: str | None = None
@@ -193,12 +199,14 @@ class LiveBoardBA:
     # falling back to the coordinates stamped on their clock punch. Null when
     # they denied location or the browser never got a fix; the board still
     # shows them, just without a pin.
-    lat: float | None = None
-    lng: float | None = None
-    location_at: str | None = None
+    # The BA's live position is Ignite's: brand users get nulls (the board
+    # still lists who is clocked in, just without a pin).
+    lat: float | None = ba_pii_field(None, default=None)
+    lng: float | None = ba_pii_field(None, default=None)
+    location_at: str | None = ba_pii_field(None, default=None)
     # foreground | background | clock_in | clock_out | punch
-    location_source: str | None = None
-    accuracy_meters: float | None = None
+    location_source: str | None = ba_pii_field(None, default=None)
+    accuracy_meters: float | None = ba_pii_field(None, default=None)
     # True when this BA reached the shift through a walk-up / standing
     # check-in link and their booking is still unapproved. They are working
     # (that's why they're on this board) but their hours don't count until a

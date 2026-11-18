@@ -6,7 +6,7 @@ from typing import List
 
 import strawberry
 
-from utils.graphql.permissions import IsClientOrSparkAdmin
+from utils.graphql.permissions import IsClientOrSparkAdmin, viewer_is_admin
 
 from . import client, types
 
@@ -38,7 +38,12 @@ class WingspanQueries:
     ) -> List[types.WingspanPayrollPeriod]:
         """Recent payroll periods, newest first. Returns empty list
         when Wingspan isn't connected — use wingspanStatus to detect.
+
+        Ignite admins only (Ignite's contractor payroll across all brands);
+        brand users get an empty list.
         """
+        if not await viewer_is_admin(info):
+            return []
         try:
             periods = await client.list_payroll_periods(limit=max(1, min(limit, 50)))
         except client.WingspanAPIError:
@@ -66,7 +71,13 @@ class WingspanQueries:
     ) -> List[types.WingspanPayment]:
         """Recent payments / disbursements. Filter to a single period
         with `periodId`. Empty list when not connected.
+
+        Ignite admins only: this is Ignite's Wingspan account (every
+        contractor's name, email and pay, across all brands). Brand users get
+        an empty list.
         """
+        if not await viewer_is_admin(info):
+            return []
         try:
             payments = await client.list_payments(
                 period_id=str(period_id) if period_id else None,

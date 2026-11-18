@@ -31,6 +31,8 @@ from events.models import Event
 from utils.graphql.permissions import (
     StrictIsAuthenticated,
     IsClientOrSparkAdmin,
+    HideEmailLikeName,
+    ba_pii_field,
 )
 from utils.graphql.mixins import resolve_id_to_int
 from ambassadors import inputs as amb_inputs
@@ -324,9 +326,10 @@ class WalkupShiftType:
     event_uuid: str
     event_name: str
     brand_name: str
-    ambassador_name: str
-    ambassador_email: str | None = None
-    ambassador_phone: str | None = None
+    ambassador_name: str = strawberry.field(extensions=[HideEmailLikeName()])
+    # Contact details: Ignite admins only.
+    ambassador_email: str | None = ba_pii_field(None, default=None)
+    ambassador_phone: str | None = ba_pii_field(None, default=None)
     is_new_account: bool = False
     is_approved: bool = False
     clock_in_at: str | None = None
@@ -467,9 +470,14 @@ class WalkupAdminQueries:
         tenant_id: strawberry.ID | None = None,
     ) -> list[WalkupShiftType]:
         """Walk-up bookings for the admin's tenant(s). status="pending" (needs
-        review) | "confirmed" | None (all). Newest first; capped at 200."""
+        review) | "confirmed" | None (all). Newest first; capped at 200.
+
+        Ignite admins only (the queue carries BA contact details and the
+        page is admin-only); brand users get an empty list."""
         user = info.context.request.user
         is_admin, allowed = await _admin_scope(user)
+        if not is_admin:
+            return []
         resolved_tid = None
         if tenant_id is not None:
             try:

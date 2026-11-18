@@ -46,7 +46,7 @@ from jobboard.services import (
 )
 from utils.graphql.inputs import SparkGraphQLInput
 from utils.graphql.mixins import SparkGraphQLMixin
-from utils.graphql.permissions import StrictIsAuthenticated
+from utils.graphql.permissions import StrictIsAuthenticated, ba_pii_field
 from utils.utils import build_mutation_response
 
 logger = logging.getLogger(__name__)
@@ -55,8 +55,9 @@ logger = logging.getLogger(__name__)
 class JobBoardBookingType:
     id: strawberry.ID
     name: str
-    phone: str
-    email: str
+    # The booker's contact details: Ignite admins only.
+    phone: str = ba_pii_field("")
+    email: str = ba_pii_field("")
     note: str
     created_at: str
 

@@ -4973,6 +4973,16 @@ class ScheduledReportMutations:
         if not rows:
             return fail("No expense receipts or spend in that range.")
 
+        # BA contact details are Ignite's: a brand user's CSV/PDF gets the
+        # BA's name only (no email, and no email standing in for a name).
+        from utils.graphql.permissions import BA_NAME_PLACEHOLDER, viewer_is_admin
+
+        if not await viewer_is_admin(info):
+            for r in rows:
+                r["ba_email"] = ""
+                if "@" in (r.get("ba_name") or ""):
+                    r["ba_name"] = BA_NAME_PLACEHOLDER
+
         csv_text = build_expense_rows_csv(rows)
 
         # Fan out the image downloads, then render + upload.
