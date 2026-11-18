@@ -88,7 +88,9 @@ class TestPublicAmbassadorCreation(AmbassadorsGraphQLTestCase):
         assert "created successfully" in result.data["createPublicAmbassador"]["message"].lower(
         )
         assert result.data["createPublicAmbassador"]["clientMutationId"] == "test-123"
-        assert result.data["createPublicAmbassador"]["activationToken"] is not None
+        # The activation token travels by email only; returning it let any
+        # caller verify an address they don't own.
+        assert result.data["createPublicAmbassador"]["activationToken"] is None
 
         # Verify user was created
         user = await sync_to_async(User.objects.get)(email=email)

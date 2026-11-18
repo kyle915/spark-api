@@ -1236,7 +1236,9 @@ class AmbassadorMutations:
             input, info, ambassador_is_active=False
         )
 
-    @relay.mutation(permission_classes=[IsSparkAdminAccess])  # Ignite staff only — BA write
+    # Ignite staff only (BA write). Was open to ANY signed-in user, so a
+    # walk-up BA token could mint pre-verified accounts for any address.
+    @relay.mutation(permission_classes=[IsSparkAdminAccess])
     async def create_ambassador_with_user(
         self,
         info: strawberry.Info,
@@ -1780,7 +1782,7 @@ class ShiftExtensionAdminMutations:
         from ambassadors.models import ShiftExtensionRequest
 
         actor = info.context.request.user
-        if not user_is_ignite_admin(actor):
+        if not await user_is_ignite_admin(actor):
             return RequestExtensionResponse(
                 success=False,
                 message="Not authorized.",
