@@ -791,6 +791,13 @@ for _logger_cfg in LOGGING["loggers"].values():
 MCP_PUBLIC_BASE_URL = env("MCP_PUBLIC_BASE_URL", default="")
 # Kill switch: False → /mcp and /oauth/* answer 503 and tokens stop working.
 MCP_ENABLED = env.bool("MCP_ENABLED", default=True)
+
+# Brand "Where to go next" store recommendations publish to the brand as soon
+# as they are worked out (alerts still wait for staff review). Set false to
+# hold recommendations as drafts again.
+BRAND_INSIGHTS_AUTO_PUBLISH_RECOMMENDATIONS = env.bool(
+    "BRAND_INSIGHTS_AUTO_PUBLISH_RECOMMENDATIONS", default=True
+)
 # Optional rollout allowlist of tenant ids ("17,18"); empty → every brand.
 MCP_ALLOWED_TENANT_IDS = env.list("MCP_ALLOWED_TENANT_IDS", default=[])
 MCP_DAILY_CALLS_PER_TENANT = env.int("MCP_DAILY_CALLS_PER_TENANT", default=500)
