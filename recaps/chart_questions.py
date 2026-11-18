@@ -58,7 +58,8 @@ def chart_data(tenant_id: int, chart: str, start: date | None, end: date | None)
     if chart in (CHART_WEEK, CHART_STORE, CHART_STATE):
         from recaps.consumer_breakdown import (
             KIND_MISSING,
-            KIND_NAMED,
+            KIND_VENUE,
+            LABELED_KINDS,
             tenant_consumer_breakdown,
         )
 
@@ -71,14 +72,23 @@ def chart_data(tenant_id: int, chart: str, start: date | None, end: date | None)
             return ChartData("Consumers sampled per week", "consumers sampled", "week", rows, [])
         split = data["by_store" if chart == CHART_STORE else "by_state"]
         noun = "store" if chart == CHART_STORE else "state"
-        rows = [(r["label"], r["consumers"]) for r in split if r["kind"] == KIND_NAMED]
+        # An event venue (festival, activation) is a named place too; it
+        # says so, so it is not read as a store.
+        rows = [
+            (
+                f"{r['label']} (event venue)" if r["kind"] == KIND_VENUE else r["label"],
+                r["consumers"],
+            )
+            for r in split
+            if r["kind"] in LABELED_KINDS
+        ]
         asides = [
             (
                 f"No {noun} recorded" if r["kind"] == KIND_MISSING else f"All other {noun}s",
                 r["consumers"],
             )
             for r in split
-            if r["kind"] != KIND_NAMED
+            if r["kind"] not in LABELED_KINDS
         ]
         return ChartData(f"Consumers sampled by {noun}", "consumers sampled", noun, rows, asides)
     if chart == CHART_PRODUCT:

@@ -257,14 +257,17 @@ def build_facts(
             numbers.append({"key": key, "label": label, "value": value})
 
     def _named(rows, limit):
+        # "venue" rows are festivals / activations named by the walk-in
+        # title: real places, flagged so the draft doesn't call them stores.
         return [
             {
                 "label": r["label"],
                 "consumers_sampled": int(r["consumers"]),
                 "recaps": int(r["recaps"]),
+                **({"event_venue": True} if r.get("kind") == "venue" else {}),
             }
             for r in rows
-            if r.get("kind") == "named" and r.get("label")
+            if r.get("kind") in ("named", "venue") and r.get("label")
         ][:limit]
 
     if visits is None:
