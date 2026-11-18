@@ -51,22 +51,19 @@ def public_extension_url(token: str) -> str:
     return f"{base}/api/public/extension/{token}"
 
 
-def user_is_ignite_admin(user) -> bool:
+async def user_is_ignite_admin(user) -> bool:
     """True for the Ignite admin team only (staff/superuser, role=spark-admin,
-    or an @igniteproductions.co address — honoring the suppression exclude)."""
+    or a trusted @igniteproductions.co account — honoring the suppression
+    exclude). Decided from the DB via ``resolve_request_user_access`` so a
+    self-registered or unverified Ignite-domain address gets nothing."""
     if not getattr(user, "is_authenticated", False):
         return False
-    if getattr(user, "is_staff", False) or getattr(user, "is_superuser", False):
-        return True
-    role = getattr(user, "role", None)
-    if getattr(role, "slug", None) == "spark-admin":
-        return True
-    try:
-        from utils.graphql.permissions import email_grants_ignite_admin
+    from utils.graphql.permissions import (
+        _is_admin_access,
+        resolve_request_user_access,
+    )
 
-        return bool(email_grants_ignite_admin(getattr(user, "email", "") or ""))
-    except Exception:  # noqa: BLE001
-        return False
+    return _is_admin_access(*await resolve_request_user_access(user))
 
 
 def resolve_extension(

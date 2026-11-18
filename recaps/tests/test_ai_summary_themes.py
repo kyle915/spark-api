@@ -555,25 +555,48 @@ class TestSummaryAndThemes(AmbassadorsGraphQLTestCase):
         from django.core.management import call_command
         import io
 
+        from recaps.management.commands.prebuild_feedback_themes import ranges_for
+
+        # The prebuild works from _ops_today() and builds rolling ranges
+        # ending today (7d / 30d / 90d / 182d / YTD); the page then asks for
+        # one of those same ranges. Pin "today" to the Monday after the
+        # fixture week, so the 7-day range holds exactly the fixture week's
+        # comments whatever day the suite runs on. (Before this, the page
+        # asked for the fixture week itself, which only matched a prebuilt
+        # range by luck on a Monday or Tuesday.)
+        today = self.week_end + timedelta(days=1)
+        start, end = ranges_for(today)[0]
+        assert (start, end) == (self.week_start, today)
+
         self._model_groups_comments()
-        out = io.StringIO()
-        await sync_to_async(call_command)(
-            "prebuild_feedback_themes", "--tenant", str(self.tenant.id), stdout=out
-        )
-        assert "built 1" in out.getvalue() or "built" in out.getvalue()
-        calls = self.post.call_count
-        assert calls >= 1
+        with patch("events.live_board._ops_today", return_value=today):
+            out = io.StringIO()
+            await sync_to_async(call_command)(
+                "prebuild_feedback_themes", "--tenant", str(self.tenant.id), stdout=out
+            )
+            assert f"built tenant {self.tenant.id} {start} → {end}" in out.getvalue()
+            calls = self.post.call_count
+            assert calls >= 1
 
-        themes = await self._themes(self.client_user, self.tenant)
-        assert themes["status"] == "ready"
-        assert self.post.call_count == calls
+            data = await self._run(
+                THEMES,
+                {
+                    "tenantId": str(self.tenant.id),
+                    "startDate": start.isoformat(),
+                    "endDate": end.isoformat(),
+                },
+                self.client_user,
+            )
+            themes = data["tenantFeedbackThemes"]
+            assert themes["status"] == "ready"
+            assert self.post.call_count == calls
 
-        # A second run finds the themes up to date and builds none again.
-        again = io.StringIO()
-        await sync_to_async(call_command)(
-            "prebuild_feedback_themes", "--tenant", str(self.tenant.id), stdout=again
-        )
-        assert "built 0," in again.getvalue()
+            # A second run finds the themes up to date and builds none again.
+            again = io.StringIO()
+            await sync_to_async(call_command)(
+                "prebuild_feedback_themes", "--tenant", str(self.tenant.id), stdout=again
+            )
+            assert "built 0," in again.getvalue()
 
     @pytest.mark.asyncio
     async def test_a_newly_approved_comment_rebuilds_once(self):

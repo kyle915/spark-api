@@ -33,6 +33,7 @@ from urllib.parse import urlparse
 
 import httpx
 from ambassadors.models import AttendanceStatus, Skill
+from events.event_confirmations import PRODUCT_CATEGORY_SEPARATOR
 from events.models import (
     EventStatus,
     EventType,
@@ -51,7 +52,17 @@ from recaps.models import (
     RecapSection,
     TypeOfGood,
 )
-from recaps.products_sampled import products_sampled_options_for_tenant
+from recaps.field_conditions import FIELD_CONDITIONS_KEY
+from recaps.product_choice_fields import (
+    catalog_keys_for_tenant,
+    is_product_choice_field,
+    option_in_catalog,
+)
+from recaps.products_sampled import (
+    PRODUCTS_SAMPLED_TYPES_KEY,
+    is_products_sampled_field,
+    products_sampled_options_for_tenant,
+)
 from tenants.models import Tenant, TenantTheme
 from tenants.mutations import (
     DEFAULT_ATTENDANCE_STATUS_TEMPLATES,
@@ -331,6 +342,200 @@ def resolve_donor_photo_buckets(
     return out
 
 
+DEFAULT_PRODUCT_TYPE = "Products"
+_GENERIC_TYPE_NAMES = {"products", "product", "default", "other"}
+
+
+def resolve_layout_for_target(
+    layout: dict | None,
+    *,
+    swaps: list[tuple[str, str]],
+    target_type_names: set[str],
+) -> tuple[dict, list[str]]:
+    """Donor template layout, made safe for the new tenant.
+
+    - ``productsSampledProductTypes`` names the DONOR's product lines (MAB
+      Total Wine → ["The Finnish Long Drink"]). Kept only for types the new
+      catalog actually has; when none survive the key is dropped, otherwise
+      the read-time resolver filters the new catalog down to nothing and
+      falls back to whatever options are stored.
+    - ``fieldConditions`` follow the label swaps, so a show-when rule still
+      points at the (renamed) field and the (renamed) option.
+    """
+    out = dict(layout or {}) if isinstance(layout, dict) else {}
+    warnings: list[str] = []
+    raw_types = out.get(PRODUCTS_SAMPLED_TYPES_KEY)
+    if isinstance(raw_types, list) and raw_types:
+        kept = [
+            str(t).strip()
+            for t in raw_types
+            if str(t).strip() and str(t).strip().lower() in target_type_names
+        ]
+        if kept:
+            out[PRODUCTS_SAMPLED_TYPES_KEY] = kept
+        else:
+            out.pop(PRODUCTS_SAMPLED_TYPES_KEY, None)
+            warnings.append(
+                "The donor form only offered its own product line(s) "
+                f"({', '.join(str(t) for t in raw_types)}) as Products Sampled. "
+                "The new catalog has none of those, so that filter was removed "
+                "and every new product is offered."
+            )
+    conditions = out.get(FIELD_CONDITIONS_KEY)
+    if isinstance(conditions, dict) and swaps:
+        swapped: dict = {}
+        for field_name, rule in conditions.items():
+            new_rule = rule
+            if isinstance(rule, dict):
+                new_rule = dict(rule)
+                for key in ("field", "includes"):
+                    if isinstance(new_rule.get(key), str):
+                        new_rule[key] = _swap_text(new_rule[key], swaps)
+            swapped[_swap_text(str(field_name), swaps)] = new_rule
+        out[FIELD_CONDITIONS_KEY] = swapped
+    return out, warnings
+
+
+def donor_brand_terms(donor_tenant: Tenant) -> list[str]:
+    """Brand words a cloned label should no longer contain: the donor's
+    name and its (non-generic) product line names."""
+    terms: list[str] = []
+    name = (donor_tenant.name or "").strip()
+    if len(name) >= 3:
+        terms.append(name)
+    for type_name in (
+        ProductType.objects.filter(tenant_id=donor_tenant.id)
+        .order_by("name")
+        .values_list("name", flat=True)
+    ):
+        cleaned = (type_name or "").strip()
+        if len(cleaned) >= 4 and cleaned.lower() not in _GENERIC_TYPE_NAMES:
+            if cleaned.lower() not in {t.lower() for t in terms}:
+                terms.append(cleaned)
+    return terms
+
+
+def plan_cloned_fields(
+    structure: list[dict],
+    *,
+    swaps: list[tuple[str, str]],
+    donor_catalog_keys: set[str],
+    product_options: list[str] | None,
+    brand_terms: list[str] | None = None,
+) -> dict:
+    """What every cloned field will look like — shared by preview + launch.
+
+    Product-choice fields (Products Sampled & aliases, or any choice field
+    whose options were the donor's catalog products) take ``product_options``
+    — the NEW tenant's catalog — and never the donor's products. A field
+    detected by its options keeps any non-product extras (e.g. "Other").
+    Every other option goes through the label swaps, so "Full can" stays
+    "Full can" while "Long Drink tasting" becomes "<new brand> tasting".
+    ``product_options=None`` means "keep the donor's options" (legacy).
+    """
+    swaps = swaps or []
+    sections: list[dict] = []
+    product_fields: list[dict] = []
+    swap_changes: list[dict] = []
+    leftovers: list[str] = []
+    terms = [t for t in (brand_terms or []) if t]
+
+    def _mentions_donor(text: str) -> str | None:
+        low = (text or "").lower()
+        return next((t for t in terms if t.lower() in low), None)
+
+    for section in structure:
+        fields_out: list[dict] = []
+        for f in section["fields"]:
+            donor_name = f["name"]
+            field_name = _swap_text(donor_name, swaps)
+            if field_name != donor_name:
+                swap_changes.append(
+                    {"kind": "field", "field": field_name, "before": donor_name, "after": field_name}
+                )
+            donor_options = [str(o) for o in (f.get("options") or [])]
+            is_product = product_options is not None and is_product_choice_field(
+                name=field_name,
+                type_name=f["type"],
+                options=donor_options,
+                catalog_keys=donor_catalog_keys,
+            )
+            if not is_product and product_options is not None:
+                # A swapped label may only now read "Products Sampled".
+                is_product = is_product_choice_field(
+                    name=donor_name,
+                    type_name=f["type"],
+                    options=[],
+                    catalog_keys=set(),
+                )
+            if is_product:
+                options = list(product_options or [])
+                if not (
+                    is_products_sampled_field(field_name)
+                    or is_products_sampled_field(donor_name)
+                ):
+                    for extra in donor_options:
+                        if option_in_catalog(extra, donor_catalog_keys):
+                            continue
+                        swapped_extra = _swap_text(extra, swaps)
+                        if swapped_extra not in options:
+                            options.append(swapped_extra)
+                product_fields.append(
+                    {"name": field_name, "options": options, "donor_options": donor_options}
+                )
+            else:
+                options = []
+                for opt in donor_options:
+                    swapped_opt = _swap_text(opt, swaps)
+                    if swapped_opt != opt:
+                        swap_changes.append(
+                            {"kind": "option", "field": field_name, "before": opt, "after": swapped_opt}
+                        )
+                    options.append(swapped_opt)
+                for opt in options:
+                    term = _mentions_donor(opt)
+                    if term:
+                        leftovers.append(
+                            f"“{field_name}” option “{opt}” still mentions "
+                            f"“{term}” — add a label swap if that is the donor's brand."
+                        )
+            term = _mentions_donor(field_name)
+            if term:
+                leftovers.append(
+                    f"Field “{field_name}” still mentions “{term}” — add a label "
+                    "swap if that is the donor's brand."
+                )
+            fields_out.append({**f, "name": field_name, "options": options, "from_catalog": is_product})
+        sections.append({**section, "fields": fields_out})
+    return {
+        "sections": sections,
+        "product_fields": product_fields,
+        "swap_changes": swap_changes,
+        "warnings": leftovers,
+    }
+
+
+def empty_catalog_warnings(product_fields: list[dict], product_options: list[str] | None) -> list[str]:
+    if product_options is None or product_options:
+        return []
+    return [
+        f"“{pf['name']}” has no products to offer: the new catalog is empty, so "
+        "its options were cleared (the donor's products were not copied). Add "
+        "products, then re-run launch with the same slug to fill it."
+        for pf in product_fields
+    ]
+
+
+def _tenant_type_names(tenant: Tenant) -> set[str]:
+    return {
+        (n or "").strip().lower()
+        for n in Product.objects.filter(tenant_id=tenant.id).values_list(
+            "product_type__name", flat=True
+        )
+        if (n or "").strip()
+    }
+
+
 def clone_recap_template(
     *,
     source: CustomRecapTemplate,
@@ -340,11 +545,33 @@ def clone_recap_template(
     swaps: list[tuple[str, str]] | None = None,
     products_from_target: bool = True,
 ) -> dict:
-    """Clone donor sections/fields onto target. Never writes to the donor."""
+    """Clone donor sections/fields onto target. Never writes to the donor.
+
+    With ``products_from_target`` (the wizard always passes it) every
+    product-choice field is set from the TARGET's catalog as it stands now —
+    so import the catalog first. An empty catalog clears those options and
+    returns a warning; the donor's products are never left behind.
+    """
     swaps = swaps or []
-    target_options: list[str] | None = None
+    warnings: list[str] = []
+    layout, layout_warnings = resolve_layout_for_target(
+        source.layout, swaps=swaps, target_type_names=_tenant_type_names(target)
+    )
+    product_options: list[str] | None = None
     if products_from_target:
-        target_options = products_sampled_options_for_tenant(target)
+        warnings.extend(layout_warnings)
+        product_options = products_sampled_options_for_tenant(
+            target, product_types=layout.get(PRODUCTS_SAMPLED_TYPES_KEY) or None
+        )
+    plan = plan_cloned_fields(
+        donor_template_structure(source),
+        swaps=swaps,
+        donor_catalog_keys=catalog_keys_for_tenant(source.tenant_id),
+        product_options=product_options,
+        brand_terms=donor_brand_terms(source.tenant),
+    )
+    warnings.extend(empty_catalog_warnings(plan["product_fields"], product_options))
+    warnings.extend(plan["warnings"])
 
     event_type_name = source.event_type.name
     event_type = EventType.objects.filter(
@@ -367,16 +594,28 @@ def clone_recap_template(
             "event_type": event_type,
             "product_samples": source.product_samples,
             "sales_performance": source.sales_performance,
-            "layout": dict(source.layout or {}),
+            "layout": layout if products_from_target else dict(source.layout or {}),
             "created_by": creator,
         },
     )
+    update_fields: list[str] = []
     if template.event_type_id != event_type.id:
         template.event_type = event_type
-        template.save(update_fields=["event_type", "updated_at"])
+        update_fields.append("event_type")
+    if not created and products_from_target:
+        # Resume: a template cloned before this fix may still carry the
+        # donor's product-line filter. Swaps were applied when it was made.
+        fixed_layout, _ = resolve_layout_for_target(
+            template.layout, swaps=[], target_type_names=_tenant_type_names(target)
+        )
+        if isinstance(template.layout, dict) and fixed_layout != template.layout:
+            template.layout = fixed_layout
+            update_fields.append("layout")
+    if update_fields:
+        template.save(update_fields=update_fields + ["updated_at"])
 
     sections_created = sections_reused = fields_created = fields_reused = 0
-    for section_data in donor_template_structure(source):
+    for section_data in plan["sections"]:
         section, s_created = RecapSection.objects.get_or_create(
             tenant_id=target.id,
             name=section_data["name"],
@@ -385,13 +624,8 @@ def clone_recap_template(
         sections_created += int(s_created)
         sections_reused += int(not s_created)
         for field_data in section_data["fields"]:
-            field_name = _swap_text(field_data["name"], swaps)
+            field_name = field_data["name"]
             options = list(field_data["options"])
-            if (
-                target_options
-                and field_name.strip().lower() == "products sampled"
-            ):
-                options = list(target_options)
             # Field types are global — reuse the donor's exact row.
             field_type = CustomRecapFieldType.objects.get(
                 pk=field_data["field_type_id"]
@@ -410,7 +644,10 @@ def clone_recap_template(
             )
             fields_created += int(f_created)
             fields_reused += int(not f_created)
-            if not f_created and options and list(field.options or []) != options:
+            # Product pickers always follow the new catalog (even to empty);
+            # other fields refresh only when there is something to write.
+            refresh = field_data["from_catalog"] or bool(options)
+            if not f_created and refresh and list(field.options or []) != options:
                 field.options = options
                 field.updated_by = creator
                 field.save(update_fields=["options", "updated_by", "updated_at"])
@@ -444,6 +681,9 @@ def clone_recap_template(
         "fields_reused": fields_reused,
         "photo_buckets": buckets,
         "location_mode": target.checkin_location_mode,
+        "product_fields": plan["product_fields"],
+        "swap_changes": plan["swap_changes"],
+        "warnings": warnings,
     }
 
 
@@ -799,19 +1039,54 @@ def build_preview(
     buckets: list[dict] = []
     location_mode = ""
     donor_info = None
+    product_fields: list[dict] = []
+    swap_changes: list[dict] = []
+    warnings: list[str] = []
     if donor_template is not None:
         swaps = swaps or []
-        for section in donor_template_structure(donor_template):
+        entries = preview_catalog_entries(existing, catalog_rows)
+        layout, layout_warnings = resolve_layout_for_target(
+            donor_template.layout,
+            swaps=swaps,
+            target_type_names={t.lower() for t, _ in entries},
+        )
+        product_options = preview_catalog_labels(
+            entries, layout.get(PRODUCTS_SAMPLED_TYPES_KEY) or None
+        )
+        plan = plan_cloned_fields(
+            donor_template_structure(donor_template),
+            swaps=swaps,
+            donor_catalog_keys=catalog_keys_for_tenant(donor_template.tenant_id),
+            product_options=product_options,
+            brand_terms=donor_brand_terms(donor_template.tenant),
+        )
+        product_fields = plan["product_fields"]
+        swap_changes = plan["swap_changes"]
+        new_name = (new_template_name or "").strip() or _swap_text(
+            donor_template.name, swaps
+        )
+        if new_name != donor_template.name:
+            swap_changes.insert(
+                0,
+                {"kind": "template", "field": "", "before": donor_template.name, "after": new_name},
+            )
+        warnings = (
+            layout_warnings
+            + empty_catalog_warnings(product_fields, product_options)
+            + plan["warnings"]
+        )
+        for section in plan["sections"]:
             sections.append(
                 {
                     "name": section["name"],
                     "order": section["order"],
                     "fields": [
                         {
-                            "name": _swap_text(f["name"], swaps),
+                            "name": f["name"],
                             "type": f["type"],
                             "required": f["required"],
                             "options": list(f["options"]),
+                            "from_catalog": bool(f["from_catalog"]),
                         }
                         for f in section["fields"]
                     ],
@@ -853,7 +1128,66 @@ def build_preview(
             for r in catalog_rows
         ],
         "catalog_count": len(catalog_rows),
+        "product_fields": product_fields,
+        "swap_changes": swap_changes,
+        "warnings": warnings,
     }
+
+
+def preview_catalog_entries(
+    existing: Tenant | None, rows: list[dict]
+) -> list[tuple[str, str]]:
+    """``(type, name)`` the tenant's catalog will hold after import.
+
+    Mirrors ``import_products``: rows matching an existing product by SKU or
+    name are reused (the existing name wins), names over 50 characters are
+    skipped, and a row without a type lands in "Products".
+    """
+    entries: dict[str, tuple[str, str]] = {}
+    skus: set[str] = set()
+    if existing is not None:
+        for product in Product.objects.filter(tenant_id=existing.id).select_related(
+            "product_type"
+        ):
+            name = (product.name or "").strip()
+            if not name:
+                continue
+            type_name = (getattr(product.product_type, "name", "") or "").strip()
+            entries.setdefault(name.lower(), (type_name, name))
+            sku = _extract_sku(product.description)
+            if sku:
+                skus.add(sku.lower())
+    for row in rows:
+        name = (row.get("name") or "").strip()
+        sku = (row.get("sku") or "").strip().lower()
+        if not name or len(name) > 50:
+            continue
+        if (sku and sku in skus) or name.lower() in entries:
+            continue
+        type_name = (row.get("product_type") or "").strip() or DEFAULT_PRODUCT_TYPE
+        entries[name.lower()] = (type_name[:50], name)
+        if sku:
+            skus.add(sku)
+    return list(entries.values())
+
+
+def preview_catalog_labels(
+    entries: list[tuple[str, str]], product_types: list[str] | None = None
+) -> list[str]:
+    """Products Sampled options for ``entries``, in the same ``Type — Name``
+    shape and order as ``catalog_product_options``."""
+    wanted = {str(t).strip().lower() for t in (product_types or []) if str(t).strip()}
+    out: list[str] = []
+    seen: set[str] = set()
+    for type_name, name in sorted(entries, key=lambda e: (e[0].lower(), e[1].lower())):
+        if wanted and type_name.lower() not in wanted:
+            continue
+        label = f"{type_name}{PRODUCT_CATEGORY_SEPARATOR}{name}" if type_name else name
+        if label.lower() in seen:
+            continue
+        seen.add(label.lower())
+        out.append(label)
+    return out
 
 
 @transaction.atomic
@@ -896,6 +1230,16 @@ def launch_tenant(
     if brand_color:
         apply_brand_color(tenant, brand_color, creator)
 
+    # Catalog FIRST: the clone sets every product-choice field from the
+    # tenant's catalog as it stands, so importing afterwards (as this used
+    # to) left the donor's products on the cloned form.
+    catalog_result = import_products(
+        tenant=tenant,
+        creator=creator,
+        rows=catalog_rows or [],
+        download_images=download_images,
+    ) if catalog_rows else {"created": 0, "reused": 0, "updated": 0, "warnings": [], "total": Product.objects.filter(tenant_id=tenant.id).count()}
+
     clone_result = None
     donor_template = None
     if donor_template_id:
@@ -918,16 +1262,6 @@ def launch_tenant(
                 swaps=label_swaps or [],
                 products_from_target=True,
             )
-
-    catalog_result = import_products(
-        tenant=tenant,
-        creator=creator,
-        rows=catalog_rows or [],
-        download_images=download_images,
-    ) if catalog_rows else {"created": 0, "reused": 0, "updated": 0, "warnings": [], "total": Product.objects.filter(tenant_id=tenant.id).count()}
-
-    # If the catalog arrived after the clone, refresh Products Sampled pills
-    # are live from the catalog at read time — nothing else to stamp.
 
     code, code_minted = ensure_checkin_code(
         tenant, prefix=code_prefix, name=name, slug=slug
@@ -953,6 +1287,8 @@ def launch_tenant(
         "template": clone_result["template"] if clone_result else None,
         "clone": clone_result,
         "catalog": catalog_result,
+        "warnings": list(catalog_result["warnings"])
+        + list(clone_result["warnings"] if clone_result else []),
         "checkin_code": code,
         "code_minted": code_minted,
         "checkin_url": checkin_url(code),

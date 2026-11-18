@@ -2,8 +2,9 @@
 
 A single helper — :func:`generate_summary` — that POSTs a system+user
 prompt to the OpenAI Chat Completions REST endpoint and returns the
-assistant's text. It is deliberately tiny: no streaming, no function
-calling, no SDK. The only consumer today is the on-demand campaign-report
+assistant's text. It is deliberately tiny: no streaming, no SDK.
+:func:`chat_with_tools` adds function tools with strict schemas, a cap on
+tool calls per turn and a deadline (brand chat, ``brand_chat.service``). The only consumer today is the on-demand campaign-report
 executive summary (``recaps.report_types.campaignReportAiSummary``), but
 the signature is generic so other "write me a paragraph" features can
 reuse it.
@@ -442,6 +443,354 @@ def generate_vision_json(
         return _with_model_fallback(_ask, small=small)
     except Exception:
         return None
+
+
+OPENAI_TRANSCRIPTIONS_URL = "https://api.openai.com/v1/audio/transcriptions"
+# Speech-to-text. The configured model first, then the long-standing one.
+_TRANSCRIBE_FALLBACK_MODEL = "whisper-1"
+# OpenAI refuses files over 25 MB; callers cap well under that.
+_TRANSCRIBE_MAX_BYTES = 25 * 1024 * 1024
+_TRANSCRIBE_EXTENSIONS = {
+    "audio/webm": "webm",
+    "video/webm": "webm",
+    "audio/mp4": "m4a",
+    "audio/x-m4a": "m4a",
+    "audio/m4a": "m4a",
+    "video/mp4": "mp4",
+    "audio/mpeg": "mp3",
+    "audio/mp3": "mp3",
+    "audio/ogg": "ogg",
+    "audio/wav": "wav",
+    "audio/x-wav": "wav",
+    "audio/wave": "wav",
+}
+
+
+def transcription_extension(content_type: str) -> str | None:
+    """The file extension OpenAI expects for this audio type, or None when
+    the type is not one it reads. Codec parameters are ignored."""
+    base = (content_type or "").split(";", 1)[0].strip().lower()
+    return _TRANSCRIBE_EXTENSIONS.get(base)
+
+
+def _transcribe_model() -> str:
+    return (
+        getattr(settings, "OPENAI_TRANSCRIBE_MODEL", "") or ""
+    ).strip() or _TRANSCRIBE_FALLBACK_MODEL
+
+
+def transcribe_audio(
+    audio: bytes,
+    *,
+    content_type: str,
+    prompt: str = "",
+    language: str = "en",
+    timeout: float | None = None,
+) -> str:
+    """Speech to text for one short recording. The audio is sent once and
+    not kept: nothing here writes it anywhere.
+
+    ``prompt`` is a short list of words to spell correctly (product names).
+
+    Raises:
+        AiUnavailable: When the key is unset, the audio type is not one
+            OpenAI reads, the file is empty or too big, or the call fails.
+            The message is safe to show.
+    """
+    headers = _auth_headers()
+    headers.pop("Content-Type", None)  # multipart sets its own boundary
+    ext = transcription_extension(content_type)
+    if ext is None:
+        raise AiUnavailable("That recording format can't be read.")
+    if not audio or len(audio) > _TRANSCRIBE_MAX_BYTES:
+        raise AiUnavailable("That recording is empty or too long.")
+    base_type = content_type.split(";", 1)[0].strip().lower()
+
+    def _ask(model_name: str) -> str:
+        fields = {"model": model_name, "response_format": "json"}
+        if language:
+            fields["language"] = language
+        if prompt:
+            fields["prompt"] = prompt[:800]
+        body = _post_multipart(
+            OPENAI_TRANSCRIPTIONS_URL,
+            fields,
+            ("file", f"recording.{ext}", audio, base_type),
+            headers,
+            timeout=timeout or DEFAULT_TIMEOUT_SECONDS,
+        )
+        if not isinstance(body, dict):
+            raise AiUnavailable("Speech service returned an unexpected response.")
+        err = body.get("error")
+        if err:
+            raise AiUnavailable("Speech service error.")
+        text = body.get("text")
+        if not isinstance(text, str):
+            raise AiUnavailable("Speech service returned no text.")
+        return text.strip()
+
+    configured = _transcribe_model()
+    try:
+        return _ask(configured)
+    except AiUnavailable:
+        if configured == _TRANSCRIBE_FALLBACK_MODEL:
+            raise
+        return _ask(_TRANSCRIBE_FALLBACK_MODEL)
+
+
+def _post_multipart(
+    url: str,
+    fields: dict,
+    file: tuple[str, str, bytes, str],
+    headers: dict,
+    *,
+    timeout: float,
+) -> dict:
+    """POST form fields plus one file as multipart; return the decoded JSON.
+
+    ``file`` is ``(form_name, filename, bytes, content_type)``. Errors are
+    re-raised as :class:`AiUnavailable` with a short reason, like
+    :func:`_post_json`.
+    """
+    import requests  # noqa: PLC0415 — present in uv.lock
+
+    name, filename, data, ctype = file
+    try:
+        response = requests.post(
+            url,
+            data=fields,
+            files={name: (filename, data, ctype)},
+            headers=headers,
+            timeout=timeout,
+        )
+    except requests.exceptions.Timeout as exc:
+        raise AiUnavailable("Speech service timed out.") from exc
+    except requests.exceptions.RequestException as exc:
+        raise AiUnavailable("Speech service request failed.") from exc
+    if response.status_code >= 400:
+        raise AiUnavailable(_http_error_reason(response.status_code, response.text))
+    try:
+        return response.json()
+    except ValueError as exc:
+        raise AiUnavailable("Speech service returned invalid JSON.") from exc
+# ─── Tool calling (function tools) ───────────────────────────────────
+
+
+class ToolRun:
+    """One tool call the model asked for and what came back."""
+
+    __slots__ = ("name", "args", "output", "ok")
+
+    def __init__(self, name: str, args: dict, output: str, ok: bool):
+        self.name = name
+        self.args = args
+        self.output = output
+        self.ok = ok
+
+
+class ChatResult:
+    """The model's last message plus everything that led to it.
+
+    ``text`` is the final assistant content (empty when the model gave
+    none). ``stopped`` says why the loop ended: ``answered``,
+    ``tool_cap`` (the per-turn tool-call cap was hit and the model was made
+    to answer without more tools) or ``deadline``.
+    """
+
+    def __init__(self):
+        self.text = ""
+        self.runs: list[ToolRun] = []
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
+        self.model = ""
+        self.stopped = "answered"
+        self.requests = 0
+        # The whole conversation as sent, tool results included, so a
+        # caller can ask a follow-up (e.g. "use only the figures given").
+        self.messages: list[dict] = []
+
+
+def strict_function_tool(name: str, description: str, parameters: dict) -> dict:
+    """A Chat Completions function tool with a strict schema.
+
+    Strict mode needs every property listed in ``required`` and
+    ``additionalProperties: false``; an optional argument is a nullable
+    union instead. Bounds (``minimum`` …) are dropped: the tool checks its
+    own arguments and says what was wrong.
+    """
+    props: dict = {}
+    for key, spec in (parameters.get("properties") or {}).items():
+        kind = spec.get("type", "string")
+        out = {"type": [kind, "null"] if isinstance(kind, str) else [*kind, "null"]}
+        if spec.get("description"):
+            out["description"] = spec["description"]
+        if spec.get("enum"):
+            out["enum"] = [*spec["enum"], None]
+        props[key] = out
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": description,
+            "strict": True,
+            "parameters": {
+                "type": "object",
+                "properties": props,
+                "required": list(props),
+                "additionalProperties": False,
+            },
+        },
+    }
+
+
+def chat_with_tools(
+    messages: list[dict],
+    tools: list[dict],
+    run_tool: Callable[[str, dict], tuple[str, bool]],
+    *,
+    max_tool_calls: int = 6,
+    max_rounds: int = 4,
+    max_tokens: int = 1500,
+    timeout: float | None = None,
+    deadline_seconds: float = 60.0,
+    response_schema: dict | None = None,
+    allow_tools: bool = True,
+) -> ChatResult:
+    """Run a Chat Completions conversation with function tools.
+
+    The model may call tools for up to ``max_rounds`` rounds and
+    ``max_tool_calls`` calls in all. ``run_tool(name, args)`` runs one and
+    returns ``(text for the model, ok)``; it must never raise. Calls past
+    the cap are answered with a "limit reached" note and the model is then
+    asked once more with ``tool_choice: "none"`` so it answers from what it
+    has. Past ``deadline_seconds`` the same last call is made.
+
+    ``response_schema`` (strict JSON schema) shapes the final message.
+    ``allow_tools=False`` sends the tools but forbids calling them (a
+    follow-up that must answer from results already in ``messages``).
+
+    Raises :class:`AiUnavailable` when the service is unconfigured or the
+    first request fails on both the configured and the fallback model.
+    Later failures end the loop with whatever text there is (possibly
+    none); the caller decides what to show.
+    """
+    import time as _time
+
+    headers = _auth_headers()
+    result = ChatResult()
+    started = _time.monotonic()
+    convo = list(messages)
+    result.messages = convo
+    per_request = timeout or DEFAULT_TIMEOUT_SECONDS
+
+    def _payload(model: str, *, allow_tools: bool) -> dict:
+        payload = {
+            "model": model,
+            "messages": convo,
+            "max_completion_tokens": _completion_cap(max_tokens),
+            "tools": tools,
+            "tool_choice": "auto" if allow_tools else "none",
+        }
+        if allow_tools:
+            payload["parallel_tool_calls"] = True
+        if response_schema is not None:
+            payload["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {"name": "chat_answer", "strict": True, "schema": response_schema},
+            }
+        return payload
+
+    def _send(model: str, *, allow_tools: bool) -> dict:
+        body = _post_json(
+            OPENAI_CHAT_COMPLETIONS_URL,
+            _payload(model, allow_tools=allow_tools),
+            headers,
+            timeout=per_request,
+        )
+        if not isinstance(body, dict):
+            raise AiUnavailable("AI service returned an unexpected response.")
+        err = body.get("error")
+        if err:
+            message = err.get("message") if isinstance(err, dict) else str(err)
+            raise AiUnavailable(f"AI service error: {message or 'unknown error'}")
+        choices = body.get("choices")
+        if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+            raise AiUnavailable("AI service returned no completion.")
+        result.requests += 1
+        usage = body.get("usage") or {}
+        result.prompt_tokens += int(usage.get("prompt_tokens") or 0)
+        result.completion_tokens += int(usage.get("completion_tokens") or 0)
+        return choices[0].get("message") or {}
+
+    # First request picks the model: the configured one, else the fallback.
+    model = _configured_model()
+    try:
+        message = _send(model, allow_tools=allow_tools)
+    except AiUnavailable:
+        if model == _FALLBACK_MODEL:
+            raise
+        model = _FALLBACK_MODEL
+        message = _send(model, allow_tools=allow_tools)
+    result.model = model
+
+    used = 0
+    rounds = 0
+    while True:
+        calls = message.get("tool_calls") or []
+        if not calls:
+            content = message.get("content")
+            result.text = content.strip() if isinstance(content, str) else ""
+            return result
+        rounds += 1
+        convo.append(
+            {
+                "role": "assistant",
+                "content": message.get("content") or None,
+                "tool_calls": calls,
+            }
+        )
+        capped = False
+        for call in calls:
+            fn = (call or {}).get("function") or {}
+            name = str(fn.get("name") or "")
+            call_id = (call or {}).get("id") or ""
+            if used >= max_tool_calls:
+                capped = True
+                convo.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": call_id,
+                        "content": json.dumps(
+                            {"error": "Tool call limit for this question reached. Answer from the results you have."}
+                        ),
+                    }
+                )
+                continue
+            used += 1
+            try:
+                args = json.loads(fn.get("arguments") or "{}")
+                if not isinstance(args, dict):
+                    args = {}
+            except ValueError:
+                args = {}
+            output, ok = run_tool(name, args)
+            result.runs.append(ToolRun(name, args, output, ok))
+            convo.append({"role": "tool", "tool_call_id": call_id, "content": output})
+
+        out_of_time = (_time.monotonic() - started) >= deadline_seconds
+        last_round = capped or used >= max_tool_calls or rounds >= max_rounds or out_of_time
+        if last_round:
+            result.stopped = "deadline" if out_of_time else "tool_cap"
+        try:
+            message = _send(model, allow_tools=not last_round)
+        except AiUnavailable:
+            result.text = ""
+            result.stopped = "error"
+            return result
+        if last_round:
+            content = message.get("content")
+            result.text = content.strip() if isinstance(content, str) else ""
+            return result
 
 
 def _extract_message_text(body: dict) -> str:

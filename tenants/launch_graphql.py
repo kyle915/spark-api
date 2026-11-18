@@ -60,6 +60,29 @@ class LaunchFieldPreview:
     type: str
     required: bool
     options: list[str]
+    from_catalog: bool = strawberry.field(
+        default=False,
+        description="Options come from the NEW tenant's catalog (a product picker).",
+    )
+
+
+@strawberry.type
+class LaunchProductFieldPreview:
+    """A product-choice field and the options launch will write to it."""
+
+    name: str
+    options: list[str]
+    donor_options: list[str]
+
+
+@strawberry.type
+class LaunchSwapChange:
+    """One label swap the clone will make: a field, an option or the name."""
+
+    kind: str
+    field: str
+    before: str
+    after: str
 
 
 @strawberry.type
@@ -115,6 +138,11 @@ class TenantLaunchPreview:
     catalog: list[LaunchCatalogPreview]
     catalog_count: int
     errors: list[str]
+    product_fields: list[LaunchProductFieldPreview] = strawberry.field(
+        default_factory=list
+    )
+    swap_changes: list[LaunchSwapChange] = strawberry.field(default_factory=list)
+    warnings: list[str] = strawberry.field(default_factory=list)
 
 
 @strawberry.type
@@ -188,6 +216,7 @@ def _preview_type(data: dict) -> TenantLaunchPreview:
                         type=f["type"],
                         required=f["required"],
                         options=list(f["options"]),
+                        from_catalog=bool(f.get("from_catalog")),
                     )
                     for f in s["fields"]
                 ],
@@ -209,6 +238,21 @@ def _preview_type(data: dict) -> TenantLaunchPreview:
         ],
         catalog_count=data["catalog_count"],
         errors=[],
+        product_fields=[
+            LaunchProductFieldPreview(
+                name=pf["name"],
+                options=list(pf["options"]),
+                donor_options=list(pf["donor_options"]),
+            )
+            for pf in data.get("product_fields") or []
+        ],
+        swap_changes=[
+            LaunchSwapChange(
+                kind=c["kind"], field=c["field"], before=c["before"], after=c["after"]
+            )
+            for c in data.get("swap_changes") or []
+        ],
+        warnings=list(data.get("warnings") or []),
     )
 
 
@@ -345,7 +389,7 @@ class TenantLaunchMutations:
                     else "; ".join(errors)
                 ),
                 preview=preview,
-                warnings=errors,
+                warnings=errors + list(preview.warnings),
                 client_mutation_id=input.client_mutation_id,
             )
 
@@ -432,7 +476,7 @@ class TenantLaunchMutations:
                 catalog_created=catalog["created"],
                 catalog_reused=catalog["reused"],
                 catalog_total=catalog["total"],
-                warnings=list(catalog["warnings"]),
+                warnings=list(result["warnings"]),
                 preview=preview,
                 client_mutation_id=input.client_mutation_id,
             )

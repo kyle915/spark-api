@@ -1,7 +1,6 @@
 """Services for ambassador mutations and queries."""
 
 import asyncio
-import sys
 import secrets
 import string
 from decimal import Decimal
@@ -161,8 +160,13 @@ class BaseAmbassadorService(SparkGraphQLMixin):
 
     @staticmethod
     async def check_email_exists(email: str) -> bool:
-        """Check if a user with the given email exists."""
-        return await sync_to_async(User.objects.filter(email=email).exists)()
+        """Check if a user with the given email exists (case-insensitive, so
+        ``KYLE@x`` can't be registered next to ``kyle@x``)."""
+        from utils.graphql.permissions import normalize_email
+
+        return await sync_to_async(
+            User.objects.filter(email__iexact=normalize_email(email)).exists
+        )()
 
     @staticmethod
     async def check_active_invitation_exists(email: str) -> bool:
@@ -344,6 +348,35 @@ class PublicAmbassadorCreationService(BaseAmbassadorService):
             ambassador_is_active if ambassador_is_active is not None else False
         )
         is_admin_created = isinstance(input, inputs.CreateAmbassadorWithUserInput)
+
+        # Self-serve sign-ups (public signup, walk-up) and brand users may not
+        # claim an address on Ignite's own domain: nothing here proves the
+        # signer owns that inbox. Only a platform admin may create one.
+        from utils.graphql.permissions import (
+            _is_admin_access,
+            normalize_email,
+            reserved_signup_email_error,
+            resolve_request_user_access,
+        )
+
+        input.email = normalize_email(input.email)
+        reserved = reserved_signup_email_error(input.email)
+        if reserved:
+            caller_is_admin = False
+            if is_admin_created:
+                caller = getattr(getattr(info.context, "request", None), "user", None)
+                if caller is not None and getattr(caller, "is_authenticated", False):
+                    caller_is_admin = _is_admin_access(
+                        *await resolve_request_user_access(caller)
+                    )
+            if not caller_is_admin:
+                return build_mutation_response(
+                    PublicAmbassadorCreationResponse,
+                    success=False,
+                    message=reserved,
+                    input_obj=input,
+                )
+
         password, password_error, password_was_generated = cls.resolve_password(
             input=input,
             response_class=PublicAmbassadorCreationResponse,
@@ -432,6 +465,10 @@ class PublicAmbassadorCreationService(BaseAmbassadorService):
                 )
                 verification_email = EmailVerificationMailer(user, activation_url)
                 await verification_email.send_async()
+                # The token proves inbox ownership only if it travels by
+                # email. Returning it to the (anonymous) caller let anyone
+                # verify an address they don't own.
+                activation_token = None
 
             if password_was_generated:
                 generated_password_email = AmbassadorGeneratedPasswordMailer(
@@ -1979,9 +2016,13 @@ class AmbassadorQueriesService(SparkGraphQLMixin):
 
         from utils.graphql.relay import connection_from_queryset_async
 
+        # Always paginate (anti-bulk guardrail). Calls without paging args
+        # used to return EVERY active ambassador in one page (sys.maxsize);
+        # they now get the same 50-row page the FE already uses (it always
+        # passes `first`, so no screen changes).
         no_pagination = all(value is None for value in (first, after, last, before))
-        default_limit = sys.maxsize if no_pagination else 10
-        max_limit = sys.maxsize if no_pagination else 50
+        default_limit = 50 if no_pagination else 10
+        max_limit = 50
 
         return await connection_from_queryset_async(
             queryset,
@@ -3812,7 +3853,21 @@ class OAuthSignInService(BaseAmbassadorService):
 
     @classmethod
     async def _finish(cls, input, identity) -> OAuthSignInResponse:
+        from utils.graphql.permissions import is_ignite_domain_email
+
         allow_create = getattr(input, "create_if_missing", None) is not False
+        if is_ignite_domain_email(identity.email):
+            # Staff accounts are provisioned by an admin, never auto-created
+            # by a mobile SSO sign-in, and an Ignite address must come with
+            # the provider's own proof that the signer owns it.
+            if not identity.email_verified:
+                return build_mutation_response(
+                    OAuthSignInResponse,
+                    success=False,
+                    message="This sign-in couldn't be verified. Use a different account.",
+                    input_obj=input,
+                )
+            allow_create = False
         try:
             user, is_new = await cls._find_or_create_user(
                 email=identity.email,

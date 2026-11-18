@@ -37,11 +37,12 @@ async def authenticate_or_create_social_user(
 
     @TODO: Probably it would be better to use the same function for both authentication and social auth in the near future.
     """
-    user_exists = await sync_to_async(User.objects.filter(email=email).exists)()
+    existing = await sync_to_async(
+        User.objects.filter(email__iexact=(email or "").strip()).order_by("pk").first
+    )()
 
-    if user_exists:
-        user = await sync_to_async(User.objects.get)(email=email)
-        return user, False
+    if existing is not None:
+        return existing, False
     else:
         # Create new user
         @sync_to_async
@@ -99,6 +100,7 @@ class BaseSocialAuthMutations:
             email = ""
             first_name = ""
             last_name = ""
+            email_verified = False
 
             id_tok = (id_token or "").strip()
             access = (access_token or "").strip()
@@ -118,6 +120,7 @@ class BaseSocialAuthMutations:
                         client_mutation_id=client_mutation_id,
                     )
                 email = identity.email
+                email_verified = bool(identity.email_verified)
                 first_name = identity.first_name or ""
                 last_name = identity.last_name or ""
             elif access:
@@ -139,6 +142,7 @@ class BaseSocialAuthMutations:
                     user_info = response.json()
 
                 email = (user_info.get("email") or "").strip()
+                email_verified = bool(user_info.get("verified_email"))
                 first_name = user_info.get("given_name", "") or ""
                 last_name = user_info.get("family_name", "") or ""
             else:
@@ -155,8 +159,15 @@ class BaseSocialAuthMutations:
                     client_mutation_id=client_mutation_id,
                 )
 
+            if not email_verified:
+                return SocialAuthResponse(
+                    success=False,
+                    message="Google hasn't verified this email address.",
+                    client_mutation_id=client_mutation_id,
+                )
+
             user_exists = await sync_to_async(
-                User.objects.filter(email=email).exists
+                User.objects.filter(email__iexact=email).exists
             )()
             if not user_exists:
                 return SocialAuthResponse(
@@ -172,6 +183,14 @@ class BaseSocialAuthMutations:
                 provider="google",
                 role_id=role_id,
                 tenant_id=tenant_id,
+            )
+
+            # Google vouched for this inbox (email_verified above): record it,
+            # so a staffer left unverified regains Ignite-domain access.
+            from gqlauth.models import UserStatus
+
+            await sync_to_async(UserStatus.objects.update_or_create)(
+                user=user, defaults={"verified": True, "archived": False}
             )
 
             token = TokenType.from_user(user)
@@ -209,28 +228,40 @@ class BaseSocialAuthMutations:
         Returns JWT tokens compatible with strawberry-django-auth.
         """
         try:
-            import jwt
+            # The signature was never checked here, so a hand-made token
+            # carrying any email logged in as that user (or created one with
+            # this schema's role, e.g. spark-admin). Verify against Apple's
+            # keys and, like the Google path, only sign in EXISTING accounts.
+            from tenants.oauth import OAuthVerificationError, verify_apple_id_token
 
-            # Decode identity token (you should verify signature in production)
-            decoded_token = jwt.decode(
-                identity_token,
-                options={"verify_signature": False}
-            )
-
-            email = decoded_token.get('email')
-            if not email:
+            try:
+                identity = await sync_to_async(verify_apple_id_token)(
+                    identity_token
+                )
+            except OAuthVerificationError as exc:
                 return SocialAuthResponse(
                     success=False,
-                    message="Unable to get email from Apple token",
+                    message=str(exc) or "Invalid Apple identity token",
                     client_mutation_id=client_mutation_id,
                 )
 
-            # Get name from token if available
-            name = decoded_token.get('name', {})
-            first_name = name.get('firstName', '') if isinstance(
-                name, dict) else ''
-            last_name = name.get('lastName', '') if isinstance(
-                name, dict) else ''
+            email = identity.email
+            if not email or not identity.email_verified:
+                return SocialAuthResponse(
+                    success=False,
+                    message="Unable to get a verified email from Apple token",
+                    client_mutation_id=client_mutation_id,
+                )
+            if not await sync_to_async(
+                User.objects.filter(email__iexact=email).exists
+            )():
+                return SocialAuthResponse(
+                    success=False,
+                    message="Email not registered in the platform",
+                    client_mutation_id=client_mutation_id,
+                )
+            first_name = identity.first_name or ""
+            last_name = identity.last_name or ""
 
             # Authenticate or create user
             user, is_new = await authenticate_or_create_social_user(
