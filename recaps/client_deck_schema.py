@@ -190,6 +190,30 @@ class ClientRecapDraftPhoto:
 
 
 @strawberry.type
+class ClientRecapVisit:
+    """A visit the deck leaves out of its demo count (a no-product visit),
+    or one kept in but worth a look. ``evidence`` is cut from the recap's
+    notes with ambassador names taken out; it is shown to staff only and
+    never printed in the deck. ``kept`` is true when staff counted a
+    left-out visit back in."""
+
+    key: str
+    day: str
+    store: str
+    state: str
+    reason: str
+    label: str
+    evidence: str
+    kept: bool
+
+
+@strawberry.type
+class ClientRecapQuoteChoice:
+    text: str
+    hidden: bool
+
+
+@strawberry.type
 class ClientRecapDraftType:
     """A staff draft of a client recap. ``textSource`` is ``model``,
     ``fallback`` (built from the numbers, because the model was unavailable
@@ -214,6 +238,20 @@ class ClientRecapDraftType:
     photos: list[ClientRecapDraftPhoto]
     created_at: str
     updated_at: str
+    # The deck (recap_decks): ``status`` is ``building`` (the summary is
+    # still being written), ``draft`` (staff only) or ``ready`` (the brand's
+    # users can download it).
+    status: str
+    can_edit: bool
+    build_note: str
+    ready_at: str
+    next_steps: list[str]
+    deck_numbers: list[ClientRecapNumber]
+    no_product_note: str
+    left_out_visits: list[ClientRecapVisit]
+    visits_to_check: list[ClientRecapVisit]
+    left_out_count: int
+    quote_choices: list[ClientRecapQuoteChoice]
 
 
 @strawberry.type
@@ -240,16 +278,28 @@ class ClientRecapDraftPdf:
     pdf_base64: str
 
 
+def _visit(v: dict) -> ClientRecapVisit:
+    return ClientRecapVisit(
+        key=str(v.get("key") or ""),
+        day=str(v.get("day") or ""),
+        store=str(v.get("store") or ""),
+        state=str(v.get("state") or ""),
+        reason=str(v.get("reason") or ""),
+        label=str(v.get("label") or ""),
+        evidence=str(v.get("evidence") or ""),
+        kept=bool(v.get("kept")),
+    )
+
+
 def _draft_type(draft) -> ClientRecapDraftType:
+    from recap_decks import builder
+    from recap_decks.models import ClientRecapDeck
     from recaps.client_recap_draft import draft_photos, period_label
 
     facts = draft.facts or {}
-    themes = facts.get("themes") or []
-    quotes = (
-        [t["quote"] for t in themes if t.get("quote")]
-        if themes
-        else list(facts.get("comments") or [])
-    )[:6]
+    deck = builder.deck_for(draft)
+    quotes = [q["text"] for q in builder.deck_quotes(draft)]
+    figures = builder.program(draft)
     return ClientRecapDraftType(
         uuid=str(draft.uuid),
         tenant_id=str(draft.tenant_id),
@@ -284,6 +334,23 @@ def _draft_type(draft) -> ClientRecapDraftType:
         ],
         created_at=draft.created_at.isoformat(),
         updated_at=draft.updated_at.isoformat(),
+        status=deck.status,
+        can_edit=deck.status == ClientRecapDeck.STATUS_DRAFT,
+        build_note=deck.build_note or "",
+        ready_at=deck.ready_at.isoformat() if deck.ready_at else "",
+        next_steps=[str(x) for x in deck.next_steps or []],
+        deck_numbers=[
+            ClientRecapNumber(label=n["label"], value=int(n["value"]))
+            for n in builder.deck_numbers(draft)
+        ],
+        no_product_note=builder.no_product_note(draft),
+        left_out_visits=[_visit(v) for v in builder.left_out_visits(draft)],
+        visits_to_check=[_visit(v) for v in builder.visits_to_check(draft)],
+        left_out_count=int(figures["no_product_visits"]),
+        quote_choices=[
+            ClientRecapQuoteChoice(text=q["text"], hidden=bool(q["hidden"]))
+            for q in builder.deck_quotes(draft, include_hidden=True)
+        ],
     )
 
 
@@ -442,13 +509,14 @@ class ClientRecapDraftMutations:
             return _no_draft("Pick a start and an end date.")
 
         def _create():
-            from recaps.client_recap_draft import ClientRecapDraftError, create_draft
+            from recap_decks.builder import start_deck
+            from recaps.client_recap_draft import ClientRecapDraftError
 
             tenant = _tenant(str(tenant_id))
             if tenant is None:
                 return _no_draft("Choose a client first.")
             try:
-                draft = create_draft(tenant, start, end, user)
+                draft = start_deck(tenant, start, end, user)
             except ClientRecapDraftError as exc:
                 return _no_draft(str(exc))
             return ClientRecapDraftResult(ok=True, reason="", draft=_draft_type(draft))
@@ -468,20 +536,38 @@ class ClientRecapDraftMutations:
         summary: str | None = None,
         takeaways: list[str] | None = None,
         photo_ids: list[strawberry.ID] | None = None,
+        next_steps: list[str] | None = None,
+        hidden_quotes: list[str] | None = None,
+        kept_visits: list[str] | None = None,
     ) -> ClientRecapDraftResult:
         """Save staff edits to a draft: the title, the summary, the
-        takeaways, and which photos it uses (in order). Only what is passed
-        changes. Staff only."""
+        takeaways, which photos it uses (in order), the next steps, the
+        quotes taken out and the no-product visits counted back in. Only
+        what is passed changes. Staff only. A deck shared with the brand
+        (``ready``) or still being written (``building``) can't be edited."""
         user = await _Staff().staff_user(info)
         if user is None:
             return _no_draft()
 
         def _update():
+            from recap_decks.builder import DeckError, check_editable, update_deck
             from recaps.client_recap_draft import ClientRecapDraftError, update_draft
 
             draft = _load_draft(uuid)
             if draft is None:
                 return _no_draft("Draft not found.")
+            try:
+                check_editable(draft)
+                if next_steps is not None or hidden_quotes is not None or kept_visits is not None:
+                    update_deck(
+                        draft,
+                        next_steps=next_steps,
+                        hidden_quotes=hidden_quotes,
+                        kept_visits=kept_visits,
+                    )
+                    draft.refresh_from_db()
+            except DeckError as exc:
+                return _no_draft(str(exc))
             try:
                 draft = update_draft(
                     draft,

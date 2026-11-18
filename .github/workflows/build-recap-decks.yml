@@ -1,0 +1,55 @@
+name: Build recap decks
+
+# Fires `/internal/cron/build-recap-decks` on Cloud Run. Finishes client
+# recap decks left "building": big programs get their numbers, photos and
+# no-product visits inside the staff member's request, and their summary,
+# takeaways and next steps here, outside Cloud Run's request timeout. See
+# recap_decks/builder.py.
+#
+# A run with nothing building does nothing. Sends nothing; shares nothing
+# (a finished deck is a staff draft until staff mark it ready).
+#
+# Secret-gated via `X-Cron-Secret` (shared INTERNAL_CRON_SECRET).
+#
+# Schedule: every 10 minutes at :07 past (offset from the hourly crons).
+# NOTE: schedules only fire from the default branch (main).
+
+on:
+  schedule:
+    - cron: "7-59/10 * * * *"
+  workflow_dispatch:
+    inputs:
+      max_decks:
+        description: "Decks to finish this run (cap 20)"
+        required: false
+        default: "5"
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  build-recap-decks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Fire build-recap-decks cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/build-recap-decks
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          MAX_DECKS: ${{ github.event.inputs.max_decks || '5' }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS -o /tmp/resp.json -w '%{http_code}' \
+            --max-time 600 \
+            -X POST "$CRON_URL" \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            --data-urlencode "max_decks=$MAX_DECKS")
+          echo "HTTP $STATUS"
+          cat /tmp/resp.json
+          echo
+          [ "$STATUS" != "200" ] && exit 1 || exit 0
