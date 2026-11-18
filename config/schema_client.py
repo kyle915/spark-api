@@ -11,6 +11,7 @@ from recaps.feedback_themes import FeedbackThemeMutations, FeedbackThemeQueries
 from recaps.comment_insights import CommentInsightQueries
 from consumer_mentions.trends import MentionTrendQueries
 from recaps.weekly_summary import WeeklySummaryMutations, WeeklySummaryQueries
+from brand_insights.schema import BrandInsightMutations, BrandInsightQueries
 from recaps.flag_explanation import RecapFlagExplanationQueries
 from recaps.metric_mapping_schema import (
     RecapMetricMappingMutations,
@@ -83,6 +84,7 @@ QueryClients = merge_types(
         CommentInsightQueries,
         MentionTrendQueries,
         WeeklySummaryQueries,
+        BrandInsightQueries,
         RecapFlagExplanationQueries,
         RecapMetricMappingQueries,
         AmbassadorQueryClient,
@@ -111,6 +113,7 @@ MutationClients = merge_types(
         FeedbackThemeMutations,
         ShelfCheckMutations,
         WeeklySummaryMutations,
+        BrandInsightMutations,
         RecapMetricMappingMutations,
         TenantGoalsMutations,
         ScheduledReportMutations,
