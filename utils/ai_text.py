@@ -2,8 +2,9 @@
 
 A single helper — :func:`generate_summary` — that POSTs a system+user
 prompt to the OpenAI Chat Completions REST endpoint and returns the
-assistant's text. It is deliberately tiny: no streaming, no function
-calling, no SDK. The only consumer today is the on-demand campaign-report
+assistant's text. It is deliberately tiny: no streaming, no SDK.
+:func:`chat_with_tools` adds function tools with strict schemas, a cap on
+tool calls per turn and a deadline (brand chat, ``brand_chat.service``). The only consumer today is the on-demand campaign-report
 executive summary (``recaps.report_types.campaignReportAiSummary``), but
 the signature is generic so other "write me a paragraph" features can
 reuse it.
@@ -442,6 +443,226 @@ def generate_vision_json(
         return _with_model_fallback(_ask, small=small)
     except Exception:
         return None
+
+
+# ─── Tool calling (function tools) ───────────────────────────────────
+
+
+class ToolRun:
+    """One tool call the model asked for and what came back."""
+
+    __slots__ = ("name", "args", "output", "ok")
+
+    def __init__(self, name: str, args: dict, output: str, ok: bool):
+        self.name = name
+        self.args = args
+        self.output = output
+        self.ok = ok
+
+
+class ChatResult:
+    """The model's last message plus everything that led to it.
+
+    ``text`` is the final assistant content (empty when the model gave
+    none). ``stopped`` says why the loop ended: ``answered``,
+    ``tool_cap`` (the per-turn tool-call cap was hit and the model was made
+    to answer without more tools) or ``deadline``.
+    """
+
+    def __init__(self):
+        self.text = ""
+        self.runs: list[ToolRun] = []
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
+        self.model = ""
+        self.stopped = "answered"
+        self.requests = 0
+        # The whole conversation as sent, tool results included, so a
+        # caller can ask a follow-up (e.g. "use only the figures given").
+        self.messages: list[dict] = []
+
+
+def strict_function_tool(name: str, description: str, parameters: dict) -> dict:
+    """A Chat Completions function tool with a strict schema.
+
+    Strict mode needs every property listed in ``required`` and
+    ``additionalProperties: false``; an optional argument is a nullable
+    union instead. Bounds (``minimum`` …) are dropped: the tool checks its
+    own arguments and says what was wrong.
+    """
+    props: dict = {}
+    for key, spec in (parameters.get("properties") or {}).items():
+        kind = spec.get("type", "string")
+        out = {"type": [kind, "null"] if isinstance(kind, str) else [*kind, "null"]}
+        if spec.get("description"):
+            out["description"] = spec["description"]
+        if spec.get("enum"):
+            out["enum"] = [*spec["enum"], None]
+        props[key] = out
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": description,
+            "strict": True,
+            "parameters": {
+                "type": "object",
+                "properties": props,
+                "required": list(props),
+                "additionalProperties": False,
+            },
+        },
+    }
+
+
+def chat_with_tools(
+    messages: list[dict],
+    tools: list[dict],
+    run_tool: Callable[[str, dict], tuple[str, bool]],
+    *,
+    max_tool_calls: int = 6,
+    max_rounds: int = 4,
+    max_tokens: int = 1500,
+    timeout: float | None = None,
+    deadline_seconds: float = 60.0,
+    response_schema: dict | None = None,
+    allow_tools: bool = True,
+) -> ChatResult:
+    """Run a Chat Completions conversation with function tools.
+
+    The model may call tools for up to ``max_rounds`` rounds and
+    ``max_tool_calls`` calls in all. ``run_tool(name, args)`` runs one and
+    returns ``(text for the model, ok)``; it must never raise. Calls past
+    the cap are answered with a "limit reached" note and the model is then
+    asked once more with ``tool_choice: "none"`` so it answers from what it
+    has. Past ``deadline_seconds`` the same last call is made.
+
+    ``response_schema`` (strict JSON schema) shapes the final message.
+    ``allow_tools=False`` sends the tools but forbids calling them (a
+    follow-up that must answer from results already in ``messages``).
+
+    Raises :class:`AiUnavailable` when the service is unconfigured or the
+    first request fails on both the configured and the fallback model.
+    Later failures end the loop with whatever text there is (possibly
+    none); the caller decides what to show.
+    """
+    import time as _time
+
+    headers = _auth_headers()
+    result = ChatResult()
+    started = _time.monotonic()
+    convo = list(messages)
+    result.messages = convo
+    per_request = timeout or DEFAULT_TIMEOUT_SECONDS
+
+    def _payload(model: str, *, allow_tools: bool) -> dict:
+        payload = {
+            "model": model,
+            "messages": convo,
+            "max_completion_tokens": _completion_cap(max_tokens),
+            "tools": tools,
+            "tool_choice": "auto" if allow_tools else "none",
+        }
+        if allow_tools:
+            payload["parallel_tool_calls"] = True
+        if response_schema is not None:
+            payload["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {"name": "chat_answer", "strict": True, "schema": response_schema},
+            }
+        return payload
+
+    def _send(model: str, *, allow_tools: bool) -> dict:
+        body = _post_json(
+            OPENAI_CHAT_COMPLETIONS_URL,
+            _payload(model, allow_tools=allow_tools),
+            headers,
+            timeout=per_request,
+        )
+        if not isinstance(body, dict):
+            raise AiUnavailable("AI service returned an unexpected response.")
+        err = body.get("error")
+        if err:
+            message = err.get("message") if isinstance(err, dict) else str(err)
+            raise AiUnavailable(f"AI service error: {message or 'unknown error'}")
+        choices = body.get("choices")
+        if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+            raise AiUnavailable("AI service returned no completion.")
+        result.requests += 1
+        usage = body.get("usage") or {}
+        result.prompt_tokens += int(usage.get("prompt_tokens") or 0)
+        result.completion_tokens += int(usage.get("completion_tokens") or 0)
+        return choices[0].get("message") or {}
+
+    # First request picks the model: the configured one, else the fallback.
+    model = _configured_model()
+    try:
+        message = _send(model, allow_tools=allow_tools)
+    except AiUnavailable:
+        if model == _FALLBACK_MODEL:
+            raise
+        model = _FALLBACK_MODEL
+        message = _send(model, allow_tools=allow_tools)
+    result.model = model
+
+    used = 0
+    rounds = 0
+    while True:
+        calls = message.get("tool_calls") or []
+        if not calls:
+            content = message.get("content")
+            result.text = content.strip() if isinstance(content, str) else ""
+            return result
+        rounds += 1
+        convo.append(
+            {
+                "role": "assistant",
+                "content": message.get("content") or None,
+                "tool_calls": calls,
+            }
+        )
+        capped = False
+        for call in calls:
+            fn = (call or {}).get("function") or {}
+            name = str(fn.get("name") or "")
+            call_id = (call or {}).get("id") or ""
+            if used >= max_tool_calls:
+                capped = True
+                convo.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": call_id,
+                        "content": json.dumps(
+                            {"error": "Tool call limit for this question reached. Answer from the results you have."}
+                        ),
+                    }
+                )
+                continue
+            used += 1
+            try:
+                args = json.loads(fn.get("arguments") or "{}")
+                if not isinstance(args, dict):
+                    args = {}
+            except ValueError:
+                args = {}
+            output, ok = run_tool(name, args)
+            result.runs.append(ToolRun(name, args, output, ok))
+            convo.append({"role": "tool", "tool_call_id": call_id, "content": output})
+
+        out_of_time = (_time.monotonic() - started) >= deadline_seconds
+        last_round = capped or used >= max_tool_calls or rounds >= max_rounds or out_of_time
+        if last_round:
+            result.stopped = "deadline" if out_of_time else "tool_cap"
+        try:
+            message = _send(model, allow_tools=not last_round)
+        except AiUnavailable:
+            result.text = ""
+            result.stopped = "error"
+            return result
+        if last_round:
+            content = message.get("content")
+            result.text = content.strip() if isinstance(content, str) else ""
+            return result
 
 
 def _extract_message_text(body: dict) -> str:

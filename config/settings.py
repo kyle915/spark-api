@@ -99,6 +99,8 @@ INSTALLED_APPS = [
     # resolves; the routes are mounted under `api/tasks/` in config/urls.py.
     "tasks",
     "brand_insights",
+    # Brand chat on the brand dashboard (read-only; see brand_chat/).
+    "brand_chat",
     # Official Spark MCP server (AI app connections): OAuth 2.1 + /mcp.
     "spark_mcp",
     # What the BA product-questions box can answer from beyond staff notes:
