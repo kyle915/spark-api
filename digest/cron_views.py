@@ -5421,9 +5421,16 @@ class NormalizeRecapLocationsView(View):
     Fills blanks only, plus a retailer that is the same chain spelled another
     way; a retailer set on the recap by hand is never replaced. Idempotent.
 
-    Params (query or POST): tenant (id or slug, REQUIRED), since (YYYY-MM-DD,
-    event date), limit, use_ai (default true), max_ai_calls, show (per-recap
-    rows returned, default 300).
+    Params (query or POST): tenant (id or slug, REQUIRED), since / until
+    (YYYY-MM-DD, event date, inclusive), after_id (only recaps with a larger
+    id), limit, use_ai (default true), max_ai_calls (per call), time_budget
+    (seconds, default 200, max 240), show (per-recap rows returned, default
+    300).
+
+    BOUNDED: no new batch starts after `time_budget` seconds, so a call
+    returns before Cloud Run's 300 s limit however big the tenant is; what
+    was written before that is kept. `partial: true` means recaps are left:
+    call again with `after_id=<next_after_id>` until `partial` is false.
     """
 
     def _run(self, request: HttpRequest) -> HttpResponse:
@@ -5447,25 +5454,46 @@ class NormalizeRecapLocationsView(View):
 
         from datetime import date as _date
 
-        from recaps.recap_location import DEFAULT_MAX_AI_CALLS, resolve_tenant, run
+        from recaps.recap_location import (
+            CRON_TIME_BUDGET_S,
+            DEFAULT_MAX_AI_CALLS,
+            resolve_tenant,
+            run,
+        )
 
         apply = _bool("apply") or _bool("execute")
         try:
             tenant = resolve_tenant(_str("tenant") or _str("tenant_slug") or _str("tenant_id"))
         except ValueError as exc:
             return JsonResponse({"ok": False, "error": str(exc)}, status=400)
-        since = None
-        if _str("since"):
+        dates = {}
+        for name in ("since", "until"):
+            dates[name] = None
+            if _str(name):
+                try:
+                    dates[name] = _date.fromisoformat(_str(name))
+                except ValueError:
+                    return JsonResponse(
+                        {"ok": False, "error": f"bad {name} (expected YYYY-MM-DD)"}, status=400
+                    )
+        if _str("after_id") and _int("after_id") is None:
+            return JsonResponse({"ok": False, "error": "bad after_id (expected an integer)"}, status=400)
+        budget = CRON_TIME_BUDGET_S
+        if _str("time_budget"):
             try:
-                since = _date.fromisoformat(_str("since"))
+                budget = float(_str("time_budget"))
             except ValueError:
                 return JsonResponse(
-                    {"ok": False, "error": "bad since (expected YYYY-MM-DD)"}, status=400
+                    {"ok": False, "error": "bad time_budget (expected seconds)"}, status=400
                 )
+        budget = min(max(budget, 1.0), 240.0)
         try:
             report = run(
                 tenant,
-                since=since,
+                since=dates["since"],
+                until=dates["until"],
+                after_id=_int("after_id"),
+                time_budget_s=budget,
                 limit=_int("limit"),
                 apply=apply,
                 use_ai=_bool("use_ai", default=True),
