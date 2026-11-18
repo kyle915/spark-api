@@ -95,6 +95,7 @@ INSTALLED_APPS = [
     "timeclock",
     "recap_decks",
     "consumer_mentions",
+    "hours_check",
     # Anti-scraping guardrails: shared Postgres rate limiter, audit log,
     # usage rollups (app label "abuse"). See utils/abuse/__init__.py.
     "utils.abuse",
@@ -628,6 +629,18 @@ OPENAI_MODEL = env("OPENAI_MODEL", default="gpt-6.1-terra")
 # checks) run many times and need no long reasoning, so they use a smaller
 # model. Set to "" to run everything on OPENAI_MODEL.
 OPENAI_MODEL_SMALL = env("OPENAI_MODEL_SMALL", default="gpt-5-mini")
+
+# Hours check before payroll (hours_check/thresholds.py has the defaults and
+# what each key means). JSON in the env, e.g. {"far_miles": 0.5}; unknown
+# keys and bad values are ignored.
+try:
+    import json as _json
+
+    HOURS_CHECK_THRESHOLDS = _json.loads(
+        env("HOURS_CHECK_THRESHOLDS", default="{}") or "{}"
+    )
+except ValueError:
+    HOURS_CHECK_THRESHOLDS = {}
 
 _job_extension_rate_default = env("JOB_EXTENSION_RATE_DEFAULT", default=8)
 if _job_extension_rate_default in (None, ""):
