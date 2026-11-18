@@ -18,6 +18,7 @@ urlpatterns = [
     path("oauth/register", oauth.register_view, name="spark_mcp_register"),
     path("oauth/authorize", oauth.authorize_view, name="spark_mcp_authorize"),
     path("oauth/authorize/link", oauth.signin_link_view, name="spark_mcp_link"),
+    path("oauth/authorize/google", oauth.google_return_view, name="spark_mcp_google_return"),
     path("oauth/token", oauth.token_view, name="spark_mcp_token"),
     path("oauth/revoke", oauth.revoke_view, name="spark_mcp_revoke"),
 ]

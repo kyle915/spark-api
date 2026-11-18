@@ -1,0 +1,8 @@
+<div class="ident">
+  {% if client_verified %}
+    <p>Verified by <b>{{ client_host }}</b>.</p>
+  {% else %}
+    {% if claimed_name %}<p>It calls itself “{{ claimed_name }}”. Spark can't confirm that.</p>{% endif %}
+    <p>It will return to <code class="url">{{ redirect_uri }}</code>.</p>
+  {% endif %}
+</div>
