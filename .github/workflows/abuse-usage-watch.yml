@@ -1,0 +1,69 @@
+name: Abuse usage watch
+
+# Daily suspicious-usage detector (anti-scraping Phase 2). Fires
+# POST /internal/cron/abuse-usage-watch on Cloud Run, which compares each
+# non-admin user's last 24h of GraphQL usage with their own 14-day baseline
+# (volume spikes, page walking, export bursts, non-browser user agents, many
+# IPs, off-hours bulk, many distinct ambassadors pulled) and emails a short
+# report to the Ignite team ONLY when something is flagged. Never emails
+# brands (recipients are filtered to @igniteproductions.co server-side).
+#
+# The endpoint ships in the spark-api abuse-guardrails PR (develop). Until
+# that deploy is live this workflow gets a 404 — harmless, it just fails.
+#
+# Secret: INTERNAL_CRON_SECRET (same one every other cron uses).
+# Schedule: 14:20 UTC (06:20 PT / 07:20 PDT) — off the hour to dodge GHA
+# cron jitter. Manual runs default to a dry run with no email.
+
+on:
+  schedule:
+    - cron: "20 14 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Compute the report only (no email, no counter pruning)"
+        required: false
+        default: "true"
+        type: choice
+        options: ["true", "false"]
+      notify:
+        description: "Email the Ignite team if anything is flagged (ignored on dry runs)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+      window_hours:
+        description: "Look-back window in hours"
+        required: false
+        default: "24"
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire abuse usage watch
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/abuse-usage-watch
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          # Scheduled runs: real run + notify. Manual runs: inputs (dry by default).
+          DRY_RUN: ${{ github.event_name == 'schedule' && 'false' || github.event.inputs.dry_run }}
+          NOTIFY: ${{ github.event_name == 'schedule' && 'true' || github.event.inputs.notify }}
+          WINDOW: ${{ github.event.inputs.window_hours || '24' }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          [[ "$WINDOW" =~ ^[0-9]+$ ]] || { echo "::error::window_hours must be a number"; exit 1; }
+          STATUS=$(curl -sS -o /tmp/resp.json -w '%{http_code}' \
+            -X POST "$CRON_URL?dry_run=$DRY_RUN&notify=$NOTIFY&window_hours=$WINDOW" \
+            -H "X-Cron-Secret: $CRON_SECRET")
+          echo "HTTP $STATUS"
+          # Print the summary only (findings include user emails — keep them
+          # out of the public Actions log).
+          python3 -c "import json;d=json.load(open('/tmp/resp.json'));d.pop('findings',None);print(json.dumps(d,indent=2))" || cat /tmp/resp.json | head -c 400
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS"
+            exit 1
+          fi
