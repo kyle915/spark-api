@@ -9,6 +9,7 @@ from recaps.schema import RecapQueryClient, RecapMutationsClient
 from recaps.recap_ai import RecapAiMutations, RecapAiQueries
 from recaps.feedback_themes import FeedbackThemeMutations, FeedbackThemeQueries
 from recaps.comment_insights import CommentInsightQueries
+from consumer_mentions.trends import MentionTrendQueries
 from recaps.weekly_summary import WeeklySummaryMutations, WeeklySummaryQueries
 from recaps.flag_explanation import RecapFlagExplanationQueries
 from recaps.metric_mapping_schema import (
@@ -75,6 +76,7 @@ QueryClients = merge_types(
         RecapAiQueries,
         FeedbackThemeQueries,
         CommentInsightQueries,
+        MentionTrendQueries,
         WeeklySummaryQueries,
         RecapFlagExplanationQueries,
         RecapMetricMappingQueries,
