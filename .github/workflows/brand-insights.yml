@@ -1,0 +1,67 @@
+name: Brand store insights
+
+# Fires `/internal/cron/generate-brand-insights` on Cloud Run every morning.
+# For each brand with approved recaps in the last 90 days it works out store
+# recommendations ("where to go next") and alerts about the last finished
+# week, and stores new and changed ones as DRAFTS. A brand sees nothing until
+# Ignite staff publish it in Spark (Client summaries > Store insights).
+# Findings staff already published or hid are left alone.
+#
+# This job sends NOTHING: no email, no Slack, no texts.
+#
+# NOTE: GitHub only fires `schedule:` from the DEFAULT branch (main), but the
+# cron ENDPOINT deploys from develop. So this workflow must live on BOTH
+# branches, same as weekly-client-summaries.yml.
+#
+# Schedule: 14:50 UTC daily = 06:50 PST / 07:50 PDT. Off the hour to avoid
+# GHA's on-the-hour cron jitter, and after the Monday weekly summaries.
+
+on:
+  schedule:
+    - cron: "50 14 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry-run lists what each brand would get and writes nothing (manual runs default to dry run)"
+        required: true
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+      tenant_id:
+        description: "Optional single tenant id"
+        required: false
+        default: ""
+        type: string
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Work out brand store insights
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/generate-brand-insights
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          # The scheduled run has no inputs and writes drafts.
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+          TENANT_ID: ${{ github.event.inputs.tenant_id || '' }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set."
+            exit 1
+          fi
+          QUERY="dry_run=${DRY_RUN}"
+          if [ -n "$TENANT_ID" ]; then
+            QUERY="${QUERY}&tenant_id=${TENANT_ID}"
+          fi
+          STATUS=$(curl -sS --max-time 900 -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "${CRON_URL}?${QUERY}" \
+            -H "X-Cron-Secret: $CRON_SECRET")
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS"
+            exit 1
+          fi
