@@ -96,6 +96,8 @@ INSTALLED_APPS = [
     # Cloud Tasks handler endpoints (no models). Registered so its app label
     # resolves; the routes are mounted under `api/tasks/` in config/urls.py.
     "tasks",
+    # Official Spark MCP server (AI app connections): OAuth 2.1 + /mcp.
+    "spark_mcp",
 ]
 
 AUTH_USER_MODEL = "tenants.User"
@@ -714,3 +716,26 @@ LOGGING["handlers"]["error_monitor"] = {
 LOGGING["root"]["handlers"].append("error_monitor")
 for _logger_cfg in LOGGING["loggers"].values():
     _logger_cfg.setdefault("handlers", []).append("error_monitor")
+
+
+# ─── Spark MCP server (AI app connections; see spark_mcp/) ───────────
+# Public origin of this API as brands/AI apps see it (OAuth issuer; the MCP
+# URL is <this>/mcp). Falls back to PUBLIC_API_BASE_URL.
+MCP_PUBLIC_BASE_URL = env("MCP_PUBLIC_BASE_URL", default="")
+# Kill switch: False → /mcp and /oauth/* answer 503 and tokens stop working.
+MCP_ENABLED = env.bool("MCP_ENABLED", default=True)
+# Optional rollout allowlist of tenant ids ("17,18"); empty → every brand.
+MCP_ALLOWED_TENANT_IDS = env.list("MCP_ALLOWED_TENANT_IDS", default=[])
+MCP_DAILY_CALLS_PER_TENANT = env.int("MCP_DAILY_CALLS_PER_TENANT", default=500)
+MCP_CALLS_PER_MINUTE_PER_CONNECTION = env.int(
+    "MCP_CALLS_PER_MINUTE_PER_CONNECTION", default=30
+)
+MCP_ACCESS_TOKEN_TTL_SECONDS = env.int("MCP_ACCESS_TOKEN_TTL_SECONDS", default=3600)
+MCP_REFRESH_TOKEN_TTL_DAYS = env.int("MCP_REFRESH_TOKEN_TTL_DAYS", default=30)
+# Unset → the built-in lists in spark_mcp/conf.py (Claude + ChatGPT hosts).
+if env("MCP_ALLOWED_REDIRECT_HOSTS", default=None) is not None:
+    MCP_ALLOWED_REDIRECT_HOSTS = env.list("MCP_ALLOWED_REDIRECT_HOSTS")
+if env("MCP_ALLOWED_CIMD_HOSTS", default=None) is not None:
+    MCP_ALLOWED_CIMD_HOSTS = env.list("MCP_ALLOWED_CIMD_HOSTS")
+if env("MCP_ALLOWED_ORIGINS", default=None) is not None:
+    MCP_ALLOWED_ORIGINS = env.list("MCP_ALLOWED_ORIGINS")
