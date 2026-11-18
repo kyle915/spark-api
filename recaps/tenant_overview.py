@@ -43,8 +43,8 @@ import re
 from dataclasses import dataclass, fields as dataclass_fields
 from datetime import date, timedelta
 
-from django.db.models import Count, Exists, F, Max, Min, OuterRef, Q, Sum, TextField
-from django.db.models.functions import Coalesce, TruncMonth
+from django.db.models import Count, Exists, F, Max, Min, OuterRef, Q, Sum, TextField, Value
+from django.db.models.functions import Coalesce, NullIf, TruncMonth
 from django.utils import timezone
 
 from events.models import Event, Request
@@ -1218,6 +1218,25 @@ def tenant_monthly_trend(
 # path is a single join and yields the code the frontend map keys on.
 _LEGACY_STATE_PATH = "event__state__code"
 _CUSTOM_STATE_PATH = "event__state__code"
+# A custom recap's state: its event's, else the recap's own ``state`` FK
+# (filled by hand or by the recap location normalizer,
+# :mod:`recaps.recap_location`). Annotated by :func:`_with_custom_state`.
+_CUSTOM_STATE_ANNOTATION = "_custom_state"
+
+
+def _with_custom_state(queryset, prefix: str = ""):
+    """``queryset`` annotated with :data:`_CUSTOM_STATE_ANNOTATION`: the
+    event's state code, falling back to the custom recap's own state code.
+    ``prefix`` is the path from the queryset's model to the CustomRecap
+    ("" for CustomRecap itself, "custom_recap__" for its child rows)."""
+    return queryset.annotate(
+        **{
+            _CUSTOM_STATE_ANNOTATION: Coalesce(
+                NullIf(F(f"{prefix}{_CUSTOM_STATE_PATH}"), Value("")),
+                NullIf(F(f"{prefix}state__code"), Value("")),
+            )
+        }
+    )
 
 # The six summable per-state KPIs. ``event_count`` / ``recap_count`` are
 # COUNTs handled separately; these are SUMs that mirror the matching
@@ -1444,7 +1463,10 @@ def _custom_market_kpis(
     # Typed engagement column groups cleanly in SQL — same address fallback as
     # the samples/consumers below so a no-State-FK event isn't dropped.
     for code, value in _grouped_sum_state_or_address(
-        custom_recaps, _CUSTOM_STATE_PATH, "event__address", "total_engagements"
+        _with_custom_state(custom_recaps),
+        _CUSTOM_STATE_ANNOTATION,
+        "event__address",
+        "total_engagements",
     ).items():
         _bucket(code)["total_engagements"] = (
             _bucket(code).get("total_engagements", 0) + value
@@ -1454,8 +1476,8 @@ def _custom_market_kpis(
     # fallback so no-State-FK events (Feel Free's FL/TX program) still land on
     # the map instead of being dropped under a null code.
     structured_by_state = _grouped_sum_state_or_address(
-        structured_samples_qs,
-        f"custom_recap__{_CUSTOM_STATE_PATH}",
+        _with_custom_state(structured_samples_qs, "custom_recap__"),
+        _CUSTOM_STATE_ANNOTATION,
         "custom_recap__event__address",
         "quantity",
     )
@@ -1480,6 +1502,7 @@ def _custom_market_kpis(
         .values_list(
             "custom_recap_id",
             f"custom_recap__{_CUSTOM_STATE_PATH}",
+            "custom_recap__state__code",
             "custom_recap__event__address",
             "custom_field_id",
             "custom_field__name",
@@ -1489,9 +1512,10 @@ def _custom_market_kpis(
     )
 
     per_recap: dict[int, dict] = {}
-    for recap_id, state_code, address, field_id, name, value in rows.iterator():
+    for recap_id, state_code, recap_state, address, field_id, name, value in rows.iterator():
         entry = per_recap.setdefault(
-            recap_id, {"state": state_code, "address": address, "pairs": []}
+            recap_id,
+            {"state": state_code or recap_state, "address": address, "pairs": []},
         )
         entry["pairs"].append(
             (metric_mapping.tag_name(name, field_id, confirmed), value)
@@ -1609,13 +1633,15 @@ def tenant_market_performance(
         _LEGACY_STATE_PATH,
     )
     custom_recap_counts = _grouped_count(
-        _approved_only(
-            _filter_event_window(
-                CustomRecap.objects.filter(tenant_id=tenant_id), "event__", window
-            ),
-            "",
+        _with_custom_state(
+            _approved_only(
+                _filter_event_window(
+                    CustomRecap.objects.filter(tenant_id=tenant_id), "event__", window
+                ),
+                "",
+            )
         ),
-        _CUSTOM_STATE_PATH,
+        _CUSTOM_STATE_ANNOTATION,
     )
 
     legacy_kpis = _legacy_market_kpis(tenant_id, window=window)

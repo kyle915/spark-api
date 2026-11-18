@@ -188,9 +188,15 @@ def _city(recap) -> str:
     consistency. This FK is unreliable for some tenants (nulls, and stores
     mis-geocoded to the wrong metro); the Event NAME often carries the real
     city, which is why both columns ship side by side. Judge, don't assume.
+
+    The recap's own ``location`` (set by hand, or filled from the recap's
+    location text by :mod:`recaps.recap_location`) wins over the event's, the
+    same order the recap PDF uses for its City.
     """
-    event = getattr(recap, "event", None)
-    location = getattr(event, "location", None) if event else None
+    location = getattr(recap, "location", None)
+    if location is None:
+        event = getattr(recap, "event", None)
+        location = getattr(event, "location", None) if event else None
     return str(getattr(location, "name", "") or "") if location else ""
 
 
@@ -403,6 +409,7 @@ def _tenant_recaps(tenant):
             "event__retailer",
             "ambassador",
             "ambassador__user",
+            "location",
             "state",
             "retailer",
         )

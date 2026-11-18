@@ -1,0 +1,121 @@
+name: Normalize recap locations (manual)
+
+# Manually fires `/internal/cron/normalize-recap-locations` on Cloud Run to run
+# the recap location normalizer (recaps/recap_location.py, command
+# `normalize_recap_locations`). For each recap of one tenant it proposes a
+# canonical retailer, store number, city and state from what the recap and its
+# event already carry (addresses, typed store, the recap's store / city /
+# state answers, store numbers like "HEB #614"), then asks the AI model about
+# what is still blank, sending location text only (no ambassador names,
+# phones or emails). Two sources that disagree leave the value blank.
+#
+# SAFE — DRY-RUN IS THE DEFAULT. dry_run=true sends apply=false: the job
+# prints counts and every recap's before -> after and writes nothing. Set
+# dry_run=false to write. Only blanks are filled, plus a retailer that is the
+# same chain spelled another way ("heb" -> "H-E-B"); a retailer set on the
+# recap by hand is never replaced. Idempotent: re-running proposes nothing new.
+# Writes go on the recap only (CustomRecap.retailer / store_number / state /
+# location); the shared Event is untouched.
+#
+# Run from the Actions tab AFTER the endpoint is deployed (ships from
+# develop). Secret-gated via X-Cron-Secret (shared INTERNAL_CRON_SECRET) — a
+# HEADER, never the URL. Manual one-off — no `schedule:`.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (no DB writes). Leave true to preview; set false to apply."
+        required: true
+        default: true
+        type: boolean
+      tenant:
+        description: "Tenant id or slug (e.g. 17 or girl-beer)."
+        required: true
+        type: string
+      since:
+        description: "Only recaps whose EVENT date is on/after YYYY-MM-DD (blank = all)."
+        required: false
+        default: ""
+        type: string
+      limit:
+        description: "At most this many recaps, oldest first (blank = all)."
+        required: false
+        default: ""
+        type: string
+      use_ai:
+        description: "Ask the AI model about what deterministic rules leave blank."
+        required: true
+        default: true
+        type: boolean
+
+jobs:
+  fire-normalize-recap-locations:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire normalize-recap-locations cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/normalize-recap-locations
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+          TENANT: ${{ github.event.inputs.tenant }}
+          SINCE: ${{ github.event.inputs.since }}
+          LIMIT: ${{ github.event.inputs.limit }}
+          USE_AI: ${{ github.event.inputs.use_ai }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+
+          # dry_run=true -> apply=false (no writes); dry_run=false -> apply=true.
+          if [ "$DRY_RUN" = "false" ]; then APPLY=true; else APPLY=false; fi
+
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            --max-time 900 \
+            -X POST "$CRON_URL" \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            --data-urlencode "apply=$APPLY" \
+            --data-urlencode "tenant=$TENANT" \
+            --data-urlencode "since=$SINCE" \
+            --data-urlencode "limit=$LIMIT" \
+            --data-urlencode "use_ai=$USE_AI")
+          echo "HTTP $STATUS"
+          python3 - <<'PY'
+          import json
+          try:
+              r = json.load(open("/tmp/cron-response.json"))
+          except Exception:
+              print(open("/tmp/cron-response.json").read())
+              raise SystemExit(0)
+          if not r.get("ok"):
+              print(json.dumps(r, indent=2))
+              raise SystemExit(0)
+          print(f"tenant={r['tenant']} applied={r['applied']} scanned={r['scanned']} "
+                f"with_changes={r['recaps_with_changes']} written={r['recaps_written']}")
+          print("fills:", r["fills"])
+          print("blank before:", r["blank_before"])
+          print("blank after: ", r["blank_after"])
+          print("by source:", r["by_source"])
+          print("ai:", r["ai"])
+          if r.get("created_retailers"):
+              print("created retailers:", r["created_retailers"])
+          if r.get("created_locations"):
+              print("created cities:", r["created_locations"])
+          for row in r["rows"]:
+              diff = "; ".join(
+                  f"{f}: {row['before'].get(f) or '-'} -> {v} [{row['sources'].get(f, '')}/{row['confidence'].get(f, '')}]"
+                  for f, v in row["changes"].items()
+              )
+              tag = "SET" if row.get("written") else ("WOULD-SET" if row["changes"] else "NOTE")
+              print(f"[{tag}] recap {row['recap_id']} ({row['event_date'] or 'no date'}) {diff}")
+              for note in row["notes"]:
+                  print(f"    note: {note}")
+          if r.get("rows_total", 0) > len(r["rows"]):
+              print(f"... {r['rows_total'] - len(r['rows'])} more rows")
+          PY
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS — see body above."
+            exit 1
+          fi
