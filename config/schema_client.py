@@ -60,6 +60,7 @@ from tenants.notification_pref_schema import (
 from spark_mcp.schema import AiConnectionMutations, AiConnectionQueries
 from utils.utils import BlockIntrospectionForAnonymous
 from utils.graphql.gcs_schema import GCSQuery
+from utils.abuse.graphql_extension import guardrail_extensions
 
 # Clients Schemas
 QueryClients = merge_types(
@@ -148,5 +149,8 @@ schema_clients = JwtSchema(
     extensions=[
         DjangoOptimizerExtension,
         BlockIntrospectionForAnonymous,
+        # Anti-scraping guardrails: token/depth/alias limits, per-user rate
+        # limits, brand page-size cap, export/bulk caps + audit, usage log.
+        *guardrail_extensions(),
     ],
 )

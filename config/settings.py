@@ -95,6 +95,9 @@ INSTALLED_APPS = [
     "timeclock",
     "recap_decks",
     "consumer_mentions",
+    # Anti-scraping guardrails: shared Postgres rate limiter, audit log,
+    # usage rollups (app label "abuse"). See utils/abuse/__init__.py.
+    "utils.abuse",
     # Cloud Tasks handler endpoints (no models). Registered so its app label
     # resolves; the routes are mounted under `api/tasks/` in config/urls.py.
     "tasks",
@@ -661,6 +664,45 @@ BACKEND_ERROR_ALERTS_ENABLED = env.bool(
 BACKEND_ERROR_ALERT_EMAILS = env.list(
     "BACKEND_ERROR_ALERT_EMAILS", default=["kyle@igniteproductions.co"]
 )
+
+# ---------------------------------------------------------------------------
+# Abuse guardrails (utils/abuse) — brand users must not bulk-export data.
+# Every limit is env-overridable; see utils/abuse/policy.py for the buckets.
+# ---------------------------------------------------------------------------
+ABUSE_GUARDRAILS_ENABLED = env.bool("ABUSE_GUARDRAILS_ENABLED", default=True)
+# X-Forwarded-For entries appended by trusted proxies. Cloud Run's Google
+# front end appends the real client IP as the LAST entry → 1. Use 2 if an
+# external HTTPS load balancer is ever put in front of the service.
+ABUSE_TRUSTED_PROXY_COUNT = env.int("ABUSE_TRUSTED_PROXY_COUNT", default=1)
+ABUSE_GQL_USER_PER_MINUTE = env.int("ABUSE_GQL_USER_PER_MINUTE", default=120)
+ABUSE_GQL_USER_PER_HOUR = env.int("ABUSE_GQL_USER_PER_HOUR", default=3000)
+ABUSE_GQL_ADMIN_PER_MINUTE = env.int("ABUSE_GQL_ADMIN_PER_MINUTE", default=600)
+ABUSE_GQL_ADMIN_PER_HOUR = env.int("ABUSE_GQL_ADMIN_PER_HOUR", default=15000)
+ABUSE_GQL_ANON_IP_PER_MINUTE = env.int("ABUSE_GQL_ANON_IP_PER_MINUTE", default=120)
+ABUSE_GQL_ANON_IP_PER_HOUR = env.int("ABUSE_GQL_ANON_IP_PER_HOUR", default=2000)
+ABUSE_AMBASSADOR_PER_MINUTE = env.int("ABUSE_AMBASSADOR_PER_MINUTE", default=30)
+ABUSE_AMBASSADOR_PER_HOUR = env.int("ABUSE_AMBASSADOR_PER_HOUR", default=300)
+ABUSE_AMBASSADOR_PER_DAY = env.int("ABUSE_AMBASSADOR_PER_DAY", default=1000)
+ABUSE_AMBASSADOR_DISTINCT_PER_DAY = env.int("ABUSE_AMBASSADOR_DISTINCT_PER_DAY", default=500)
+ABUSE_EXPORTS_PER_HOUR = env.int("ABUSE_EXPORTS_PER_HOUR", default=20)
+ABUSE_EXPORTS_PER_DAY = env.int("ABUSE_EXPORTS_PER_DAY", default=100)
+ABUSE_TENANT_EXPORTS_PER_DAY = env.int("ABUSE_TENANT_EXPORTS_PER_DAY", default=300)
+ABUSE_ADMIN_EXPORTS_PER_HOUR = env.int("ABUSE_ADMIN_EXPORTS_PER_HOUR", default=200)
+ABUSE_BULK_PER_HOUR = env.int("ABUSE_BULK_PER_HOUR", default=60)
+ABUSE_ADMIN_BULK_PER_HOUR = env.int("ABUSE_ADMIN_BULK_PER_HOUR", default=600)
+ABUSE_BULK_MAX_ITEMS = env.int("ABUSE_BULK_MAX_ITEMS", default=200)
+ABUSE_ADMIN_BULK_MAX_ITEMS = env.int("ABUSE_ADMIN_BULK_MAX_ITEMS", default=2000)
+ABUSE_IMPORT_MAX_ROWS = env.int("ABUSE_IMPORT_MAX_ROWS", default=500)
+ABUSE_DOWNLOADS_PER_HOUR = env.int("ABUSE_DOWNLOADS_PER_HOUR", default=600)
+ABUSE_LOGIN_IP_PER_15M = env.int("ABUSE_LOGIN_IP_PER_15M", default=50)
+ABUSE_LOGIN_IDENTIFIER_PER_15M = env.int("ABUSE_LOGIN_IDENTIFIER_PER_15M", default=10)
+ABUSE_CLIENT_PAGE_CAP = env.int("ABUSE_CLIENT_PAGE_CAP", default=200)
+ABUSE_PAGE_CAP_EXEMPT_FIELDS = env.list("ABUSE_PAGE_CAP_EXEMPT_FIELDS", default=[])
+ABUSE_GQL_MAX_DEPTH = env.int("ABUSE_GQL_MAX_DEPTH", default=12)
+ABUSE_GQL_MAX_ALIASES = env.int("ABUSE_GQL_MAX_ALIASES", default=20)
+ABUSE_GQL_MAX_TOKENS = env.int("ABUSE_GQL_MAX_TOKENS", default=4000)
+# Daily detector report recipients (Ignite team only — never brands).
+ABUSE_ALERT_EMAILS = env.list("ABUSE_ALERT_EMAILS", default=BACKEND_ERROR_ALERT_EMAILS)
 
 # Weekly mileage reimbursement report recipients (Monday cron).
 MILEAGE_REPORT_EMAILS = env.list(
