@@ -122,9 +122,9 @@ def _actor_may_edit(user, tenant_id: int) -> bool:
     if getattr(user, "is_superuser", False) or getattr(user, "is_staff", False):
         return True
     from tenants.models import TenantedUser
-    from utils.graphql.permissions import email_grants_ignite_admin
+    from utils.graphql.permissions import user_grants_ignite_admin
 
-    if email_grants_ignite_admin(getattr(user, "email", "") or ""):
+    if user_grants_ignite_admin(user):
         return True
     return TenantedUser.objects.filter(
         user_id=getattr(user, "id", None),
