@@ -41,6 +41,7 @@ from announcements.schema import AnnouncementQueryClient, AnnouncementMutationsC
 from jobboard.schema import JobBoardMutations, JobBoardQueries
 from timeclock.schema import ClockLinkMutations, ClockLinkQueries
 from recaps.checkin_issue_schema import CheckinIssueQueries
+from ambassadors.product_qa_schema import BaProductQaMutations, BaProductQaQueries
 from recaps.shelf_schema import ShelfCheckMutations, ShelfCheckQueries
 from recaps.client_deck_schema import (
     BestPhotoMutations,
@@ -64,6 +65,7 @@ QueryClients = merge_types(
         CampaignReportQueries,
         ReportSubscriptionQueries,
         CheckinIssueQueries,
+        BaProductQaQueries,
         ShelfCheckQueries,
         DashboardExplainQueries,
         BestPhotoQueries,
@@ -122,6 +124,7 @@ MutationClients = merge_types(
         BillingMutationsClient,
         JobBoardMutations,
         ClockLinkMutations,
+        BaProductQaMutations,
     ),
 )
 
