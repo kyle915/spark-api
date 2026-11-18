@@ -30,6 +30,29 @@ LIVE = dict(
 CHICAGO = ZoneInfo("America/Chicago")
 
 
+def test_latest_keyword_reply_decides_opt_out():
+    from ambassadors.shift_sms import keyword_of, opted_out_in_replies
+
+    assert keyword_of("STOP") == "stop"
+    assert keyword_of(" Stop. ") == "stop"
+    assert keyword_of("unsubscribe please") == "stop"
+    assert keyword_of("I'll stop by later") is None
+    assert keyword_of("Cancel") == "stop"
+    assert keyword_of("cancel my shift tomorrow?") is None
+    assert keyword_of("stop texting me") == "stop"
+    assert keyword_of("START") == "start"
+    msgs = [
+        {"direction": "incoming", "text": "STOP", "createdAt": "2026-11-01T10:00:00Z"},
+        {"direction": "outgoing", "text": "Reply STOP to opt out.", "createdAt": "2026-11-02T10:00:00Z"},
+    ]
+    assert opted_out_in_replies(msgs) is True
+    msgs.append({"direction": "incoming", "text": "start", "createdAt": "2026-11-03T10:00:00Z"})
+    assert opted_out_in_replies(msgs) is False
+    assert opted_out_in_replies([{"direction": "incoming", "text": "ok thanks"}]) is False
+    # Our own outgoing "Reply STOP" line never counts.
+    assert opted_out_in_replies([{"direction": "outgoing", "text": "STOP"}]) is False
+
+
 def test_normalize_us_phone():
     assert normalize_us_phone("(606) 448-9015") == "+16064489015"
     assert normalize_us_phone("16064489015") == "+16064489015"
@@ -101,6 +124,7 @@ class TestShiftSms(AmbassadorsGraphQLTestCase):
     def _run(self, **kwargs):
         kwargs.setdefault("now", self.now)
         kwargs.setdefault("send", self._send)
+        kwargs.setdefault("opted_out", lambda to: False)
         return send_shift_sms(**kwargs)
 
     # --- pre-shift -------------------------------------------------------
@@ -518,6 +542,49 @@ class TestShiftSms(AmbassadorsGraphQLTestCase):
         row = ShiftSms.objects.get()
         assert (row.status, row.attempts) == ("failed", 1)
         assert self._run()["sent"] == 0 and self.sent == []
+
+    @override_settings(**LIVE)
+    def test_a_stop_reply_stops_the_text_and_is_remembered(self):
+        event = self._event(
+            start=self.now + timedelta(minutes=90), end=self.now + timedelta(hours=5)
+        )
+        self._book(event)
+        result = self._run(opted_out=lambda to: True)
+        assert result["skipped_opt_out"] == 1 and result["sent"] == 0
+        assert self.sent == [] and not ShiftSms.objects.exists()
+        self.ba.refresh_from_db()
+        assert self.ba.sms_opt_out is True
+
+    @override_settings(**LIVE)
+    def test_text_is_held_when_replies_cannot_be_read(self):
+        event = self._event(
+            start=self.now + timedelta(minutes=90), end=self.now + timedelta(hours=5)
+        )
+        self._book(event)
+
+        def unreadable(to):
+            raise OSError("quo down")
+
+        held = self._run(opted_out=unreadable)
+        assert held["held_opt_out_unknown"] == 1 and held["sent"] == 0
+        assert not ShiftSms.objects.exists()  # nothing reserved: next run tries again
+        assert self._run()["sent"] == 1
+
+    @override_settings(**LIVE)
+    def test_quo_opted_out_answer_is_remembered(self):
+        from ambassadors.shift_sms import QuoSendError
+
+        event = self._event(
+            start=self.now + timedelta(minutes=90), end=self.now + timedelta(hours=5)
+        )
+        self._book(event)
+
+        def opted(**kwargs):
+            raise QuoSendError('Quo returned 400: {"title": "User Opted Out", "code": "0201400"}', status=400)
+
+        assert self._run(send=opted)["failed"] == 1
+        self.ba.refresh_from_db()
+        assert self.ba.sms_opt_out is True
 
     @override_settings(**LIVE)
     def test_a_retry_is_only_sent_while_the_text_is_still_due(self):

@@ -31,6 +31,7 @@ import json
 import logging
 import re
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import timedelta
 from zoneinfo import ZoneInfo
@@ -148,6 +149,102 @@ def send_quo_sms(*, to: str, body: str) -> str:
         detail = exc.read().decode(errors="replace")[:300]
         raise QuoSendError(f"Quo returned {exc.code}: {detail}", status=exc.code) from exc
     return str((data.get("data") or {}).get("id") or "")
+
+
+# ─── Opt-out (STOP) ─────────────────────────────────────────────────
+#
+# Every text says "Reply STOP to opt out", so a STOP reply must stop the
+# texts. Before texting a number we read that conversation in Quo: the most
+# recent opt-out or opt-in keyword the person sent wins. Quo also rejects a
+# send to someone it has recorded as opted out ("User Opted Out", 400); that
+# answer is recorded too. If the conversation can't be read, the text is not
+# sent this run (it is tried again on the next one) — never sent on a guess.
+
+_STOP_WORDS = {"stop", "stopall", "unsubscribe", "cancel", "end", "quit", "revoke", "optout"}
+_START_WORDS = {"start", "unstop", "subscribe"}
+_from_number_id_cache: dict[str, str] = {}
+
+
+def _quo_get(path: str, query: list[tuple[str, str]]) -> dict:
+    base = (getattr(settings, "QUO_API_BASE_URL", "") or "https://api.quo.com").rstrip("/")
+    qs = urllib.parse.urlencode(query)
+    request = urllib.request.Request(
+        f"{base}{path}{'?' + qs if qs else ''}",
+        method="GET",
+        headers={
+            "Authorization": settings.QUO_API_KEY.strip(),
+            "Accept": "application/json",
+            "User-Agent": _USER_AGENT,
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            return json.loads(response.read().decode() or "{}")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode(errors="replace")[:300]
+        raise QuoSendError(f"Quo returned {exc.code}: {detail}", status=exc.code) from exc
+
+
+def _from_number_id() -> str:
+    """Quo's id (PN…) for QUO_FROM_NUMBER, looked up once per process."""
+    number = settings.QUO_FROM_NUMBER.strip()
+    if number not in _from_number_id_cache:
+        rows = (_quo_get("/v1/phone-numbers", []).get("data")) or []
+        match = next((r for r in rows if r.get("number") == number), None)
+        if not match or not match.get("id"):
+            raise QuoSendError(f"QUO_FROM_NUMBER {number} is not a number in this Quo workspace")
+        _from_number_id_cache[number] = str(match["id"])
+    return _from_number_id_cache[number]
+
+
+def keyword_of(text: str | None) -> str | None:
+    """"stop" / "start" when a reply is an opt-out / opt-in keyword. The
+    whole reply must be the keyword ("Cancel" — but not "cancel my shift"),
+    except STOP / UNSUBSCRIBE, which also count at the start of a reply
+    ("stop texting me")."""
+    words = re.sub(r"[^a-z ]", "", (text or "").lower()).split()
+    if not words:
+        return None
+    whole = "".join(words)
+    if whole in _STOP_WORDS or words[0] in {"stop", "stopall", "unsubscribe"}:
+        return "stop"
+    if whole in _START_WORDS:
+        return "start"
+    return None
+
+
+def opted_out_in_replies(messages: list[dict]) -> bool:
+    """True when the person's latest keyword reply is an opt-out."""
+    incoming = [m for m in messages if m.get("direction") == "incoming"]
+    incoming.sort(key=lambda m: m.get("createdAt") or "", reverse=True)
+    for m in incoming:
+        kw = keyword_of(m.get("text"))
+        if kw:
+            return kw == "stop"
+    return False
+
+
+def quo_says_opted_out(to: str) -> bool:
+    """Read the conversation with ``to`` in Quo and look for STOP. Raises
+    when Quo can't be read (the caller then holds the text)."""
+    data = _quo_get(
+        "/v1/messages",
+        [("phoneNumberId", _from_number_id()), ("participants", to), ("maxResults", "100")],
+    )
+    return opted_out_in_replies(data.get("data") or [])
+
+
+def is_opt_out_error(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return isinstance(exc, QuoSendError) and ("opted out" in text or "0201400" in text)
+
+
+def _record_opt_out(ambassador) -> None:
+    """Remember a STOP so no later run texts this person."""
+    from ambassadors.models import Ambassador
+
+    Ambassador.objects.filter(id=ambassador.id).update(sms_opt_out=True)
+    ambassador.sms_opt_out = True
 
 
 def _venue(event) -> str:
@@ -340,7 +437,7 @@ def _recap_candidates(now):
         yield kind, ambassador, event
 
 
-def send_shift_sms(*, now=None, dry_run: bool = False, send=None) -> dict:
+def send_shift_sms(*, now=None, dry_run: bool = False, send=None, opted_out=None) -> dict:
     """Send every shift text that is due. Returns counts and, for a dry run,
     one line per text that would go out (first name and last four digits
     only — the log is read by people)."""
@@ -349,6 +446,7 @@ def send_shift_sms(*, now=None, dry_run: bool = False, send=None) -> dict:
 
     now = now or timezone.now()
     send = send or send_quo_sms
+    opted_out = opted_out or quo_says_opted_out
     counts = {
         "sent": 0,
         "would_send": 0,
@@ -356,6 +454,8 @@ def send_shift_sms(*, now=None, dry_run: bool = False, send=None) -> dict:
         "skipped_opt_out": 0,
         "skipped_no_phone": 0,
         "skipped_no_link": 0,
+        # Quo's conversation couldn't be read, so STOP couldn't be ruled out.
+        "held_opt_out_unknown": 0,
         "failed": 0,
         # Of ``failed``: temporary failures a later run will try again.
         "will_retry": 0,
@@ -400,6 +500,17 @@ def send_shift_sms(*, now=None, dry_run: bool = False, send=None) -> dict:
             preview.append(f"{kind} → {_first_name(ambassador)} (…{to[-4:]}): {body}")
             continue
 
+        try:
+            stopped = opted_out(to)
+        except Exception:  # noqa: BLE001 — hold the text, try next run
+            logger.warning("shift sms: could not read Quo replies for event=%s", event.id, exc_info=True)
+            counts["held_opt_out_unknown"] += 1
+            continue
+        if stopped:
+            _record_opt_out(ambassador)
+            counts["skipped_opt_out"] += 1
+            continue
+
         if retry_row is not None:
             # Claim the retry atomically: the row goes back to pending with
             # one more attempt counted, and only if no other run got there
@@ -436,6 +547,8 @@ def send_shift_sms(*, now=None, dry_run: bool = False, send=None) -> dict:
         try:
             provider_id = send(to=to, body=body)
         except Exception as exc:  # noqa: BLE001 — one number must not stop the run
+            if is_opt_out_error(exc):
+                _record_opt_out(ambassador)
             will_retry = (
                 is_transient_send_error(exc) and attempts < MAX_SEND_ATTEMPTS
             )
