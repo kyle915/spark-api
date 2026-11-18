@@ -1,0 +1,123 @@
+name: Refresh BA product knowledge
+
+# What the BA product-questions box answers from, beyond staff notes: text
+# from each brand's uploaded documents and a bounded crawl of its website
+# (spark-api product_knowledge/). Fires /internal/cron/refresh-product-knowledge.
+#
+# Scheduled: Mondays 09:00 UTC — lists every brand with a website or
+# documents, then refreshes them one brand per request (so one slow site
+# can't time the whole run out).
+# Manual: refresh one brand (tenant id) or all; scope website / documents /
+# all; dry_run prints what would be read and stores nothing.
+#
+# Also here: set-websites, which sets brands' website URLs in bulk from a
+# JSON map ({"17": "https://brand.com", "liquid-death": "liquiddeath.com"}).
+# DRY RUN unless apply is true.
+
+on:
+  schedule:
+    - cron: "0 9 * * 1"
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "What to run"
+        required: true
+        default: "refresh"
+        type: choice
+        options:
+          - refresh
+          - set-websites
+      tenant:
+        description: "Tenant id to refresh (blank = every brand with a website or documents)"
+        required: false
+        default: ""
+      scope:
+        description: "What to refresh"
+        required: false
+        default: "all"
+        type: choice
+        options:
+          - all
+          - website
+          - documents
+      dry_run:
+        description: "Refresh: show what would be read, store nothing"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      websites_json:
+        description: 'set-websites: JSON map of tenant id/slug/name to website'
+        required: false
+        default: ""
+      apply:
+        description: "set-websites: write the URLs (otherwise dry run)"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+jobs:
+  refresh-product-knowledge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Fire product knowledge endpoints
+        env:
+          BASE_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          ACTION: ${{ github.event_name == 'schedule' && 'refresh' || github.event.inputs.action }}
+          TENANT: ${{ github.event.inputs.tenant }}
+          SCOPE: ${{ github.event_name == 'schedule' && 'all' || github.event.inputs.scope }}
+          DRY_RUN: ${{ github.event_name == 'schedule' && 'false' || github.event.inputs.dry_run }}
+          WEBSITES_JSON: ${{ github.event.inputs.websites_json }}
+          APPLY: ${{ github.event.inputs.apply }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+
+          if [ "$ACTION" = "set-websites" ]; then
+            STATUS=$(curl -sS -o /tmp/r.json -w '%{http_code}' -X POST "$BASE_URL/set-brand-websites" \
+              -H "X-Cron-Secret: $CRON_SECRET" \
+              --data-urlencode "map=$WEBSITES_JSON" \
+              --data-urlencode "apply=$APPLY")
+            echo "HTTP $STATUS"
+            python3 -c 'import json; d=json.load(open("/tmp/r.json")); print(json.dumps(d, indent=2))'
+            [ "$STATUS" = "200" ]
+            exit 0
+          fi
+
+          if [ -n "$TENANT" ]; then
+            TENANTS="$TENANT"
+          else
+            STATUS=$(curl -sS -o /tmp/list.json -w '%{http_code}' -X POST "$BASE_URL/refresh-product-knowledge" \
+              -H "X-Cron-Secret: $CRON_SECRET" --data-urlencode "action=list")
+            [ "$STATUS" = "200" ] || { echo "list failed: HTTP $STATUS"; cat /tmp/list.json; exit 1; }
+            TENANTS=$(python3 -c 'import json; print(" ".join(str(t) for t in json.load(open("/tmp/list.json"))["tenants"]))')
+          fi
+          echo "Brands: ${TENANTS:-none}"
+
+          FAILED=0
+          for T in $TENANTS; do
+            rm -f /tmp/r.json
+            STATUS=$(curl -sS -o /tmp/r.json -w '%{http_code}' --max-time 600 -X POST "$BASE_URL/refresh-product-knowledge" \
+              -H "X-Cron-Secret: $CRON_SECRET" \
+              --data-urlencode "action=refresh" \
+              --data-urlencode "tenant=$T" \
+              --data-urlencode "scope=$SCOPE" \
+              --data-urlencode "dry_run=$DRY_RUN" || true)
+            echo "== tenant $T: HTTP $STATUS"
+            python3 -c 'import json; d=json.load(open("/tmp/r.json")); print(d.get("log","")); [print(k, "=", v) for k, v in d.items() if k != "log"]' 2>/dev/null || echo "(no JSON response)"
+            [ "$STATUS" = "200" ] || FAILED=$((FAILED + 1))
+          done
+          if [ "$FAILED" -gt 0 ]; then
+            echo "::warning::$FAILED brand(s) failed to refresh"
+            exit 1
+          fi
