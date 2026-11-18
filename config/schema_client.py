@@ -10,6 +10,7 @@ from recaps.recap_ai import RecapAiMutations, RecapAiQueries
 from recaps.feedback_themes import FeedbackThemeMutations, FeedbackThemeQueries
 from recaps.comment_insights import CommentInsightQueries
 from consumer_mentions.trends import MentionTrendQueries
+from photo_library.schema import PhotoLibraryQueries
 from recaps.weekly_summary import WeeklySummaryMutations, WeeklySummaryQueries
 from brand_insights.schema import BrandInsightMutations, BrandInsightQueries
 from recaps.flag_explanation import RecapFlagExplanationQueries
@@ -83,6 +84,7 @@ QueryClients = merge_types(
         FeedbackThemeQueries,
         CommentInsightQueries,
         MentionTrendQueries,
+        PhotoLibraryQueries,
         WeeklySummaryQueries,
         BrandInsightQueries,
         RecapFlagExplanationQueries,
