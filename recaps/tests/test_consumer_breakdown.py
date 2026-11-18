@@ -12,7 +12,12 @@ from ambassadors.tests.base import AmbassadorsGraphQLTestCase
 from config.schema_client import schema_clients
 from events import models as event_models
 from recaps import models as recap_models
-from recaps.consumer_breakdown import summarize_consumers, week_start
+from recaps.consumer_breakdown import (
+    consumer_rows,
+    place_from_walkin_title,
+    summarize_consumers,
+    week_start,
+)
 
 
 # ─── Pure roll-up ───────────────────────────────────────────────────
@@ -95,6 +100,100 @@ def test_empty_window():
     out = summarize_consumers([], start=date(2026, 10, 1), end=date(2026, 10, 31))
     assert out["total"] == 0 and out["recaps"] == 0
     assert out["by_week"] == [] and out["by_store"] == [] and out["by_state"] == []
+
+
+# ─── Walk-in titles: the place when no retailer resolves ────────────
+
+
+@pytest.mark.parametrize(
+    "title,address,event_type,expected",
+    [
+        (
+            "10/19/2026 - Lockhart City Park, Lockhart, Texas (BBQ Fest) · Event Activation",
+            "Lockhart City Park, Lockhart, Texas",
+            "Event Activation",
+            ("BBQ Fest", "venue"),
+        ),
+        # The program suffix alone marks it, when the event type is unknown.
+        (
+            "11/2/2026 - 600 2nd St N, St. Petersburg, FL (Savor St Pete) · Event Activation",
+            "600 2nd St N, St. Petersburg, FL",
+            None,
+            ("Savor St Pete", "venue"),
+        ),
+        # A retail program: the typed store is a named store, not a venue.
+        (
+            "11/5/2026 - 1200 Main St, Austin, TX 78701 (Sunoco) · Retail Sampling",
+            "1200 Main St, Austin, TX 78701",
+            "Retail Sampling",
+            ("Sunoco", "named"),
+        ),
+        # A " · " inside the parenthetical is not the program suffix.
+        (
+            "8/21/2026 - 1825 S Campus Dr, Salt Lake City, UT 84112, USA "
+            "(Huntsman Center (TONY HAWK VERT ALERT) · 2026-08-22 (2/2)) · Event Activation",
+            "1825 S Campus Dr, Salt Lake City, UT 84112, USA",
+            "Event Activation",
+            ("Huntsman Center (TONY HAWK VERT ALERT)", "venue"),
+        ),
+        # No parenthetical: the title names the venue directly.
+        (
+            "8/16/2026 - Wisconsin State Fair · Event Activation",
+            "",
+            "Event Activation",
+            ("Wisconsin State Fair", "venue"),
+        ),
+        # Only the street address: nothing to name.
+        (
+            "8/14/2026 - 7859 Harlem Avenue, Burbank, IL 60459 · Retail Sampling",
+            "7859 Harlem Avenue, Burbank, IL 60459",
+            "Retail Sampling",
+            ("", ""),
+        ),
+        ("9/4/2026 - Product Seeding · BA 769 · 2026-09-04", "", None, ("", "")),
+        # Not a walk-in title: left alone.
+        ("LAFC Event", "Los Angeles, CA", "Event Activation", ("", "")),
+        ("", "", None, ("", "")),
+    ],
+)
+def test_place_from_walkin_title(title, address, event_type, expected):
+    assert place_from_walkin_title(title, address, event_type) == expected
+
+
+def test_venue_rows_rank_with_named_rows_but_stay_distinguishable():
+    out = summarize_consumers(
+        [
+            {**_row(5000, date(2026, 10, 19), store="BBQ Fest"), "store_kind": "venue"},
+            {**_row(850, date(2026, 11, 2), store="Savor St Pete"), "store_kind": "venue"},
+            # Case-insensitive grouping within venues.
+            {**_row(50, date(2026, 11, 3), store="savor st pete"), "store_kind": "venue"},
+            _row(900, date(2026, 10, 20), store="Costco"),
+            _row(28, date(2026, 11, 5), store="Sunoco"),
+            _row(70, date(2026, 11, 6), store=None),
+        ]
+    )
+    assert [(r["label"], r["kind"], r["consumers"]) for r in out["by_store"]] == [
+        ("BBQ Fest", "venue", 5000),
+        ("Costco", "named", 900),
+        ("Savor St Pete", "venue", 900),
+        ("Sunoco", "named", 28),
+        ("", "missing", 70),
+    ]
+    assert out["store_count"] == 4
+    assert sum(r["consumers"] for r in out["by_store"]) == out["total"] == 6898
+
+
+def test_a_venue_and_a_store_of_the_same_name_are_two_rows():
+    out = summarize_consumers(
+        [
+            {**_row(10, date(2026, 10, 5), store="Main Street"), "store_kind": "venue"},
+            _row(20, date(2026, 10, 5), store="Main Street"),
+        ]
+    )
+    assert sorted((r["label"], r["kind"]) for r in out["by_store"]) == [
+        ("Main Street", "named"),
+        ("Main Street", "venue"),
+    ]
 
 
 # ─── Through the database and the real schema ───────────────────────
@@ -244,6 +343,123 @@ class TestConsumerBreakdownSchema(AmbassadorsGraphQLTestCase):
         self._custom(self._event(day=6, tenant=self.other), 999)
         return self._client_user()
 
+    def _walkin(self, title, address, *, day, event_type=None, **kwargs):
+        when = timezone.make_aware(datetime(2026, 10, day, 18))
+        return event_models.Event.objects.create(
+            name=title, tenant=self.tenant, address=address, date=when,
+            event_type=event_type or self.et, created_by=self.sys,
+            updated_by=self.sys, **kwargs,
+        )
+
+    def _seed_walkins(self):
+        activation = event_models.EventType.objects.create(
+            name="Event Activation", slug="breakdown-activation", tenant=self.tenant,
+            created_by=self.sys,
+        )
+        tx = event_models.State.objects.create(name="Texas", code="TX", created_by=self.sys)
+        # A festival with no request and no retailer: a venue row.
+        self._custom(
+            self._walkin(
+                "10/19/2026 - Lockhart City Park, Lockhart, Texas (BBQ Fest) · Event Activation",
+                "Lockhart City Park, Lockhart, Texas",
+                day=19, event_type=activation, state=tx,
+            ),
+            5000,
+        )
+        # Two recaps at one venue, typed in different case: one row.
+        for sampled, name in ((800, "Savor St Pete"), (50, "SAVOR ST PETE")):
+            self._custom(
+                self._walkin(
+                    f"10/20/2026 - 600 2nd St N, St. Petersburg, FL ({name}) · Event Activation",
+                    "600 2nd St N, St. Petersburg, FL",
+                    day=20, event_type=activation,
+                ),
+                sampled,
+            )
+        # A retail walk-in at a store the brand never typed: a named store.
+        self._custom(
+            self._walkin(
+                "10/21/2026 - 1200 Main St, Austin, TX 78701 (Sunoco) · Retail Sampling",
+                "1200 Main St, Austin, TX 78701",
+                day=21,
+            ),
+            28,
+        )
+        # Address only: still "missing".
+        self._custom(
+            self._walkin(
+                "10/22/2026 - 7859 Harlem Avenue, Burbank, IL 60459 · Retail Sampling",
+                "7859 Harlem Avenue, Burbank, IL 60459",
+                day=22,
+            ),
+            12,
+        )
+        # A retailer on the event still wins over the title.
+        self._custom(
+            self._walkin(
+                "10/23/2026 - 1 Main St (Somewhere Else) · Event Activation",
+                "1 Main St",
+                day=23, event_type=activation, retailer=self.costco, state=self.ca,
+            ),
+            100,
+        )
+        return self._client_user()
+
+    @pytest.mark.asyncio
+    async def test_walkin_titles_name_venues_and_stores_and_totals_hold(self):
+        me = await sync_to_async(self._seed_walkins)()
+        res = await self._execute_mutation(
+            BREAKDOWN_Q,
+            {"tenantId": str(self.tenant.id), "startDate": "2026-10-01", "endDate": "2026-10-31"},
+            self.endpoint_path,
+            user=me,
+        )
+        assert res.errors is None, res.errors
+        b = res.data["tenantConsumerBreakdown"]
+        assert b["total"] == 5000 + 850 + 28 + 12 + 100
+        for split in ("byWeek", "byStore", "byState"):
+            assert sum(r["consumers"] for r in b[split]) == b["total"], split
+        assert [(r["label"], r["kind"], r["consumers"]) for r in b["byStore"]] == [
+            ("BBQ Fest", "venue", 5000),
+            ("Savor St Pete", "venue", 850),
+            ("Costco", "named", 100),
+            ("Sunoco", "named", 28),
+            ("", "missing", 12),
+        ]
+        assert b["storeCount"] == 4
+
+    def _seed_legacy_own_place(self):
+        tx = event_models.State.objects.create(name="Texas", code="TX", created_by=self.sys)
+        kroger = event_models.Retailer.objects.create(
+            name="Kroger", tenant=self.tenant, created_by=self.sys
+        )
+        # The event knows nothing; the legacy recap names its own store and state.
+        recap = self._legacy(self._event(day=6), 70)
+        recap.retailer = kroger
+        recap.state = tx
+        recap.save(update_fields=["retailer", "state"])
+        # The recap's own retailer wins over the event's; the event's state
+        # stays (the recap's only fills in), as on the custom path.
+        recap = self._legacy(self._event(day=7, retailer=self.costco, state=self.ca), 30)
+        recap.retailer = kroger
+        recap.state = tx
+        recap.save(update_fields=["retailer", "state"])
+        # Nothing on the recap: the event's store and state as before.
+        self._legacy(self._event(day=8, retailer=self.costco, state=self.ca), 5)
+
+    @pytest.mark.django_db(transaction=True)
+    def test_legacy_recap_prefers_its_own_retailer_and_fills_in_its_state(self):
+        self._seed_legacy_own_place()
+        rows = consumer_rows(self.tenant.id, date(2026, 10, 1), date(2026, 10, 31))
+        got = sorted((r["consumers"], r["store"], r["state"]) for r in rows)
+        assert got == [(5, "Costco", "CA"), (30, "Kroger", "CA"), (70, "Kroger", "TX")]
+        out = summarize_consumers(rows)
+        assert out["total"] == 105
+        assert [(r["label"], r["consumers"]) for r in out["by_store"]] == [
+            ("Kroger", 100),
+            ("Costco", 5),
+        ]
+
     @pytest.mark.asyncio
     async def test_splits_add_up_and_leave_out_what_kpis_leave_out(self):
         me = await sync_to_async(self._seed)()
@@ -330,3 +546,22 @@ def test_the_sql_gate_lets_through_every_wording_the_matcher_counts():
     for name in wordings:
         assert _CONSUMERS_SAMPLED_RE.search(name), name
         assert _CUSTOM_KPI_NAME_RE.search(name), name
+
+
+def test_chart_questions_name_venues_and_keep_missing_aside(monkeypatch):
+    from recaps import chart_questions, consumer_breakdown
+
+    monkeypatch.setattr(
+        consumer_breakdown,
+        "tenant_consumer_breakdown",
+        lambda tenant_id, start, end: summarize_consumers(
+            [
+                {**_row(5000, date(2026, 10, 19), store="BBQ Fest"), "store_kind": "venue"},
+                _row(28, date(2026, 11, 5), store="Sunoco"),
+                _row(70, date(2026, 11, 6), store=None),
+            ]
+        ),
+    )
+    data = chart_questions.chart_data(1, chart_questions.CHART_STORE, None, None)
+    assert data.rows == [("BBQ Fest (event venue)", 5000), ("Sunoco", 28)]
+    assert data.asides == [("No store recorded", 70)]

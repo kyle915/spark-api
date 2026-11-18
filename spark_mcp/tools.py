@@ -363,7 +363,9 @@ def get_consumer_breakdown(ctx: ToolContext, args: dict) -> tuple[dict, int]:
             "basis": (
                 "Consumers sampled on approved recaps, dated by the event date. Each "
                 "split adds up to total_consumers_sampled. kind 'missing' = recaps whose "
-                "event has no store/state recorded; kind 'other' = the smaller stores folded together."
+                "event has no store/state recorded; kind 'venue' = a festival or event activation "
+                "named by its walk-in event title (a venue, not a store); kind 'other' = the "
+                "smaller stores folded together."
             ),
             "total_consumers_sampled": data["total"],
             "recaps": data["recaps"],
