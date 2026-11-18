@@ -34,6 +34,10 @@ SECRET_KEY = env("SECRET_KEY")
 DEBUG = env("DEBUG")
 
 ALLOWED_HOSTS = env.list("ALLOWED_HOSTS")
+# Session cookie (used by the AI connection page) only over HTTPS outside
+# local development. Browsers see HTTPS on Cloud Run even though Django sits
+# behind the TLS proxy.
+SESSION_COOKIE_SECURE = env.bool("SESSION_COOKIE_SECURE", default=not DEBUG)
 CORS_ALLOWED_ORIGINS = env.list(
     "CORS_ALLOWED_ORIGINS", default=["http://localhost:3000"]
 )
@@ -722,19 +726,28 @@ for _logger_cfg in LOGGING["loggers"].values():
 # Public origin of this API as brands/AI apps see it (OAuth issuer; the MCP
 # URL is <this>/mcp). Falls back to PUBLIC_API_BASE_URL.
 MCP_PUBLIC_BASE_URL = env("MCP_PUBLIC_BASE_URL", default="")
-# Kill switch: False → /mcp and /oauth/* answer 503 and tokens stop working.
-MCP_ENABLED = env.bool("MCP_ENABLED", default=True)
-# Optional rollout allowlist of tenant ids ("17,18"); empty → every brand.
+# Kill switch: False (the default) → /mcp and /oauth/* answer 503 and tokens
+# stop working.
+MCP_ENABLED = env.bool("MCP_ENABLED", default=False)
+# Rollout allowlist of tenant ids ("17,18"); "all" → every brand; empty →
+# no brand.
 MCP_ALLOWED_TENANT_IDS = env.list("MCP_ALLOWED_TENANT_IDS", default=[])
 MCP_DAILY_CALLS_PER_TENANT = env.int("MCP_DAILY_CALLS_PER_TENANT", default=500)
 MCP_CALLS_PER_MINUTE_PER_CONNECTION = env.int(
     "MCP_CALLS_PER_MINUTE_PER_CONNECTION", default=30
 )
+MCP_RPC_PER_MINUTE_PER_CONNECTION = env.int("MCP_RPC_PER_MINUTE_PER_CONNECTION", default=120)
 MCP_ACCESS_TOKEN_TTL_SECONDS = env.int("MCP_ACCESS_TOKEN_TTL_SECONDS", default=3600)
 MCP_REFRESH_TOKEN_TTL_DAYS = env.int("MCP_REFRESH_TOKEN_TTL_DAYS", default=30)
+# Web app that runs "Continue with Google" for the consent page; empty →
+# CLIENT_FRONTEND_URL.
+MCP_SIGNIN_FRONTEND_URL = env("MCP_SIGNIN_FRONTEND_URL", default="")
 # Unset → the built-in lists in spark_mcp/conf.py (Claude + ChatGPT hosts).
-if env("MCP_ALLOWED_REDIRECT_HOSTS", default=None) is not None:
-    MCP_ALLOWED_REDIRECT_HOSTS = env.list("MCP_ALLOWED_REDIRECT_HOSTS")
+# Exact callback URLs (comma separated); unset → Claude + ChatGPT defaults.
+if env("MCP_ALLOWED_REDIRECT_URIS", default=None) is not None:
+    MCP_ALLOWED_REDIRECT_URIS = env.list("MCP_ALLOWED_REDIRECT_URIS")
+# X-Forwarded-For entries appended by trusted proxies (Cloud Run front end: 1).
+MCP_TRUSTED_PROXY_HOPS = env.int("MCP_TRUSTED_PROXY_HOPS", default=1)
 if env("MCP_ALLOWED_CIMD_HOSTS", default=None) is not None:
     MCP_ALLOWED_CIMD_HOSTS = env.list("MCP_ALLOWED_CIMD_HOSTS")
 if env("MCP_ALLOWED_ORIGINS", default=None) is not None:

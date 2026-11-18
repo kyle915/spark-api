@@ -15,9 +15,10 @@ def _get(name: str, default):
 
 
 def enabled() -> bool:
-    """Global kill switch (MCP_ENABLED). Off → every MCP and OAuth endpoint
-    answers 503 and existing tokens stop working until it is back on."""
-    return bool(_get("MCP_ENABLED", True))
+    """Global kill switch (MCP_ENABLED, off unless set). Off → every MCP and
+    OAuth endpoint answers 503 and existing tokens stop working until it is
+    back on."""
+    return bool(_get("MCP_ENABLED", False))
 
 
 def base_url() -> str:
@@ -45,6 +46,20 @@ def frontend_url() -> str:
     ).rstrip("/")
 
 
+def signin_frontend_url() -> str:
+    """Web app that runs "Continue with Google" for the consent page. Brand
+    users sign in on the client host, so it comes first."""
+    return str(
+        _get("MCP_SIGNIN_FRONTEND_URL", "")
+        or _get("CLIENT_FRONTEND_URL", "")
+        or _get("ADMIN_FRONTEND_URL", "")
+    ).rstrip("/")
+
+
+def signin_handoff_ttl_seconds() -> int:
+    return 10 * 60
+
+
 def access_token_ttl_seconds() -> int:
     return int(_get("MCP_ACCESS_TOKEN_TTL_SECONDS", 3600))
 
@@ -61,39 +76,59 @@ def daily_calls_per_tenant() -> int:
     return int(_get("MCP_DAILY_CALLS_PER_TENANT", 500))
 
 
+def rpc_per_minute_per_connection() -> int:
+    """Every JSON-RPC request (initialize, ping, tools/list, tools/call)."""
+    return int(_get("MCP_RPC_PER_MINUTE_PER_CONNECTION", 120))
+
+
 def calls_per_minute_per_connection() -> int:
     return int(_get("MCP_CALLS_PER_MINUTE_PER_CONNECTION", 30))
 
 
-def allowed_tenant_ids() -> set[int]:
-    """Optional rollout allowlist (MCP_ALLOWED_TENANT_IDS). Empty → every
-    brand may connect."""
+def allowed_tenant_ids() -> set[int] | None:
+    """Rollout allowlist (MCP_ALLOWED_TENANT_IDS). Brand ids ("17,18") → only
+    those brands; "all" → every brand; empty or unset → no brand (deny by
+    default, so turning MCP_ENABLED on alone exposes nothing). Returns None
+    for "all"."""
     raw = _get("MCP_ALLOWED_TENANT_IDS", []) or []
     if isinstance(raw, str):
-        raw = [p for p in raw.split(",") if p.strip()]
-    return {int(p) for p in raw}
+        raw = raw.split(",")
+    parts = [str(p).strip() for p in raw if str(p).strip()]
+    if any(p.lower() in ("all", "*") for p in parts):
+        return None
+    ids = set()
+    for p in parts:
+        try:
+            ids.add(int(p))
+        except ValueError:
+            continue
+    return ids
 
 
-# Redirect hosts an OAuth client may send people back to. Loopback
+# Exact callback URLs an OAuth client may send people back to. Loopback
 # (http://localhost / 127.0.0.1, any port) is always allowed for desktop
 # clients such as Claude Code and the MCP Inspector. Anything else must be
-# https on one of these hosts: Ignite approves integrations in writing (ToS),
-# so a new AI app is added here deliberately.
-DEFAULT_REDIRECT_HOSTS = [
-    "claude.ai",
-    "claude.com",
-    "chatgpt.com",
-    "chat.openai.com",
+# one of these URLs exactly (no other paths or subdomains): Ignite approves
+# integrations in writing (ToS), so a new AI app is added here deliberately.
+#   Claude:  https://claude.ai|claude.com/api/mcp/auth_callback
+#   ChatGPT: its stable connector callback, used when the server returns
+#            the RFC 9207 ``iss`` parameter (this one does). ChatGPT's
+#            fallback is a per-app https://chatgpt.com/connector/oauth/<id>;
+#            add that exact URL via MCP_ALLOWED_REDIRECT_URIS if it shows up.
+DEFAULT_REDIRECT_URIS = [
+    "https://claude.ai/api/mcp/auth_callback",
+    "https://claude.com/api/mcp/auth_callback",
+    "https://chatgpt.com/connector_platform_oauth_redirect",
 ]
 
 
-def allowed_redirect_hosts() -> list[str]:
-    raw = _get("MCP_ALLOWED_REDIRECT_HOSTS", None)
+def allowed_redirect_uris() -> list[str]:
+    raw = _get("MCP_ALLOWED_REDIRECT_URIS", None)
     if raw is None:
-        return list(DEFAULT_REDIRECT_HOSTS)
+        return list(DEFAULT_REDIRECT_URIS)
     if isinstance(raw, str):
         raw = raw.split(",")
-    return [h.strip().lower() for h in raw if h.strip()]
+    return [u.strip() for u in raw if u.strip()]
 
 
 # Hosts a Client ID Metadata Document may be fetched from. Same reasoning as

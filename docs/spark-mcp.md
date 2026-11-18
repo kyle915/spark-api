@@ -17,8 +17,9 @@ endpoint). Brand-facing help page: `/help/ai-connector` in spark-front-client.
 1. Settings → Connectors → **Add custom connector**.
 2. Name it "Spark" and paste the connector URL. Leave the OAuth client fields
    empty.
-3. Click **Connect**. A Spark page opens: sign in with your Spark email and
-   password (or ask for an email sign-in link), pick the brand, click **Allow**.
+3. Click **Connect**. A Spark page opens: **Continue with Google** (or sign in
+   with your Spark email and password, or ask for an email sign-in link), pick
+   the brand, click **Allow**.
 4. In a chat, turn the Spark connector on from the tools menu and ask, e.g.
    "How many consumers did we sample last month, by state?"
 
@@ -92,25 +93,51 @@ is what guarantees its access is cut off.
 
 | Var | Default | Meaning |
 | --- | --- | --- |
-| `MCP_ENABLED` | `True` | Kill switch. False → `/mcp` and `/oauth/*` return 503, tokens stop working |
+| `MCP_ENABLED` | `False` | Kill switch, off unless set. False → `/mcp` and `/oauth/*` return 503, tokens stop working |
 | `MCP_PUBLIC_BASE_URL` | `PUBLIC_API_BASE_URL` | Issuer / connector origin |
-| `MCP_ALLOWED_TENANT_IDS` | empty (all) | Rollout allowlist |
+| `MCP_ALLOWED_TENANT_IDS` | empty (no brand) | Rollout allowlist: brand ids (`17,18`), or `all`. Empty denies every brand |
 | `MCP_DAILY_CALLS_PER_TENANT` | 500 | Per-brand daily quota |
-| `MCP_CALLS_PER_MINUTE_PER_CONNECTION` | 30 | Per-connection rate limit |
+| `MCP_CALLS_PER_MINUTE_PER_CONNECTION` | 30 | Per-connection tool-call rate limit |
+| `MCP_RPC_PER_MINUTE_PER_CONNECTION` | 120 | Per-connection limit on every JSON-RPC request (initialize, ping, tools/list too) |
 | `MCP_ACCESS_TOKEN_TTL_SECONDS` | 3600 | Access token life |
 | `MCP_REFRESH_TOKEN_TTL_DAYS` | 30 | Refresh token life (rotated on use) |
-| `MCP_ALLOWED_REDIRECT_HOSTS` | claude.ai, claude.com, chatgpt.com, chat.openai.com | Where an app may send people back to (loopback always allowed for desktop clients) |
-| `MCP_ALLOWED_CIMD_HOSTS` | claude.ai, claude.com, chatgpt.com, openai.com | Hosts a Client ID Metadata Document may be fetched from |
+| `MCP_ALLOWED_REDIRECT_URIS` | `https://claude.ai/api/mcp/auth_callback`, `https://claude.com/api/mcp/auth_callback`, `https://chatgpt.com/connector_platform_oauth_redirect` | Exact callback URLs an app may send people back to (loopback always allowed for desktop clients). Replaces the old host list |
+| `MCP_TRUSTED_PROXY_HOPS` | 1 | `X-Forwarded-For` entries added by trusted proxies; the client IP is read that many from the right |
+| `MCP_ALLOWED_CIMD_HOSTS` | claude.ai, claude.com, chatgpt.com, openai.com | Hosts (exact, no subdomains) a Client ID Metadata Document may be fetched from |
 | `MCP_ALLOWED_ORIGINS` | claude.ai, claude.com, chatgpt.com, chat.openai.com | Browser `Origin` values accepted on `/mcp` |
+| `MCP_SIGNIN_FRONTEND_URL` | `CLIENT_FRONTEND_URL` | Web app that runs Continue with Google for the consent page |
 
-Adding another AI app = adding its redirect host (and CIMD host if it uses
-one). That is the "approved in writing" gate from the Terms.
+Adding another AI app = adding its exact callback URL (and CIMD host if it
+uses one). That is the "approved in writing" gate from the Terms.
 
 ### Who can connect
 
-* Brand users (role `client`): only brands they are an active member of.
-* Ignite admins: any brand (support / testing).
+* Brand users (role `client`) and Ignite staff: only brands they are an
+  active member of (`TenantedUser`). Staff have no "any brand" access here;
+  to test against a brand, be a member of it.
+* The account must be verified (gqlauth `UserStatus.verified`, the same gate
+  as the app's password sign-in). Fix a stuck account with `verify_user`.
 * Brand ambassadors and everyone else: nobody — the consent page says so.
+
+### Continue with Google
+
+The consent page can't run Google sign-in itself (its host isn't an
+authorized JavaScript origin on Spark's Google client), so it hands off to the
+web app and gets the person back (`McpSignInHandoff`):
+
+1. **Continue with Google** stores the pending authorization request with the
+   digest of a random start nonce and of a secret kept in this browser's
+   session, then sends the browser to `<client app>/connect-ai?h=<start nonce>`.
+2. The web app signs the person in with its normal Google button and calls
+   `approveAiSignIn(handoff)` (authenticated). That burns the start nonce,
+   checks the account (verified, member of a brand), and returns a URL on the
+   API with a fresh return nonce, which only that browser sees.
+3. `/oauth/authorize/google?h=<return nonce>` finishes the sign-in only in the
+   browser that started it, once, within 10 minutes, then shows the brand
+   picker. The return address is built on the server from
+   `MCP_PUBLIC_BASE_URL`; no URL from the request is ever followed.
+
+The web app host is `MCP_SIGNIN_FRONTEND_URL`, else `CLIENT_FRONTEND_URL`.
 
 Membership is re-checked on every call: removing someone from a brand,
 deactivating them, or dropping the brand from `MCP_ALLOWED_TENANT_IDS` cuts
@@ -163,3 +190,13 @@ purpose.
   (emails, phone numbers, and the names of every ambassador who has worked
   for the brand). `spark_mcp/tests/test_mcp.py` scans every tool's output for
   ambassador fixtures.
+
+### Abuse limits
+
+Sign-in, registration and token throttles are counted in the database
+(`McpThrottle`), so they hold across Cloud Run instances, and are keyed on the
+client IP Cloud Run saw (right-most `X-Forwarded-For` hop), not the
+caller-supplied left-most one. Password sign-in is limited per account (10
+per 15 minutes, whatever the IP) and per IP. A consent-page sign-in lasts 10
+minutes and one approval. Tool calls reserve their quota slot under a
+per-brand database lock, so simultaneous calls can't overrun the daily quota.

@@ -791,6 +791,21 @@ class SparkUserMutations:
             return MagicLinkLoginResponse(success=False, message="Account not found.")
         if not user.is_active:
             return MagicLinkLoginResponse(success=False, message="Account is inactive.")
+        # Same gate as tokenAuth (gqlauth UserStatus.verified). Consuming the
+        # link deliberately does NOT verify the account: someone can register
+        # an address they don't own with their own password, and if the real
+        # owner's link click verified it, that password would then sign in to
+        # the owner's account. Unverified people verify through the activation
+        # email (or staff run verify_user); invited accounts are verified when
+        # they're invited (_ensure_verified), so invite links still work.
+        verified = await sync_to_async(
+            lambda: UserStatus.objects.filter(user_id=user.id, verified=True).exists()
+        )()
+        if not verified:
+            return MagicLinkLoginResponse(
+                success=False,
+                message="Please verify your account first. Use the verification email we sent, or ask your Ignite contact.",
+            )
 
         # Mint a real gqlauth JWT (TokenType), same as Google SSO / tokenAuth.
         # django.core.signing get_token() looks similar but Authorization:

@@ -156,6 +156,11 @@ class TestClientInviteToken(BaseGraphQLTestCase):
             email="new@client.com",
             role=self.roles["client"],
         )
+        # Inviting a client verifies the account (_ensure_verified), and
+        # magic-link sign-in requires a verified account.
+        from tenants.mutations import _ensure_verified
+
+        await sync_to_async(_ensure_verified)(user)
         token = self._invite_token(user)
 
         result = await self._execute_mutation(

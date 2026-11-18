@@ -99,7 +99,7 @@ def _int_arg(args: dict, name: str, default: int, lo: int, hi: int) -> int:
         raise ToolInputError(f"{name} must be a whole number.")
     try:
         value = int(raw)
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, OverflowError) as exc:
         raise ToolInputError(f"{name} must be a whole number.") from exc
     if value < lo or value > hi:
         raise ToolInputError(f"{name} must be between {lo} and {hi}.")

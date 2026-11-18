@@ -51,6 +51,8 @@ def _mcp_settings(settings):
     settings.MCP_ENABLED = True
     settings.MCP_DAILY_CALLS_PER_TENANT = 500
     settings.MCP_CALLS_PER_MINUTE_PER_CONNECTION = 1000
+    settings.MCP_RPC_PER_MINUTE_PER_CONNECTION = 10000
+    settings.MCP_ALLOWED_TENANT_IDS = "all"
     cache.clear()
     yield
 
@@ -125,6 +127,13 @@ class World(AmbassadorsGraphQLTestCase):
         )
         self.create_tenanted_user(user=self.ba_user, tenant=self.tenant)
         self.ba = self.create_ambassador(self.ba_user, address=BA_ADDRESS, phone=BA_PHONE)
+        # Verified accounts, as the app's own sign-in requires (the gqlauth
+        # post_save signal creates the status row unverified).
+        from gqlauth.models import UserStatus
+
+        UserStatus.objects.filter(
+            user__in=[self.brand_user, self.other_user, self.ba_user]
+        ).update(verified=True)
 
         # Past recaps (inside a fixed window) for both brands.
         today = _ops_today()
@@ -394,10 +403,16 @@ def test_pkce_redirect_and_code_replay_are_enforced(world):
     bad = c.post("/oauth/token", {"grant_type": "authorization_code", "code": code, "redirect_uri": REDIRECT,
                                   "client_id": reg["client_id"], "code_verifier": "x" * 50})
     assert bad.status_code == 400 and bad.json()["error"] == "invalid_grant"
-    # The code was consumed by the failed attempt; replay is refused too.
+    # A failed attempt doesn't burn the code (that would let anyone holding a
+    # leaked code break the real client); the real client still redeems it.
+    ok = c.post("/oauth/token", {"grant_type": "authorization_code", "code": code, "redirect_uri": REDIRECT,
+                                 "client_id": reg["client_id"], "code_verifier": verifier})
+    assert ok.status_code == 200
+    # A genuine replay is refused and revokes what that code minted.
     again = c.post("/oauth/token", {"grant_type": "authorization_code", "code": code, "redirect_uri": REDIRECT,
                                     "client_id": reg["client_id"], "code_verifier": verifier})
     assert again.status_code == 400
+    assert rpc(c, ok.json()["access_token"], "tools/list", {}).status_code == 401
     # An unregistered redirect is never redirected to.
     r = c.get("/oauth/authorize", {"response_type": "code", "client_id": reg["client_id"],
                                    "redirect_uri": "https://claude.ai/other", "code_challenge": challenge,
