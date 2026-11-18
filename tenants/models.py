@@ -372,6 +372,12 @@ class Tenant(Asyncable, models.Model):
     # caffeine is in it" for a BA to find mid-shift. Empty = the box says the
     # lead hasn't added notes yet. See ambassadors/product_qa.py.
     ba_product_notes = models.TextField(blank=True, default="")
+    # The brand's own public website ("https://famusenergy.com"). The
+    # product-questions box also answers from a bounded, polite crawl of this
+    # site (homepage + product/FAQ/about pages, Shopify products.json), stored
+    # in product_knowledge.KnowledgeSource and refreshed weekly. Empty = no
+    # crawl. Staff set it on the "BA product notes" card.
+    brand_website_url = models.CharField(max_length=300, blank=True, default="")
     # Per-tenant Google Sheet that mirrors the Master Tracker. Set by
     # admins via the front-end "Link Sheet" chip; the "Copy for Sheets"
     # TSV path expects this URL to live somewhere persistent. Storing
@@ -625,6 +631,9 @@ class BaProductQuestion(models.Model):
     question = models.CharField(max_length=300)
     answer = models.TextField(blank=True, default="")
     outcome = models.CharField(max_length=20, choices=OUTCOME_CHOICES)
+    # The citation shown under the answer ("From famusenergy.com/products/og-luxe",
+    # a document title, or "From <brand> notes"). Empty when not answered.
+    source = models.CharField(max_length=200, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
 
     class Meta:

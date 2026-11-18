@@ -265,3 +265,36 @@ async def connecteam_import_recap_view(request: HttpRequest) -> HttpResponse:
         logger.exception("connecteam-import failed job=%s", body.get("job_id"))
 
     return JsonResponse({"ok": True})
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+async def recap_deck_build_view(request: HttpRequest) -> HttpResponse:
+    """POST `/api/tasks/recap-deck-build`.
+
+    Body JSON: ``{"deck": int}``. Writes the summary, takeaways and next
+    steps of a client recap deck left ``building``
+    (`recap_decks.builder.finish_build`). Sends nothing. Safe to run twice:
+    the build is claimed, and the `build-recap-decks` cron is the fallback.
+    """
+    if not _secret_ok(request):
+        return HttpResponseForbidden("Forbidden")
+
+    from asgiref.sync import sync_to_async
+
+    from recap_decks.builder import finish_build
+
+    try:
+        body = json.loads((request.body or b"").decode("utf-8") or "{}")
+    except (ValueError, UnicodeDecodeError):
+        return JsonResponse({"ok": False, "error": "bad-json"}, status=200)
+    deck_id = body.get("deck") if isinstance(body, dict) else None
+    if not isinstance(deck_id, int):
+        return JsonResponse({"ok": False, "error": "bad-payload"}, status=200)
+    try:
+        outcome = await sync_to_async(finish_build)(deck_id)
+    except Exception:
+        logger.exception("recap-deck-build failed deck=%s", deck_id)
+        # 200: the cron picks the deck up again; no retry storm.
+        return JsonResponse({"ok": False}, status=200)
+    return JsonResponse({"ok": True, "outcome": outcome})

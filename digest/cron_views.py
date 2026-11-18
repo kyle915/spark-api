@@ -1991,6 +1991,56 @@ class GenerateWeeklyClientSummariesView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class GenerateBrandInsightsView(View):
+    """POST `/internal/cron/generate-brand-insights`.
+
+    Works out each brand's store recommendations ("where to go next") and
+    alerts (last finished week) from approved recaps, and stores new and
+    changed ones as DRAFTS for Ignite staff to publish in Spark (Client
+    summaries > Store insights). Findings staff already published or hid
+    are left alone. Dry-run is the default (lists what each brand would get,
+    calls no model, stores nothing); ``dry_run=false`` writes. Optional
+    ``tenant_id``. This endpoint never sends email, Slack or texts.
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        from brand_insights.service import generate_all
+
+        raw = (request.GET.get("dry_run") or request.POST.get("dry_run") or "true").lower()
+        dry_run = raw not in ("0", "false", "no", "off")
+        tenant = (request.GET.get("tenant_id") or request.POST.get("tenant_id") or "").strip()
+        tenant_id = None
+        if tenant:
+            try:
+                tenant_id = int(tenant)
+            except ValueError:
+                return JsonResponse(
+                    {"ok": False, "error": "tenant_id must be an integer"},
+                    status=400,
+                )
+        try:
+            summary = generate_all(tenant_id=tenant_id, apply=not dry_run)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("Brand insights cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc)},
+                status=500,
+            )
+        return JsonResponse(
+            {
+                "ok": True,
+                "endpoint": "generate-brand-insights",
+                "dry_run": dry_run,
+                **summary,
+            }
+        )
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class BackfillGirlBeerReceiptsView(View):
     """POST `/internal/cron/backfill-girlbeer-receipts`.
 
@@ -3474,6 +3524,56 @@ class ReadShelfPhotosView(View):
                 {"ok": False, "error": "read-failed", "detail": str(exc)}, status=500
             )
         return JsonResponse({"ok": True, "report": report})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class BuildRecapDecksView(View):
+    """POST `/internal/cron/build-recap-decks`.
+
+    Finishes client recap decks left ``building`` (big programs: the
+    summary, takeaways and next steps are written outside the staff
+    member's request; see `recap_decks/builder.py`). Each deck is claimed
+    with one conditional UPDATE, so this never races the Cloud Task that
+    may also be finishing it. Sends nothing; shares nothing (a finished
+    deck is a staff draft).
+
+    Params: max_decks (default 5, cap 20), max_seconds (default 240, cap 800).
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _int(name: str, default: int) -> int:
+            raw = (request.POST.get(name) or request.GET.get(name) or "").strip()
+            try:
+                return int(raw) if raw else default
+            except ValueError:
+                return default
+
+        from recap_decks.builder import finish_pending_builds
+
+        try:
+            report = finish_pending_builds(
+                max_decks=max(1, min(_int("max_decks", 5), 20)),
+                max_seconds=max(10, min(_int("max_seconds", 240), 800)),
+            )
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("Build recap decks cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "build-failed", "detail": str(exc)}, status=500
+            )
+        return JsonResponse({"ok": True, "report": report})
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        return JsonResponse({"ok": True, "endpoint": "build-recap-decks"})
 
     def post(self, request: HttpRequest) -> HttpResponse:
         return self._run(request)
@@ -5459,9 +5559,16 @@ class NormalizeRecapLocationsView(View):
     Fills blanks only, plus a retailer that is the same chain spelled another
     way; a retailer set on the recap by hand is never replaced. Idempotent.
 
-    Params (query or POST): tenant (id or slug, REQUIRED), since (YYYY-MM-DD,
-    event date), limit, use_ai (default true), max_ai_calls, show (per-recap
-    rows returned, default 300).
+    Params (query or POST): tenant (id or slug, REQUIRED), since / until
+    (YYYY-MM-DD, event date, inclusive), after_id (only recaps with a larger
+    id), limit, use_ai (default true), max_ai_calls (per call), time_budget
+    (seconds, default 200, max 240), show (per-recap rows returned, default
+    300).
+
+    BOUNDED: no new batch starts after `time_budget` seconds, so a call
+    returns before Cloud Run's 300 s limit however big the tenant is; what
+    was written before that is kept. `partial: true` means recaps are left:
+    call again with `after_id=<next_after_id>` until `partial` is false.
     """
 
     def _run(self, request: HttpRequest) -> HttpResponse:
@@ -5485,25 +5592,46 @@ class NormalizeRecapLocationsView(View):
 
         from datetime import date as _date
 
-        from recaps.recap_location import DEFAULT_MAX_AI_CALLS, resolve_tenant, run
+        from recaps.recap_location import (
+            CRON_TIME_BUDGET_S,
+            DEFAULT_MAX_AI_CALLS,
+            resolve_tenant,
+            run,
+        )
 
         apply = _bool("apply") or _bool("execute")
         try:
             tenant = resolve_tenant(_str("tenant") or _str("tenant_slug") or _str("tenant_id"))
         except ValueError as exc:
             return JsonResponse({"ok": False, "error": str(exc)}, status=400)
-        since = None
-        if _str("since"):
+        dates = {}
+        for name in ("since", "until"):
+            dates[name] = None
+            if _str(name):
+                try:
+                    dates[name] = _date.fromisoformat(_str(name))
+                except ValueError:
+                    return JsonResponse(
+                        {"ok": False, "error": f"bad {name} (expected YYYY-MM-DD)"}, status=400
+                    )
+        if _str("after_id") and _int("after_id") is None:
+            return JsonResponse({"ok": False, "error": "bad after_id (expected an integer)"}, status=400)
+        budget = CRON_TIME_BUDGET_S
+        if _str("time_budget"):
             try:
-                since = _date.fromisoformat(_str("since"))
+                budget = float(_str("time_budget"))
             except ValueError:
                 return JsonResponse(
-                    {"ok": False, "error": "bad since (expected YYYY-MM-DD)"}, status=400
+                    {"ok": False, "error": "bad time_budget (expected seconds)"}, status=400
                 )
+        budget = min(max(budget, 1.0), 240.0)
         try:
             report = run(
                 tenant,
-                since=since,
+                since=dates["since"],
+                until=dates["until"],
+                after_id=_int("after_id"),
+                time_budget_s=budget,
                 limit=_int("limit"),
                 apply=apply,
                 use_ai=_bool("use_ai", default=True),
@@ -12257,6 +12385,7 @@ def _registered_views() -> dict[str, Any]:
         "send-client-weekly-digest": SendClientWeeklyDigestView,
         "generate-weekly-narration": GenerateWeeklyNarrationView,
         "generate-weekly-client-summaries": GenerateWeeklyClientSummariesView,
+        "generate-brand-insights": GenerateBrandInsightsView,
         "repair-approved-event-status": RepairApprovedEventStatusView,
         "repair-missing-events-for-approved-requests": (
             RepairMissingEventsForApprovedRequestsView
@@ -12284,6 +12413,7 @@ def _registered_views() -> dict[str, Any]:
         "regenerate-recap-pdfs": RegenerateRecapPdfsView,
         "read-recap-receipts": ReadRecapReceiptsView,
         "score-recap-photos": ScoreRecapPhotosView,
+        "build-recap-decks": BuildRecapDecksView,
         "read-shelf-photos": ReadShelfPhotosView,
         "campaign-to-date": CampaignToDateView,
         "dedupe-skills": DedupeSkillsView,
