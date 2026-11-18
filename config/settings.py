@@ -95,6 +95,7 @@ INSTALLED_APPS = [
     "timeclock",
     "recap_decks",
     "consumer_mentions",
+    "photo_library",
     "hours_check",
     # Anti-scraping guardrails: shared Postgres rate limiter, audit log,
     # usage rollups (app label "abuse"). See utils/abuse/__init__.py.
