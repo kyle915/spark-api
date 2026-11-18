@@ -1,0 +1,129 @@
+name: Sales assist
+
+# Spark numbers -> DRAFT notes and emails in Close (spark-api sales_assist/,
+# docs/sales-assist.md). Fires /internal/cron/sales-assist on Cloud Run.
+#
+# This job SENDS NOTHING. At most it creates a note and an email with status
+# "draft" on a Close lead; a rep reviews and sends it from Close.
+#
+# Two locks before anything reaches Close: the run must pass apply=true AND
+# SALES_ASSIST_ENABLED must be true on Cloud Run (plus CLOSE_API_KEY set).
+# Scheduled runs pass apply=true, so they stay dry runs until Kyle flips
+# SALES_ASSIST_ENABLED. Manual runs default to a dry run.
+#
+# Schedules (GitHub only fires schedules from main; the endpoint deploys
+# from develop):
+#   - weekdays every 2h, :17 past (15:17-01:17 UTC): new-lead proposals, then
+#     renewals due soon (links with a renewal date in the next 45 days)
+#   - 3rd of Jan/Apr/Jul/Oct 15:37 UTC: last quarter's results for every
+#     linked client
+
+on:
+  schedule:
+    - cron: "17 15-23/2 * * 1-5"
+    - cron: "17 1 * * 2-6"
+    - cron: "37 15 3 1,4,7,10 *"
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "What to run"
+        required: true
+        default: "status"
+        type: choice
+        options:
+          - status
+          - prospects
+          - renewals
+          - suggest-links
+          - link
+      apply:
+        description: "Write drafts to Close (also needs SALES_ASSIST_ENABLED on Cloud Run). false = dry run"
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      tenant:
+        description: "renewals: one tenant id (blank = every linked client)"
+        required: false
+        default: ""
+      mode:
+        description: "renewals: quarterly (every link) or due (renewal date soon)"
+        required: false
+        default: "quarterly"
+        type: choice
+        options:
+          - quarterly
+          - due
+      start:
+        description: "renewals: period start YYYY-MM-DD (blank = last complete quarter)"
+        required: false
+        default: ""
+      end:
+        description: "renewals: period end YYYY-MM-DD"
+        required: false
+        default: ""
+      lead:
+        description: "prospects: one Close lead id (lead_...) to draft on demand"
+        required: false
+        default: ""
+      map:
+        description: 'link: JSON {"<tenant id>": "lead_..."} (reviewed suggestions only)'
+        required: false
+        default: ""
+
+jobs:
+  sales-assist:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Fire sales-assist endpoint
+        env:
+          BASE_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/sales-assist
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          EVENT: ${{ github.event_name }}
+          SCHEDULE: ${{ github.event.schedule }}
+          ACTION: ${{ github.event.inputs.action }}
+          APPLY: ${{ github.event.inputs.apply }}
+          TENANT: ${{ github.event.inputs.tenant }}
+          MODE: ${{ github.event.inputs.mode }}
+          START: ${{ github.event.inputs.start }}
+          END: ${{ github.event.inputs.end }}
+          LEAD: ${{ github.event.inputs.lead }}
+          MAP: ${{ github.event.inputs.map }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+
+          fire() {
+            rm -f /tmp/r.json
+            STATUS=$(curl -sS -o /tmp/r.json -w '%{http_code}' --max-time 900 -X POST "$BASE_URL" \
+              -H "X-Cron-Secret: $CRON_SECRET" "$@" || true)
+            echo "== HTTP $STATUS"
+            python3 -c 'import json; print(json.dumps(json.load(open("/tmp/r.json")), indent=2))' 2>/dev/null || cat /tmp/r.json || true
+            [ "$STATUS" = "200" ]
+          }
+
+          if [ "$EVENT" = "schedule" ]; then
+            if [ "$SCHEDULE" = "37 15 3 1,4,7,10 *" ]; then
+              fire --data-urlencode "action=renewals" --data-urlencode "mode=quarterly" --data-urlencode "apply=true"
+            else
+              fire --data-urlencode "action=prospects" --data-urlencode "apply=true"
+              fire --data-urlencode "action=renewals" --data-urlencode "mode=due" --data-urlencode "apply=true"
+            fi
+            exit 0
+          fi
+
+          case "$ACTION" in
+            status)        fire --data-urlencode "action=status" ;;
+            suggest-links) fire --data-urlencode "action=suggest-links" ;;
+            link)          fire --data-urlencode "action=link" --data-urlencode "map=$MAP" --data-urlencode "apply=$APPLY" ;;
+            prospects)     fire --data-urlencode "action=prospects" --data-urlencode "lead=$LEAD" --data-urlencode "apply=$APPLY" ;;
+            renewals)      fire --data-urlencode "action=renewals" --data-urlencode "tenant=$TENANT" \
+                             --data-urlencode "mode=$MODE" --data-urlencode "start=$START" \
+                             --data-urlencode "end=$END" --data-urlencode "apply=$APPLY" ;;
+          esac
