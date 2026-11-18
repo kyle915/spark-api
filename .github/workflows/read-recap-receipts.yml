@@ -29,6 +29,11 @@ on:
         description: "Receipt images to read this run"
         required: false
         default: "40"
+      reread_older:
+        description: "Also re-read receipts read before store numbers/charge lines were captured"
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: ${{ github.workflow }}
@@ -46,6 +51,7 @@ jobs:
           TENANT_ID: ${{ github.event.inputs.tenant_id || '' }}
           SINCE_DAYS: ${{ github.event.inputs.since_days || '45' }}
           LIMIT: ${{ github.event.inputs.limit || '40' }}
+          REREAD_OLDER: ${{ github.event.inputs.reread_older || 'false' }}
         run: |
           set -euo pipefail
           if [ -z "$CRON_SECRET" ]; then
@@ -58,7 +64,8 @@ jobs:
             -H "X-Cron-Secret: $CRON_SECRET" \
             --data-urlencode "tenant_id=$TENANT_ID" \
             --data-urlencode "since_days=$SINCE_DAYS" \
-            --data-urlencode "limit=$LIMIT")
+            --data-urlencode "limit=$LIMIT" \
+            --data-urlencode "reread_older=$REREAD_OLDER")
           echo "HTTP $STATUS"
           cat /tmp/resp.json
           echo
