@@ -1,0 +1,77 @@
+name: Tag recap photos (photo library)
+
+# Fires `/internal/cron/tag-recap-photos` on Cloud Run. Tags each recap photo
+# once for the searchable photo library: what it shows, the brand's products
+# in it, crowd size, setting and quality. See photo_library/tagging.py.
+#
+# A photo is tagged once and again only if its file changes. Receipts are set
+# aside without a model call, the same file twice is copied, and photos the
+# best-photo scorer already looked at reuse its answer, so a run with nothing
+# new makes no vision calls. Each run is capped at `max_calls` vision calls
+# and `max_seconds`; anything left waits for the next run.
+#
+# The scheduled run writes. A manual run is a DRY RUN unless you choose
+# dry_run=false: it counts what would be tagged and calls nothing.
+#
+# Sends nothing and changes no recap. Secret-gated via `X-Cron-Secret`.
+#
+# Schedule: hourly at :53 (offset from score-recap-photos at :41).
+# NOTE: schedules only fire from the default branch (main).
+
+on:
+  schedule:
+    - cron: "53 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Count what would be tagged, but call no model and store nothing"
+        required: false
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+      tenant:
+        description: "Limit to one tenant id (blank = all brands)"
+        required: false
+        default: ""
+      max_calls:
+        description: "Vision calls allowed this run (cost cap, max 500)"
+        required: false
+        default: "100"
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  tag-recap-photos:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Fire tag-recap-photos cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/tag-recap-photos
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+          TENANT: ${{ github.event.inputs.tenant || '' }}
+          MAX_CALLS: ${{ github.event.inputs.max_calls || '100' }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS --max-time 900 -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL" \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            --data-urlencode "dry_run=$DRY_RUN" \
+            --data-urlencode "tenant=$TENANT" \
+            --data-urlencode "max_calls=$MAX_CALLS" \
+            --data-urlencode "max_seconds=240")
+          echo "HTTP $STATUS"
+          python3 -c "import json;d=json.load(open('/tmp/cron-response.json'));print(d.get('log') or d)"
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS"
+            exit 1
+          fi
