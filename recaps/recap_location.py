@@ -20,6 +20,15 @@ Order of evidence
    store / city / state / address answers, store-number patterns such as
    "HEB #614" or "H-E-B 540", accepted store-name aliases
    (``events.retailer_aliases``) and a fixed list of chain spellings.
+2b. The state from where the recap's BA clocked in to its event
+   (``Attendance.coordinates`` of the clock-in, and the mobile app's clock-in
+   ``LocationPing``), looked up offline in shipped state shapes
+   (``recaps.us_state_geo``). Only when the recap shows no state. A fix with
+   poor stated accuracy, far from the event's own position, or too close to
+   another state's line is not used; one that disagrees with an address or
+   answer blanks the state, like any other disagreement. The city is never
+   read from GPS, but a city the recap names gets placed in the GPS state
+   (medium) unless the Location catalog puts that city only elsewhere.
 3. The AI text model, only for what is still blank, given only location text
    (event name and address, the store / city / state / address answers). No
    ambassador names, phone numbers, emails or other people data are sent;
@@ -50,6 +59,7 @@ mirror once per recap; the nightly sheet sync picks the values up.
 from __future__ import annotations
 
 import logging
+import math
 import re
 from dataclasses import dataclass, field
 from datetime import date
@@ -75,6 +85,18 @@ FIELDS = ("retailer", "store_number", "city", "state_code")
 
 CONF_HIGH = "high"
 CONF_MEDIUM = "medium"
+
+GPS_SOURCE = "clockin_gps"
+# A clock-in fix whose device said it was this unsure is not used.
+GPS_MAX_ACCURACY_M = 1000.0
+# A fix this far from the event's own coordinates is the wrong place (a BA
+# clocking in from home or the car park of another town), not the event.
+GPS_MAX_FROM_EVENT_MILES = 25.0
+# Closer than this (plus the fix's stated accuracy) to another state's line:
+# too close to call with simplified shapes, left blank. Closer than
+# GPS_NEAR_BORDER_KM: used, at medium confidence.
+GPS_BORDER_UNSURE_KM = 1.0
+GPS_NEAR_BORDER_KM = 5.0
 
 # Recaps sent to the model in one call, and the default cap on calls per run.
 AI_BATCH = 15
@@ -455,6 +477,157 @@ def gather_snippets(recap) -> list[Snippet]:
     return out
 
 
+# ─── Clock-in GPS ───────────────────────────────────────────────────
+
+
+@dataclass
+class ClockinFix:
+    lat: float
+    lng: float
+    accuracy_m: float | None = None
+    source: str = "attendance"  # attendance | ping
+
+
+@dataclass
+class ClockinGps:
+    """The clock-in fixes of a recap's BA on its event, and the event's own
+    position (``Event.coordinates``, else its geocoded map point)."""
+
+    fixes: list[ClockinFix] = field(default_factory=list)
+    event_point: tuple[float, float] | None = None
+
+
+def _coords(raw) -> tuple[float, float] | None:
+    if not raw or len(raw) < 2:
+        return None
+    try:
+        lat, lng = float(raw[0]), float(raw[1])
+    except (TypeError, ValueError):
+        return None
+    if (lat == 0.0 and lng == 0.0) or not (-90.0 <= lat <= 90.0 and -180.0 <= lng <= 180.0):
+        return None
+    return lat, lng
+
+
+def _miles(a: tuple[float, float], b: tuple[float, float]) -> float:
+    lat1, lng1, lat2, lng2 = map(math.radians, (a[0], a[1], b[0], b[1]))
+    h = math.sin((lat2 - lat1) / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin((lng2 - lng1) / 2) ** 2
+    return 3958.8 * 2 * math.asin(math.sqrt(h))
+
+
+def clockin_gps_for(recaps) -> dict[int, ClockinGps]:
+    """``{recap id: ClockinGps}`` for recaps with both an event and an
+    ambassador, in three queries however many recaps there are."""
+    from ambassadors.models import Attendance, LocationPing
+    from events.models import EventMapPoint
+
+    pairs = {(r.event_id, r.ambassador_id) for r in recaps if r.event_id and r.ambassador_id}
+    if not pairs:
+        return {}
+    event_ids = sorted({e for e, _a in pairs})
+    amb_ids = sorted({a for _e, a in pairs})
+    fixes: dict[tuple[int, int], list[ClockinFix]] = {}
+    rows = (
+        Attendance.objects.filter(
+            event_id__in=event_ids, ambassador_id__in=amb_ids, source__name="clock_in"
+        )
+        .exclude(coordinates__isnull=True)
+        .order_by("clock_time", "id")
+        .values_list("event_id", "ambassador_id", "coordinates")
+    )
+    for ev, amb, raw in rows.iterator():
+        point = _coords(raw)
+        if point and (ev, amb) in pairs:
+            fixes.setdefault((ev, amb), []).append(ClockinFix(*point, source="attendance"))
+    pings = (
+        LocationPing.objects.filter(event_id__in=event_ids, ambassador_id__in=amb_ids, source="clock_in")
+        .order_by("recorded_at", "id")
+        .values_list("event_id", "ambassador_id", "lat", "lng", "accuracy_meters")
+    )
+    for ev, amb, lat, lng, acc in pings.iterator():
+        point = _coords((lat, lng))
+        if point and (ev, amb) in pairs:
+            fixes.setdefault((ev, amb), []).append(ClockinFix(*point, accuracy_m=acc, source="ping"))
+    map_points = {
+        ev: (lat, lng)
+        for ev, lat, lng in EventMapPoint.objects.filter(
+            event_id__in=event_ids, status=EventMapPoint.STATUS_OK
+        ).values_list("event_id", "lat", "lng")
+        if _coords((lat, lng))
+    }
+    out = {}
+    for r in recaps:
+        if not (r.event_id and r.ambassador_id):
+            continue
+        event_point = _coords(getattr(r.event, "coordinates", None)) or map_points.get(r.event_id)
+        out[r.id] = ClockinGps(fixes.get((r.event_id, r.ambassador_id), []), event_point)
+    return out
+
+
+def gps_state(gps: ClockinGps | None) -> tuple[str, str, list[str]]:
+    """``(state code, confidence, notes)`` from a recap's clock-in fixes;
+    ``("", "", notes)`` when they do not settle it."""
+    from recaps.us_state_geo import state_at
+
+    notes: list[str] = []
+    if gps is None or not gps.fixes:
+        return "", "", notes
+    poor = [f for f in gps.fixes if f.accuracy_m is not None and f.accuracy_m > GPS_MAX_ACCURACY_M]
+    usable = []
+    for f in gps.fixes:
+        if f in poor:
+            continue
+        # The web/mobile clock-in writes the same fix to Attendance (no
+        # accuracy) and to a ping (with it): a fix next to a poor ping is
+        # that same poor fix.
+        if f.accuracy_m is None and any(_miles((f.lat, f.lng), (p.lat, p.lng)) < 0.06 for p in poor):
+            continue
+        usable.append(f)
+    if poor and not usable:
+        notes.append(f"state_code: clock-in GPS accuracy worse than {GPS_MAX_ACCURACY_M:.0f} m; not used")
+        return "", "", notes
+    if gps.event_point is not None:
+        near = [f for f in usable if _miles((f.lat, f.lng), gps.event_point) <= GPS_MAX_FROM_EVENT_MILES]
+        if usable and not near:
+            notes.append(
+                f"state_code: clock-in GPS is more than {GPS_MAX_FROM_EVENT_MILES:.0f} mi "
+                "from the event; not used"
+            )
+            return "", "", notes
+        usable = near
+    codes: set[str] = set()
+    confidence = CONF_HIGH
+    for f in usable:
+        hit = state_at(f.lat, f.lng)
+        if hit is None:
+            continue
+        unsure_km = GPS_BORDER_UNSURE_KM + (f.accuracy_m or 0) / 1000.0
+        if hit.border_km < unsure_km:
+            notes.append(f"state_code: clock-in GPS is too close to a state line to call ({hit.code}?); not used")
+            return "", "", notes
+        if not hit.inside or hit.border_km < GPS_NEAR_BORDER_KM:
+            confidence = CONF_MEDIUM
+        codes.add(hit.code)
+    if len(codes) > 1:
+        notes.append(f"state_code: clock-in GPS fixes fall in different states ({', '.join(sorted(codes))}); not used")
+        return "", "", notes
+    if not codes:
+        return "", "", notes
+    return codes.pop(), confidence, notes
+
+
+def _catalog_states(city: str) -> set[str]:
+    from events.models import Location
+
+    return {
+        (code or "").strip().upper()
+        for code in Location.objects.filter(name__iexact=city, state__isnull=False).values_list(
+            "state__code", flat=True
+        )
+        if code
+    }
+
+
 # ─── Proposals ──────────────────────────────────────────────────────
 
 
@@ -524,8 +697,13 @@ def _pick(values: list[tuple[str, str]], field_name: str, notes: list[str]) -> t
     return next(iter(distinct.values())) if distinct else ("", "")
 
 
-def propose(recap, index: ChainIndex) -> Proposal:
-    """Deterministic proposal for one recap (no network)."""
+_LOOKUP = object()
+
+
+def propose(recap, index: ChainIndex, gps: ClockinGps | None = _LOOKUP) -> Proposal:  # type: ignore[assignment]
+    """Deterministic proposal for one recap (no network). ``gps``: the
+    recap's clock-in fixes from :func:`clockin_gps_for` (looked up here when
+    not given)."""
     cur = current_values(recap)
     snippets = gather_snippets(recap)
     when = None
@@ -630,18 +808,37 @@ def propose(recap, index: ChainIndex) -> Proposal:
                     cities.append((city, s.source))
 
     if not cur.state_code:
+        # After the addresses and answers, so one of them is the source
+        # whenever they agree with the GPS; a disagreement blanks the state.
+        if gps is _LOOKUP:
+            gps = clockin_gps_for([recap]).get(recap.id)
+        gps_code, gps_conf, gps_notes = gps_state(gps)
+        notes.extend(gps_notes)
+        if gps_code:
+            states.append((gps_code, GPS_SOURCE))
         value, src = _pick(states, "state_code", notes)
         if value:
             prop.after["state_code"] = value
             prop.sources["state_code"] = src
-            prop.confidence["state_code"] = CONF_HIGH
+            prop.confidence["state_code"] = gps_conf if src == GPS_SOURCE else CONF_HIGH
     state = prop.after.get("state_code") or ""
     if not cur.city:
         value, src = _pick(cities, "city", notes)
+        city_conf = CONF_HIGH
+        if value and state and prop.sources.get("state_code") == GPS_SOURCE:
+            # The city is the recap's own answer; the state only the GPS.
+            city_conf = CONF_MEDIUM
+            known = _catalog_states(value)
+            if known and state not in known:
+                notes.append(
+                    f"city: {value!r} is listed only in {', '.join(sorted(known))}, "
+                    f"not the clock-in state {state}; left blank"
+                )
+                value = ""
         if value and state:
             prop.after["city"] = value
             prop.sources["city"] = src
-            prop.confidence["city"] = CONF_HIGH
+            prop.confidence["city"] = city_conf
         elif value:
             notes.append(f"city: {value!r} found but no state to place it in; left blank")
     prop.zip = zips[0] if len(set(zips)) == 1 else ""
@@ -997,7 +1194,8 @@ def run(
     )
     index = ChainIndex.for_tenant(tenant.id, retailers)
     recaps = list(recaps_for(tenant.id, since=since, limit=limit))
-    proposals: list[tuple[object, Proposal]] = [(r, propose(r, index)) for r in recaps]
+    gps = clockin_gps_for([r for r in recaps if not current_values(r).state_code])
+    proposals: list[tuple[object, Proposal]] = [(r, propose(r, index, gps.get(r.id))) for r in recaps]
 
     ai_status = "off"
     ai_calls = 0
