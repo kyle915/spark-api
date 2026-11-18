@@ -17,6 +17,14 @@ name: Normalize recap locations (manual)
 # Writes go on the recap only (CustomRecap.retailer / store_number / state /
 # location); the shared Event is untouched.
 #
+# BIG TENANTS: one HTTP call stops starting new batches after ~200 s (Cloud
+# Run kills requests at 300 s) and answers partial=true with next_after_id.
+# With follow_pages=true (default) this job keeps calling with
+# after_id=<next_after_id> until partial=false, so ONE dispatch walks the
+# whole tenant. since / until narrow the event-date window; after_id resumes
+# from a cursor printed by an earlier run. Every page's writes are kept even
+# if a later page fails, and re-running is a no-op for written recaps.
+#
 # Run from the Actions tab AFTER the endpoint is deployed (ships from
 # develop). Secret-gated via X-Cron-Secret (shared INTERNAL_CRON_SECRET) — a
 # HEADER, never the URL. Manual one-off — no `schedule:`.
@@ -38,13 +46,28 @@ on:
         required: false
         default: ""
         type: string
+      until:
+        description: "Only recaps whose EVENT date is on/before YYYY-MM-DD (blank = all)."
+        required: false
+        default: ""
+        type: string
+      after_id:
+        description: "Start after this recap id (resume cursor = next_after_id of an earlier run; blank = start)."
+        required: false
+        default: ""
+        type: string
       limit:
-        description: "At most this many recaps, oldest first (blank = all)."
+        description: "At most this many recaps PER CALL, oldest first (blank = as many as fit the time budget)."
         required: false
         default: ""
         type: string
       use_ai:
-        description: "Ask the AI model about what deterministic rules leave blank."
+        description: "Ask the AI model about what deterministic rules leave blank (max_ai_calls applies per call)."
+        required: true
+        default: true
+        type: boolean
+      follow_pages:
+        description: "Keep calling with after_id=next_after_id until partial=false (false = one call only)."
         required: true
         default: true
         type: boolean
@@ -52,6 +75,7 @@ on:
 jobs:
   fire-normalize-recap-locations:
     runs-on: ubuntu-latest
+    timeout-minutes: 300
     steps:
       - name: Fire normalize-recap-locations cron endpoint
         env:
@@ -60,8 +84,11 @@ jobs:
           DRY_RUN: ${{ github.event.inputs.dry_run }}
           TENANT: ${{ github.event.inputs.tenant }}
           SINCE: ${{ github.event.inputs.since }}
+          UNTIL: ${{ github.event.inputs.until }}
+          AFTER_ID: ${{ github.event.inputs.after_id }}
           LIMIT: ${{ github.event.inputs.limit }}
           USE_AI: ${{ github.event.inputs.use_ai }}
+          FOLLOW_PAGES: ${{ github.event.inputs.follow_pages }}
         run: |
           set -euo pipefail
           if [ -z "$CRON_SECRET" ]; then
@@ -72,18 +99,28 @@ jobs:
           # dry_run=true -> apply=false (no writes); dry_run=false -> apply=true.
           if [ "$DRY_RUN" = "false" ]; then APPLY=true; else APPLY=false; fi
 
-          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
-            --max-time 900 \
-            -X POST "$CRON_URL" \
-            -H "X-Cron-Secret: $CRON_SECRET" \
-            --data-urlencode "apply=$APPLY" \
-            --data-urlencode "tenant=$TENANT" \
-            --data-urlencode "since=$SINCE" \
-            --data-urlencode "limit=$LIMIT" \
-            --data-urlencode "use_ai=$USE_AI")
-          echo "HTTP $STATUS"
-          python3 - <<'PY'
-          import json
+          CURSOR="$AFTER_ID"
+          PAGE=0
+          MAX_PAGES=500
+          while :; do
+            PAGE=$((PAGE + 1))
+            echo "=== page $PAGE (after_id=${CURSOR:-start}) ==="
+            : > /tmp/cron-response.json
+            STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+              --max-time 330 \
+              -X POST "$CRON_URL" \
+              -H "X-Cron-Secret: $CRON_SECRET" \
+              --data-urlencode "apply=$APPLY" \
+              --data-urlencode "tenant=$TENANT" \
+              --data-urlencode "since=$SINCE" \
+              --data-urlencode "until=$UNTIL" \
+              --data-urlencode "after_id=$CURSOR" \
+              --data-urlencode "limit=$LIMIT" \
+              --data-urlencode "use_ai=$USE_AI") || true
+            echo "HTTP $STATUS"
+            : > /tmp/next-cursor.txt
+            python3 - <<'PY'
+          import json, sys
           try:
               r = json.load(open("/tmp/cron-response.json"))
           except Exception:
@@ -92,30 +129,52 @@ jobs:
           if not r.get("ok"):
               print(json.dumps(r, indent=2))
               raise SystemExit(0)
+          out = sys.stdout
           print(f"tenant={r['tenant']} applied={r['applied']} scanned={r['scanned']} "
-                f"with_changes={r['recaps_with_changes']} written={r['recaps_written']}")
-          print("fills:", r["fills"])
-          print("blank before:", r["blank_before"])
-          print("blank after: ", r["blank_after"])
-          print("by source:", r["by_source"])
-          print("ai:", r["ai"])
+                f"with_changes={r['recaps_with_changes']} written={r['recaps_written']} "
+                f"partial={r.get('partial')} last_recap_id={r.get('last_recap_id')} "
+                f"next_after_id={r.get('next_after_id')} elapsed_s={r.get('elapsed_s')}", file=out)
+          print("fills:", r["fills"], file=out)
+          print("blank before:", r["blank_before"], file=out)
+          print("blank after: ", r["blank_after"], file=out)
+          print("by source:", r["by_source"], file=out)
+          print("ai:", r["ai"], file=out)
           if r.get("created_retailers"):
-              print("created retailers:", r["created_retailers"])
+              print("created retailers:", r["created_retailers"], file=out)
           if r.get("created_locations"):
-              print("created cities:", r["created_locations"])
+              print("created cities:", r["created_locations"], file=out)
           for row in r["rows"]:
               diff = "; ".join(
                   f"{f}: {row['before'].get(f) or '-'} -> {v} [{row['sources'].get(f, '')}/{row['confidence'].get(f, '')}]"
                   for f, v in row["changes"].items()
               )
               tag = "SET" if row.get("written") else ("WOULD-SET" if row["changes"] else "NOTE")
-              print(f"[{tag}] recap {row['recap_id']} ({row['event_date'] or 'no date'}) {diff}")
+              print(f"[{tag}] recap {row['recap_id']} ({row['event_date'] or 'no date'}) {diff}", file=out)
               for note in row["notes"]:
-                  print(f"    note: {note}")
+                  print(f"    note: {note}", file=out)
           if r.get("rows_total", 0) > len(r["rows"]):
-              print(f"... {r['rows_total'] - len(r['rows'])} more rows")
+              print(f"... {r['rows_total'] - len(r['rows'])} more rows", file=out)
+          # The next cursor, only when recaps are left.
+          if r.get("partial") and r.get("next_after_id"):
+              open("/tmp/next-cursor.txt", "w").write(str(r["next_after_id"]))
           PY
-          if [ "$STATUS" != "200" ]; then
-            echo "::error::Cron endpoint returned $STATUS — see body above."
-            exit 1
-          fi
+            NEXT=$(cat /tmp/next-cursor.txt)
+            if [ "$STATUS" != "200" ]; then
+              echo "::error::Cron endpoint returned $STATUS on page $PAGE (after_id=${CURSOR:-start}) — see body above. Resume with after_id=${CURSOR}."
+              exit 1
+            fi
+            if [ -z "$NEXT" ]; then
+              echo "Done: partial=false after $PAGE page(s)."
+              break
+            fi
+            echo "More recaps left: next_after_id=$NEXT"
+            if [ "$FOLLOW_PAGES" != "true" ]; then
+              echo "follow_pages=false — stopping. Re-dispatch with after_id=$NEXT to continue."
+              break
+            fi
+            if [ "$NEXT" = "$CURSOR" ] || [ "$PAGE" -ge "$MAX_PAGES" ]; then
+              echo "::error::No progress or $MAX_PAGES pages reached (cursor=$NEXT); stopping."
+              exit 1
+            fi
+            CURSOR="$NEXT"
+          done

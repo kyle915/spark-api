@@ -6,8 +6,9 @@ request body it would have sent is checked for people data.
 
 from __future__ import annotations
 
+import itertools
 import json
-from datetime import datetime
+from datetime import date, datetime
 from io import StringIO
 from unittest.mock import patch
 
@@ -22,7 +23,9 @@ from ambassadors.tests.base import AmbassadorsGraphQLTestCase
 from config.schema_client import schema_clients
 from events import models as event_models
 from recaps import models as recap_models
-from recaps.recap_location import chain_in_text, run, scrub, state_code_of
+from recaps import recap_location
+from recaps.recap_location import ChainIndex, chain_in_text, run, scrub, state_code_of
+from recaps.us_state_geo import state_at
 
 # ─── Pure text rules ────────────────────────────────────────────────
 
@@ -60,6 +63,64 @@ def test_scrub_blanks_people_data():
     assert "Claire" not in out and "Thornhill" not in out
     assert "555" not in out and "@" not in out
     assert "HEB" in out
+
+
+def test_chain_index_target_picks_the_numbered_store_then_the_canonical_row():
+    index = ChainIndex.for_tenant(
+        None, [(1, "heb"), (2, "HEB #614"), (3, "H-E-B"), (4, "Kroger 12"), (5, "H-E-B")]
+    )
+    assert index.target("H-E-B", "614") == (2, "HEB #614")
+    assert index.target("H-E-B", "999") == (3, "H-E-B")
+    assert index.target("H-E-B") == (3, "H-E-B")
+    assert index.target("Kroger", "12") == (4, "Kroger 12")
+    assert index.target("Kroger") == (None, "Kroger")
+    assert index.target("Publix") == (None, "Publix")
+    # Memoized: the same answer on a second read.
+    assert index.target("H-E-B", "614") == (2, "HEB #614")
+    assert index.canonical("heb #614") == index.canonical("heb #614") == "H-E-B"
+
+
+# ─── Point → state, offline ─────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "lat, lng, code",
+    [
+        (30.2672, -97.7431, "TX"),  # Austin
+        (34.0522, -118.2437, "CA"),  # Los Angeles
+        (47.6062, -122.3321, "WA"),  # Seattle
+        (25.7617, -80.1918, "FL"),  # Miami
+        (40.7128, -74.0060, "NY"),  # Manhattan
+        (21.3069, -157.8583, "HI"),  # Honolulu
+        (61.2181, -149.9003, "AK"),  # Anchorage
+        (38.8977, -77.0365, "DC"),
+        (41.8917, -87.6086, "IL"),  # Navy Pier: past the simplified shore
+    ],
+)
+def test_state_at_known_points(lat, lng, code):
+    hit = state_at(lat, lng)
+    assert hit is not None and hit.code == code
+
+
+def test_state_at_border_points_report_the_distance_to_the_line():
+    # Country Club Plaza, Kansas City MO: ~1.5 km from State Line Rd.
+    plaza = state_at(39.0425, -94.5900)
+    assert plaza.code == "MO" and 1.0 < plaza.border_km < 5.0
+    kck = state_at(39.1142, -94.6275)
+    assert kck.code == "KS" and kck.border_km < 5.0
+    # Bristol TN on State St, which IS the TN/VA line.
+    assert state_at(36.5940, -82.1850).border_km < 1.0
+    # Far inland: nowhere near another state.
+    assert state_at(30.2672, -97.7431).border_km >= 20
+
+
+@pytest.mark.parametrize(
+    "lat, lng",
+    [(43.65, -79.38), (32.5149, -117.0382), (18.4655, -66.1057), (0, 0), (None, None)],
+)
+def test_state_at_outside_the_states(lat, lng):
+    # Toronto, Tijuana, San Juan PR (a territory), null island, garbage.
+    assert state_at(lat, lng) is None
 
 
 # ─── Through the database ───────────────────────────────────────────
@@ -359,6 +420,161 @@ class TestRecapLocation(AmbassadorsGraphQLTestCase):
         row = self._row(report, recap)
         assert row is None or not row["changes"]
 
+    # Clock-in GPS
+
+    AUSTIN = (30.2672, -97.7431)
+    LOS_ANGELES = (34.0522, -118.2437)
+
+    def _clock_in(self, event, point, *, ambassador=None, accuracy=None, ping=False):
+        from ambassadors.models import Attendance, LocationPing, Source
+
+        amb = ambassador or self.ba
+        if ping:
+            return LocationPing.objects.create(
+                ambassador=amb, event=event, lat=point[0], lng=point[1],
+                accuracy_meters=accuracy, recorded_at=event.date, source="clock_in",
+            )
+        source, _ = Source.objects.get_or_create(name="clock_in")
+        return Attendance.objects.create(
+            clock_time=event.date, coordinates=list(point), ambassador=amb, event=event, source=source,
+        )
+
+    def test_clockin_gps_fills_a_blank_state(self):
+        event = self._event(name="Walk-up")
+        self._clock_in(event, self.AUSTIN)
+        recap = self._recap(event)
+        report = self._run(apply=True)
+        row = self._row(report, recap)
+        assert row["changes"] == {"state_code": "TX"}
+        assert row["sources"]["state_code"] == "clockin_gps"
+        assert row["confidence"]["state_code"] == "high"
+        assert report["by_source"] == {"clockin_gps": 1}
+        recap.refresh_from_db()
+        assert recap.state_id == self.tx.id
+        assert recap.location_fill["fields"]["state_code"]["source"] == "clockin_gps"
+        assert recap.event.state_id is None  # the shared event is untouched
+
+    def test_clockin_gps_places_the_recaps_own_city_at_medium(self):
+        event = self._event(name="Walk-up")
+        self._clock_in(event, self.AUSTIN)
+        recap = self._recap(event, {"City": "austin"})
+        row = self._row(self._run(), recap)
+        assert row["changes"] == {"city": "Austin", "state_code": "TX"}
+        assert row["sources"] == {"city": "city_field", "state_code": "clockin_gps"}
+        assert row["confidence"]["city"] == "medium"
+
+    def test_clockin_gps_city_listed_only_in_another_state_is_left_blank(self):
+        event_models.Location.objects.create(
+            name="Portland", code="OR", zip="97201", state=event_models.State.objects.create(
+                name="Oregon", code="OR", created_by=self.sys), created_by=self.sys,
+        )
+        event = self._event(name="Walk-up")
+        self._clock_in(event, self.AUSTIN)
+        recap = self._recap(event, {"City": "Portland"})
+        row = self._row(self._run(), recap)
+        assert row["changes"] == {"state_code": "TX"}
+        assert any("listed only in OR" in n for n in row["notes"])
+
+    def test_clockin_gps_agreeing_with_an_address_keeps_the_address_source(self):
+        event = self._event(request=self._request(address="1 Congress Ave, Austin, TX 78701"))
+        self._clock_in(event, self.AUSTIN)
+        recap = self._recap(event)
+        row = self._row(self._run(), recap)
+        assert row["changes"]["state_code"] == "TX"
+        assert row["sources"]["state_code"] == "request_address"
+
+    def test_clockin_gps_disagreeing_with_an_address_blanks_the_state(self):
+        event = self._event(request=self._request(address="1 Main St, Los Angeles, CA 90001"))
+        self._clock_in(event, self.AUSTIN)
+        recap = self._recap(event)
+        report = self._run(apply=True)
+        row = self._row(report, recap)
+        assert "state_code" not in row["changes"] and "city" not in row["changes"]
+        assert any("disagree" in n and "clockin_gps" in n for n in row["notes"])
+        recap.refresh_from_db()
+        assert recap.state_id is None and recap.location_id is None
+
+    def test_no_clockin_gps_leaves_the_recap_unchanged(self):
+        event = self._event(name="Walk-up")
+        from ambassadors.models import Attendance, Source
+
+        Attendance.objects.create(  # a clock-in with no fix
+            clock_time=event.date, coordinates=None, ambassador=self.ba, event=event,
+            source=Source.objects.get_or_create(name="clock_in")[0],
+        )
+        recap = self._recap(event)
+        row = self._row(self._run(apply=True), recap)
+        assert row is None or not row["changes"]
+        recap.refresh_from_db()
+        assert recap.state_id is None and recap.location_fill == {}
+
+    def test_another_bas_clockin_and_a_recap_with_a_state_are_ignored(self):
+        other_user = self.create_user(username="o@ba.com", email="o@ba.com", role=self.roles["ambassador"])
+        other = self.create_ambassador(other_user)
+        event = self._event(name="Walk-up")
+        self._clock_in(event, self.AUSTIN, ambassador=other)
+        recap = self._recap(event)
+        row = self._row(self._run(), recap)
+        assert row is None or not row["changes"]
+
+        has_state = self._recap(self._event(name="Walk-up 2"), state=self.ca)
+        self._clock_in(has_state.event, self.AUSTIN)
+        row = self._row(self._run(), has_state)
+        assert row is None or not row["changes"]
+
+    def test_poor_accuracy_far_from_event_and_border_fixes_are_not_used(self):
+        poor_event = self._event(name="Walk-up")
+        self._clock_in(poor_event, self.AUSTIN, ping=True, accuracy=5000)
+        self._clock_in(poor_event, self.AUSTIN)  # the same fix, on the Attendance row
+        poor = self._recap(poor_event)
+
+        far_event = self._event(name="Walk-up", coordinates=list(self.LOS_ANGELES))
+        self._clock_in(far_event, self.AUSTIN)
+        far = self._recap(far_event)
+
+        border_event = self._event(name="Walk-up")
+        self._clock_in(border_event, (36.5940, -82.1850))  # Bristol, on the TN/VA line
+        border = self._recap(border_event)
+
+        good_ping_event = self._event(name="Walk-up")
+        self._clock_in(good_ping_event, self.LOS_ANGELES, ping=True, accuracy=20)
+        good_ping = self._recap(good_ping_event)
+
+        report = self._run()
+        for recap, phrase in ((poor, "accuracy"), (far, "from the event"), (border, "state line")):
+            row = self._row(report, recap)
+            assert "state_code" not in row["changes"], phrase
+            assert any(phrase in n for n in row["notes"]), (phrase, row["notes"])
+        assert self._row(report, good_ping)["changes"] == {"state_code": "CA"}
+
+    def test_clockin_gps_near_a_border_is_medium(self):
+        event = self._event(name="Walk-up")
+        self._clock_in(event, (39.0425, -94.5900))  # Kansas City MO, ~1.5 km from KS
+        recap = self._recap(event)
+        row = self._row(self._run(), recap)
+        assert row["changes"] == {"state_code": "MO"}
+        assert row["confidence"]["state_code"] == "medium"
+
+    @override_settings(OPENAI_API_KEY="test-key")
+    def test_clockin_gps_state_is_settled_before_the_model(self):
+        event = self._event(name="Sampling at the corner market")
+        self._clock_in(event, self.AUSTIN)
+        recap = self._recap(event, {"Store": "corner market"})
+        calls = []
+
+        def _post(url, payload, headers, *, timeout):
+            calls.append(payload)
+            return _reply({"recaps": [
+                {"id": recap.id, "retailer": None, "store_number": None, "city": None,
+                 "state_code": "OR", "confidence": "high"},
+            ]})
+
+        with patch("utils.ai_text._post_json", side_effect=_post):
+            report = self._run(use_ai=True)
+        row = self._row(report, recap)
+        assert row["changes"]["state_code"] == "TX"
+        assert row["sources"]["state_code"] == "clockin_gps"
+
     # Reports read what was written
 
     def _client(self):
@@ -417,6 +633,148 @@ class TestRecapLocation(AmbassadorsGraphQLTestCase):
         keys = [c["key"] for c in payload["columns"]]
         row = dict(zip(keys, payload["rows"][0]))
         assert (row["city"], row["state"], row["retailer"]) == ("Austin", "Texas", "H-E-B")
+
+    # Paging and the time budget (big tenants)
+
+    def _five(self):
+        """Five recaps, event days 2, 4, 6, 8, 10, each fillable."""
+        return [
+            self._recap(
+                self._event(day=day, request=self._request(address="1 Congress Ave, Austin, TX 78701")),
+                {"Store": f"heb #{day}"},
+            )
+            for day in (2, 4, 6, 8, 10)
+        ]
+
+    def test_until_filters_by_event_date(self):
+        recaps = self._five()
+        report = self._run(until=date(2026, 10, 6))
+        assert report["scanned"] == 3 and report["partial"] is False
+        assert {r["recap_id"] for r in report["rows"]} == {r.id for r in recaps[:3]}
+        window = self._run(since=date(2026, 10, 4), until=date(2026, 10, 8))
+        assert {r["recap_id"] for r in window["rows"]} == {r.id for r in recaps[1:4]}
+        assert window["since"] == "2026-10-04" and window["until"] == "2026-10-08"
+
+    def test_after_id_pages_cover_every_recap_once_with_consistent_counts(self):
+        recaps = self._five()
+        whole = self._run()
+        assert whole["partial"] is False and whole["next_after_id"] is None
+        assert whole["last_recap_id"] == recaps[-1].id
+
+        pages, cursor = [], None
+        while True:
+            page = self._run(after_id=cursor, limit=2)
+            pages.append(page)
+            if not page["partial"]:
+                assert page["next_after_id"] is None
+                break
+            assert page["next_after_id"] == page["last_recap_id"]
+            cursor = page["next_after_id"]
+        assert [p["scanned"] for p in pages] == [2, 2, 1]
+        seen = [r["recap_id"] for p in pages for r in p["rows"]]
+        assert seen == [r.id for r in recaps]
+        for key in ("scanned", "recaps_with_changes"):
+            assert sum(p[key] for p in pages) == whole[key]
+        for key in ("fills", "blank_before", "blank_after"):
+            for f in recap_location.FIELDS:
+                assert sum(p[key][f] for p in pages) == whole[key][f], (key, f)
+        # A limit that ends exactly at the last recap is not partial.
+        assert self._run(after_id=recaps[2].id, limit=2)["partial"] is False
+
+    def test_time_budget_stops_between_segments_and_keeps_what_was_written(self):
+        recaps = self._five()
+        # Start at t=0; every later read of the clock is far past the budget.
+        clock = itertools.chain([0.0], itertools.repeat(500.0))
+        with patch.object(recap_location, "SEGMENT_MAX", 2), patch.object(
+            recap_location, "_monotonic", side_effect=lambda: next(clock)
+        ):
+            first = self._run(apply=True, time_budget_s=200)
+        # The first segment always runs (progress); no new one after that.
+        assert first["scanned"] == 2 and first["recaps_written"] == 2
+        assert first["partial"] is True and first["stopped"] == "time_budget"
+        assert first["next_after_id"] == recaps[1].id
+        for recap in recaps[:2]:
+            recap.refresh_from_db()
+            assert recap.retailer.name == "H-E-B" and recap.state.code == "TX"
+        recaps[2].refresh_from_db()
+        assert recaps[2].retailer_id is None
+
+        rest = self._run(apply=True, after_id=first["next_after_id"], time_budget_s=200)
+        assert rest["partial"] is False and rest["scanned"] == 3 and rest["recaps_written"] == 3
+        assert first["fills"]["state_code"] + rest["fills"]["state_code"] == 5
+        # Idempotent: the whole tenant again proposes nothing new.
+        again = self._run(apply=True)
+        assert again["recaps_with_changes"] == 0 and again["recaps_written"] == 0
+        assert event_models.Retailer.objects.filter(tenant=self.tenant, name="H-E-B").count() == 1
+
+    def test_paged_apply_matches_a_single_apply(self):
+        self._five()
+        cursor, written = None, 0
+        while True:
+            page = self._run(apply=True, after_id=cursor, limit=1)
+            written += page["recaps_written"]
+            if not page["partial"]:
+                break
+            cursor = page["next_after_id"]
+        assert written == 5
+        assert self._run()["recaps_with_changes"] == 0
+
+    @override_settings(OPENAI_API_KEY="test-key")
+    def test_ai_call_cap_applies_per_call(self):
+        recaps = [
+            self._recap(self._event(day=day, name=f"Sampling at shop {day}, Austin TX"), {"Store": "a shop"})
+            for day in (2, 4, 6)
+        ]
+        calls = []
+
+        def _post(url, payload, headers, *, timeout):
+            calls.append(payload)
+            return _reply({"recaps": []})
+
+        with patch.object(recap_location, "AI_BATCH", 1), patch(
+            "utils.ai_text._post_json", side_effect=_post
+        ):
+            first = self._run(use_ai=True, max_ai_calls=2)
+            assert first["ai"]["calls"] == 2 and len(calls) == 2
+            assert first["ai"]["status"].startswith("stopped after 2 calls")
+            assert first["scanned"] == 3  # the rest still get the deterministic rules
+            nxt = self._run(use_ai=True, max_ai_calls=2, after_id=recaps[1].id)
+            assert nxt["ai"]["calls"] == 1 and len(calls) == 3
+
+    @override_settings(INTERNAL_CRON_SECRET="s3cret")
+    def test_cron_endpoint_pages_with_until_after_id_and_time_budget(self):
+        recaps = self._five()
+        http = DjangoClient()
+        url = "/internal/cron/normalize-recap-locations"
+        auth = {"HTTP_X_CRON_SECRET": "s3cret"}
+        res = http.post(url, {"tenant": "location-brand", "use_ai": "false", "until": "2026-10-06", "limit": "2"}, **auth)
+        assert res.status_code == 200, res.content
+        body = res.json()
+        assert body["scanned"] == 2 and body["partial"] is True
+        assert body["next_after_id"] == recaps[1].id and body["time_budget_s"] == 200.0
+        res = http.post(
+            url,
+            {"tenant": "location-brand", "use_ai": "false", "until": "2026-10-06",
+             "after_id": str(body["next_after_id"]), "time_budget": "9999"},
+            **auth,
+        )
+        body = res.json()
+        assert body["scanned"] == 1 and body["partial"] is False and body["next_after_id"] is None
+        assert body["time_budget_s"] == 240.0
+        for bad in ({"until": "06/10/2026"}, {"after_id": "abc"}, {"time_budget": "soon"}):
+            res = http.post(url, {"tenant": "location-brand", **bad}, **auth)
+            assert res.status_code == 400, bad
+
+    def test_command_takes_until_and_after_id(self):
+        recaps = self._five()
+        out = StringIO()
+        call_command(
+            "normalize_recap_locations", tenant="location-brand", no_ai=True,
+            until="2026-10-08", after_id=recaps[0].id, limit=2, stdout=out,
+        )
+        text = out.getvalue()
+        assert "scanned=2" in text and "partial=True" in text
+        assert f"next_after_id={recaps[2].id}" in text
 
     # Command and endpoint
 

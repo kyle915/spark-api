@@ -365,6 +365,13 @@ class Tenant(Asyncable, models.Model):
     # a tenant configured before this field existed. Set with
     # `set_checkin_resources`.
     checkin_resources = models.JSONField(null=True, blank=True)
+    # Facts staff write for this brand's ambassadors — ingredients, caffeine,
+    # ABV, sizes, talking points, what NOT to say. The product-questions box
+    # on the web check-in answers ONLY from this text, the brand's product
+    # catalog and its training hub, so this is where a lead puts "how much
+    # caffeine is in it" for a BA to find mid-shift. Empty = the box says the
+    # lead hasn't added notes yet. See ambassadors/product_qa.py.
+    ba_product_notes = models.TextField(blank=True, default="")
     # Per-tenant Google Sheet that mirrors the Master Tracker. Set by
     # admins via the front-end "Link Sheet" chip; the "Copy for Sheets"
     # TSV path expects this URL to live somewhere persistent. Storing
@@ -575,6 +582,57 @@ class Tenant(Asyncable, models.Model):
     def recap_skip_email_set(self) -> set[str]:
         """Lower-cased addresses left off this brand's approved-recap email."""
         return {e.lower() for e in parse_recipient_emails(self.recap_skip_emails)}
+
+
+class BaProductQuestion(models.Model):
+    """One question an ambassador asked the product-questions box on the web
+    check-in, with the answer they got.
+
+    Kept so staff can see what BAs ask and fill the gaps in the brand's
+    product notes. Holds nothing about the BA beyond the check-in's own
+    event + ambassador link (already stored by check-in itself).
+    """
+
+    OUTCOME_ANSWERED = "answered"
+    OUTCOME_NOT_IN_NOTES = "not_in_notes"
+    OUTCOME_NO_MATERIAL = "no_material"
+    OUTCOME_AI_UNAVAILABLE = "ai_unavailable"
+    OUTCOME_CHOICES = (
+        (OUTCOME_ANSWERED, "Answered from notes"),
+        (OUTCOME_NOT_IN_NOTES, "Not in the notes"),
+        (OUTCOME_NO_MATERIAL, "No notes yet"),
+        (OUTCOME_AI_UNAVAILABLE, "AI unavailable"),
+    )
+
+    id = models.BigAutoField(primary_key=True)
+    tenant = models.ForeignKey(
+        Tenant, on_delete=models.CASCADE, related_name="ba_product_questions"
+    )
+    event = models.ForeignKey(
+        "events.Event",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="ba_product_questions",
+    )
+    ambassador = models.ForeignKey(
+        "ambassadors.Ambassador",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="ba_product_questions",
+    )
+    question = models.CharField(max_length=300)
+    answer = models.TextField(blank=True, default="")
+    outcome = models.CharField(max_length=20, choices=OUTCOME_CHOICES)
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [models.Index(fields=["tenant", "-created_at"])]
+
+    def __str__(self) -> str:  # pragma: no cover - debug only
+        return f"{self.question[:40]} ({self.outcome})"
 
 
 class ClientReportSubscription(models.Model):
