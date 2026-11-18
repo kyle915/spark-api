@@ -1,0 +1,48 @@
+name: Tag consumer mentions (themes + other brands)
+on:
+  schedule:
+    # Nightly, after the day's recaps are approved (09:20 UTC ≈ 1:20 am Pacific).
+    - cron: "20 9 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "List what would be read, but call no model and store nothing"
+        required: false
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+      tenant:
+        description: "Tenant id (blank = every brand with recent approved recaps)"
+        required: false
+        default: ""
+      max_calls:
+        description: "Most model calls this run (cost cap)"
+        required: false
+        default: "40"
+jobs:
+  fire-tag-consumer-mentions:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire tag consumer mentions cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/tag-consumer-mentions
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          # The nightly run writes; a manual run is a dry run unless chosen.
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+          TENANT: ${{ github.event.inputs.tenant || '' }}
+          MAX_CALLS: ${{ github.event.inputs.max_calls || '40' }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          STATUS=$(curl -sS --max-time 840 -o /tmp/cron-response.json -w '%{http_code}' -X POST "$CRON_URL?dry_run=$DRY_RUN&tenant=$TENANT&max_calls=$MAX_CALLS&max_seconds=240" -H "X-Cron-Secret: $CRON_SECRET")
+          echo "HTTP $STATUS"
+          python3 -c "import json;d=json.load(open('/tmp/cron-response.json'));print(d.get('log') or d)"
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS"
+            exit 1
+          fi
