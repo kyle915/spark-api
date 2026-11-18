@@ -175,6 +175,8 @@ class TestRecapOnlyCheckinLink(AmbassadorsGraphQLTestCase):
                 "phone": "5550100999",
                 "eventDate": past.isoformat(),
                 "address": "1648 NW Chipman Road, LEE'S SUMMIT, MO 64081",
+                # Retail sampling: a new walk-in event names its store.
+                "storeName": "Total Wine & More",
             },
             content_type="application/json",
         )
@@ -292,6 +294,8 @@ class TestRecapOnlyCheckinLink(AmbassadorsGraphQLTestCase):
                 "phone": "5550100123",
                 "eventDate": dj_tz.localdate().isoformat(),
                 "address": "1648 NW Chipman Road, LEE'S SUMMIT, MO 64081",
+                # Retail sampling: a new walk-in event names its store.
+                "storeName": "Total Wine & More",
             },
             content_type="application/json",
         )

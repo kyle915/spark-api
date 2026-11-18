@@ -1351,6 +1351,27 @@ def is_event_activation_type(event_type) -> bool:
     return bool(re.search(r"\bactivation\b|\bguerr?ill?a\b", name, re.I))
 
 
+def is_retail_sampling_type(event_type) -> bool:
+    """True for an in-store program ("Retail Sampling"): the BA is standing
+    in a store, so the store's name is part of where the work happened.
+    Event activations, guerilla shifts and product seeding are not."""
+    name = (getattr(event_type, "name", None) or "").strip()
+    if not name or is_event_activation_type(event_type) or is_product_seeding_event_type(event_type):
+        return False
+    return bool(re.search(r"\bretail\b", name, re.I))
+
+
+def store_name_required(tenant, event_type=None) -> bool:
+    """Must a walk-up check-in name the store? Only for retail sampling (the
+    BA's pick, else the link's default program). Without it the recap lands
+    under "No store recorded" on the brand's dashboards."""
+    chosen = event_type if event_type is not None else _default_event_type(tenant)
+    return is_retail_sampling_type(chosen)
+
+
+STORE_NAME_REQUIRED_ERROR = "Enter the store name so your work counts for the right store."
+
+
 def requires_store_identity(tenant, event=None) -> bool:
     """Brands whose recap title must be "Store Name #1234" (client ask).
 
@@ -2952,6 +2973,7 @@ def checkin_program_picker(tenant) -> tuple[list[dict], str]:
                     "name": et.name or "",
                     "label": str(row.get("label") or "").strip(),
                     "description": str(row.get("description") or "").strip(),
+                    "storeNameRequired": is_retail_sampling_type(et),
                 },
             )
         )
@@ -3050,7 +3072,8 @@ def store_name_match_allowed(typed_address: str | None, event_address: str | Non
 
 
 def find_or_create_walkin_event(
-    *, tenant, store_name: str, address: str, on_date, actor, event_type=None
+    *, tenant, store_name: str, address: str, on_date, actor, event_type=None,
+    require_store: bool = False,
 ):
     """The event for (tenant, address, date, event type) — found, else created.
 
@@ -3187,7 +3210,19 @@ def find_or_create_walkin_event(
     with transaction.atomic():
         existing = _match()
         if existing is not None:
+            if getattr(existing, "request_id", None) is None:
+                # A walk-in event opened earlier without a store (or state):
+                # this BA's store name can fill the blank. Never overwrites.
+                try:
+                    stamp_walkin_location(existing, store_name=store_name, actor=actor)
+                except Exception:  # noqa: BLE001
+                    logger.warning("checkin: location stamp failed for event=%s", existing.id)
             return existing, False
+
+        # Joining an existing event never asks for the store; opening a new
+        # retail one does, or its recaps land under "No store recorded".
+        if require_store and not _usable_store_name(store_name, address):
+            raise ValueError(STORE_NAME_REQUIRED_ERROR)
 
         name = walkin_event_name(
             store_name=store_name,
@@ -3210,23 +3245,132 @@ def find_or_create_walkin_event(
             updated_by=actor,
         )
 
-    # Stamp the state from the address so the row shows a Market in the tracker
-    # and counts in the geo breakdown. Best-effort: a geo miss must never block
-    # a BA from checking in.
+    # Stamp the store and the state so the row shows a Market in the tracker
+    # and its recaps count under a store and a state on the brand dashboards
+    # (the recap copies both off the event at submit). Best-effort: a miss
+    # must never block a BA from checking in.
     try:
-        from events.routing import extract_state_code
-        from tenants.models import State
-
-        code = extract_state_code(event.address or "")
-        if code:
-            st = State.objects.filter(code__iexact=code).first()
-            if st is not None:
-                event.state = st
-                event.save(update_fields=["state"])
+        stamp_walkin_location(event, store_name=store_name, actor=actor)
     except Exception:  # noqa: BLE001
-        logger.warning("checkin: state stamp failed for event=%s", event.id)
+        logger.warning("checkin: location stamp failed for event=%s", event.id)
 
     return event, True
+
+
+def _usable_store_name(store_name: str | None, address: str | None) -> str:
+    """The typed store name, or "" when it is blank or is really the address
+    (or an old walk-in title) pasted into the store box."""
+    store = re.sub(r"\s+", " ", store_name or "").strip()
+    if not store:
+        return ""
+    addr = normalize_place(address or "")
+    key = normalize_place(store)
+    # The address (or the start of it) pasted into the store box.
+    if addr and (key == addr or addr in key or (key[:1].isdigit() and key in addr)):
+        return ""
+    if re.match(r"^\d{1,2}/\d{1,2}/\d{4}", store):
+        return ""
+    return store
+
+
+def resolve_walkin_location(tenant, *, store_name: str, address: str, exclude_event_id=None) -> dict:
+    """Where a walk-in event is, as the brand's records already know it.
+
+    ``retailer_id`` / ``retailer_name``: the typed store resolved to the
+    tenant's own Retailer (case- and accepted-alias-insensitive), else to a
+    known chain (``recaps.recap_location.CHAINS``; ``retailer_id`` None means
+    the tenant has no row for it yet). With no store typed, the store another
+    event of the brand names at the same street address, when exactly one
+    does. ``state_code``: from the address, else from other places at the
+    same address when they agree. Sources say which rule answered.
+    """
+    from events.market import parse_address_geo
+    from events.models import Retailer
+    from events.retailer_aliases import resolve_store_name
+    from events.routing import extract_state_code
+    from recaps.recap_location import AddressBook, ChainIndex, chain_in_text, street_key
+
+    out = {
+        "retailer_id": None, "retailer_name": "", "retailer_source": "",
+        "state_code": "", "state_source": "",
+    }
+    retailers = list(
+        Retailer.objects.filter(tenant_id=tenant.id).exclude(name="").order_by("id").values_list("id", "name")
+    )
+    index = ChainIndex.for_tenant(tenant.id, retailers)
+    typed = _usable_store_name(store_name, address)
+    if typed:
+        resolved = re.sub(r"\s+", " ", resolve_store_name(typed, index.aliases)).strip()
+        exact = next((rid for rid, name in retailers if name.strip().casefold() == resolved.casefold()), None)
+        if exact is not None:
+            out.update(retailer_id=exact, retailer_name=dict(retailers)[exact], retailer_source="tenant_retailer")
+        else:
+            chain = index.canonical(resolved)
+            number = ""
+            if not chain:
+                chain, number = chain_in_text(resolved, index)
+            if chain:
+                rid, name = index.target(chain, number)
+                out.update(retailer_id=rid, retailer_name=name, retailer_source="typed_store")
+
+    code = (parse_address_geo(address or "").state_code or extract_state_code(address or "") or "").upper()
+    if code:
+        out.update(state_code=code, state_source="address")
+
+    key = street_key(address)
+    if key is not None and ((not typed and not out["retailer_name"]) or not code):
+        book = AddressBook.for_tenant(tenant.id, index, house_number=key.number)
+        exclude = (exclude_event_id,) if exclude_event_id else ()
+        if not typed and not out["retailer_name"]:
+            place, _stores = book.store_at([address], exclude_event_ids=exclude)
+            if place is not None:
+                rid, name = (
+                    (place.retailer_id, place.chain) if place.retailer_id else index.target(place.chain)
+                )
+                out.update(retailer_id=rid, retailer_name=name, retailer_source="same_address")
+        if not code:
+            same, _codes, _place = book.state_at([address], exclude_event_ids=exclude)
+            if same:
+                out.update(state_code=same, state_source="same_address")
+    return out
+
+
+def stamp_walkin_location(event, *, store_name: str, actor=None) -> dict:
+    """Fill a walk-in event's blank retailer and state (never overwrites).
+
+    Returns the fields written. A chain the tenant has no Retailer row for
+    yet gets one, found-or-created by name the way the request importer
+    links accounts (``events.batch_requests._ensure_retailer_account``)."""
+    from events.batch_requests import _ensure_retailer_account
+    from events.models import Event, Retailer, State
+
+    if event.retailer_id and event.state_id:
+        return {}
+    found = resolve_walkin_location(
+        event.tenant, store_name=store_name, address=event.address or "", exclude_event_id=event.id
+    )
+    updates: dict = {}
+    if not event.retailer_id and found["retailer_name"]:
+        rid = found["retailer_id"]
+        if rid is None and actor is not None:
+            rid = _ensure_retailer_account(event.tenant_id, found["retailer_name"], None, actor)
+        if rid:
+            updates["retailer"] = Retailer.objects.get(pk=rid)
+    if not event.state_id and found["state_code"]:
+        st = State.objects.filter(code__iexact=found["state_code"]).order_by("id").first()
+        if st is not None:
+            updates["state"] = st
+    if updates:
+        # update(), not save(): the address-geo mixin would re-derive the
+        # state from an address that names none and undo the fill.
+        Event.objects.filter(pk=event.pk).update(**{f"{k}_id": v.pk for k, v in updates.items()})
+        for k, v in updates.items():
+            setattr(event, k, v)
+        logger.info(
+            "checkin: walk-in event=%s location %s (retailer=%s state=%s)",
+            event.id, sorted(updates), found["retailer_source"], found["state_source"],
+        )
+    return {k: getattr(v, "name", None) or getattr(v, "code", "") for k, v in updates.items()}
 
 
 def build_tenant_context(
@@ -3261,6 +3405,9 @@ def build_tenant_context(
         # default program (Torch TH-AGENCY = store demos only).
         "eventTypes": programs,
         "programPickerTitle": program_title,
+        # The link's default program asks for the store name (retail
+        # sampling). A picked program carries its own storeNameRequired.
+        "storeNameRequired": (not agency) and store_name_required(tenant),
         # BA-facing resources (training deck, photo-release QR, the brand's
         # /training/<code> hub) as ordered buttons. See build_checkin_resources.
         # Agency twin drops hideOnRecapOnly rows (Torch Sampling Guide).

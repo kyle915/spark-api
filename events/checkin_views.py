@@ -712,6 +712,15 @@ def public_checkin_identify(request: HttpRequest, code: str) -> HttpResponse:
                 event, _new = checkin_web.find_or_create_walkin_event(
                     tenant=target, store_name=store_name, address=address,
                     on_date=on_date, actor=ambassador.user, event_type=chosen_type,
+                    # Retail sampling at a store: a new walk-in event needs
+                    # the store's name. Roaming markets, product seeding and
+                    # the recap-only links (own rules above) never ask here.
+                    require_store=(
+                        not market_mode
+                        and not recap_only
+                        and not checkin_web.is_product_seeding_event_type(chosen_type)
+                        and checkin_web.store_name_required(target, chosen_type)
+                    ),
                 )
             except ValueError as exc:
                 return _err(str(exc))
