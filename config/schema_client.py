@@ -58,6 +58,7 @@ from tenants.notification_pref_schema import (
     NotificationPreferenceQueries,
 )
 from spark_mcp.schema import AiConnectionMutations, AiConnectionQueries
+from sales_assist.schema import SalesAssistMutations, SalesAssistQueries
 from utils.utils import BlockIntrospectionForAnonymous
 from utils.graphql.gcs_schema import GCSQuery
 from utils.abuse.graphql_extension import guardrail_extensions
@@ -105,6 +106,7 @@ QueryClients = merge_types(
         JobBoardQueries,
         ClockLinkQueries,
         AiConnectionQueries,
+        SalesAssistQueries,
     ),
 )
 MutationClients = merge_types(
@@ -140,6 +142,7 @@ MutationClients = merge_types(
         ClockLinkMutations,
         BaProductQaMutations,
         AiConnectionMutations,
+        SalesAssistMutations,
     ),
 )
 
