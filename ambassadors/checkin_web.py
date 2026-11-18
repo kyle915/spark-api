@@ -1614,7 +1614,16 @@ def submit_checkin_recap(
     #    Total Wireless, Feel Free — behaves exactly as it did before buckets
     #    existed, and a forged id can at worst pick a different bucket of the
     #    brand's own rather than reach another tenant's category.
-    allowed_category_ids = {b["id"] for b in serialize_photo_buckets(event)}
+    offered_buckets = serialize_photo_buckets(event)
+    allowed_category_ids = {b["id"] for b in offered_buckets}
+    # Spend with no receipt is refused only when this page actually offered a
+    # receipt bucket to put the photo in. Without one every photo lands in the
+    # generic pile and the BA could never satisfy the rule.
+    from recaps.receipt_gate import is_receipt_category
+
+    offers_receipt_bucket = any(
+        is_receipt_category(b.get("name")) for b in offered_buckets
+    )
 
     with transaction.atomic():
         # Default is idempotent: a returning/edited check-in updates its
@@ -1920,6 +1929,18 @@ def submit_checkin_recap(
             raise RecapNeedsAPhoto(
                 f"recap for event {event.uuid} would have no photo; refusing"
             )
+
+        # Spend entered → a receipt photo must be on the recap. Same posture as
+        # the photo floor above: judged on what the recap ENDS UP with (an edit
+        # of a recap that already has its receipt needs none re-sent), raised
+        # inside the transaction so a refused edit rolls all of itself back.
+        # Photos are uploaded to GCS before this request and arrive as blob
+        # refs, so this never blocks an upload, only the filing.
+        from recaps.receipt_gate import assert_custom_recap_has_receipt
+
+        assert_custom_recap_has_receipt(
+            recap, offers_receipt_bucket=offers_receipt_bucket
+        )
 
         # None = a page that predates multi-brand recaps: leave any slices.
         if co_brands is not None:

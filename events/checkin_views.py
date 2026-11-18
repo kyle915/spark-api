@@ -45,6 +45,7 @@ from jobboard.checkin import (
     public_gig,
 )
 from recaps.photo_check import classify_photo
+from recaps.receipt_gate import NEEDS_RECEIPT_CODE, RecapNeedsAReceipt
 from recaps.recap_precheck import precheck_recap
 from recaps.spend_amount import SpendAmountNeedsCents
 from recaps.voice_draft import structure_transcript
@@ -1333,6 +1334,15 @@ def public_checkin_recap(request: HttpRequest, code: str) -> HttpResponse:
             status=400,
             code="needs_photo",
         )
+    except RecapNeedsAReceipt as exc:
+        # Spend entered, no receipt photo. The BA's to fix while they still
+        # have the receipt in hand; same sentence the page shows.
+        logger.warning(
+            "checkin recap refused, spend without receipt, code=%s: $%.2f",
+            code,
+            exc.amount,
+        )
+        return _err(exc.message, status=400, code=NEEDS_RECEIPT_CODE)
     except checkin_web.RecapAlreadyApproved:
         # Not a fault and not retryable: staff approved this recap, so the
         # public link may no longer change it.
