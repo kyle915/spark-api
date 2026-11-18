@@ -88,7 +88,9 @@ class TestPublicAmbassadorCreation(AmbassadorsGraphQLTestCase):
         assert "created successfully" in result.data["createPublicAmbassador"]["message"].lower(
         )
         assert result.data["createPublicAmbassador"]["clientMutationId"] == "test-123"
-        assert result.data["createPublicAmbassador"]["activationToken"] is not None
+        # The activation token travels by email only; returning it let any
+        # caller verify an address they don't own.
+        assert result.data["createPublicAmbassador"]["activationToken"] is None
 
         # Verify user was created
         user = await sync_to_async(User.objects.get)(email=email)
@@ -960,8 +962,9 @@ class TestApproveAmbassador(AmbassadorsGraphQLTestCase):
         """
 
     @pytest.mark.asyncio
-    async def test_approve_ambassador_success_by_client(self):
-        """Test successful ambassador approval by client."""
+    async def test_approve_ambassador_refused_for_client(self):
+        """Brand/client users can no longer activate a BA — Ignite staff
+        only (IsSparkAdminAccess)."""
         variables = {
             "input": {
                 "ambassadorId": str(self.ambassador.id),
@@ -973,14 +976,12 @@ class TestApproveAmbassador(AmbassadorsGraphQLTestCase):
             self.mutation, variables, self.client_user, self.endpoint_path
         )
 
-        assert result.data is not None
-        assert result.data["approveAmbassador"]["success"] is True
-        assert "approved successfully" in result.data["approveAmbassador"]["message"].lower(
-        )
+        assert result.errors
+        assert "Only Ignite admins" in str(result.errors[0].message)
+        assert result.data is None or result.data.get("approveAmbassador") is None
 
-        # Verify ambassador is now active
         ambassador = await sync_to_async(Ambassador.objects.get)(pk=self.ambassador.id)
-        assert ambassador.is_active is True
+        assert ambassador.is_active is False
 
     @pytest.mark.asyncio
     async def test_approve_ambassador_success_by_spark_admin(self):
@@ -1010,7 +1011,7 @@ class TestApproveAmbassador(AmbassadorsGraphQLTestCase):
         }
 
         result = await self._execute_mutation_authenticated(
-            self.mutation, variables, self.client_user, self.endpoint_path
+            self.mutation, variables, self.spark_admin_user, self.endpoint_path
         )
 
         assert result.data is not None
@@ -1046,7 +1047,7 @@ class TestApproveAmbassador(AmbassadorsGraphQLTestCase):
         assert result.errors is not None
         assert len(result.errors) > 0
         assert "permission" in str(result.errors[0].message).lower(
-        ) or "client or spark admin" in str(result.errors[0].message).lower()
+        ) or "ignite admins" in str(result.errors[0].message).lower()
 
     @pytest.mark.asyncio
     async def test_approve_ambassador_not_found(self):
@@ -1059,7 +1060,7 @@ class TestApproveAmbassador(AmbassadorsGraphQLTestCase):
         }
 
         result = await self._execute_mutation_authenticated(
-            self.mutation, variables, self.client_user, self.endpoint_path
+            self.mutation, variables, self.spark_admin_user, self.endpoint_path
         )
 
         assert result.data is not None
@@ -1127,8 +1128,8 @@ class TestUpdateAmbassador(AmbassadorsGraphQLTestCase):
         """
 
     @pytest.mark.asyncio
-    async def test_update_ambassador_success_by_client(self):
-        """Test successful ambassador update by client."""
+    async def test_update_ambassador_refused_for_client(self):
+        """Brand/client users can no longer edit a BA — Ignite staff only."""
         variables = {
             "input": {
                 "ambassadorId": str(self.ambassador.id),
@@ -1142,18 +1143,12 @@ class TestUpdateAmbassador(AmbassadorsGraphQLTestCase):
             self.mutation, variables, self.client_user, self.endpoint_path
         )
 
-        assert result.data is not None
-        assert result.data["updateAmbassador"]["success"] is True
-        assert "updated successfully" in result.data["updateAmbassador"]["message"].lower(
-        )
-        assert result.data["updateAmbassador"]["ambassador"]["address"] == "Updated Address"
-        assert result.data["updateAmbassador"]["ambassador"]["coordinates"] == [
-            34.0522, -118.2437]
+        assert result.errors
+        assert "Only Ignite admins" in str(result.errors[0].message)
+        assert result.data is None or result.data.get("updateAmbassador") is None
 
-        # Verify changes in DB
         ambassador = await sync_to_async(Ambassador.objects.get)(pk=self.ambassador.id)
-        assert ambassador.address == "Updated Address"
-        assert ambassador.coordinates == [34.0522, -118.2437]
+        assert ambassador.address != "Updated Address"
 
     @pytest.mark.asyncio
     async def test_update_ambassador_success_by_spark_admin(self):
@@ -1190,7 +1185,7 @@ class TestUpdateAmbassador(AmbassadorsGraphQLTestCase):
         }
 
         result = await self._execute_mutation_authenticated(
-            self.mutation, variables, self.client_user, self.endpoint_path
+            self.mutation, variables, self.spark_admin_user, self.endpoint_path
         )
 
         assert result.data is not None
@@ -1214,7 +1209,7 @@ class TestUpdateAmbassador(AmbassadorsGraphQLTestCase):
         }
 
         result = await self._execute_mutation_authenticated(
-            self.mutation, variables, self.client_user, self.endpoint_path
+            self.mutation, variables, self.spark_admin_user, self.endpoint_path
         )
 
         assert result.data is not None
@@ -1264,7 +1259,7 @@ class TestUpdateAmbassador(AmbassadorsGraphQLTestCase):
         }
 
         result = await self._execute_mutation_authenticated(
-            self.mutation, variables, self.client_user, self.endpoint_path
+            self.mutation, variables, self.spark_admin_user, self.endpoint_path
         )
 
         assert result.data is not None
