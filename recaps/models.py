@@ -1154,9 +1154,10 @@ class ReceiptReading(models.Model):
     """What Spark read off one receipt photo (see ``recaps.receipt_reader``).
 
     One row per receipt image, written once by the background reader. Holds
-    only the printed total, merchant and date — never card details. A photo
-    that could not be read confidently is kept as ``unreadable`` so it is not
-    retried forever and the review check can say so.
+    only the printed total, merchant, store number, date and money lines —
+    never card details. A photo that could not be read confidently is kept
+    as ``unreadable`` so it is not retried forever and the review check can
+    say so.
     """
 
     STATUS_READ = "read"
@@ -1173,6 +1174,14 @@ class ReceiptReading(models.Model):
     merchant = models.CharField(max_length=120, blank=True, default="")
     # ISO date printed on the receipt, when legible; free of timezone.
     receipt_date = models.CharField(max_length=10, blank=True, default="")
+    # Store number printed on the receipt (digits only), "" when none. Lets a
+    # card statement line like "H-E-B #614" be matched to this receipt.
+    store_number = models.CharField(max_length=8, blank=True, default="")
+    # Each money line as a signed decimal string (refunds negative); sums to
+    # ``total``. A card-activity screenshot can carry several charges.
+    charges = models.JSONField(default=list, blank=True)
+    # Which reader wrote the row; 1 = total/merchant/date only.
+    reader_version = models.PositiveSmallIntegerField(default=1)
     read_at = models.DateTimeField(auto_now=True)
 
     def __str__(self) -> str:  # pragma: no cover - admin/debug only

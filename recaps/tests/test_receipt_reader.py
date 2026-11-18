@@ -18,7 +18,9 @@ from recaps import models as recap_models
 from recaps.checkin_issue_schema import summarize_issues
 from recaps.receipt_reader import (
     compare_spend_to_receipts,
+    READER_VERSION,
     interpret_reading,
+    parse_store_number,
     parse_total,
     read_pending_receipts,
 )
@@ -38,12 +40,73 @@ def test_parse_total_accepts_only_plausible_amounts():
     assert parse_total("9999.00") is None  # above the plausibility cap
 
 
+def _model(total="38.11", lines=None, **extra):
+    return {
+        "isReceipt": True, "totalLegible": True, "total": total,
+        "merchant": "H-E-B", "storeNumber": "", "date": "2026-10-10",
+        "lines": lines if lines is not None else [], **extra,
+    }
+
+
+def test_store_number_is_digits_only():
+    assert parse_store_number("#614") == "614"
+    assert parse_store_number("0092") == "92"
+    assert parse_store_number("Store 540") == "540"
+    assert parse_store_number("") == ""
+    assert parse_store_number("8005551212") == ""  # a phone number
+
+
+def test_single_charge_receipt_keeps_total_and_store():
+    out = interpret_reading(_model("41.43", [{"amount": "41.43", "kind": "charge"}], storeNumber="#658"))
+    assert out["status"] == "read"
+    assert out["total"] == Decimal("41.43")
+    assert out["store_number"] == "658"
+    assert out["charges"] == ["41.43"]
+
+
+def test_card_screenshot_with_two_charges_sums():
+    lines = [{"amount": "22.42", "kind": "charge"}, {"amount": "11.56", "kind": "charge"}]
+    out = interpret_reading(_model("33.98", lines))
+    assert out["total"] == Decimal("33.98")
+    assert out["charges"] == ["22.42", "11.56"]
+
+
+def test_purchase_refund_repurchase_nets():
+    lines = [
+        {"amount": "14.94", "kind": "charge"},
+        {"amount": "14.94", "kind": "refund"},
+        {"amount": "14.94", "kind": "charge"},
+    ]
+    out = interpret_reading(_model("14.94", lines))
+    assert out["total"] == Decimal("14.94")
+    assert out["charges"] == ["14.94", "-14.94", "14.94"]
+
+
+def test_refund_only_receipt_is_negative():
+    out = interpret_reading(_model("-7.59", [{"amount": "7.59", "kind": "refund"}]))
+    assert out["status"] == "read"
+    assert out["total"] == Decimal("-7.59")
+
+
+def test_lines_that_disagree_with_total_are_dropped():
+    out = interpret_reading(_model("38.11", [{"amount": "30.00", "kind": "charge"}]))
+    assert out["total"] == Decimal("38.11")
+    assert out["charges"] == ["38.11"]
+
+
+def test_half_read_lines_fall_back_to_total():
+    out = interpret_reading(_model("38.11", [{"amount": "n/a", "kind": "charge"}]))
+    assert out["total"] == Decimal("38.11")
+    assert out["charges"] == ["38.11"]
+
+
 def test_interpret_reading_is_unreadable_unless_confident():
     good = {"isReceipt": True, "totalLegible": True, "total": "40.66",
             "merchant": "Smart & Final", "date": "2026-10-10"}
     out = interpret_reading(good)
     assert out == {"status": "read", "total": Decimal("40.66"),
-                   "merchant": "Smart & Final", "receipt_date": "2026-10-10"}
+                   "merchant": "Smart & Final", "receipt_date": "2026-10-10",
+                   "store_number": "", "charges": ["40.66"]}
     assert interpret_reading({**good, "totalLegible": False})["status"] == "unreadable"
     assert interpret_reading({**good, "isReceipt": False})["status"] == "unreadable"
     assert interpret_reading({**good, "total": "n/a"})["status"] == "unreadable"
@@ -178,6 +241,32 @@ class TestReceiptReadingDb(AmbassadorsGraphQLTestCase):
         )
         assert set(rows) == {r1.id, r2.id}
         assert sorted(rows.values()) == ["read", "unreadable"]
+
+    def test_reread_older_fills_new_fields_once(self):
+        r1 = self._file("old.jpg", self.receipts)
+        recap_models.ReceiptReading.objects.create(
+            custom_recap_file=r1, status="read", total=Decimal("9.96"), merchant="H-E-B",
+        )  # written by the v1 reader
+        new = {
+            "status": "read", "total": Decimal("9.96"), "merchant": "H-E-B",
+            "receipt_date": "2026-10-04", "store_number": "291", "charges": ["9.96"],
+        }
+        with patch("utils.gcs.download_blob_bytes", return_value=b"img"), patch(
+            "utils.gcs.extract_blob_name_from_url", side_effect=lambda u: u
+        ), patch("recaps.pdf.downscale_image_bytes", side_effect=lambda b: b), patch(
+            "recaps.receipt_reader.read_receipt_image", return_value=new
+        ) as reader:
+            plain = read_pending_receipts(limit=10)
+            first = read_pending_receipts(limit=10, reread_older=True)
+            second = read_pending_receipts(limit=10, reread_older=True)
+
+        assert plain["read"] == 0  # without the flag, an old reading is left alone
+        assert first["read"] == 1 and second["read"] == 0
+        assert reader.call_count == 1
+        row = recap_models.ReceiptReading.objects.get(custom_recap_file=r1)
+        assert row.store_number == "291"
+        assert row.charges == ["9.96"]
+        assert row.reader_version == READER_VERSION
 
     def test_field_issue_beacon_stores_known_kinds_only(self):
         self.tenant.checkin_code = "RB-TEST12"

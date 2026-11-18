@@ -3349,7 +3349,9 @@ class ReadRecapReceiptsView(View):
     (see `recaps/receipt_reader.py`) so the review check can compare it with
     the spend entered on the recap. Idempotent: each image is read once.
 
-    Params: tenant_id (optional), since_days (default 45), limit (default 40).
+    Params: tenant_id (optional), since_days (default 45), limit (default 40),
+    reread_older (re-read rows from the older reader to fill store numbers
+    and charge lines).
     """
 
     def _run(self, request: HttpRequest) -> HttpResponse:
@@ -3369,10 +3371,12 @@ class ReadRecapReceiptsView(View):
         from recaps.receipt_reader import read_pending_receipts
 
         try:
+            reread = (request.POST.get("reread_older") or request.GET.get("reread_older") or "")
             report = read_pending_receipts(
                 tenant_id=_int("tenant_id", None),
                 since_days=max(1, min(_int("since_days", 45) or 45, 365)),
                 limit=max(1, min(_int("limit", 40) or 40, 200)),
+                reread_older=reread.strip().lower() in ("1", "true", "yes"),
             )
         except Exception as exc:  # noqa: BLE001 — surface to caller
             logger.exception("Read recap receipts cron failed")

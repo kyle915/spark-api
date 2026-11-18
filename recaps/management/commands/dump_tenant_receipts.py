@@ -61,6 +61,23 @@ def _ba_name(recap) -> str | None:
     return (getattr(recap, "external_ba_name", None) or "").strip() or None
 
 
+def _reading(recap_file) -> dict | None:
+    """What the receipt reader stored for this file, or None if unread."""
+    try:
+        r = recap_file.receipt_reading
+    except Exception:  # RelatedObjectDoesNotExist
+        return None
+    return {
+        "status": r.status,
+        "total": str(r.total) if r.total is not None else None,
+        "merchant": r.merchant,
+        "store_number": r.store_number,
+        "receipt_date": r.receipt_date,
+        "charges": list(r.charges or []),
+        "reader_version": r.reader_version,
+    }
+
+
 def _event_date(recap):
     ev = getattr(recap, "event", None)
     if ev is None:
@@ -104,7 +121,10 @@ class Command(BaseCommand):
         recaps = (
             CustomRecap.objects.filter(tenant_id=tenant.id)
             .select_related("event", "ambassador")
-            .prefetch_related("custom_recap_files__file_recap_category")
+            .prefetch_related(
+                "custom_recap_files__file_recap_category",
+                "custom_recap_files__receipt_reading",
+            )
             .order_by("id")
         )
 
@@ -144,6 +164,7 @@ class Command(BaseCommand):
                         "serve_blob": serve_blob,
                         "heic_converted": serve_blob != blob,
                         "url": signed,
+                        "reading": _reading(f) if is_receipt else None,
                     }
                 )
             if spend is not None and not any(x["is_receipt"] for x in files):
