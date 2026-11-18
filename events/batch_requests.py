@@ -294,6 +294,7 @@ def import_requests_from_excel_bytes(
     dry_run: bool = False,
     rollback_on_error: bool = True,
     link_event_ids: dict[int, int] | None = None,
+    max_rows: int | None = None,
 ) -> BatchRequestImportResult:
     tenant = Tenant.objects.filter(id=tenant_id).first()
     if not tenant:
@@ -322,6 +323,13 @@ def import_requests_from_excel_bytes(
 
     wb = load_workbook(filename=BytesIO(file_bytes), data_only=True)
     headers, rows = _read_rows_from_workbook(wb, sheet_name)
+    # Anti-bulk guardrail (utils/abuse): brand users may not import more than
+    # ABUSE_IMPORT_MAX_ROWS rows in one file. Admin imports pass None.
+    if max_rows is not None and len(rows) > max_rows:
+        raise ValueError(
+            f"This file has {len(rows)} rows; the limit is {max_rows} per import. "
+            "Split it into smaller files."
+        )
 
     return _import_requests_from_rows(
         headers=headers,

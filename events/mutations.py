@@ -4095,6 +4095,11 @@ class RequestMutations:
                 sheet_name=sheet_name,
                 dry_run=input.dry_run,
                 rollback_on_error=input.rollback_on_error,
+                max_rows=(
+                    None
+                    if is_spark_request
+                    else int(getattr(settings, "ABUSE_IMPORT_MAX_ROWS", 500))
+                ),
             )
 
             rows = [
