@@ -99,6 +99,7 @@ INSTALLED_APPS = [
     "timeclock",
     "recap_decks",
     "consumer_mentions",
+    "photo_library",
     "hours_check",
     # Anti-scraping guardrails: shared Postgres rate limiter, audit log,
     # usage rollups (app label "abuse"). See utils/abuse/__init__.py.
@@ -798,6 +799,16 @@ MCP_PUBLIC_BASE_URL = env("MCP_PUBLIC_BASE_URL", default="")
 MCP_ENABLED = env.bool("MCP_ENABLED", default=False)
 # Rollout allowlist of tenant ids ("17,18"); "all" → every brand; empty →
 # no brand.
+# Kill switch: False → /mcp and /oauth/* answer 503 and tokens stop working.
+MCP_ENABLED = env.bool("MCP_ENABLED", default=True)
+
+# Brand "Where to go next" store recommendations publish to the brand as soon
+# as they are worked out (alerts still wait for staff review). Set false to
+# hold recommendations as drafts again.
+BRAND_INSIGHTS_AUTO_PUBLISH_RECOMMENDATIONS = env.bool(
+    "BRAND_INSIGHTS_AUTO_PUBLISH_RECOMMENDATIONS", default=True
+)
+# Optional rollout allowlist of tenant ids ("17,18"); empty → every brand.
 MCP_ALLOWED_TENANT_IDS = env.list("MCP_ALLOWED_TENANT_IDS", default=[])
 MCP_DAILY_CALLS_PER_TENANT = env.int("MCP_DAILY_CALLS_PER_TENANT", default=500)
 MCP_CALLS_PER_MINUTE_PER_CONNECTION = env.int(

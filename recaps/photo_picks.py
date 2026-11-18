@@ -42,6 +42,7 @@ from io import BytesIO
 from django.db.models import Exists, OuterRef, Q
 from django.utils import timezone
 
+from photo_library import vision as shared_vision
 from recaps.photo_check import _KIND_WORDS
 from recaps.scoped_ai import _ba_names, _hide_names, _live_request_q
 from utils.ai_text import AiUnavailable, generate_vision_json
@@ -118,47 +119,11 @@ _NEVER_A_PICK = frozenset({"receipt", "screenshot"})
 
 _IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic", ".heif")
 
-PHOTO_SYSTEM = (
-    "You judge one field-marketing photo for use in a client report. "
-    "Look only at the setup, the product, the branding and the setting. "
-    "Do not identify, recognize or describe any person. If people are in the "
-    "frame, ignore them: never mention them, their appearance, clothing, "
-    "age, expression or what they are doing, and never write a name. "
-    "kind is what the photo mainly shows. A photo of a paper or on-screen "
-    "receipt is 'receipt'. A phone or computer screen capture is "
-    "'screenshot'. sharp is false when the photo is blurry or shaken. "
-    "wellLit is false when it is too dark or blown out to read. "
-    "usefulness is 0 to 100: how well this photo would show a client the "
-    "activation (a clear, well framed table, product, shelf or branded "
-    "setup scores high; a blurry, dark, cropped or irrelevant shot scores "
-    "low). caption is at most 10 words, sentence case, no full stop, about "
-    "the setup, product and setting only, for example 'Sampling table at "
-    "the store entrance' or 'Product on the cooler shelf'."
-)
-PHOTO_USER = "Judge this photo. Ignore any people in it."
-
-_PHOTO_SCHEMA = {
-    "type": "object",
-    "additionalProperties": False,
-    "required": [
-        "kind",
-        "sharp",
-        "wellLit",
-        "productVisible",
-        "brandingVisible",
-        "usefulness",
-        "caption",
-    ],
-    "properties": {
-        "kind": {"type": "string", "enum": list(KINDS)},
-        "sharp": {"type": "boolean"},
-        "wellLit": {"type": "boolean"},
-        "productVisible": {"type": "boolean"},
-        "brandingVisible": {"type": "boolean"},
-        "usefulness": {"type": "integer"},
-        "caption": {"type": "string"},
-    },
-}
+# One vision call per photo serves both this scorer and the photo library
+# (see photo_library/vision.py): the prompt and schema live there, so the
+# reply also carries the library tags and the library never calls again.
+PHOTO_SYSTEM = shared_vision.SYSTEM
+PHOTO_USER = shared_vision.USER
 
 KIND_CAPTIONS = {
     "table_setup": "Sampling table set up",
@@ -617,7 +582,7 @@ def score_recap(recap, budget: RunBudget, counts: dict, state: dict) -> bool:
     files = list(
         CustomRecapFile.objects.filter(custom_recap_id=recap.id)
         .filter(_image_q())
-        .select_related("file_recap_category", "photo_score", "receipt_reading")
+        .select_related("file_recap_category", "photo_score", "receipt_reading", "library_tag")
         .order_by("id")
     )
     done = [f for f in files if _related(f, "photo_score") is not None]
@@ -667,54 +632,73 @@ def score_recap(recap, budget: RunBudget, counts: dict, state: dict) -> bool:
     for f in over:
         _skip(f, SKIP_OVER_LIMIT, counts)
 
+    from photo_library.tagging import reusable_reply, save_from_scorer
+
     names = _ba_names([recap])
+    catalog = None
     complete = True
     for f in to_open:
-        if budget.spent():
+        # The photo library may already have looked at this exact file with
+        # the same call: reuse its answer, no download and no model call.
+        reused = reusable_reply(f)
+        tag = _related(f, "library_tag") if reused is not None else None
+        if tag is not None and not (tag.width and tag.height and tag.dhash):
+            reused = None
+        if reused is None and budget.spent():
             complete = False
             break
-        try:
-            data, image = _open(f)
-        except Exception as exc:  # noqa: BLE001 — storage hiccup: try next run
-            logger.warning("photo picks: could not fetch file %s: %s", f.id, exc)
-            counts["errors"] += 1
-            complete = False
-            continue
-        if data is None:
-            _skip(f, SKIP_MISSING_FILE, counts)
-            continue
-        if image is None:
-            _skip(f, SKIP_NOT_AN_IMAGE, counts)
-            continue
+        if reused is not None:
+            width, height, dhash = tag.width, tag.height, tag.dhash
+        else:
+            try:
+                data, image = _open(f)
+            except Exception as exc:  # noqa: BLE001 — storage hiccup: try next run
+                logger.warning("photo picks: could not fetch file %s: %s", f.id, exc)
+                counts["errors"] += 1
+                complete = False
+                continue
+            if data is None:
+                _skip(f, SKIP_MISSING_FILE, counts)
+                continue
+            if image is None:
+                _skip(f, SKIP_NOT_AN_IMAGE, counts)
+                continue
+            width, height = image.size
+            dhash = difference_hash(image)
 
         # 3. Opened, still no model call.
-        width, height = image.size
         size = {"width": width, "height": height}
         if min(width, height) < MIN_SIDE_PX:
             _skip(f, SKIP_LOW_RESOLUTION, counts, **size)
             continue
-        dhash = difference_hash(image)
         if any(hash_distance(dhash, other) <= NEAR_DUPLICATE_BITS for other in kept_dhashes):
             _skip(f, SKIP_NEAR_DUPLICATE, counts, dhash=dhash, **size)
             continue
 
-        # 4. One vision call, on a small copy.
-        small = downscale_image_bytes(data, max_dim=VISION_MAX_DIM, quality=VISION_QUALITY)
-        budget.used += 1
-        counts["model_calls"] += 1
-        try:
-            parsed = generate_vision_json(
-                PHOTO_SYSTEM,
-                PHOTO_USER,
-                image_bytes=small or data,
-                content_type="image/jpeg",
-                schema=_PHOTO_SCHEMA,
-                max_tokens=300,
-                # A fixed, short judgement: the smaller, cheaper model.
-                small=True,
-            )
-        except AiUnavailable as exc:
-            raise _StopRun("ai_unavailable") from exc
+        if reused is not None:
+            parsed = reused
+            counts["reused_library"] = counts.get("reused_library", 0) + 1
+        else:
+            # 4. One vision call, on a small copy. The same call tags the
+            # photo for the photo library.
+            if catalog is None:
+                catalog = shared_vision.catalog_labels(recap.tenant_id)
+            small = downscale_image_bytes(data, max_dim=VISION_MAX_DIM, quality=VISION_QUALITY)
+            budget.used += 1
+            counts["model_calls"] += 1
+            try:
+                parsed = generate_vision_json(
+                    PHOTO_SYSTEM,
+                    PHOTO_USER,
+                    image_bytes=small or data,
+                    content_type="image/jpeg",
+                    schema=shared_vision.schema_for(catalog),
+                    max_tokens=500,
+                    # A fixed, short judgement: the smaller, cheaper model.
+                    small=True,
+                )
+            except AiUnavailable as exc:
+                raise _StopRun("ai_unavailable") from exc
         result = interpret_score(parsed, names)
         if result is None:
             # Unusable reply. Remember it, and only record the photo as
@@ -730,6 +714,8 @@ def score_recap(recap, budget: RunBudget, counts: dict, state: dict) -> bool:
         state["failures_in_a_row"] = 0
         kept_dhashes.append(dhash)
         _save(f, dhash=dhash, **size, **result)
+        if reused is None:
+            save_from_scorer(f, parsed, names=names, width=width, height=height, dhash=dhash)
         if result["status"] == STATUS_SCORED:
             counts["scored"] += 1
         else:
