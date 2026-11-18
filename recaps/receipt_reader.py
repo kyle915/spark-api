@@ -40,44 +40,74 @@ logger = logging.getLogger(__name__)
 RECEIPT_CATEGORY_RE = re.compile(r"receipt|product\s*spend|expense", re.IGNORECASE)
 _IMAGE_RE = re.compile(r"\.(jpe?g|png|webp|gif|heic|heif)$", re.IGNORECASE)
 
+# Bumped when the reader starts capturing more. Rows written by an older
+# reader can be re-read once (``reread_older``) to fill the new fields.
+READER_VERSION = 2
+
 RECEIPT_SYSTEM = (
-    "You read retail purchase receipts. Report only what is printed on the "
-    "receipt in the image. If the image shows more than one receipt, read the "
-    "one that is most fully in frame. Never report card numbers or anything "
-    "about people. If you cannot clearly read the final amount paid, say so."
+    "You read retail purchase receipts and card-activity screenshots (a "
+    "banking or card app listing charges). Report only what is printed in the "
+    "image. If it shows more than one paper receipt, read the one most fully "
+    "in frame. Never report card or account numbers, or anything about people. "
+    "If you cannot clearly read the amounts, say so."
 )
 RECEIPT_USER = (
-    "Read this receipt. Give the final total paid (after tax), the store "
-    "name, and the purchase date if printed. If this is not a receipt or the "
-    "total is not legible, set isReceipt or totalLegible to false."
+    "Read this image. Give the final total paid (after tax), the store name, "
+    "the store number if one is printed (for example 614 from 'H-E-B #614' or "
+    "'STORE 614'; never a register, transaction or phone number), and the "
+    "purchase date if printed. List every money line separately in `lines`: "
+    "a paper receipt is usually one charge; a refund or return receipt is a "
+    "refund; a card-activity screenshot lists each charge or refund shown. "
+    "If this is neither a receipt nor card activity, or the amounts are not "
+    "legible, set isReceipt or totalLegible to false."
 )
 _RECEIPT_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["isReceipt", "totalLegible", "total", "merchant", "date"],
+    "required": [
+        "isReceipt", "totalLegible", "total", "merchant", "storeNumber", "date", "lines",
+    ],
     "properties": {
+        # True for a receipt OR a card-activity screenshot.
         "isReceipt": {"type": "boolean"},
         "totalLegible": {"type": "boolean"},
         # Final amount paid as a plain decimal string, e.g. "38.11".
         "total": {"type": "string"},
         "merchant": {"type": "string"},
+        # Digits only, "" when no store number is printed.
+        "storeNumber": {"type": "string"},
         # ISO date if printed, else "".
         "date": {"type": "string"},
+        "lines": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["amount", "kind"],
+                "properties": {
+                    "amount": {"type": "string"},
+                    "kind": {"type": "string", "enum": ["charge", "refund"]},
+                },
+            },
+        },
     },
 }
 
 # A single field-marketing supply run above this is far more likely a
 # misread (a barcode, a phone number) than a real purchase.
 MAX_PLAUSIBLE_TOTAL = Decimal("5000")
+_CENT = Decimal("0.01")
 
 
 def parse_total(raw) -> Decimal | None:
     """A printed total → Decimal, or None when it is not a plausible amount."""
     text = str(raw if raw is not None else "").replace(",", "").replace("$", "").strip()
+    if text.startswith("-"):
+        text = text[1:].strip()
     if not re.fullmatch(r"\d{1,5}(\.\d{1,2})?", text):
         return None
     try:
-        value = Decimal(text).quantize(Decimal("0.01"))
+        value = Decimal(text).quantize(_CENT)
     except InvalidOperation:
         return None
     if value <= 0 or value > MAX_PLAUSIBLE_TOTAL:
@@ -85,16 +115,61 @@ def parse_total(raw) -> Decimal | None:
     return value
 
 
+def parse_store_number(raw) -> str:
+    """'#614' / '0614' / 'Store 614' → '614'; anything else → ''."""
+    digits = re.sub(r"\D", "", str(raw or ""))
+    if not digits or len(digits) > 5:
+        return ""
+    return digits.lstrip("0") or ""
+
+
+def parse_lines(raw) -> list[Decimal] | None:
+    """Model ``lines`` → signed amounts (refunds negative). ``None`` when any
+    line is not a plausible amount, so a half-read screenshot is not trusted."""
+    if not isinstance(raw, list):
+        return None
+    out: list[Decimal] = []
+    for line in raw:
+        if not isinstance(line, dict):
+            return None
+        amount = parse_total(line.get("amount"))
+        if amount is None:
+            return None
+        out.append(-amount if line.get("kind") == "refund" else amount)
+    return out
+
+
 def interpret_reading(parsed: dict | None) -> dict:
-    """Model output → ``{"status", "total", "merchant", "receipt_date"}``.
-    Anything short of a confident, plausible total is ``unreadable``."""
-    unreadable = {"status": "unreadable", "total": None, "merchant": "", "receipt_date": ""}
+    """Model output → ``{"status", "total", "merchant", "receipt_date",
+    "store_number", "charges"}``.
+
+    ``charges`` are signed decimal strings (refunds negative) whose sum is
+    ``total``. When the listed lines do not add up to the printed total the
+    lines are dropped and the total stands as one charge — the total is the
+    figure printed most prominently, so it is the one trusted. Anything
+    short of a confident, plausible total is ``unreadable``."""
+    unreadable = {
+        "status": "unreadable", "total": None, "merchant": "", "receipt_date": "",
+        "store_number": "", "charges": [],
+    }
     if not isinstance(parsed, dict):
         return unreadable
     if parsed.get("isReceipt") is not True or parsed.get("totalLegible") is not True:
         return unreadable
-    total = parse_total(parsed.get("total"))
-    if total is None:
+    lines = parse_lines(parsed.get("lines")) or []
+    printed = parse_total(parsed.get("total"))
+    net = sum(lines, Decimal("0")).quantize(_CENT) if lines else None
+    if printed is not None and net is not None and abs(net) != printed:
+        lines, net = [], None  # lines disagree with the total: trust the total
+    if printed is None and net is None:
+        return unreadable
+    if net is not None:
+        total = net  # signed: a refund-only receipt nets negative
+    else:
+        raw_total = str(parsed.get("total") or "").strip()
+        total = -printed if raw_total.startswith("-") else printed
+        lines = [total]
+    if total == 0 and not lines:
         return unreadable
     date_text = str(parsed.get("date") or "").strip()
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_text):
@@ -104,6 +179,8 @@ def interpret_reading(parsed: dict | None) -> dict:
         "total": total,
         "merchant": str(parsed.get("merchant") or "").strip()[:120],
         "receipt_date": date_text,
+        "store_number": parse_store_number(parsed.get("storeNumber")),
+        "charges": [str(x) for x in lines],
     }
 
 
@@ -118,7 +195,7 @@ def read_receipt_image(image_bytes: bytes, content_type: str = "image/jpeg") -> 
             image_bytes=image_bytes,
             content_type=content_type,
             schema=_RECEIPT_SCHEMA,
-            max_tokens=200,
+            max_tokens=400,
         )
     except AiUnavailable:
         raise
@@ -127,14 +204,22 @@ def read_receipt_image(image_bytes: bytes, content_type: str = "image/jpeg") -> 
     return interpret_reading(parsed)
 
 
-def pending_receipt_files(*, tenant_id: int | None = None, since_days: int = 45):
+def pending_receipt_files(
+    *, tenant_id: int | None = None, since_days: int = 45, reread_older: bool = False
+):
     """Receipt-bucket image files on custom recaps that have no reading yet,
-    newest first."""
+    newest first. ``reread_older`` also includes files read by an older
+    reader (before store numbers and charge lines were captured)."""
+    from django.db.models import Q
+
     from recaps.models import CustomRecapFile
 
+    unread = Q(receipt_reading__isnull=True)
+    if reread_older:
+        unread |= Q(receipt_reading__reader_version__lt=READER_VERSION)
     qs = CustomRecapFile.objects.filter(
+        unread,
         file_recap_category__name__iregex=RECEIPT_CATEGORY_RE.pattern,
-        receipt_reading__isnull=True,
         custom_recap__isnull=False,
         custom_recap__created_at__gte=timezone.now() - timedelta(days=since_days),
     ).select_related("custom_recap")
@@ -142,8 +227,6 @@ def pending_receipt_files(*, tenant_id: int | None = None, since_days: int = 45)
         qs = qs.filter(custom_recap__tenant_id=tenant_id)
     # Images only, in the query: a PDF in the receipts bucket can never be
     # read, and leaving it "pending" would use up every run's limit.
-    from django.db.models import Q
-
     images = Q()
     for suffix in (".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic", ".heif"):
         images |= Q(url__iendswith=suffix)
@@ -151,7 +234,11 @@ def pending_receipt_files(*, tenant_id: int | None = None, since_days: int = 45)
 
 
 def read_pending_receipts(
-    *, tenant_id: int | None = None, since_days: int = 45, limit: int = 40
+    *,
+    tenant_id: int | None = None,
+    since_days: int = 45,
+    limit: int = 40,
+    reread_older: bool = False,
 ) -> dict:
     """Read up to ``limit`` unread receipt images and store the results."""
     from recaps.heic_conversion import display_blob_name, is_heic_blob
@@ -160,7 +247,10 @@ def read_pending_receipts(
     from utils.gcs import download_blob_bytes, extract_blob_name_from_url
 
     counts = {"read": 0, "unreadable": 0, "skipped": 0, "errors": 0}
-    for recap_file in pending_receipt_files(tenant_id=tenant_id, since_days=since_days)[:limit]:
+    pending = pending_receipt_files(
+        tenant_id=tenant_id, since_days=since_days, reread_older=reread_older
+    )
+    for recap_file in pending[:limit]:
         blob = extract_blob_name_from_url(str(recap_file.url)) or ""
         if not blob or not _IMAGE_RE.search(blob):
             counts["skipped"] += 1
@@ -188,6 +278,9 @@ def read_pending_receipts(
                 "total": reading["total"],
                 "merchant": reading["merchant"],
                 "receipt_date": reading["receipt_date"],
+                "store_number": reading.get("store_number", ""),
+                "charges": reading.get("charges", []),
+                "reader_version": READER_VERSION,
             },
         )
         counts[reading["status"]] += 1
