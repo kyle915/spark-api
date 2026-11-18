@@ -14,6 +14,11 @@ recap by hand is never replaced. Idempotent: a second run proposes nothing new.
     python manage.py normalize_recap_locations --tenant torch-thc
     python manage.py normalize_recap_locations --tenant 17 --since 2026-06-01 --limit 200
     python manage.py normalize_recap_locations --tenant girl-beer --apply
+    python manage.py normalize_recap_locations --tenant 1 --until 2025-12-31 --after-id 50000
+
+Big tenants can be walked in pages: ``--limit`` / ``--time-budget`` stop a
+run early, and the report's ``next_after_id`` is the ``--after-id`` of the
+next run (``partial=True`` while recaps are left).
 """
 
 from __future__ import annotations
@@ -29,13 +34,13 @@ JSON_START = "RECAPLOCATION_JSON_START"
 JSON_END = "RECAPLOCATION_JSON_END"
 
 
-def parse_since(value: str | None) -> date | None:
+def parse_since(value: str | None, flag: str = "--since") -> date | None:
     if not value:
         return None
     try:
         return date.fromisoformat(value.strip())
     except ValueError as exc:
-        raise CommandError(f"bad --since (expected YYYY-MM-DD): {value}") from exc
+        raise CommandError(f"bad {flag} (expected YYYY-MM-DD): {value}") from exc
 
 
 def format_report(report: dict, *, show: int = 500) -> list[str]:
@@ -44,6 +49,8 @@ def format_report(report: dict, *, show: int = 500) -> list[str]:
         f"tenant={report['tenant']['slug'] or report['tenant']['id']} "
         f"applied={report['applied']} scanned={report['scanned']} "
         f"with_changes={report['recaps_with_changes']} written={report['recaps_written']}",
+        f"partial={report['partial']} last_recap_id={report['last_recap_id']} "
+        f"next_after_id={report['next_after_id']} elapsed_s={report['elapsed_s']}",
         "fills: " + ", ".join(f"{k}={v}" for k, v in report["fills"].items()),
         "blank before: " + ", ".join(f"{k}={v}" for k, v in report["blank_before"].items()),
         "blank after:  " + ", ".join(f"{k}={v}" for k, v in report["blank_after"].items()),
@@ -76,7 +83,13 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument("--tenant", required=True, help="tenant id, slug or name")
         parser.add_argument("--since", default=None, help="only recaps whose EVENT date is on/after YYYY-MM-DD")
+        parser.add_argument("--until", default=None, help="only recaps whose EVENT date is on/before YYYY-MM-DD")
+        parser.add_argument("--after-id", type=int, default=None, help="only recaps with id > this (paging cursor)")
         parser.add_argument("--limit", type=int, default=None, help="at most this many recaps (oldest first)")
+        parser.add_argument(
+            "--time-budget", type=float, default=None,
+            help="seconds; start no new batch after this (default: no budget)",
+        )
         parser.add_argument("--apply", action="store_true", help="write the changes (default: dry-run)")
         parser.add_argument("--no-ai", action="store_true", help="deterministic only; never call the AI model")
         parser.add_argument("--max-ai-calls", type=int, default=DEFAULT_MAX_AI_CALLS)
@@ -90,6 +103,9 @@ class Command(BaseCommand):
         report = run(
             tenant,
             since=parse_since(opts.get("since")),
+            until=parse_since(opts.get("until"), "--until"),
+            after_id=opts.get("after_id"),
+            time_budget_s=opts.get("time_budget"),
             limit=opts.get("limit"),
             apply=bool(opts.get("apply")),
             use_ai=not opts.get("no_ai"),
