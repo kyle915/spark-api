@@ -98,6 +98,10 @@ INSTALLED_APPS = [
     "tasks",
     # Official Spark MCP server (AI app connections): OAuth 2.1 + /mcp.
     "spark_mcp",
+    # What the BA product-questions box can answer from beyond staff notes:
+    # text extracted from the brand's uploaded documents and a bounded crawl
+    # of its website. See product_knowledge/.
+    "product_knowledge",
 ]
 
 AUTH_USER_MODEL = "tenants.User"
