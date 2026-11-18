@@ -3442,6 +3442,56 @@ class ReadShelfPhotosView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class BuildRecapDecksView(View):
+    """POST `/internal/cron/build-recap-decks`.
+
+    Finishes client recap decks left ``building`` (big programs: the
+    summary, takeaways and next steps are written outside the staff
+    member's request; see `recap_decks/builder.py`). Each deck is claimed
+    with one conditional UPDATE, so this never races the Cloud Task that
+    may also be finishing it. Sends nothing; shares nothing (a finished
+    deck is a staff draft).
+
+    Params: max_decks (default 5, cap 20), max_seconds (default 240, cap 800).
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _int(name: str, default: int) -> int:
+            raw = (request.POST.get(name) or request.GET.get(name) or "").strip()
+            try:
+                return int(raw) if raw else default
+            except ValueError:
+                return default
+
+        from recap_decks.builder import finish_pending_builds
+
+        try:
+            report = finish_pending_builds(
+                max_decks=max(1, min(_int("max_decks", 5), 20)),
+                max_seconds=max(10, min(_int("max_seconds", 240), 800)),
+            )
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("Build recap decks cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "build-failed", "detail": str(exc)}, status=500
+            )
+        return JsonResponse({"ok": True, "report": report})
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        return JsonResponse({"ok": True, "endpoint": "build-recap-decks"})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class ScoreRecapPhotosView(View):
     """POST `/internal/cron/score-recap-photos`.
 
@@ -12246,6 +12296,7 @@ def _registered_views() -> dict[str, Any]:
         "regenerate-recap-pdfs": RegenerateRecapPdfsView,
         "read-recap-receipts": ReadRecapReceiptsView,
         "score-recap-photos": ScoreRecapPhotosView,
+        "build-recap-decks": BuildRecapDecksView,
         "read-shelf-photos": ReadShelfPhotosView,
         "campaign-to-date": CampaignToDateView,
         "dedupe-skills": DedupeSkillsView,

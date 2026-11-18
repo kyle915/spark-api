@@ -48,6 +48,7 @@ from recaps.client_deck_schema import (
     ClientRecapDraftMutations,
     ClientRecapDraftQueries,
 )
+from recap_decks.schema import ClientRecapDeckMutations, ClientRecapDeckQueries
 from tenants.notification_pref_schema import (
     NotificationPreferenceMutations,
     NotificationPreferenceQueries,
@@ -68,6 +69,7 @@ QueryClients = merge_types(
         DashboardExplainQueries,
         BestPhotoQueries,
         ClientRecapDraftQueries,
+        ClientRecapDeckQueries,
         ListSearchQueries,
         StoreProfileQueries,
         MonthHighlightQueries,
@@ -110,6 +112,7 @@ MutationClients = merge_types(
         FieldSamplingReportMutations,
         BestPhotoMutations,
         ClientRecapDraftMutations,
+        ClientRecapDeckMutations,
         MutationClients,
         ClientJobMutations,
         AmbassadorMutationsClient,

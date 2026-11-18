@@ -66,6 +66,9 @@ MIN_PHOTOS_BEFORE_FILL = 4
 MAX_PHOTOS_PER_RECAP = 2
 MAX_COMMENTS = 40
 MAX_QUOTES_IN_PDF = 6
+MAX_QUOTE_CHARS = 220
+MAX_NEXT_STEPS = 3
+MAX_NEXT_STEP_CHARS = 240
 MAX_TAKEAWAYS = 5
 MIN_TAKEAWAYS = 3
 MAX_SUMMARY_CHARS = 1200
@@ -104,16 +107,22 @@ _SYSTEM = (
     "exclamation marks, no adjectives the facts do not support. "
     "summary: 3 to 4 sentences. takeaways: 3 to 5 short sentences, each "
     "specific and supported by FACTS or COMMENTS. If FACTS cannot support a "
-    "point, leave it out."
+    "point, leave it out. 'program.demos' already leaves out no-product "
+    "visits (stores with no product on hand); call them demos. "
+    "next_steps: 0 to 3 short, practical suggestions for the brand's next "
+    "program, each tied to something in FACTS or COMMENTS (a store or state "
+    "that did well, something consumers asked for). No promises about "
+    "results. Return an empty list when FACTS do not support one."
 )
 
 _TEXT_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["summary", "takeaways"],
+    "required": ["summary", "takeaways", "next_steps"],
     "properties": {
         "summary": {"type": "string"},
         "takeaways": {"type": "array", "items": {"type": "string"}},
+        "next_steps": {"type": "array", "items": {"type": "string"}},
     },
 }
 
@@ -149,15 +158,39 @@ def _window_ba_names(tenant_id: int, window) -> list[str]:
     return _ba_names(list(legacy[:500]) + list(custom[:500]))
 
 
-def approved_comments(tenant_id: int, start: date, end: date) -> list[str]:
+def approved_comments(
+    tenant_id: int, start: date, end: date, *, skip_recaps: set[str] | None = None
+) -> list[str]:
     """What consumers said, from approved recaps in the window, newest event
     first. The feedback-themes gatherer is used, so the deck and the themes
     page read the same comments: approved and not archived, with ambassador
-    names, emails and phone numbers taken out."""
-    from recaps.feedback_themes import gather_comments
+    names, emails and phone numbers taken out.
+
+    ``skip_recaps`` ("C123" / "L45") leaves out comments filed on those
+    recaps: the no-product visits a deck does not count. What consumers said
+    comes before the reasons they gave for not buying."""
+    from recaps.feedback_themes import KIND_DECLINE, gather_comments
 
     comments, _cut = gather_comments(tenant_id, start, end)
-    return [c.text for c in comments][:MAX_COMMENTS]
+    skip = skip_recaps or set()
+    kept = [c for c in comments if c.recap not in skip]
+    kept.sort(key=lambda c: 1 if c.kind == KIND_DECLINE else 0)
+    return [c.text for c in kept][:MAX_COMMENTS]
+
+
+def trim_quote(text: str, limit: int = MAX_QUOTE_CHARS) -> str:
+    """A comment as a deck prints it: one line of spacing, no wrapping
+    quote marks, and cut at a sentence (or else a word) when it runs long.
+    Nothing is reworded."""
+    cleaned = " ".join(str(text or "").split()).strip()
+    cleaned = cleaned.strip("\"'“”‘’ ").strip()
+    if len(cleaned) <= limit:
+        return cleaned
+    head = cleaned[:limit]
+    sentence_end = max(head.rfind(". "), head.rfind("! "), head.rfind("? "))
+    if sentence_end >= limit // 2:
+        return head[: sentence_end + 1]
+    return head[: head.rfind(" ")].rstrip(",;:- ") + "…" if " " in head else head + "…"
 
 
 def feedback_themes(tenant_id: int, start: date, end: date) -> list[dict]:
@@ -189,8 +222,24 @@ def feedback_themes(tenant_id: int, start: date, end: date) -> list[dict]:
     return themes
 
 
-def build_facts(tenant, start: date, end: date) -> dict:
-    """Everything the draft states as fact, from the dashboard's roll-ups."""
+def build_facts(
+    tenant,
+    start: date,
+    end: date,
+    *,
+    with_themes: bool = True,
+    visits: dict | None = None,
+    names: list[str] | None = None,
+) -> dict:
+    """Everything the draft states as fact, from the dashboard's roll-ups.
+
+    ``with_themes=False`` skips the counted themes (a model call) so a big
+    program can be put together inside one request and finished later
+    (:mod:`recap_decks.builder`). ``visits`` is the no-product scan
+    (:func:`recap_decks.no_product.no_product_visits`); it is run here when
+    not given."""
+    from recap_decks.no_product import excluded_keys, no_product_visits
+
     window = _inclusive_dates_to_window(start, end)
     events, recaps = _tenant_event_recap_counts_window(tenant.id, window)
     kpis = asdict(_tenant_kpi_totals_window(tenant.id, window))
@@ -218,10 +267,22 @@ def build_facts(tenant, start: date, end: date) -> dict:
             if r.get("kind") == "named" and r.get("label")
         ][:limit]
 
+    if visits is None:
+        visits = no_product_visits(tenant.id, start, end, names or [])
+    store_count = int(breakdown.get("store_count") or 0)
+    state_count = int(breakdown.get("state_count") or 0)
     return {
         "brand": tenant.name or "",
         "period": period_label(start, end),
         "numbers": numbers,
+        "program": program_figures(
+            recaps=int(recaps),
+            consumers=int(kpis.get("consumers_reached") or 0),
+            no_product=int(visits.get("excluded_count") or 0),
+            store_count=store_count,
+            state_count=state_count,
+        ),
+        "visits": visits,
         "consumers_sampled_by_week": [
             {
                 "week_of": w["week_start"],
@@ -232,14 +293,35 @@ def build_facts(tenant, start: date, end: date) -> dict:
         ],
         "top_stores": _named(breakdown.get("by_store") or [], MAX_STORES),
         "states": _named(breakdown.get("by_state") or [], MAX_STATES),
-        "store_count": int(breakdown.get("store_count") or 0),
-        "state_count": int(breakdown.get("state_count") or 0),
-        "comments": approved_comments(tenant.id, start, end),
-        "themes": feedback_themes(tenant.id, start, end),
+        "store_count": store_count,
+        "state_count": state_count,
+        "comments": approved_comments(
+            tenant.id, start, end, skip_recaps=excluded_keys(visits)
+        ),
+        "themes": feedback_themes(tenant.id, start, end) if with_themes else [],
         "labels": (
             "Consumers sampled, samples handed out and engagements are "
             "separate counts and must not be swapped."
         ),
+    }
+
+
+def program_figures(
+    *, recaps: int, consumers: int, no_product: int, store_count: int, state_count: int
+) -> dict:
+    """The deck's own counts, worked out here and never by the model.
+
+    ``demos`` is the approved recaps less the no-product visits; a left-out
+    visit recorded nothing, so no total changes. ``consumers_per_demo`` is
+    consumers sampled over demos, rounded to a whole number."""
+    demos = max(0, int(recaps) - int(no_product))
+    per_demo = round(consumers / demos) if demos and consumers else 0
+    return {
+        "demos": demos,
+        "no_product_visits": max(0, int(no_product)),
+        "consumers_per_demo": int(per_demo),
+        "store_count": int(store_count),
+        "state_count": int(state_count),
     }
 
 
@@ -265,6 +347,13 @@ def fallback_text(facts: dict) -> tuple[str, list[str]]:
     ]
     for item in (facts.get("numbers") or [])[2:5]:
         sentences.append(f"{item['label']}: {int(item['value']):,}.")
+    program = facts.get("program") or {}
+    left_out = int(program.get("no_product_visits") or 0)
+    if left_out:
+        sentences.append(
+            f"{left_out:,} no-product visit{'s are' if left_out != 1 else ' is'} left out of "
+            f"the demo count, which is {int(program.get('demos') or 0):,}."
+        )
     takeaways: list[str] = []
     stores = facts.get("top_stores") or []
     if stores:
@@ -320,6 +409,9 @@ def text_is_grounded(text: str, facts: dict) -> bool:
         values.append(str(int(row.get("recaps") or 0)))
     values.append(str(int(facts.get("store_count") or 0)))
     values.append(str(int(facts.get("state_count") or 0)))
+    for value in (facts.get("program") or {}).values():
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            values.append(str(int(value)))
     supplied = " ; ".join(
         [str(facts.get("period") or ""), *values, *(facts.get("comments") or [])]
     )
@@ -356,17 +448,35 @@ def compose_text(
 ) -> tuple[str, list[str], str]:
     """``(summary, takeaways, source)``. ``source`` is ``model`` when the
     model's reply was kept, otherwise ``fallback``."""
+    words = compose_deck_text(facts, names, generate=generate)
+    return words["summary"], words["takeaways"], words["source"]
+
+
+def compose_deck_text(facts: dict, names: list[str] | None = None, *, generate=None) -> dict:
+    """``{summary, takeaways, next_steps, source}`` from one model call.
+
+    The summary and every takeaway and next step must pass
+    :func:`text_is_grounded`. A summary that fails, or no reply, gives the
+    sentences built from the facts and no next steps (they are optional).
+    """
     names = names or []
     fb_summary, fb_takeaways = fallback_text(facts)
+    fallback = {
+        "summary": fb_summary,
+        "takeaways": fb_takeaways,
+        "next_steps": [],
+        "source": ClientRecapDraft.SOURCE_FALLBACK,
+    }
     if _number(facts, "recaps") == 0:
-        return fb_summary, fb_takeaways, ClientRecapDraft.SOURCE_FALLBACK
+        return fallback
     generate = generate or generate_json
     # The weekly series stays out of the prompt: its dates are numbers the
-    # model could mistake for figures. It is still drawn in the PDF.
+    # model could mistake for figures. It is still drawn in the PDF. The
+    # visit list (stores, dates, notes) is for staff, not the model.
     prompt_facts = {
         k: v
         for k, v in facts.items()
-        if k not in ("comments", "themes", "consumers_sampled_by_week")
+        if k not in ("comments", "themes", "consumers_sampled_by_week", "visits")
     }
     user = (
         "FACTS:\n"
@@ -382,11 +492,16 @@ def compose_text(
         logger.exception("client recap draft: model call failed")
         raw = None
     if not isinstance(raw, dict):
-        return fb_summary, fb_takeaways, ClientRecapDraft.SOURCE_FALLBACK
+        return fallback
 
     summary = _clean_line(raw.get("summary"), MAX_SUMMARY_CHARS, names)
     if not summary or not text_is_grounded(summary, facts):
-        return fb_summary, fb_takeaways, ClientRecapDraft.SOURCE_FALLBACK
+        return fallback
+    next_steps: list[str] = []
+    for item in raw.get("next_steps") if isinstance(raw.get("next_steps"), list) else []:
+        line = _clean_line(item, MAX_NEXT_STEP_CHARS, names)
+        if line and text_is_grounded(line, facts) and line not in next_steps:
+            next_steps.append(line)
     takeaways: list[str] = []
     for item in raw.get("takeaways") if isinstance(raw.get("takeaways"), list) else []:
         line = _clean_line(item, MAX_TAKEAWAY_CHARS, names)
@@ -399,7 +514,12 @@ def compose_text(
             break
         if line not in takeaways:
             takeaways.append(line)
-    return summary, takeaways, ClientRecapDraft.SOURCE_MODEL
+    return {
+        "summary": summary,
+        "takeaways": takeaways,
+        "next_steps": next_steps[:MAX_NEXT_STEPS],
+        "source": ClientRecapDraft.SOURCE_MODEL,
+    }
 
 
 # ─── Photos ─────────────────────────────────────────────────────────
@@ -415,10 +535,43 @@ def _eligible_photos(tenant_id: int):
     )
 
 
-def default_photo_ids(tenant_id: int, start: date, end: date, limit: int = DEFAULT_PHOTOS) -> list[int]:
+# Why the scorer set a photo aside that also rules it out of a deck: it
+# is not a field photo, or it would not print.
+_UNUSABLE_SKIPS = frozenset(
+    {"receipt", "screenshot", "low_resolution", "not_an_image", "missing_file"}
+)
+
+
+def photo_is_usable(recap_file, skip_recaps: set[int] | None = None) -> bool:
+    """A photo a deck may print: not a receipt or screenshot, not flagged
+    unreadable or too small by the scorer, and not from a no-product visit
+    (``skip_recaps`` are custom recap ids). Staff pins do not override this."""
+    from recaps.photo_picks import _related, is_receipt
+
+    if skip_recaps and recap_file.custom_recap_id in skip_recaps:
+        return False
+    if is_receipt(recap_file):
+        return False
+    score = _related(recap_file, "photo_score")
+    if score is None:
+        return True
+    if score.status == "unreadable" or score.kind == "screenshot":
+        return False
+    return not (score.status == "skipped" and score.skip_reason in _UNUSABLE_SKIPS)
+
+
+def default_photo_ids(
+    tenant_id: int,
+    start: date,
+    end: date,
+    limit: int = DEFAULT_PHOTOS,
+    *,
+    skip_recaps: set[int] | None = None,
+) -> list[int]:
     """Photos for a new draft: staff pins first, then the scorer's picks by
     score, at most two per recap. Topped up with one field photo per recap
-    when few have been picked."""
+    when few have been picked. Never an unusable photo or one from a
+    no-product visit (:func:`photo_is_usable`)."""
     from recaps.photo_gallery import _base_queryset
     from recaps.photo_picks import (
         _related,
@@ -446,6 +599,8 @@ def default_photo_ids(tenant_id: int, start: date, end: date, limit: int = DEFAU
     for f in sorted(picks, key=_rank):
         if len(chosen) >= limit:
             break
+        if not photo_is_usable(f, skip_recaps):
+            continue
         if per_recap.get(f.custom_recap_id, 0) >= MAX_PHOTOS_PER_RECAP:
             continue
         per_recap[f.custom_recap_id] = per_recap.get(f.custom_recap_id, 0) + 1
@@ -459,6 +614,8 @@ def default_photo_ids(tenant_id: int, start: date, end: date, limit: int = DEFAU
     best: dict[int, tuple] = {}
     for f in base.order_by("-custom_recap__event__date", "-custom_recap_id", "id")[:400]:
         if f.id in chosen or f.custom_recap_id in per_recap or is_receipt(f):
+            continue
+        if not photo_is_usable(f, skip_recaps):
             continue
         staff = _related(f, "staff_pick")
         score = _related(f, "photo_score")
@@ -477,9 +634,10 @@ def default_photo_ids(tenant_id: int, start: date, end: date, limit: int = DEFAU
     return chosen
 
 
-def clean_photo_ids(tenant_id: int, raw_ids) -> list[int]:
+def clean_photo_ids(tenant_id: int, raw_ids, *, skip_recaps: set[int] | None = None) -> list[int]:
     """The ids that are this brand's client-visible photos, in the order
-    given, without repeats, capped at :data:`MAX_PHOTOS`."""
+    given, without repeats, capped at :data:`MAX_PHOTOS`. Unusable photos and
+    photos from no-product visits are refused (:func:`photo_is_usable`)."""
     wanted: list[int] = []
     for raw in raw_ids or []:
         try:
@@ -490,9 +648,13 @@ def clean_photo_ids(tenant_id: int, raw_ids) -> list[int]:
             wanted.append(value)
     if not wanted:
         return []
-    allowed = set(
-        _eligible_photos(tenant_id).filter(id__in=wanted).values_list("id", flat=True)
-    )
+    allowed = {
+        f.id
+        for f in _eligible_photos(tenant_id)
+        .filter(id__in=wanted)
+        .select_related("file_recap_category", "photo_score", "receipt_reading")
+        if photo_is_usable(f, skip_recaps)
+    }
     return [i for i in wanted if i in allowed][:MAX_PHOTOS]
 
 
@@ -513,9 +675,13 @@ def _store_name(event) -> str:
 
 def draft_photos(draft: ClientRecapDraft) -> list[dict]:
     """The draft's photos, in order, with what the screen and the PDF show.
-    A photo that is no longer client-visible is left out."""
+    A photo that is no longer client-visible, or no longer usable in a deck,
+    is left out."""
+    from recap_decks.builder import deck_skip_recaps
     from recaps.photo_gallery import _image_url
     from recaps.photo_picks import _related, is_effective_pick
+
+    skip = deck_skip_recaps(draft)
 
     ids = [int(i) for i in (draft.photo_ids or []) if str(i).isdigit()]
     if not ids:
@@ -537,7 +703,7 @@ def draft_photos(draft: ClientRecapDraft) -> list[dict]:
     photos: list[dict] = []
     for file_id in ids:
         f = rows.get(file_id)
-        if f is None:
+        if f is None or not photo_is_usable(f, skip):
             continue
         url = _image_url(f)
         if not url:
@@ -564,24 +730,46 @@ def draft_photos(draft: ClientRecapDraft) -> list[dict]:
 # ─── Draft rows ─────────────────────────────────────────────────────
 
 
-def create_draft(tenant, start: date, end: date, user) -> ClientRecapDraft:
-    """Assemble and store a new draft. One model call at most."""
+def create_draft(
+    tenant, start: date, end: date, user, *, finish_words: bool = True
+) -> ClientRecapDraft:
+    """Assemble and store a new draft and its deck row. One model call at
+    most, plus the counted themes.
+
+    ``finish_words=False`` (a big program) stores the numbers, photos and
+    no-product visits now, with words built from the numbers, and leaves the
+    deck ``building``: :func:`recap_decks.builder.finish_build` writes the
+    summary, takeaways and next steps later, outside this request."""
+    from recap_decks.models import ClientRecapDeck
+    from recap_decks.no_product import excluded_custom_ids, no_product_visits
+
     if end < start:
         raise ClientRecapDraftError("The end date is before the start date.")
     if (end - start).days > MAX_RANGE_DAYS:
         raise ClientRecapDraftError("Pick a range of 13 months or less.")
-    facts = build_facts(tenant, start, end)
     names = _window_ba_names(tenant.id, _inclusive_dates_to_window(start, end))
+    visits = no_product_visits(tenant.id, start, end, names)
+    facts = build_facts(
+        tenant, start, end, with_themes=finish_words, visits=visits, names=names
+    )
     stored = stored_period_summary(tenant.id, start, end)
+    next_steps: list[str] = []
+    status = ClientRecapDeck.STATUS_DRAFT
     if stored:
         # These dates already have a written client summary: use it rather
         # than paying for, and reviewing, a second one. No model call.
         summary = _hide_names(stored, names)[: MAX_SUMMARY_CHARS * 2]
         takeaways = fallback_text(facts)[1]
         source = ClientRecapDraft.SOURCE_SUMMARY
+    elif finish_words:
+        words = compose_deck_text(facts, names)
+        summary, takeaways, source = words["summary"], words["takeaways"], words["source"]
+        next_steps = words["next_steps"]
     else:
-        summary, takeaways, source = compose_text(facts, names)
-    return ClientRecapDraft.objects.create(
+        summary, takeaways = fallback_text(facts)
+        source = ClientRecapDraft.SOURCE_FALLBACK
+        status = ClientRecapDeck.STATUS_BUILDING
+    draft = ClientRecapDraft.objects.create(
         tenant=tenant,
         start_date=start,
         end_date=end,
@@ -590,10 +778,14 @@ def create_draft(tenant, start: date, end: date, user) -> ClientRecapDraft:
         takeaways=takeaways,
         text_source=source,
         facts=facts,
-        photo_ids=default_photo_ids(tenant.id, start, end),
+        photo_ids=default_photo_ids(
+            tenant.id, start, end, skip_recaps=excluded_custom_ids(visits)
+        ),
         created_by=user,
         updated_by=user,
     )
+    ClientRecapDeck.objects.create(draft=draft, status=status, next_steps=next_steps)
+    return draft
 
 
 def update_draft(
@@ -625,7 +817,11 @@ def update_draft(
         edited = edited or cleaned_list != list(draft.takeaways or [])
         draft.takeaways = cleaned_list
     if photo_ids is not None:
-        draft.photo_ids = clean_photo_ids(draft.tenant_id, photo_ids)
+        from recap_decks.builder import deck_skip_recaps
+
+        draft.photo_ids = clean_photo_ids(
+            draft.tenant_id, photo_ids, skip_recaps=deck_skip_recaps(draft)
+        )
     if edited:
         draft.text_source = ClientRecapDraft.SOURCE_EDITED
     draft.updated_by = user
@@ -646,39 +842,6 @@ def _short_date(iso: str) -> str:
     except (TypeError, ValueError):
         return ""
     return f"{d.strftime('%b')} {d.day}"
-
-
-def _bars(rows: list[tuple[str, int]], unit: str) -> str:
-    """Horizontal bars, drawn with plain boxes. One accent, no gradient."""
-    peak = max((value for _label, value in rows), default=0)
-    if peak <= 0:
-        return ""
-    out = []
-    for label, value in rows:
-        width = max(1.5, round(100 * value / peak, 1))
-        out.append(
-            "<div class='bar-row'>"
-            f"<div class='bar-label'>{_esc(label)}</div>"
-            f"<div class='bar-track'><div class='bar-fill' style='width:{width}%'></div></div>"
-            f"<div class='bar-value'>{value:,}</div>"
-            "</div>"
-        )
-    return f"<div class='bars' aria-label='{_esc(unit)}'>{''.join(out)}</div>"
-
-
-def _photo_figure(photo: dict, data_uri: str) -> str:
-    lines = []
-    if photo.get("caption"):
-        lines.append(f"<span class='cap-main'>{_esc(photo['caption'])}</span>")
-    where = " · ".join(
-        part
-        for part in (photo.get("store"), photo.get("state"), _short_date(photo.get("event_date")))
-        if part
-    )
-    if where:
-        lines.append(f"<span class='cap-meta'>{_esc(where)}</span>")
-    caption = f"<figcaption>{''.join(lines)}</figcaption>" if lines else ""
-    return f"<figure><div class='frame'><img src='{data_uri}' /></div>{caption}</figure>"
 
 
 def _embed_photos(photos: list[dict]) -> list[tuple[dict, str]]:
@@ -707,212 +870,117 @@ def _embed_photos(photos: list[dict]) -> list[tuple[dict, str]]:
 
 
 def build_draft_html(draft: ClientRecapDraft, embedded: list[tuple[dict, str]]) -> str:
-    """The deck as one HTML document. Each section starts a new page."""
+    """The deck as one HTML document (:mod:`recap_decks.deck_html`).
+
+    Everything it prints is client-safe by the time it gets here: numbers
+    from the stored facts (the dashboard roll-ups), store names from the
+    retailer (never a raw event title), quotes with ambassador names taken
+    out, and no evidence from the no-product visits beyond the reason."""
+    from recap_decks import builder
+    from recap_decks.deck_html import build_deck_html
     from recaps.pdf import _spark_mark_src
 
     facts = draft.facts or {}
     brand = facts.get("brand") or getattr(draft.tenant, "name", "") or ""
     period = facts.get("period") or period_label(draft.start_date, draft.end_date)
-    mark = _spark_mark_src()
+    figures = builder.program(draft)
+    deck = builder.deck_for(draft)
 
-    def _header(title: str) -> str:
-        return (
-            "<header class='page-head'>"
-            f"<p class='eyebrow'>{_esc(brand)} · {_esc(period)}</p>"
-            f"<h2>{_esc(title)}</h2><div class='accent'></div></header>"
-        )
-
-    pages: list[str] = []
-
-    # 1. Cover.
-    hero = ""
-    if embedded:
-        hero = f"<div class='hero'><img src='{embedded[0][1]}' /></div>"
-    pages.append(
-        "<section class='page cover'>"
-        f"<img class='spark-mark' src='{mark}' alt='Spark' />"
-        f"<p class='eyebrow'>{_esc(brand)} · Client recap</p>"
-        f"<h1>{_esc(draft.title or brand)}</h1>"
-        f"<p class='period'>{_esc(period)}</p><div class='accent'></div>"
-        f"{hero}"
-        "<p class='prepared'>Prepared by Ignite Productions</p>"
-        "</section>"
-    )
-
-    # 2. At a glance: the numbers, then the words.
-    tiles = "".join(
-        f"<div class='kpi'><strong>{int(n['value']):,}</strong><span>{_esc(n['label'])}</span></div>"
-        for n in (facts.get("numbers") or [])[:8]
-    )
-    takeaways = "".join(f"<li>{_esc(t)}</li>" for t in (draft.takeaways or []) if str(t).strip())
-    summary = "".join(
-        f"<p>{_esc(par)}</p>" for par in str(draft.summary or "").split("\n") if par.strip()
-    )
-    pages.append(
-        "<section class='page'>"
-        + _header("At a glance")
-        + (f"<div class='kpi-grid'>{tiles}</div>" if tiles else "")
-        + (f"<div class='summary'>{summary}</div>" if summary else "")
-        + (f"<h3>Takeaways</h3><ol class='takeaways'>{takeaways}</ol>" if takeaways else "")
-        + "</section>"
-    )
-
-    # 3. When and where.
     weeks = [
-        (f"Week of {_short_date(w['week_of'])}", int(w["consumers_sampled"]))
+        (_short_date(w["week_of"]), int(w["consumers_sampled"]))
         for w in facts.get("consumers_sampled_by_week") or []
-    ][-12:]
+    ]
     stores = [(s["label"], int(s["consumers_sampled"])) for s in facts.get("top_stores") or []]
     states = [(s["label"], int(s["consumers_sampled"])) for s in facts.get("states") or []]
-    blocks = []
-    if len(weeks) > 1 and _bars(weeks, "by week"):
-        blocks.append("<h3>Consumers sampled by week</h3>" + _bars(weeks, "by week"))
-    if stores and _bars(stores, "by store"):
-        blocks.append("<h3>Consumers sampled by store</h3>" + _bars(stores, "by store"))
-    if states and _bars(states, "by state"):
-        blocks.append("<h3>Consumers sampled by state</h3>" + _bars(states, "by state"))
-    if blocks:
-        pages.append("<section class='page'>" + _header("When and where") + "".join(blocks) + "</section>")
+    where_bits = []
+    if figures["demos"]:
+        where_bits.append(f"{figures['demos']:,} demo{'s' if figures['demos'] != 1 else ''}")
+    if figures["store_count"]:
+        where_bits.append(
+            f"at {figures['store_count']:,} store{'s' if figures['store_count'] != 1 else ''}"
+        )
+    if figures["state_count"]:
+        where_bits.append(
+            f"in {figures['state_count']:,} state{'s' if figures['state_count'] != 1 else ''}"
+        )
+    where_line = (" ".join(where_bits) + ".") if where_bits else ""
+    if where_line:
+        where_line = where_line[0].upper() + where_line[1:]
 
-    # 4. What consumers said: counted themes when that feature has them,
-    # otherwise plain quotes.
+    basis = (
+        f"Approved recaps for {period}, by the date of each event. "
+        "Totals are the same as the Spark dashboard for these dates."
+    )
+    note = builder.no_product_note(draft)
+    if note:
+        basis = f"{basis} {note}"
+
+    visits = facts.get("visits") or {}
+    method = [
+        f"Approved recaps only, placed by the date of each event ({period}).",
+        "Totals match the Spark dashboard for the same dates.",
+        (
+            f"Demos leave out {figures['no_product_visits']:,} no-product "
+            f"visit{'s' if figures['no_product_visits'] != 1 else ''}: stores with no product "
+            "on hand. Those visits recorded nothing, so no total changes."
+            if figures["no_product_visits"]
+            else "Every approved recap in these dates is counted as a demo."
+        ),
+    ]
+    if figures["consumers_per_demo"]:
+        method.append("Consumers per demo is consumers sampled divided by demos, rounded.")
+    method.append(
+        "Consumer comments are as noted on approved recaps, trimmed for length. "
+        "Ambassadors are not named."
+    )
+    if visits.get("capped"):
+        method.append("The newest 5,000 recaps were checked for no-product visits.")
+    left_out = [v for v in builder.left_out_visits(draft) if not v.get("kept")]
+
     themes = facts.get("themes") or []
-    comments = facts.get("comments") or []
-    if themes:
-        items = "".join(
-            "<div class='theme'>"
-            f"<p class='theme-label'>{_esc(t['label'])}"
-            + (
-                f"<span> · noted on {int(t['recap_count']):,} recap{'s' if int(t['recap_count']) != 1 else ''}</span>"
-                if t.get("recap_count")
-                else ""
-            )
-            + "</p>"
-            + (f"<blockquote>{_esc(t['quote'])}</blockquote>" if t.get("quote") else "")
-            + "</div>"
-            for t in themes[:6]
-        )
-        pages.append("<section class='page'>" + _header("What consumers said") + items + "</section>")
-    elif comments:
-        quotes = "".join(
-            f"<blockquote>{_esc(c if len(c) <= 200 else c[:199].rstrip() + '…')}</blockquote>"
-            for c in comments[:MAX_QUOTES_IN_PDF]
-        )
-        pages.append(
-            "<section class='page'>"
-            + _header("What consumers said")
-            + f"<div class='quotes'>{quotes}</div>"
-            + "<p class='note'>Comments noted by the field team on approved recaps.</p>"
-            + "</section>"
-        )
-
-    # 5+. Photos, six to a page. The first photo is the cover, so it is not
-    # repeated here unless it is the only one.
-    gallery = embedded[1:] if len(embedded) > 1 else embedded
-    for start_index in range(0, len(gallery), 6):
-        group = gallery[start_index : start_index + 6]
-        figures = "".join(_photo_figure(photo, uri) for photo, uri in group)
-        pages.append(
-            "<section class='page'>"
-            + _header("From the field")
-            + f"<div class='photo-grid'>{figures}</div></section>"
-        )
-
-    return (
-        "<!doctype html><html><head><meta charset='utf-8' />"
-        f"<title>{_esc(draft.title or brand)}</title></head><body>"
-        + "".join(pages)
-        + "</body></html>"
+    hidden = {str(q) for q in deck.hidden_quotes or []}
+    shown_themes = [
+        t for t in themes if trim_quote(t.get("quote") or "") not in hidden or not t.get("quote")
+    ]
+    return build_deck_html(
+        brand=brand,
+        title=draft.title or f"{brand} recap",
+        period=period,
+        tiles=builder.deck_numbers(draft),
+        basis_note=basis,
+        summary=draft.summary or "",
+        takeaways=[str(t) for t in draft.takeaways or []],
+        weeks=weeks,
+        stores=stores,
+        states=states,
+        where_line=where_line,
+        themes=[
+            {**t, "quote": trim_quote(t.get("quote") or "")} for t in shown_themes
+        ],
+        quotes=[q["text"] for q in builder.deck_quotes(draft)],
+        photos=embedded,
+        next_steps=[str(s) for s in deck.next_steps or []],
+        method=method,
+        left_out=left_out,
+        left_out_total=max(len(left_out), figures["no_product_visits"]),
+        mark=_spark_mark_src(),
+        mark_on_dark=_spark_mark_src(invert=True),
     )
 
 
-# White page, the Spark mark, one accent (the lime the other report PDFs
-# use), no gradients or shadows.
-_DRAFT_CSS = """
-        @page {
-            size: Letter;
-            margin: 0.75in;
-            @bottom-left {
-                content: "Ignite Productions";
-                font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
-                font-size: 8px; color: #7a7f70;
-            }
-            @bottom-right {
-                content: counter(page);
-                font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
-                font-size: 8px; color: #7a7f70;
-            }
-        }
-        @page :first { @bottom-left { content: ""; } @bottom-right { content: ""; } }
-        body { background: #ffffff; color: #14160f; font-size: 11px; line-height: 1.45; }
-        .page { break-before: page; }
-        .page:first-child { break-before: auto; }
-        .eyebrow {
-            margin: 0 0 8px 0; font-size: 9px; color: #5c6154;
-            text-transform: uppercase; letter-spacing: 0.16em;
-        }
-        h1 { font-size: 38px; line-height: 1.1; letter-spacing: -0.02em; margin: 0 0 8px 0; }
-        h2 { font-size: 26px; letter-spacing: -0.01em; margin: 0 0 12px 0; }
-        h3 {
-            font-size: 10px; text-transform: uppercase; letter-spacing: 0.12em;
-            color: #5c6154; margin: 30px 0 12px 0; break-after: avoid;
-        }
-        .accent { width: 44px; height: 3px; background: #c5f546; }
-        .page-head { margin-bottom: 26px; }
-        .cover .spark-mark { height: 24px; margin: 0 0 90px 0; }
-        .cover .period { font-size: 14px; color: #3d4236; margin: 0 0 14px 0; }
-        .cover .hero { margin-top: 36px; }
-        .cover .hero img {
-            width: 100%; height: 5.1in; object-fit: cover; display: block;
-            border: 1px solid #e2e4d8;
-        }
-        .cover .prepared { margin-top: 18px; font-size: 9px; color: #7a7f70; }
-        .kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; }
-        .kpi {
-            padding: 14px 12px 14px 0; border-top: 1px solid #14160f;
-            margin: 0 14px 18px 0; break-inside: avoid;
-        }
-        .kpi strong {
-            display: block; font-size: 30px; letter-spacing: -0.02em;
-            font-variant-numeric: tabular-nums;
-        }
-        .kpi span { display: block; margin-top: 4px; font-size: 10px; color: #5c6154; }
-        .summary p { font-size: 15px; line-height: 1.55; margin: 16px 0 0 0; max-width: 6.4in; }
-        .takeaways { margin: 0; padding-left: 20px; max-width: 6.4in; }
-        .takeaways li { font-size: 13.5px; line-height: 1.5; margin: 0 0 12px 0; padding-left: 6px; break-inside: avoid; }
-        .bars { margin: 0; }
-        .bar-row { display: flex; align-items: center; margin: 0 0 11px 0; break-inside: avoid; }
-        .bar-label { width: 2.1in; font-size: 11.5px; padding-right: 10px; }
-        .bar-track { flex: 1; height: 16px; background: #f1f2ec; }
-        .bar-fill { height: 16px; background: #c5f546; }
-        .bar-value {
-            width: 0.7in; text-align: right; font-size: 11.5px;
-            font-variant-numeric: tabular-nums;
-        }
-        blockquote {
-            margin: 0 0 24px 0; padding: 2px 0 2px 16px; border-left: 3px solid #c5f546;
-            font-size: 16px; line-height: 1.5; break-inside: avoid; max-width: 6.2in;
-        }
-        .theme { margin: 0 0 26px 0; break-inside: avoid; }
-        .theme blockquote { margin-bottom: 0; font-size: 14px; }
-        .theme-label { font-size: 14px; font-weight: 700; margin: 0 0 8px 0; }
-        .theme-label span { font-weight: 400; color: #5c6154; }
-        .note { font-size: 9px; color: #7a7f70; margin-top: 18px; }
-        .photo-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px 16px; }
-        figure { margin: 0; break-inside: avoid; }
-        figure .frame { border: 1px solid #e2e4d8; }
-        figure img { width: 100%; height: 2.3in; object-fit: cover; display: block; }
-        figcaption { margin-top: 6px; }
-        .cap-main { display: block; font-size: 10.5px; }
-        .cap-meta { display: block; font-size: 9px; color: #5c6154; }
-"""
+def _deck_css() -> str:
+    from recap_decks.deck_html import DECK_CSS
+
+    return DECK_CSS
+
+
+# Kept under its old name for importers and tests.
+_DRAFT_CSS = _deck_css()
 
 
 def render_draft_pdf(draft: ClientRecapDraft) -> bytes:
-    """The draft as PDF bytes. Raises :class:`ClientRecapDraftError` when the
+    """The deck as PDF bytes. Raises :class:`ClientRecapDraftError` when the
     renderer is not available, like the other report PDFs."""
-    from recaps.pdf import _PDF_BASE_CSS
-
     embedded = _embed_photos(draft_photos(draft))
     document = build_draft_html(draft, embedded)
     try:
@@ -920,7 +988,7 @@ def render_draft_pdf(draft: ClientRecapDraft) -> bytes:
     except Exception as exc:  # native deps missing / import-time failure
         raise ClientRecapDraftError("PDF renderer is unavailable on this server.") from exc
     try:
-        css = CSS(string=_PDF_BASE_CSS + _DRAFT_CSS)
+        css = CSS(string=_deck_css())
         return HTML(string=document).write_pdf(stylesheets=[css])
     except Exception as exc:  # noqa: BLE001
         raise ClientRecapDraftError("The PDF could not be made.") from exc
