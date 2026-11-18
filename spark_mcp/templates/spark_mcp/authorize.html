@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Connect an AI app · Spark</title>
+<style>
+  :root {
+    --ink: #16181d; --muted: #5b616e; --line: #e3e5ea; --bg: #f5f6f8;
+    --card: #ffffff; --accent: #c4d82e; --accent-ink: #16181d; --danger: #a42323;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, Helvetica, Arial, sans-serif;
+  }
+  .wrap { max-width: 440px; margin: 48px auto; padding: 0 16px; }
+  .brand { display: flex; align-items: baseline; gap: 8px; margin-bottom: 20px; }
+  .brand b { font-size: 20px; letter-spacing: -0.01em; }
+  .brand span { font-size: 12px; letter-spacing: 0.08em; color: var(--muted); text-transform: uppercase; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 24px; }
+  h1 { font-size: 18px; margin: 0 0 8px; font-weight: 600; }
+  p { margin: 0 0 14px; color: var(--muted); }
+  p.ink { color: var(--ink); }
+  label { display: block; font-size: 13px; font-weight: 600; margin: 14px 0 6px; }
+  input[type=email], input[type=password], select {
+    width: 100%; padding: 10px 12px; font: inherit; border: 1px solid var(--line);
+    border-radius: 8px; background: #fff; color: var(--ink);
+  }
+  .btn {
+    display: inline-block; width: 100%; margin-top: 16px; padding: 11px 14px; font: inherit;
+    font-weight: 600; border-radius: 8px; border: 1px solid var(--accent); cursor: pointer;
+    background: var(--accent); color: var(--accent-ink);
+  }
+  .btn.secondary { background: #fff; border-color: var(--line); color: var(--ink); font-weight: 500; }
+  .row { display: flex; gap: 10px; }
+  .row .btn { width: 50%; }
+  .error { color: var(--danger); font-size: 14px; margin: 0 0 12px; }
+  .notice { color: var(--ink); background: #f3f7d9; border-radius: 8px; padding: 10px 12px; font-size: 14px; margin: 0 0 12px; }
+  ul { margin: 0 0 14px; padding-left: 18px; color: var(--muted); }
+  li { margin: 4px 0; }
+  .divider { border-top: 1px solid var(--line); margin: 20px 0 4px; }
+  .small { font-size: 13px; color: var(--muted); }
+  .warn { font-size: 13px; color: var(--danger); }
+  .linkbtn { background: none; border: 0; padding: 0; color: var(--ink); text-decoration: underline; font: inherit; font-size: 13px; cursor: pointer; }
+  code { font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brand"><b>Spark</b><span>by Ignite</span></div>
+  <div class="card">
+  {% if mode == "message" %}
+    <h1>Can't connect</h1>
+    <p class="ink">{{ message }}</p>
+  {% else %}
+    {% if error %}<p class="error">{{ error }}</p>{% endif %}
+    {% if notice %}<p class="notice">{{ notice }}</p>{% endif %}
+
+    {% if mode == "login" %}
+      <h1>Sign in to connect {{ client_name }}</h1>
+      <p>{{ client_name }} is asking to read your brand's Spark data. Sign in with your Spark account to continue.</p>
+      <form method="post" action="/oauth/authorize">
+        <input type="hidden" name="req" value="{{ req }}">
+        <input type="hidden" name="form_token" value="{{ form_token }}">
+        <input type="hidden" name="action" value="login">
+        <label for="email">Email</label>
+        <input id="email" name="email" type="email" autocomplete="username" required>
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required>
+        <button class="btn" type="submit">Sign in</button>
+      </form>
+      <div class="divider"></div>
+      <form method="post" action="/oauth/authorize">
+        <input type="hidden" name="req" value="{{ req }}">
+        <input type="hidden" name="form_token" value="{{ form_token }}">
+        <input type="hidden" name="action" value="email_link">
+        <label for="email2">No password? Email me a sign-in link</label>
+        <input id="email2" name="email" type="email" autocomplete="email" required>
+        <button class="btn secondary" type="submit">Send sign-in link</button>
+      </form>
+
+    {% elif mode == "no_brand" %}
+      <h1>No brand to connect</h1>
+      <p class="ink">You're signed in as {{ user_email }}, but this account isn't a brand account on Spark, so there's nothing it can connect.</p>
+      <p>Brand ambassador accounts can't connect AI apps. If you work for a brand, ask your Ignite contact to add you.</p>
+      <form method="post" action="/oauth/authorize">
+        <input type="hidden" name="req" value="{{ req }}">
+        <input type="hidden" name="form_token" value="{{ form_token }}">
+        <button class="linkbtn" name="action" value="switch" type="submit">Use a different account</button>
+      </form>
+
+    {% elif mode == "consent" %}
+      <h1>Allow {{ client_name }} to read your Spark data?</h1>
+      <p>Signed in as {{ user_email }}.</p>
+      <form method="post" action="/oauth/authorize">
+        <input type="hidden" name="req" value="{{ req }}">
+        <input type="hidden" name="form_token" value="{{ form_token }}">
+        <label for="tenant">Brand</label>
+        <select id="tenant" name="tenant" required>
+          {% for t in tenants %}<option value="{{ t.uuid }}">{{ t.name }}</option>{% endfor %}
+        </select>
+        <p style="margin-top:14px" class="ink">{{ client_name }} will be able to:</p>
+        <ul>
+          <li>Read this brand's program results, recaps, consumer breakdowns, upcoming events, pending approvals and published weekly summaries</li>
+          <li>Nothing else: it can't change anything, see other brands, or see brand ambassadors' personal details</li>
+        </ul>
+        <p class="small">Daily limits apply. You can disconnect it at any time from Settings in Spark. After you allow, you'll go back to <b>{{ redirect_host }}</b>.</p>
+        {% if loopback %}<p class="warn">This app runs on your own computer ({{ redirect_host }}). Only continue if you started this connection yourself.</p>{% endif %}
+        <div class="row">
+          <button class="btn secondary" name="action" value="deny" type="submit" formnovalidate>Cancel</button>
+          <button class="btn" name="action" value="approve" type="submit">Allow</button>
+        </div>
+      </form>
+      <form method="post" action="/oauth/authorize" style="margin-top:14px">
+        <input type="hidden" name="req" value="{{ req }}">
+        <input type="hidden" name="form_token" value="{{ form_token }}">
+        <button class="linkbtn" name="action" value="switch" type="submit">Use a different account</button>
+      </form>
+    {% endif %}
+  {% endif %}
+  </div>
+  <p class="small" style="margin-top:14px">Automated access to Spark is allowed only through this official connection. See the Spark terms of service.</p>
+</div>
+</body>
+</html>

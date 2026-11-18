@@ -9,6 +9,7 @@ from recaps.schema import RecapQueryClient, RecapMutationsClient
 from recaps.recap_ai import RecapAiMutations, RecapAiQueries
 from recaps.feedback_themes import FeedbackThemeMutations, FeedbackThemeQueries
 from recaps.comment_insights import CommentInsightQueries
+from consumer_mentions.trends import MentionTrendQueries
 from recaps.weekly_summary import WeeklySummaryMutations, WeeklySummaryQueries
 from recaps.flag_explanation import RecapFlagExplanationQueries
 from recaps.metric_mapping_schema import (
@@ -41,6 +42,7 @@ from announcements.schema import AnnouncementQueryClient, AnnouncementMutationsC
 from jobboard.schema import JobBoardMutations, JobBoardQueries
 from timeclock.schema import ClockLinkMutations, ClockLinkQueries
 from recaps.checkin_issue_schema import CheckinIssueQueries
+from ambassadors.product_qa_schema import BaProductQaMutations, BaProductQaQueries
 from recaps.shelf_schema import ShelfCheckMutations, ShelfCheckQueries
 from recaps.client_deck_schema import (
     BestPhotoMutations,
@@ -53,6 +55,7 @@ from tenants.notification_pref_schema import (
     NotificationPreferenceMutations,
     NotificationPreferenceQueries,
 )
+from spark_mcp.schema import AiConnectionMutations, AiConnectionQueries
 from utils.utils import BlockIntrospectionForAnonymous
 from utils.graphql.gcs_schema import GCSQuery
 
@@ -65,6 +68,7 @@ QueryClients = merge_types(
         CampaignReportQueries,
         ReportSubscriptionQueries,
         CheckinIssueQueries,
+        BaProductQaQueries,
         ShelfCheckQueries,
         DashboardExplainQueries,
         BestPhotoQueries,
@@ -77,6 +81,7 @@ QueryClients = merge_types(
         RecapAiQueries,
         FeedbackThemeQueries,
         CommentInsightQueries,
+        MentionTrendQueries,
         WeeklySummaryQueries,
         RecapFlagExplanationQueries,
         RecapMetricMappingQueries,
@@ -94,6 +99,7 @@ QueryClients = merge_types(
         BillingQueryClient,
         JobBoardQueries,
         ClockLinkQueries,
+        AiConnectionQueries,
     ),
 )
 MutationClients = merge_types(
@@ -125,6 +131,8 @@ MutationClients = merge_types(
         BillingMutationsClient,
         JobBoardMutations,
         ClockLinkMutations,
+        BaProductQaMutations,
+        AiConnectionMutations,
     ),
 )
 

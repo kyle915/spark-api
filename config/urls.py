@@ -64,8 +64,14 @@ urlpatterns = [
     # The path is intentionally not under /api/ so casual scanners
     # looking for GraphQL surface don't trip on it. See
     # `digest/cron_views.py` for the secret-validation flow.
+    # Official Spark MCP server for brands' AI apps (Claude, ChatGPT):
+    # /mcp, /oauth/*, and the /.well-known OAuth metadata. These paths are
+    # public and stable on purpose — brands paste <api>/mcp into their AI app.
+    # See spark_mcp/ and docs/spark-mcp.md.
+    path("", include("spark_mcp.urls")),
     path("internal/cron/", include("digest.urls")),
     path("internal/cron/", include("timeclock.cron_urls")),
+    path("internal/cron/", include("consumer_mentions.cron_urls")),
     # Public, token-authenticated endpoints (no JWT). These power the
     # one-click "Review & approve" email flow — clients click a signed
     # link and land on a page they can actually act on, even if they're

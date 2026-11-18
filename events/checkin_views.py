@@ -18,6 +18,7 @@ Routes (mounted under ``/api/public/`` in ``events/urls.py``):
     POST checkin/<code>/photo-check    → advisory bucket classification
     POST checkin/<code>/voice-draft    → notes/feedback/competitor draft
     POST checkin/<code>/tally-read     → numbers proposed from a tally photo
+    POST checkin/<code>/product-question → short answer from brand notes only
     POST checkin/<code>/recap          → {success}
     POST checkin/<code>/recap-draft    → {saved, filed: false}  (not a submit)
 """
@@ -1122,6 +1123,77 @@ def public_checkin_voice_draft(request: HttpRequest, code: str) -> HttpResponse:
     if not isinstance(transcript, str):
         transcript = ""
     return JsonResponse(structure_transcript(transcript, fields))
+
+
+# --------------------------------------------------------------------------
+# POST product-question  (answers from the brand's own material only)
+# --------------------------------------------------------------------------
+# Each answer is a paid model call. A BA asks a handful per shift; a whole
+# brand's crew asks a few hundred a day at most.
+PRODUCT_QA_IP_LIMIT = 30  # per 5 minutes
+PRODUCT_QA_SESSION_LIMIT = 20  # per hour, one BA on one shift
+PRODUCT_QA_TENANT_LIMIT = 300  # per hour, the whole brand
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def public_checkin_product_question(request: HttpRequest, code: str) -> HttpResponse:
+    """A short answer to a product question, from this brand's notes, catalog
+    and training material only. Refusals and "not configured" come back as a
+    200 with ``answered: false`` and a plain line the page shows as-is."""
+    from ambassadors import product_qa
+
+    if _over_limit("product-qa-ip", _client_ip(request), limit=PRODUCT_QA_IP_LIMIT, window=300):
+        return _rate_limited()
+    data = _body(request)
+    loaded, err = _load_session(code, data.get("session") or "")
+    if err is not None:
+        return err
+    event, ambassador = loaded
+    tenant = getattr(event, "tenant", None)
+    if tenant is None:
+        return _err("Couldn't find this brand.", status=404, code="not_found")
+    question = data.get("question")
+    question = " ".join(question.split()) if isinstance(question, str) else ""
+    if len(question) < 3:
+        return _err("Type a question first.", code="empty_question")
+    if len(question) > product_qa.QUESTION_MAX_CHARS:
+        return _err(
+            f"Keep it under {product_qa.QUESTION_MAX_CHARS} characters.",
+            code="question_too_long",
+        )
+    who = f"{event.id}:{getattr(ambassador, 'id', '')}"
+    if _over_limit("product-qa-session", who, limit=PRODUCT_QA_SESSION_LIMIT, window=3600):
+        return _err(
+            "That's a lot of questions this shift. Check with your lead.",
+            status=429,
+            code="rate_limited",
+        )
+    if _over_limit("product-qa-tenant", str(tenant.id), limit=PRODUCT_QA_TENANT_LIMIT, window=3600):
+        return _rate_limited()
+    try:
+        result = product_qa.answer_question(tenant=tenant, question=question)
+    except Exception:  # noqa: BLE001 — the BA keeps working without it
+        logger.exception("checkin product question failed code=%s", code)
+        from tenants.models import BaProductQuestion
+
+        result = {
+            "answer": product_qa.AI_UNAVAILABLE,
+            "outcome": BaProductQuestion.OUTCOME_AI_UNAVAILABLE,
+            "answered": False,
+            "source": "",
+        }
+    product_qa.log_question(
+        tenant=tenant, event=event, ambassador=ambassador, question=question, result=result
+    )
+    return JsonResponse(
+        {
+            "answer": result["answer"],
+            "answered": bool(result["answered"]),
+            "outcome": result["outcome"],
+            "source": result["source"],
+        }
+    )
 
 
 # --------------------------------------------------------------------------
