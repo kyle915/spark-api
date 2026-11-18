@@ -578,8 +578,9 @@ class TestCreateAmbassadorSkill(AmbassadorsGraphQLTestCase):
         """
 
     @pytest.mark.asyncio
-    async def test_create_ambassador_skill_success_by_client(self):
-        """Test successful ambassador skill creation by client."""
+    async def test_create_ambassador_skill_refused_for_client(self):
+        """BA profile writes are Ignite-staff only — a brand/client user is
+        refused (IsSparkAdminAccess) and no skill row is written."""
         variables = {
             "input": {
                 "ambassadorId": str(self.ambassador.id),
@@ -592,21 +593,14 @@ class TestCreateAmbassadorSkill(AmbassadorsGraphQLTestCase):
             self.mutation, variables, self.client_user, self.endpoint_path
         )
 
-        assert result.errors is None
-        assert result.data is not None
-        assert result.data["createAmbassadorSkill"]["success"] is True
-        assert "created successfully" in result.data["createAmbassadorSkill"]["message"].lower()
-        assert result.data["createAmbassadorSkill"]["ambassadorSkill"]["ambassadorId"] == str(self.ambassador.id)
-        assert result.data["createAmbassadorSkill"]["ambassadorSkill"]["skillId"] == str(self.skill.id)
-
-        # Verify in DB
-        ambassador_skill = await sync_to_async(
-            AmbassadorSkill.objects.select_related('created_by').get
-        )(
-            ambassador=self.ambassador,
-            skill=self.skill
-        )
-        assert ambassador_skill.created_by == self.client_user
+        assert result.errors
+        assert "Only Ignite admins" in str(result.errors[0].message)
+        exists = await sync_to_async(
+            AmbassadorSkill.objects.filter(
+                ambassador=self.ambassador, skill=self.skill
+            ).exists
+        )()
+        assert not exists
 
     @pytest.mark.asyncio
     async def test_create_ambassador_skill_success_by_spark_admin(self):
@@ -651,7 +645,7 @@ class TestCreateAmbassadorSkill(AmbassadorsGraphQLTestCase):
         }
 
         result = await self._execute_mutation_authenticated(
-            self.mutation, variables, self.client_user, self.endpoint_path
+            self.mutation, variables, self.spark_admin_user, self.endpoint_path
         )
 
         assert result.data is not None
@@ -669,7 +663,7 @@ class TestCreateAmbassadorSkill(AmbassadorsGraphQLTestCase):
         }
 
         result = await self._execute_mutation_authenticated(
-            self.mutation, variables, self.client_user, self.endpoint_path
+            self.mutation, variables, self.spark_admin_user, self.endpoint_path
         )
 
         assert result.data is not None
@@ -687,7 +681,7 @@ class TestCreateAmbassadorSkill(AmbassadorsGraphQLTestCase):
         }
 
         result = await self._execute_mutation_authenticated(
-            self.mutation, variables, self.client_user, self.endpoint_path
+            self.mutation, variables, self.spark_admin_user, self.endpoint_path
         )
 
         assert result.data is not None
@@ -716,7 +710,7 @@ class TestCreateAmbassadorSkill(AmbassadorsGraphQLTestCase):
         }
 
         result = await self._execute_mutation_authenticated(
-            self.mutation, variables, self.client_user, self.endpoint_path
+            self.mutation, variables, self.spark_admin_user, self.endpoint_path
         )
 
         assert result.data is not None
@@ -759,6 +753,11 @@ class TestDeleteAmbassadorSkill(AmbassadorsGraphQLTestCase):
             role=self.roles['client']
         )
         self.create_tenanted_user(self.client_user, self.tenant)
+        self.spark_admin_user = self.create_user(
+            username=f"admin_delete_{unique_id}@test.com",
+            email=f"admin_delete_{unique_id}@test.com",
+            role=self.roles['spark_admin'],
+        )
 
         unique_id2 = str(uuid.uuid4())[:8]
         self.ambassador_user = self.create_user(
@@ -811,7 +810,7 @@ class TestDeleteAmbassadorSkill(AmbassadorsGraphQLTestCase):
         }
 
         result = await self._execute_mutation_authenticated(
-            self.mutation, variables, self.client_user, self.endpoint_path
+            self.mutation, variables, self.spark_admin_user, self.endpoint_path
         )
 
         assert result.errors is None
@@ -835,12 +834,32 @@ class TestDeleteAmbassadorSkill(AmbassadorsGraphQLTestCase):
         }
 
         result = await self._execute_mutation_authenticated(
-            self.mutation, variables, self.client_user, self.endpoint_path
+            self.mutation, variables, self.spark_admin_user, self.endpoint_path
         )
 
         assert result.data is not None
         assert result.data["deleteAmbassadorSkill"]["success"] is False
         assert "not found" in result.data["deleteAmbassadorSkill"]["message"].lower()
+
+    @pytest.mark.asyncio
+    async def test_delete_ambassador_skill_refused_for_client(self):
+        """A brand/client user can no longer delete a BA's skill."""
+        variables = {
+            "input": {
+                "ambassadorSkillId": str(self.ambassador_skill.id),
+            }
+        }
+
+        result = await self._execute_mutation_authenticated(
+            self.mutation, variables, self.client_user, self.endpoint_path
+        )
+
+        assert result.errors
+        assert "Only Ignite admins" in str(result.errors[0].message)
+        still = await sync_to_async(
+            AmbassadorSkill.objects.filter(pk=self.ambassador_skill.pk).exists
+        )()
+        assert still
 
     @pytest.mark.asyncio
     async def test_delete_ambassador_skill_unauthorized(self):

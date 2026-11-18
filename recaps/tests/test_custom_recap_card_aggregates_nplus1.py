@@ -172,7 +172,10 @@ class TestCustomRecapCardAggregatesNoNPlus1(AmbassadorsGraphQLTestCase):
         https://storage.googleapis.com/... URL (it returns None on an empty
         bucket name); without it heroImageUrl would always be None in tests.
         """
-        with override_settings(GS_BUCKET_NAME="test-bucket"):
+        # ABUSE_GUARDRAILS_ENABLED off: the guardrail extension's own
+        # bookkeeping (cached identity lookup, limiter + usage upserts) is not
+        # resolver work and its first-call cache miss would skew the counts.
+        with override_settings(GS_BUCKET_NAME="test-bucket", ABUSE_GUARDRAILS_ENABLED=False):
             return async_to_sync(self._execute_query_authenticated)(
                 CARD_QUERY,
                 {"tenantId": str(self.tenant.id), "first": first},

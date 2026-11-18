@@ -1,7 +1,6 @@
 """Services for ambassador mutations and queries."""
 
 import asyncio
-import sys
 import secrets
 import string
 from decimal import Decimal
@@ -2017,9 +2016,13 @@ class AmbassadorQueriesService(SparkGraphQLMixin):
 
         from utils.graphql.relay import connection_from_queryset_async
 
+        # Always paginate (anti-bulk guardrail). Calls without paging args
+        # used to return EVERY active ambassador in one page (sys.maxsize);
+        # they now get the same 50-row page the FE already uses (it always
+        # passes `first`, so no screen changes).
         no_pagination = all(value is None for value in (first, after, last, before))
-        default_limit = sys.maxsize if no_pagination else 10
-        max_limit = sys.maxsize if no_pagination else 50
+        default_limit = 50 if no_pagination else 10
+        max_limit = 50
 
         return await connection_from_queryset_async(
             queryset,

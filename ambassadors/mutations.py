@@ -1236,10 +1236,9 @@ class AmbassadorMutations:
             input, info, ambassador_is_active=False
         )
 
-    # Brand users (recap AmbassadorPicker) and Ignite admins only. It was open
-    # to ANY signed-in user, so a walk-up BA token could mint pre-verified
-    # accounts with a chosen password for any address.
-    @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
+    # Ignite staff only (BA write). Was open to ANY signed-in user, so a
+    # walk-up BA token could mint pre-verified accounts for any address.
+    @relay.mutation(permission_classes=[IsSparkAdminAccess])
     async def create_ambassador_with_user(
         self,
         info: strawberry.Info,
@@ -1273,7 +1272,7 @@ class AmbassadorMutations:
     async def accept_by_token(self, info: strawberry.Info, input: inputs.AcceptByTokenInput) -> AcceptInvitationResponse:
         return await AcceptInvitationService.accept_by_token(input, info)
 
-    @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
+    @relay.mutation(permission_classes=[IsSparkAdminAccess])  # Ignite staff only — BA write
     async def approve_ambassador(
         self,
         info: strawberry.Info,
@@ -1293,7 +1292,7 @@ class AmbassadorMutations:
         disableAmbassadorMobile."""
         return await DisableAmbassadorService.disable(input, info)
 
-    @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
+    @relay.mutation(permission_classes=[IsSparkAdminAccess])  # Ignite staff only — BA write
     async def regenerate_ambassador_passwords(
         self,
         info: strawberry.Info,
@@ -1301,7 +1300,7 @@ class AmbassadorMutations:
     ) -> RegenerateAmbassadorPasswordsResponse:
         return await RegenerateAmbassadorPasswordsService.regenerate(input, info)
 
-    @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
+    @relay.mutation(permission_classes=[IsSparkAdminAccess])  # Ignite staff only — BA write
     async def create_ambassador(
         self,
         info: strawberry.Info,
@@ -1310,7 +1309,7 @@ class AmbassadorMutations:
         """Create ambassador profile including optional about_me."""
         return await CreateAmbassadorService.create(input, info)
 
-    @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
+    @relay.mutation(permission_classes=[IsSparkAdminAccess])  # Ignite staff only — BA write
     async def update_ambassador(
         self,
         info: strawberry.Info,
@@ -1414,7 +1413,7 @@ class AmbassadorMutations:
     ) -> DeleteSkillResponse:
         return await DeleteSkillService.delete(input, info)
 
-    @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
+    @relay.mutation(permission_classes=[IsSparkAdminAccess])  # Ignite staff only — BA write
     async def create_ambassador_skill(
         self,
         info: strawberry.Info,
@@ -1422,7 +1421,7 @@ class AmbassadorMutations:
     ) -> CreateAmbassadorSkillResponse:
         return await CreateAmbassadorSkillService.create(input, info)
 
-    @relay.mutation(permission_classes=[IsClientOrSparkAdmin])
+    @relay.mutation(permission_classes=[IsSparkAdminAccess])  # Ignite staff only — BA write
     async def delete_ambassador_skill(
         self,
         info: strawberry.Info,
