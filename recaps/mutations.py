@@ -127,6 +127,28 @@ def _get_event_by_flexible_id(raw_id, qs=None):
         raise GraphQLError("Event not found.")
 
 
+def _assert_ba_recap_has_receipt(custom_recap, event) -> None:
+    """BA filing (create or edit) with spend entered and no receipt photo:
+    refuse with the BA-facing sentence. Runs inside the write transaction, so
+    the refusal rolls the whole write back. Staff callers never reach this —
+    they may legitimately enter spend after the fact."""
+    from recaps.receipt_gate import (
+        RecapNeedsAReceipt,
+        assert_custom_recap_has_receipt,
+        tenant_has_receipt_bucket,
+    )
+
+    try:
+        assert_custom_recap_has_receipt(
+            custom_recap,
+            offers_receipt_bucket=lambda: tenant_has_receipt_bucket(
+                getattr(event, "tenant", None), getattr(event, "event_type", None)
+            ),
+        )
+    except RecapNeedsAReceipt as exc:
+        raise GraphQLError(exc.message) from exc
+
+
 def _stamp_recap_approval(recap: models.Recap | models.CustomRecap, *, approved: bool, actor) -> None:
     """Set approved flag and durable approval audit fields."""
     recap.approved = approved
@@ -1530,8 +1552,10 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
         # mirroring the createCustomRecapMobile derivation. Admins/clients are
         # excluded by _caller_editing_ambassador, so on-behalf / external-BA
         # filing on the web is unchanged.
+        # The caller's own Ambassador when a BA is filing (None for staff /
+        # clients). Drives the BA backfill below and the receipt gate.
+        caller_ambassador = await self._caller_editing_ambassador()
         if ambassador is None:
-            caller_ambassador = await self._caller_editing_ambassador()
             if caller_ambassador is not None:
                 ambassador = caller_ambassador
                 if retailer is None:
@@ -1740,6 +1764,8 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
                         # plain <img> (displayUrl rewrites .heic→.jpg).
                         if heic_conversion.is_heic_blob(blob_name):
                             heic_conversion.schedule_jpg_sibling_blob(blob_name)
+                if caller_ambassador is not None:
+                    _assert_ba_recap_has_receipt(custom_recap, event)
                 return custom_recap
 
         custom_recap = await create_custom_recap_transaction()
@@ -2452,6 +2478,9 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
                             reason=getattr(self.input, "edit_reason", None),
                             custom_recap=custom_recap,
                         )
+
+                if editing_ambassador is not None:
+                    _assert_ba_recap_has_receipt(custom_recap, event)
 
                 return custom_recap, removed_blob_names
 
