@@ -311,11 +311,17 @@ def compose_summary(
 def generate_summary_draft(
     tenant_id: int, start: date, end: date, period: str = PERIOD_WEEK
 ):
-    """Write (or rewrite) the draft for one brand and week.
+    """Write (or rewrite) the summary for one brand and week.
 
     Returns ``(row, None)`` or ``(None, reason)``. A rewrite replaces the
-    draft, clears any edit and puts it back to "draft"; the caller asks
-    first. When no draft can be written the stored row is left as it was.
+    text and clears any edit; the caller asks first. When nothing can be
+    written the stored row is left as it was.
+
+    A WEEKLY summary is published to the brand as soon as it is written
+    (status "reviewed", no reviewer): every number in it is checked against
+    the approved recaps before it is kept, and staff can still edit it or
+    put it back to draft to hide it. A MONTHLY one is an email Ignite sends,
+    so it stays a draft until staff review it.
     """
     from tenants.models import TenantWeeklySummary
 
@@ -323,6 +329,8 @@ def generate_summary_draft(
     body, reason = compose_summary(facts, period)
     if body is None:
         return None, reason
+    now = timezone.now()
+    auto_publish = period == PERIOD_WEEK
     row, _created = TenantWeeklySummary.objects.update_or_create(
         tenant_id=tenant_id,
         period=period,
@@ -331,11 +339,15 @@ def generate_summary_draft(
             "week_end": end,
             "body": body,
             "edited_body": "",
-            "status": TenantWeeklySummary.STATUS_DRAFT,
+            "status": (
+                TenantWeeklySummary.STATUS_REVIEWED
+                if auto_publish
+                else TenantWeeklySummary.STATUS_DRAFT
+            ),
             "facts": facts,
-            "generated_at": timezone.now(),
+            "generated_at": now,
             "reviewed_by": None,
-            "reviewed_at": None,
+            "reviewed_at": now if auto_publish else None,
         },
     )
     return row, None
