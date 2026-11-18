@@ -80,6 +80,34 @@ def test_chain_index_target_picks_the_numbered_store_then_the_canonical_row():
     assert index.canonical("heb #614") == index.canonical("heb #614") == "H-E-B"
 
 
+# ─── Same street address ────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "a, b, same",
+    [
+        ("8031 Wadsworth Blvd", "8031 Wadsworth Boulevard, Arvada, CO 80003", True),
+        ("1700 Monroe Dr NE", "1700 Monroe Drive N.E., Atlanta, GA 30324", True),
+        ("17761 Cottonwood Dr, Parker CO", "17761 COTTONWOOD DRIVE, PARKER, CO 80134", True),
+        ("100 Oak St", "100 Oak Rd", False),
+        ("100 Oak St", "101 Oak St", False),
+        ("1700 Monroe Dr NE", "1700 Monroe Dr NW", False),
+        ("100 Main St, Austin, TX", "100 Main St, Portland, OR", False),
+        ("Main St", "Main St", False),
+        ("200 Elm Street Suite 4, Denver, CO", "200 Elm St, Denver, CO", True),
+    ],
+)
+def test_same_street_address(a, b, same):
+    assert recap_location.same_street_address(a, b) is same
+
+
+def test_title_store_text():
+    title = "10/24/2026 - 400 Central Ave (Savor St Pete) · Retail Sampling"
+    assert recap_location.title_store_text(title) == "Savor St Pete"
+    assert recap_location.title_store_text("10/24/2026 - 400 Central Ave") == ""
+    assert recap_location.title_store_text("Kroger (Houston)") == ""
+
+
 # ─── Point → state, offline ─────────────────────────────────────────
 
 
@@ -317,6 +345,65 @@ class TestRecapLocation(AmbassadorsGraphQLTestCase):
         row = self._row(self._run(), recap)
         assert "state_code" not in row["changes"] and "city" not in row["changes"]
         assert any("disagree" in n for n in row["notes"])
+
+    # same address / tenant retailer in a walk-in title
+
+    def _colorado(self):
+        return event_models.State.objects.filter(code="CO").first() or event_models.State.objects.create(
+            name="Colorado", code="CO", created_by=self.sys
+        )
+
+    def test_same_address_fills_store_and_state(self):
+        co = self._colorado()
+        ks = event_models.Retailer.objects.create(name="King Soopers", tenant=self.tenant, created_by=self.sys)
+        self._event(day=1, address="8031 Wadsworth Boulevard, Arvada, CO 80003", retailer=ks)
+        walkin = self._event(day=20, address="8031 Wadsworth Blvd", name="10/20/2026 - 8031 Wadsworth Blvd")
+        assert walkin.state_id is None
+        recap = self._recap(walkin)
+        report = self._run(apply=True)
+        row = self._row(report, recap)
+        assert row["changes"] == {"retailer": "King Soopers", "state_code": "CO"}
+        assert row["sources"] == {"retailer": "same_address", "state_code": "same_address"}
+        assert row["confidence"]["retailer"] == "medium"
+        assert any("same address" in n for n in row["notes"])
+        recap.refresh_from_db()
+        assert recap.retailer_id == ks.id and recap.state_id == co.id
+        assert "[same_address/medium]" in "\n".join(
+            __import__("recaps.management.commands.normalize_recap_locations", fromlist=["x"]).format_report(report)
+        )
+
+    def test_same_address_with_two_stores_fails_closed(self):
+        self._colorado()
+        self._event(day=1, address="1700 Monroe Dr NE, Atlanta, GA 30324", name="Kroger demo")
+        ks = event_models.Retailer.objects.create(name="Publix", tenant=self.tenant, created_by=self.sys)
+        self._event(day=2, address="1700 Monroe Drive N.E., Atlanta, GA", retailer=ks)
+        kroger = event_models.Retailer.objects.create(name="Kroger", tenant=self.tenant, created_by=self.sys)
+        self._event(day=3, address="1700 Monroe Dr. NE", retailer=kroger)
+        recap = self._recap(self._event(day=20, address="1700 Monroe Dr NE"))
+        row = self._row(self._run(), recap)
+        assert "retailer" not in row["changes"]
+        assert any("different stores" in n for n in row["notes"])
+
+    def test_tenant_retailer_named_in_a_walkin_title(self):
+        savor = event_models.Retailer.objects.create(name="SAVOR", tenant=self.tenant, created_by=self.sys)
+        recap = self._recap(
+            self._event(
+                address="400 Central Ave, St Petersburg, FL 33701",
+                name="10/24/2026 - 400 Central Ave, St Petersburg, FL 33701 (Savor St Pete) · Retail Sampling",
+            )
+        )
+        report = self._run(apply=True)
+        row = self._row(report, recap)
+        assert row["changes"]["retailer"] == "SAVOR"
+        assert row["sources"]["retailer"] == "title_store"
+        recap.refresh_from_db()
+        assert recap.retailer_id == savor.id
+
+    def test_tenant_retailer_is_not_read_from_a_scheduled_events_name(self):
+        event_models.Retailer.objects.create(name="Parker", tenant=self.tenant, created_by=self.sys)
+        recap = self._recap(self._event(name="Demo (Parker)"))
+        row = self._row(self._run(), recap)
+        assert row is None or "retailer" not in row["changes"]
 
     def test_event_address_state_is_already_filled(self):
         # Events take their State FK from their address on save, so the
