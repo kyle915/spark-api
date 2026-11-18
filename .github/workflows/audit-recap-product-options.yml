@@ -1,0 +1,72 @@
+name: Audit recap product options
+
+# Manually fires `/internal/cron/audit-recap-product-options` on Cloud Run.
+# READ-ONLY: for every tenant, compares each recap template's product-choice
+# fields (Products Sampled and aliases, or any select/multiselect whose
+# options are catalog products) against that tenant's own Product names, and
+# lists mismatches. Most serious first:
+#   FOREIGN  - an option is ANOTHER tenant's product (a cloned form that kept
+#              the donor brand's SKUs, e.g. CoHo Imports / Mark Anthony).
+#   FILTER   - layout.productsSampledProductTypes names product lines the
+#              tenant doesn't have.
+#   UNKNOWN  - an option matches no tenant's catalog.
+#   MISSING  - a Products Sampled field doesn't offer one of the tenant's
+#              own products.
+# See recaps/product_options_audit.py. Nothing is written — there is no
+# execute flag. Fix after review with set-recap-choice-options.
+#
+# Dispatch-only (no schedule). Run it from the Actions tab AFTER the endpoint
+# is deployed (it ships from develop). Secret-gated via X-Cron-Secret (shared
+# INTERNAL_CRON_SECRET) — the secret is a HEADER, never in the URL.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tenant_slug:
+        description: "Exact tenant slug to audit one tenant (blank = every tenant)."
+        required: false
+        default: ""
+        type: string
+      include_ok:
+        description: "Also list product fields with no issues."
+        required: false
+        default: false
+        type: boolean
+      include_archived:
+        description: "Include [ARCHIVED] tenants."
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  fire-audit-recap-product-options:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire audit-recap-product-options cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/audit-recap-product-options
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          TENANT_SLUG: ${{ github.event.inputs.tenant_slug }}
+          INCLUDE_OK: ${{ github.event.inputs.include_ok }}
+          INCLUDE_ARCHIVED: ${{ github.event.inputs.include_archived }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL" \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            --data-urlencode "tenant_slug=$TENANT_SLUG" \
+            --data-urlencode "include_ok=$INCLUDE_OK" \
+            --data-urlencode "include_archived=$INCLUDE_ARCHIVED")
+          echo "HTTP $STATUS"
+          if [ "$STATUS" != "200" ]; then
+            cat /tmp/cron-response.json
+            echo "::error::Cron endpoint returned $STATUS — see body above."
+            exit 1
+          fi
+          # Human-readable report first, then the summary JSON.
+          python3 -c 'import json,sys; b=json.load(open("/tmp/cron-response.json")); print(b.get("log","")); print(); print(json.dumps(b.get("summary",{}), indent=2))'
