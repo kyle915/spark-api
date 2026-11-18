@@ -12,6 +12,7 @@ from recaps.comment_insights import CommentInsightQueries
 from consumer_mentions.trends import MentionTrendQueries
 from recaps.weekly_summary import WeeklySummaryMutations, WeeklySummaryQueries
 from brand_insights.schema import BrandInsightMutations, BrandInsightQueries
+from brand_chat.schema import BrandChatMutations, BrandChatQueries
 from recaps.flag_explanation import RecapFlagExplanationQueries
 from recaps.metric_mapping_schema import (
     RecapMetricMappingMutations,
@@ -59,6 +60,7 @@ from tenants.notification_pref_schema import (
 from spark_mcp.schema import AiConnectionMutations, AiConnectionQueries
 from utils.utils import BlockIntrospectionForAnonymous
 from utils.graphql.gcs_schema import GCSQuery
+from utils.abuse.graphql_extension import guardrail_extensions
 
 # Clients Schemas
 QueryClients = merge_types(
@@ -85,6 +87,7 @@ QueryClients = merge_types(
         MentionTrendQueries,
         WeeklySummaryQueries,
         BrandInsightQueries,
+        BrandChatQueries,
         RecapFlagExplanationQueries,
         RecapMetricMappingQueries,
         AmbassadorQueryClient,
@@ -114,6 +117,7 @@ MutationClients = merge_types(
         ShelfCheckMutations,
         WeeklySummaryMutations,
         BrandInsightMutations,
+        BrandChatMutations,
         RecapMetricMappingMutations,
         TenantGoalsMutations,
         ScheduledReportMutations,
@@ -145,5 +149,8 @@ schema_clients = JwtSchema(
     extensions=[
         DjangoOptimizerExtension,
         BlockIntrospectionForAnonymous,
+        # Anti-scraping guardrails: token/depth/alias limits, per-user rate
+        # limits, brand page-size cap, export/bulk caps + audit, usage log.
+        *guardrail_extensions(),
     ],
 )
