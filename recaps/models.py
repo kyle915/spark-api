@@ -592,6 +592,16 @@ class CustomRecap(models.Model):
         related_name="custom_recap",
     )
 
+    # Store number of the retailer this recap was filed at ("614" for
+    # "H-E-B #614"), when one is known. Filled by the recap location
+    # normalizer (recaps.recap_location); blank means unknown.
+    store_number = models.CharField(max_length=16, blank=True, default="")
+    # What the recap location normalizer wrote on this recap, field by field:
+    # value, source, confidence and the value before. A retailer / city /
+    # state that is NOT listed here was set by someone else (staff, an
+    # import), and the normalizer never overwrites it.
+    location_fill = models.JSONField(blank=True, default=dict)
+
     tenant = models.ForeignKey(
         Tenant, on_delete=models.RESTRICT, null=False, related_name="custom_recap"
     )

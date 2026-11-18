@@ -5409,6 +5409,88 @@ class BackfillRecapRetailersView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class NormalizeRecapLocationsView(View):
+    """POST `/internal/cron/normalize-recap-locations`.
+
+    Proposes (and with `apply=true` writes) each recap's retailer, store
+    number, city and state from what the recap and its event already carry,
+    then the AI model for what is still blank (location text only). See
+    `recaps.recap_location` / the `normalize_recap_locations` command.
+
+    SAFE — DRY-RUN by default; only `apply=true` (alias execute=true) writes.
+    Fills blanks only, plus a retailer that is the same chain spelled another
+    way; a retailer set on the recap by hand is never replaced. Idempotent.
+
+    Params (query or POST): tenant (id or slug, REQUIRED), since (YYYY-MM-DD,
+    event date), limit, use_ai (default true), max_ai_calls, show (per-recap
+    rows returned, default 300).
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _str(name: str):
+            return (request.GET.get(name) or request.POST.get(name) or "").strip() or None
+
+        def _bool(name: str, default: bool = False) -> bool:
+            raw = (_str(name) or "").lower()
+            return raw in ("1", "true", "yes", "on") if raw else default
+
+        def _int(name: str):
+            raw = _str(name)
+            try:
+                return int(raw) if raw else None
+            except ValueError:
+                return None
+
+        from datetime import date as _date
+
+        from recaps.recap_location import DEFAULT_MAX_AI_CALLS, resolve_tenant, run
+
+        apply = _bool("apply") or _bool("execute")
+        try:
+            tenant = resolve_tenant(_str("tenant") or _str("tenant_slug") or _str("tenant_id"))
+        except ValueError as exc:
+            return JsonResponse({"ok": False, "error": str(exc)}, status=400)
+        since = None
+        if _str("since"):
+            try:
+                since = _date.fromisoformat(_str("since"))
+            except ValueError:
+                return JsonResponse(
+                    {"ok": False, "error": "bad since (expected YYYY-MM-DD)"}, status=400
+                )
+        try:
+            report = run(
+                tenant,
+                since=since,
+                limit=_int("limit"),
+                apply=apply,
+                use_ai=_bool("use_ai", default=True),
+                max_ai_calls=_int("max_ai_calls") or DEFAULT_MAX_AI_CALLS,
+            )
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("normalize-recap-locations cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "run-failed", **_concise_exc(exc)}, status=500
+            )
+        show = _int("show")
+        show = 300 if show is None else max(show, 0)
+        total_rows = len(report["rows"])
+        report["rows"] = report["rows"][:show]
+        report["rows_total"] = total_rows
+        return JsonResponse(report)
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class BackfillStoreRecapNamesView(View):
     """POST `/internal/cron/backfill-store-recap-names`.
 
@@ -12208,6 +12290,7 @@ def _registered_views() -> dict[str, Any]:
         "export-ld-summary": ExportLdSummaryView,
         "export-girlbeer-summary": ExportGirlbeerSummaryView,
         "backfill-recap-retailers": BackfillRecapRetailersView,
+        "normalize-recap-locations": NormalizeRecapLocationsView,
     "backfill-store-recap-names": BackfillStoreRecapNamesView,
     "offboard-client-users": OffboardClientUsersView,
     "strip-torch-suppress-recipients": StripTorchSuppressRecipientsView,

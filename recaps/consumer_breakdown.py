@@ -23,6 +23,11 @@ number ("HEB #725") stays its own row, so it is a physical store; a
 banner-only name is one row for the banner, as before. Proposed and dismissed
 aliases change nothing here.
 
+A recap's own retailer (``CustomRecap.retailer``, with its ``store_number``)
+and state win over / fill in for its event's, the same order the recap info
+panel uses; the recap location normalizer (:mod:`recaps.recap_location`)
+fills them from free text.
+
 A recap whose event has no store or no state is not dropped: it is counted
 under a row of ``kind="missing"`` so the split still adds up and the gap in
 the data stays visible. Recaps whose event has no date at all cannot be
@@ -166,6 +171,19 @@ def _store(*names: str | None, aliases: dict[str, str] | None = None) -> str:
     return ""
 
 
+def _numbered(name: str | None, store_number: str | None) -> str:
+    """ "H-E-B" + "614" -> "H-E-B #614": a recap's retailer with its store
+    number, so a numbered store stays its own row in the store split. A
+    name that already carries a number is left alone."""
+    from events.retailer_aliases import split_store_number
+
+    cleaned = (name or "").strip()
+    number = (store_number or "").strip()
+    if not cleaned or not number or split_store_number(cleaned)[1]:
+        return cleaned
+    return f"{cleaned} #{number}"
+
+
 def consumer_rows(
     tenant_id: int,
     start: date | None,
@@ -207,10 +225,13 @@ def consumer_rows(
             "id",
             "event_id",
             "_day",
+            "retailer__name",
+            "store_number",
             "event__retailer__name",
             "event__request__retailer__name",
             "event__request__retailer_name",
             "event__state__code",
+            "state__code",
             "event__address",
         )
     )
@@ -218,10 +239,13 @@ def consumer_rows(
         recap_id,
         event_id,
         day,
+        recap_retailer,
+        store_number,
         retailer,
         req_retailer,
         req_name,
         state,
+        recap_state,
         address,
     ) in custom.iterator():
         placed[recap_id] = {
@@ -229,8 +253,17 @@ def consumer_rows(
             "kind": "custom",
             "id": recap_id,
             "day": day.date(),
-            "store": _store(retailer, req_retailer, req_name, aliases=aliases),
-            "state": state or extract_state_code(address) or "",
+            # The recap's own retailer first (the eventRetailer resolver's
+            # order), with its store number when one is known.
+            "store": _store(
+                _numbered(recap_retailer, store_number),
+                retailer,
+                req_retailer,
+                req_name,
+                aliases=aliases,
+            ),
+            # The event's state, then the recap's own, then the address.
+            "state": state or recap_state or extract_state_code(address) or "",
         }
 
     # …and how many consumers it sampled, by the same field matcher (and the
