@@ -25,8 +25,6 @@ from recaps.photo_check import (
 from recaps.photo_reuse import normalize_content_sha256, photo_reuse_checks
 from recaps.voice_draft import (
     VOICE_DRAFT_UNAVAILABLE,
-    draft_slot,
-    sanitize_fills,
     structure_transcript,
 )
 
@@ -53,31 +51,6 @@ def test_shelf_labels_with_no_product():
     assert product is False
 
 
-def test_draft_slot_skips_numbers_and_keeps_prose():
-    assert draft_slot("Total engagements", "number") is None
-    assert draft_slot("How many people did you survey", "text") is None
-    assert draft_slot("Cans sampled", "text") is None
-    assert draft_slot("Feedback & Account Notes", "long text") == "feedback"
-    assert draft_slot("Account notes", "text") == "notes"
-    assert draft_slot("What competitor products do consumers drink?", "text") == "competitor"
-    assert draft_slot("Why they like it", "long text") == "competitor"
-    assert draft_slot("Store name", "text") is None
-
-
-def test_sanitize_drops_bare_numbers_and_unknown_fields():
-    fills = sanitize_fills(
-        [
-            {"fieldId": "notes", "text": "Aisle was slow after lunch."},
-            {"fieldId": "notes", "text": "second"},
-            {"fieldId": "count", "text": "40"},
-            {"fieldId": "spend", "text": "12.50"},
-            {"fieldId": "nope", "text": "ignored"},
-        ],
-        {"notes", "count", "spend"},
-    )
-    assert fills == [{"fieldId": "notes", "text": "Aisle was slow after lunch."}]
-
-
 @override_settings(OPENAI_API_KEY="")
 def test_voice_draft_unavailable_without_a_key():
     result = structure_transcript(
@@ -87,27 +60,37 @@ def test_voice_draft_unavailable_without_a_key():
             {"id": "2", "name": "Total engagements", "type": "number"},
         ],
     )
-    assert result == {
-        "available": False,
-        "reason": VOICE_DRAFT_UNAVAILABLE,
-        "fills": [],
-    }
+    assert result["available"] is False
+    assert result["reason"] == VOICE_DRAFT_UNAVAILABLE
+    assert result["values"] == [] and result["fills"] == []
 
 
 @override_settings(OPENAI_API_KEY="test-key")
-def test_voice_draft_keeps_only_prose_fields():
-    def _fake(system, user, *, schema, max_tokens):
-        assert "Total engagements" not in user
+def test_voice_draft_fills_text_and_stated_numbers():
+    def _fake(system, user, *, schema, max_tokens, timeout):
+        assert "Total engagements" in user
         return {
-            "fills": [
-                {"fieldId": "1", "text": "Busy aisle, people asked about peach."},
-                {"fieldId": "9", "text": "40"},
+            "answers": [
+                {
+                    "ref": "f1",
+                    "value": "Busy aisle, people asked about peach.",
+                    "choices": [],
+                    "quote": "Busy aisle people asked about peach",
+                    "confidence": "high",
+                },
+                {
+                    "ref": "f2",
+                    "value": "40",
+                    "choices": [],
+                    "quote": "I handed out 40",
+                    "confidence": "high",
+                },
             ]
         }
 
     with patch("recaps.voice_draft.generate_json", side_effect=_fake):
         result = structure_transcript(
-            "Busy aisle. I handed out 40.",
+            "Busy aisle, people asked about peach. I handed out 40.",
             [
                 {"id": "1", "name": "Account notes", "type": "text"},
                 {"id": "9", "name": "Total engagements", "type": "number"},
@@ -117,6 +100,10 @@ def test_voice_draft_keeps_only_prose_fields():
     assert result["fills"] == [
         {"fieldId": "1", "text": "Busy aisle, people asked about peach."}
     ]
+    assert {"fieldId": "9", "kind": "number", "value": "40", "confidence": "high"} in result[
+        "values"
+    ]
+    assert result["filledCount"] == 2
 
 
 @override_settings(OPENAI_API_KEY="")
