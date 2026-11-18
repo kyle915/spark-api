@@ -1,0 +1,91 @@
+name: Audit Ignite-domain accounts (read-only)
+
+# Manually fires `/internal/cron/audit-ignite-domain-accounts` on Cloud Run —
+# see tenants/ignite_domain_audit.py + the audit_ignite_domain_accounts
+# command (spark-api develop). Answers "was the Ignite-domain admin grant or
+# the open register mutations abused?":
+#   - every @igniteproductions.co account (incl. case / subdomain / trailing-dot
+#     variants) with role, verified, active, created, last login, refresh-token
+#     activity, brand memberships, and admin before vs after the fix;
+#     suspicious = ambassador role / unverified / inactive / BA profile /
+#     case-duplicate;
+#   - staff-looking accounts that LOSE admin under the new rule (run
+#     verify-user on the real ones BEFORE shipping the fix);
+#   - spark-admin / is_staff accounts on OTHER domains (email domain only);
+#   - every spark_mcp connection with tool-call counts and last use.
+#
+# READ-ONLY: the endpoint writes nothing (besides the usual cron heartbeat
+# row). There is no apply/execute input on purpose.
+# MANUAL one-off — workflow_dispatch only, no schedule.
+# Secret-gated via X-Cron-Secret (shared INTERNAL_CRON_SECRET), header only.
+# Emails are printed only for Ignite-domain (staff-domain) accounts.
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire audit-ignite-domain-accounts cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/audit-ignite-domain-accounts
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            --max-time 300 \
+            -X POST "$CRON_URL" \
+            -H "X-Cron-Secret: $CRON_SECRET")
+          echo "HTTP $STATUS"
+
+          if [ "$STATUS" != "200" ]; then
+            echo "----- response body -----"
+            cat /tmp/cron-response.json
+            echo
+            echo "::error::Cron endpoint returned $STATUS — see body above."
+            exit 1
+          fi
+
+          python3 - <<'PY'
+          import json
+          d = json.load(open("/tmp/cron-response.json"))
+          print("===== SUMMARY =====")
+          for k, v in d.get("summary", {}).items():
+              print(f"  {k:<42} {v}")
+          def show(title, rows, fmt):
+              print(f"\n===== {title} ({len(rows)}) =====")
+              for r in rows:
+                  print("  " + fmt(r))
+          show("SUSPICIOUS Ignite-domain accounts", d.get("ignite_domain_suspicious", []),
+               lambda r: f"#{r['id']} {r['email']} role={r['role']} verified={r['verified']} "
+                         f"active={r['is_active']} created={r['created_at']} last_login={r['last_login']} "
+                         f"refresh_tokens={r['refresh_tokens']} last_refresh={r['last_refresh_token_at']} "
+                         f"admin_before={r['admin_before_fix']} reasons={','.join(r['reasons'])} "
+                         f"memberships={[(m['tenant_id'], m['tenant']) for m in r['memberships']]}")
+          show("Staff-looking accounts that LOSE admin after the fix (verify-user these first)",
+               d.get("staff_losing_admin_after_fix", []),
+               lambda r: f"#{r['id']} {r['email']} role={r['role']} verified={r['verified']} "
+                         f"last_login={r['last_login']}")
+          show("All Ignite-domain accounts", d.get("ignite_domain_accounts", []),
+               lambda r: f"#{r['id']} {r['email']} role={r['role']} verified={r['verified']} "
+                         f"active={r['is_active']} staff={r['is_staff']} super={r['is_superuser']} "
+                         f"admin before/after={r['admin_before_fix']}/{r['admin_after_fix']} "
+                         f"created={r['created_at']} last_login={r['last_login']}")
+          show("spark-admin / is_staff accounts on OTHER domains", d.get("elevated_accounts_other_domains", []),
+               lambda r: f"#{r['id']} @{r['email_domain']} role={r['role']} staff={r['is_staff']} "
+                         f"super={r['is_superuser']} verified={r['verified']} active={r['is_active']} "
+                         f"created={r['created_at']} last_login={r['last_login']}")
+          mcp = d.get("mcp", {})
+          show(f"MCP connections (total {mcp.get('count')}, tool calls {mcp.get('tool_calls')})",
+               mcp.get("connections", []),
+               lambda c: f"conn#{c['id']} user#{c['user_id']} {c.get('user_email') or ''} role={c['user_role']} "
+                         f"tenant#{c['tenant_id']} {c['tenant']!r} client={c['client_name']!r} "
+                         f"created={c['created_at']} last_used={c['last_used_at']} revoked={c['revoked_at']} "
+                         f"calls={c['tool_calls']} last_call={c['last_tool_call_at']}")
+          PY
