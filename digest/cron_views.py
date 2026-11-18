@@ -2561,6 +2561,44 @@ class VerifyUserView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class AuditIgniteDomainAccountsView(View):
+    """POST/GET `/internal/cron/audit-ignite-domain-accounts`.
+
+    READ-ONLY report (``audit_ignite_domain_accounts``): every Ignite-domain
+    account with role / verified / created / last login / memberships and
+    whether it had admin before vs after the domain-trust fix; spark-admin or
+    staff accounts on other domains (email domain only); every spark_mcp
+    connection with its tool-call count. Writes nothing.
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        from tenants.ignite_domain_audit import build_ignite_domain_audit
+
+        try:
+            cap = int(request.GET.get("cap") or request.POST.get("cap") or 500)
+        except ValueError:
+            cap = 500
+        cap = max(1, min(cap, 5000))
+        try:
+            payload = build_ignite_domain_audit(cap=cap)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("audit_ignite_domain_accounts failed")
+            return JsonResponse(
+                {"ok": False, "error": "audit-failed", "detail": str(exc)}, status=500
+            )
+        return JsonResponse({"ok": True, "read_only": True, **payload})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class DemoteAdminView(View):
     """POST `/internal/cron/demote-admin`.
 
@@ -12258,6 +12296,7 @@ def _registered_views() -> dict[str, Any]:
         "import-event-schedule": ImportEventScheduleView,
         "verify-user": VerifyUserView,
         "demote-admin": DemoteAdminView,
+        "audit-ignite-domain-accounts": AuditIgniteDomainAccountsView,
         "ensure-ambassador-profile": EnsureAmbassadorProfileView,
         "set-event-date": SetEventDateView,
         "book-ambassador-on-event": BookAmbassadorOnEventView,

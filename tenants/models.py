@@ -677,7 +677,7 @@ def monthly_report_subscriber_emails(tenant) -> list[str]:
     report and can still see that brand: an active user who is either an
     active member of the tenant or Ignite staff. Deduped, lower-cased order
     of first appearance."""
-    from utils.graphql.permissions import _is_admin_access  # lazy: avoid cycles
+    from utils.graphql.permissions import user_grants_ignite_admin  # lazy: avoid cycles
 
     subs = (
         ClientReportSubscription.objects.filter(
@@ -698,13 +698,7 @@ def monthly_report_subscriber_emails(tenant) -> list[str]:
         email = (getattr(user, "email", "") or "").strip()
         if not email:
             continue
-        is_staff_user = _is_admin_access(
-            (getattr(getattr(user, "role", None), "slug", "") or "").lower(),
-            bool(getattr(user, "is_staff", False)),
-            bool(getattr(user, "is_superuser", False)),
-            email,
-        )
-        if user.id not in member_ids and not is_staff_user:
+        if user.id not in member_ids and not user_grants_ignite_admin(user):
             continue
         key = email.lower()
         if key in seen:
