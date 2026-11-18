@@ -629,6 +629,9 @@ OPENAI_MODEL = env("OPENAI_MODEL", default="gpt-6.1-terra")
 # checks) run many times and need no long reasoning, so they use a smaller
 # model. Set to "" to run everything on OPENAI_MODEL.
 OPENAI_MODEL_SMALL = env("OPENAI_MODEL_SMALL", default="gpt-5-mini")
+# Speech-to-text for the check-in voice recap. Falls back to whisper-1 when
+# this id is not available on the account.
+OPENAI_TRANSCRIBE_MODEL = env("OPENAI_TRANSCRIBE_MODEL", default="gpt-4o-transcribe")
 
 # Hours check before payroll (hours_check/thresholds.py has the defaults and
 # what each key means). JSON in the env, e.g. {"far_miles": 0.5}; unknown

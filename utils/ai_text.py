@@ -445,6 +445,134 @@ def generate_vision_json(
         return None
 
 
+OPENAI_TRANSCRIPTIONS_URL = "https://api.openai.com/v1/audio/transcriptions"
+# Speech-to-text. The configured model first, then the long-standing one.
+_TRANSCRIBE_FALLBACK_MODEL = "whisper-1"
+# OpenAI refuses files over 25 MB; callers cap well under that.
+_TRANSCRIBE_MAX_BYTES = 25 * 1024 * 1024
+_TRANSCRIBE_EXTENSIONS = {
+    "audio/webm": "webm",
+    "video/webm": "webm",
+    "audio/mp4": "m4a",
+    "audio/x-m4a": "m4a",
+    "audio/m4a": "m4a",
+    "video/mp4": "mp4",
+    "audio/mpeg": "mp3",
+    "audio/mp3": "mp3",
+    "audio/ogg": "ogg",
+    "audio/wav": "wav",
+    "audio/x-wav": "wav",
+    "audio/wave": "wav",
+}
+
+
+def transcription_extension(content_type: str) -> str | None:
+    """The file extension OpenAI expects for this audio type, or None when
+    the type is not one it reads. Codec parameters are ignored."""
+    base = (content_type or "").split(";", 1)[0].strip().lower()
+    return _TRANSCRIBE_EXTENSIONS.get(base)
+
+
+def _transcribe_model() -> str:
+    return (
+        getattr(settings, "OPENAI_TRANSCRIBE_MODEL", "") or ""
+    ).strip() or _TRANSCRIBE_FALLBACK_MODEL
+
+
+def transcribe_audio(
+    audio: bytes,
+    *,
+    content_type: str,
+    prompt: str = "",
+    language: str = "en",
+    timeout: float | None = None,
+) -> str:
+    """Speech to text for one short recording. The audio is sent once and
+    not kept: nothing here writes it anywhere.
+
+    ``prompt`` is a short list of words to spell correctly (product names).
+
+    Raises:
+        AiUnavailable: When the key is unset, the audio type is not one
+            OpenAI reads, the file is empty or too big, or the call fails.
+            The message is safe to show.
+    """
+    headers = _auth_headers()
+    headers.pop("Content-Type", None)  # multipart sets its own boundary
+    ext = transcription_extension(content_type)
+    if ext is None:
+        raise AiUnavailable("That recording format can't be read.")
+    if not audio or len(audio) > _TRANSCRIBE_MAX_BYTES:
+        raise AiUnavailable("That recording is empty or too long.")
+    base_type = content_type.split(";", 1)[0].strip().lower()
+
+    def _ask(model_name: str) -> str:
+        fields = {"model": model_name, "response_format": "json"}
+        if language:
+            fields["language"] = language
+        if prompt:
+            fields["prompt"] = prompt[:800]
+        body = _post_multipart(
+            OPENAI_TRANSCRIPTIONS_URL,
+            fields,
+            ("file", f"recording.{ext}", audio, base_type),
+            headers,
+            timeout=timeout or DEFAULT_TIMEOUT_SECONDS,
+        )
+        if not isinstance(body, dict):
+            raise AiUnavailable("Speech service returned an unexpected response.")
+        err = body.get("error")
+        if err:
+            raise AiUnavailable("Speech service error.")
+        text = body.get("text")
+        if not isinstance(text, str):
+            raise AiUnavailable("Speech service returned no text.")
+        return text.strip()
+
+    configured = _transcribe_model()
+    try:
+        return _ask(configured)
+    except AiUnavailable:
+        if configured == _TRANSCRIBE_FALLBACK_MODEL:
+            raise
+        return _ask(_TRANSCRIBE_FALLBACK_MODEL)
+
+
+def _post_multipart(
+    url: str,
+    fields: dict,
+    file: tuple[str, str, bytes, str],
+    headers: dict,
+    *,
+    timeout: float,
+) -> dict:
+    """POST form fields plus one file as multipart; return the decoded JSON.
+
+    ``file`` is ``(form_name, filename, bytes, content_type)``. Errors are
+    re-raised as :class:`AiUnavailable` with a short reason, like
+    :func:`_post_json`.
+    """
+    import requests  # noqa: PLC0415 — present in uv.lock
+
+    name, filename, data, ctype = file
+    try:
+        response = requests.post(
+            url,
+            data=fields,
+            files={name: (filename, data, ctype)},
+            headers=headers,
+            timeout=timeout,
+        )
+    except requests.exceptions.Timeout as exc:
+        raise AiUnavailable("Speech service timed out.") from exc
+    except requests.exceptions.RequestException as exc:
+        raise AiUnavailable("Speech service request failed.") from exc
+    if response.status_code >= 400:
+        raise AiUnavailable(_http_error_reason(response.status_code, response.text))
+    try:
+        return response.json()
+    except ValueError as exc:
+        raise AiUnavailable("Speech service returned invalid JSON.") from exc
 # ─── Tool calling (function tools) ───────────────────────────────────
 
 
