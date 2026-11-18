@@ -2207,6 +2207,68 @@ class AuditTenantOnboardingView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class AuditRecapProductOptionsView(View):
+    """POST `/internal/cron/audit-recap-product-options`.
+
+    READ-ONLY. For every tenant, compares each recap template's
+    product-choice fields (Products Sampled & aliases, or any choice field
+    whose options are catalog products) against the tenant's own Product
+    names and lists mismatches — especially options that are ANOTHER
+    tenant's products (the CoHo Imports clone that kept Mark Anthony's Long
+    Drink SKUs). Never writes; there is no execute flag.
+
+    Query / body params (all optional):
+      - tenant_slug: exact slug to audit one tenant.
+      - include_ok: "1"/"true" — also list product fields with no issues.
+      - include_archived: "1"/"true" — include [ARCHIVED] tenants.
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _param(name: str) -> str:
+            return (request.GET.get(name) or request.POST.get(name) or "").strip()
+
+        def _bool(name: str) -> bool:
+            return _param(name).lower() in ("1", "true", "yes", "on")
+
+        from recaps.product_options_audit import (
+            audit_product_choice_options,
+            format_report,
+        )
+
+        include_ok = _bool("include_ok")
+        try:
+            result = audit_product_choice_options(
+                tenant_slug=_param("tenant_slug") or None,
+                include_archived=_bool("include_archived"),
+            )
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("Recap product-options audit failed")
+            return JsonResponse(
+                {"ok": False, "error": "audit-failed", "detail": str(exc)}, status=500
+            )
+        fields = [r for r in result["fields"] if include_ok or r["issues"]]
+        return JsonResponse(
+            {
+                "ok": True,
+                "read_only": True,
+                "summary": result["summary"],
+                "fields": fields,
+                "log": format_report(result, include_ok=include_ok),
+            }
+        )
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        return JsonResponse({"ok": True, "endpoint": "audit-recap-product-options"})
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class DedupeSkillsView(View):
     """POST `/internal/cron/dedupe-skills`.
 
@@ -12407,6 +12469,7 @@ def _registered_views() -> dict[str, Any]:
         "repair-request-activation-time": RepairRequestActivationTimeView,
         "backfill-girlbeer-receipts": BackfillGirlBeerReceiptsView,
         "audit-tenant-onboarding": AuditTenantOnboardingView,
+        "audit-recap-product-options": AuditRecapProductOptionsView,
         "audit-tenant-consumers": AuditTenantConsumersView,
         "audit-tenant-account-spend": AuditTenantAccountSpendView,
         "dump-tenant-receipts": DumpTenantReceiptsView,
