@@ -105,6 +105,8 @@ INSTALLED_APPS = [
     # text extracted from the brand's uploaded documents and a bounded crawl
     # of its website. See product_knowledge/.
     "product_knowledge",
+    # Versioned Terms / Privacy / AUP acceptance + the GraphQL gate.
+    "legal",
 ]
 
 AUTH_USER_MODEL = "tenants.User"
@@ -731,6 +733,12 @@ for _logger_cfg in LOGGING["loggers"].values():
 MCP_PUBLIC_BASE_URL = env("MCP_PUBLIC_BASE_URL", default="")
 # Kill switch: False → /mcp and /oauth/* answer 503 and tokens stop working.
 MCP_ENABLED = env.bool("MCP_ENABLED", default=True)
+
+# Legal acceptance gate (legal/graphql_extension.py): admin + client users
+# must accept the current Terms / AUP / Privacy (versions in legal/versions.py)
+# before the clients/spark GraphQL schemas serve them data. On by default;
+# the test suite turns it off (root conftest.py) and enables it per test.
+LEGAL_ACCEPTANCE_ENFORCED = env.bool("LEGAL_ACCEPTANCE_ENFORCED", default=True)
 # Optional rollout allowlist of tenant ids ("17,18"); empty → every brand.
 MCP_ALLOWED_TENANT_IDS = env.list("MCP_ALLOWED_TENANT_IDS", default=[])
 MCP_DAILY_CALLS_PER_TENANT = env.int("MCP_DAILY_CALLS_PER_TENANT", default=500)
