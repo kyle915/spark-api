@@ -281,8 +281,14 @@ CHAT_TOOLS: dict[str, ChatTool] = {
             "get_consumer_breakdown", "Consumer breakdown", "/client-dashboard#performance", "Performance"
         ),
         _from_mcp("list_upcoming_events", "Upcoming events", "/upcoming", "Upcoming"),
-        _from_mcp(
-            "list_pending_approvals", "Pending approvals", "/client-dashboard#approvals", "Approvals"
+        ChatTool(
+            "list_pending_approvals",
+            "Pending approvals",
+            mcp.PENDING_APPROVALS_DESCRIPTION,
+            {"type": "object", "properties": {}, "additionalProperties": False},
+            mcp.list_pending_approvals,
+            "/client-dashboard#approvals",
+            "Approvals",
         ),
         _from_mcp("get_weekly_summary", "Weekly summary", "/client-dashboard", "Home"),
         ChatTool(

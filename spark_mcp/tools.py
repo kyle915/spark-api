@@ -492,6 +492,17 @@ def list_upcoming_events(ctx: ToolContext, args: dict) -> tuple[dict, int]:
     )
 
 
+# Not exposed on the external AI connector: it lists recaps that are not
+# approved yet, and the connector returns approved recaps only. The in-app
+# brand chat (brand_chat.tools), where the signed-in brand already sees its
+# approvals, still uses it.
+PENDING_APPROVALS_DESCRIPTION = (
+    "What is waiting on the connected brand in Spark: event requests pending "
+    "approval and recaps awaiting approval, with totals and links (up to 50 of "
+    "each). Read only — approving or declining happens in Spark."
+)
+
+
 def list_pending_approvals(ctx: ToolContext, args: dict) -> tuple[dict, int]:
     from events.models import Request
     from events.routing import extract_state_code
@@ -740,15 +751,6 @@ TOOLS: dict[str, Tool] = {
                 "additionalProperties": False,
             },
             list_upcoming_events,
-        ),
-        Tool(
-            "list_pending_approvals",
-            "Pending approvals",
-            "What is waiting on the connected brand in Spark: event requests pending "
-            "approval and recaps awaiting approval, with totals and links (up to 50 of "
-            "each). Read only — approving or declining happens in Spark.",
-            {"type": "object", "properties": {}, "additionalProperties": False},
-            list_pending_approvals,
         ),
         Tool(
             "get_weekly_summary",
