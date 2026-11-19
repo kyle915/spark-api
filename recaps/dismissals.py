@@ -16,6 +16,12 @@ An event drops off Missing Recaps when it is dismissed as a whole, or when
 at least one ambassador on it was dismissed and nobody assigned to it is
 left un-dismissed. Assign someone new and the event is owed again.
 
+Time-sheet-only brands (``Tenant.checkin_timesheet_only``) owe no recap
+for ANY shift: their link is a plain time clock. They are answered here as if
+every event were dismissed as a whole, so Missing Recaps, its badge, the
+recap texts and nudges, brand dashboards and digests all skip them without
+each learning a second rule. No RecapDismissal row is written for them.
+
 A dismissal never blocks filing. If a recap is filed afterwards the event
 was no longer "missing" anyway and the dismissal simply stops mattering.
 Hours, payroll and KPIs never read this module.
@@ -51,7 +57,23 @@ def is_recap_dismissed(*, ambassador_id: int | None, event_id: int) -> bool:
     q = Q(ambassador__isnull=True)
     if ambassador_id is not None:
         q |= Q(ambassador_id=ambassador_id)
-    return active_dismissals().filter(event_id=event_id).filter(q).exists()
+    if active_dismissals().filter(event_id=event_id).filter(q).exists():
+        return True
+    return _timesheet_only_event_ids([event_id]) != set()
+
+
+def _timesheet_only_event_ids(event_ids) -> set[int]:
+    """The subset of ``event_ids`` whose brand runs a time-sheet-only link."""
+    from events.models import Event
+
+    ids = {i for i in event_ids if i is not None}
+    if not ids:
+        return set()
+    return set(
+        Event.objects.filter(
+            id__in=ids, tenant__checkin_timesheet_only=True
+        ).values_list("id", flat=True)
+    )
 
 
 class DismissedLookup:
@@ -67,6 +89,8 @@ class DismissedLookup:
         self.events: set[int] = set()
         if not ids:
             return
+        # Time-sheet-only brands: the whole event is owed nothing.
+        self.events |= _timesheet_only_event_ids(ids)
         for event_id, ambassador_id in active_dismissals().filter(
             event_id__in=ids
         ).values_list("event_id", "ambassador_id"):
@@ -108,7 +132,12 @@ def event_dismissed_q() -> Q:
             )
         )
     )
-    return Q(whole_event) | (Q(any_pair) & ~Q(still_owed))
+    return (
+        Q(whole_event)
+        | (Q(any_pair) & ~Q(still_owed))
+        # Time-sheet-only brand: a time clock, never a recap.
+        | Q(tenant__checkin_timesheet_only=True)
+    )
 
 
 def exclude_dismissed_events(qs: QuerySet) -> QuerySet:

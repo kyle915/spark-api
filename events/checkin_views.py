@@ -1487,6 +1487,16 @@ def public_checkin_recap(request: HttpRequest, code: str) -> HttpResponse:
         return err
     event, ambassador = loaded
 
+    # A time-sheet-only brand never takes a recap through the link — the page
+    # never offers one, and a stale page or a replayed offline queue must not
+    # file one against the brand's blank template either.
+    if checkin_web.is_timesheet_only(getattr(event, "tenant", None)):
+        return _err(
+            "This link is a time clock only — there's no recap to file.",
+            status=409,
+            code="timesheet_only",
+        )
+
     template = checkin_web.resolve_template_for_event(event)
     if template is None:
         return _err(

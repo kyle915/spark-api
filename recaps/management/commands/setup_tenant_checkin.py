@@ -42,6 +42,14 @@ PHOTO BUCKETS
     Categories that back a positional upload sentinel are matched and then left
     alone; see SENTINEL_CATEGORY_NAMES.
 
+TIME-SHEET-ONLY
+    `--timesheet-only on` turns the link into a plain time clock (name +
+    mobile phone, phone GPS for where, clock in, clock out, done — no recap,
+    no store name, no resources) and stops every recap chase for the brand.
+    `--timesheet-only off` turns it back. Omitted = leave as-is. The program
+    pin still applies (it names the walk-in event's type); the "no recap
+    template" warning does not.
+
 Dry-run by default; --apply writes. Idempotent throughout — re-running with the
 same arguments writes nothing and says so.
 
@@ -178,6 +186,16 @@ class Command(BaseCommand):
             dest="training_url",
             default="",
             help="BA reference link on the check-in page. Blank = leave as-is.",
+        )
+        parser.add_argument(
+            "--timesheet-only",
+            dest="timesheet_only",
+            choices=["on", "off"],
+            default=None,
+            help=(
+                "on = the link is a time clock only (no recap step, nothing "
+                "chases a recap). off = normal recap flow. Default: leave as-is."
+            ),
         )
         parser.add_argument(
             "--recap-only",
@@ -351,8 +369,38 @@ class Command(BaseCommand):
         forced_code = (opts["code"] or "").strip().upper()
         training_url = (opts["training_url"] or "").strip()
         location_mode = opts["location_mode"]
+        ts_opt = opts.get("timesheet_only")
+        timesheet_only = (
+            tenant.checkin_timesheet_only if ts_opt is None else ts_opt == "on"
+        )
+        if timesheet_only and location_mode == Tenant.CHECKIN_LOCATION_MARKET:
+            raise CommandError(
+                "--timesheet-only on keys each shift on the phone's GPS address; "
+                "it can't run with --location-mode market."
+            )
 
-        programs = self._resolve_event_types(tenant, opts["event_types"])
+        needles = list(opts["event_types"] or [])
+        if timesheet_only and not needles:
+            # Time sheet = event LOCATIONS, never stores: pin the tenant's
+            # event-type program instead of asking which one.
+            from ambassadors.checkin_web import timesheet_event_type
+
+            picked = timesheet_event_type(tenant, None)
+            if picked is not None:
+                needles = [picked.name]
+        programs = self._resolve_event_types(tenant, needles)
+        if timesheet_only:
+            from recaps.recap_types import RECAP_TYPE_EVENT, recap_type_for_name
+
+            wrong = [p for p in programs if recap_type_for_name(p.name) != RECAP_TYPE_EVENT]
+            if wrong:
+                raise CommandError(
+                    "--timesheet-only records event locations, not stores, so "
+                    "its program must be an event type (e.g. 'Event' or 'Event "
+                    "Activation'), not "
+                    + ", ".join(repr(p.name) for p in wrong)
+                    + ". Pass --event-type with the tenant's event program."
+                )
         prefix = (opts["code_prefix"] or _derive_prefix(tenant)).strip().upper().rstrip("-")
 
         self.stdout.write("=" * 72)
@@ -400,7 +448,11 @@ class Command(BaseCommand):
         from recaps.models import CustomRecapTemplate
 
         self.stdout.write("\n  Recap form each program opens:")
-        for etype in programs:
+        if timesheet_only:
+            self.stdout.write(
+                "    (time-sheet-only — no recap step; the form is never shown)"
+            )
+        for etype in programs if not timesheet_only else []:
             tpl = CustomRecapTemplate.objects.filter(
                 tenant=tenant, event_type_id=etype.id
             ).first()
@@ -431,6 +483,17 @@ class Command(BaseCommand):
         )
         if training_url:
             self.stdout.write(f"  Training link : {training_url}")
+        self.stdout.write(
+            f"  Time sheet only: {'ON' if timesheet_only else 'off'}"
+            + ("  (unchanged)" if ts_opt is None else "")
+        )
+        if timesheet_only:
+            self.stdout.write(
+                "    Workers give name + mobile phone; location comes from the "
+                "phone's GPS (typed only if they deny location); clock in → "
+                "clock out → done. No recap, no recap texts, never on Missing "
+                "Recaps. Hours land on /timesheet once the walk-up is confirmed."
+            )
 
         if not apply:
             self.stdout.write("")
@@ -447,6 +510,9 @@ class Command(BaseCommand):
                 tenant.checkin_location_mode = location_mode
             if training_url:
                 tenant.checkin_training_url = training_url
+            tenant.checkin_timesheet_only = timesheet_only
+            if timesheet_only:
+                tenant.checkin_location_mode = Tenant.CHECKIN_LOCATION_ADDRESS
             if wanted or bucket_plan:
                 tenant.checkin_photo_buckets = self._ensure_buckets(
                     tenant, wanted, bucket_plan, programs
@@ -458,6 +524,7 @@ class Command(BaseCommand):
                     "checkin_location_mode",
                     "checkin_training_url",
                     "checkin_photo_buckets",
+                    "checkin_timesheet_only",
                 ]
             )
             # `set`, not `add` — this list is the whole truth, so dropping a

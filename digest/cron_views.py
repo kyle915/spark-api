@@ -9151,7 +9151,8 @@ class SetupTenantCheckinView(View):
     first entry pinned as the default.
 
     Params: tenant_id (preferred) or tenant, code, code_prefix, event_type,
-    photo_buckets (JSON), location_mode, training_url, apply (default DRY RUN).
+    photo_buckets (JSON), location_mode, training_url, timesheet_only
+    (on/off, blank = leave), apply (default DRY RUN).
     """
 
     def _run(self, request: HttpRequest) -> HttpResponse:
@@ -9197,6 +9198,12 @@ class SetupTenantCheckinView(View):
             kwargs["apply"] = True
         if _param("recap_only").lower() in ("1", "true", "yes", "on"):
             kwargs["recap_only"] = True
+        # Tri-state: blank leaves the tenant's time-sheet-only flag alone.
+        ts = _param("timesheet_only").lower()
+        if ts in ("1", "true", "yes", "on"):
+            kwargs["timesheet_only"] = "on"
+        elif ts in ("0", "false", "no", "off"):
+            kwargs["timesheet_only"] = "off"
 
         out = io.StringIO()
         try:
