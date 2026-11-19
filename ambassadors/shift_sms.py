@@ -8,6 +8,10 @@ Three texts, each sent at most once per ambassador per event:
   ended, when they never clocked out) with no recap filed.
 * ``recap_morning`` — the recap is still missing the next morning.
 
+Neither recap text goes out for a walk-in shift (no request, no approved
+booking) that was clocked in and out in under ``SHIFT_SMS_MIN_SHIFT_MINUTES``
+— see ``_is_short_walk_in``.
+
 Who is on a shift comes from Spark's own data: an approved booking for the
 pre-shift text, a real clock-in for the recap texts — so a walk-up who
 clocked in from a link gets the recap reminders even though nobody booked
@@ -352,6 +356,41 @@ def _pre_shift_candidates(now):
         yield ShiftSms.KIND_PRE_SHIFT, roster.ambassador, roster.event
 
 
+def _min_shift() -> timedelta | None:
+    minutes = int(getattr(settings, "SHIFT_SMS_MIN_SHIFT_MINUTES", 0) or 0)
+    return timedelta(minutes=minutes) if minutes > 0 else None
+
+
+def _is_short_walk_in(state: dict, *, event, ambassador_id) -> bool:
+    """A walk-in shift clocked in and out in under SHIFT_SMS_MIN_SHIFT_MINUTES.
+
+    Walk-in means the event has no request behind it and this ambassador has
+    no approved booking on it, so nobody planned the shift: it exists only
+    because someone opened the check-in link. A few minutes on the clock
+    there is almost always a mistake (the wrong day, a test), and a recap
+    text for it is noise. Booked or requested shifts are real however short
+    they were, so they still get the texts. A shift still on the clock is
+    never "short" — it hasn't ended.
+    """
+    minimum = _min_shift()
+    if minimum is None or getattr(event, "request_id", None) is not None:
+        return False
+    if state.get("state") != "clocked_out":
+        return False
+    from django.utils.dateparse import parse_datetime
+
+    started = parse_datetime(state["clockInAt"]) if state.get("clockInAt") else None
+    ended = parse_datetime(state["clockOutAt"]) if state.get("clockOutAt") else None
+    if started is None or ended is None or ended - started >= minimum:
+        return False
+    from ambassadors.models import AmbassadorEvent
+
+    booked = AmbassadorEvent.objects.filter(
+        ambassador_id=ambassador_id, event_id=event.id, is_approved=True
+    ).exists()
+    return not booked
+
+
 def _recap_candidates(now):
     """(kind, ambassador, event) for everyone who clocked in, has finished,
     and has no recap on file."""
@@ -415,6 +454,8 @@ def _recap_candidates(now):
             if finished is None or finished > now:
                 continue
         if finished is None or finished > now - RECAP_GRACE:
+            continue
+        if _is_short_walk_in(state, event=event, ambassador_id=ambassador_id):
             continue
         age = now - finished
         if age <= RECAP_DUE_MAX_AGE:

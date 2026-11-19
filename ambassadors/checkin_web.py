@@ -1371,6 +1371,40 @@ def store_name_required(tenant, event_type=None) -> bool:
 
 STORE_NAME_REQUIRED_ERROR = "Enter the store name so your work counts for the right store."
 
+# "Is your shift today?" — see settings.CHECKIN_REQUIRE_SHIFT_TODAY.
+SHIFT_TODAY_CONFIRM_CODE = "confirm_shift_today"
+# Read by BAs on the old page too (it shows the message as-is), so it says
+# what to do either way.
+SHIFT_TODAY_CONFIRM_ERROR = (
+    "Is your shift today? Only start a check-in on the day you're working. "
+    "If your shift is another day, open this link again when it starts. "
+    "If it is today, refresh this page and try again."
+)
+# The latest-running US time zone the field works in. A date before today
+# HERE is before today for every BA, so it is a past-day recap, not a shift.
+_SHIFT_DAY_TZ = "America/Los_Angeles"
+
+
+class ShiftDayNotConfirmed(ValueError):
+    """A new walk-in event would be opened without the BA confirming the
+    shift is today. Nothing was created."""
+
+
+def is_past_shift_day(on_date) -> bool:
+    """True when ``on_date`` is before today for every US BA: a past-day
+    recap, which never asks "Is your shift today?"."""
+    from zoneinfo import ZoneInfo
+
+    if on_date is None:
+        return False
+    return on_date < dj_tz.now().astimezone(ZoneInfo(_SHIFT_DAY_TZ)).date()
+
+
+def shift_today_confirmed(data: dict) -> bool:
+    """The identify body says the BA answered "Yes, I'm working now"."""
+    raw = (data or {}).get("shiftIsToday")
+    return raw is True or (isinstance(raw, str) and raw.strip().lower() == "true")
+
 
 def requires_store_identity(tenant, event=None) -> bool:
     """Brands whose recap title must be "Store Name #1234" (client ask).
@@ -3073,7 +3107,7 @@ def store_name_match_allowed(typed_address: str | None, event_address: str | Non
 
 def find_or_create_walkin_event(
     *, tenant, store_name: str, address: str, on_date, actor, event_type=None,
-    require_store: bool = False,
+    require_store: bool = False, require_shift_today: bool = False,
 ):
     """The event for (tenant, address, date, event type) — found, else created.
 
@@ -3098,6 +3132,10 @@ def find_or_create_walkin_event(
     ``None`` here would raise IntegrityError on the very first check-in. The
     caller identifies the BA first and passes their user, which also gives the
     Walk-ups queue honest attribution for who opened the event.
+
+    ``require_shift_today``: refuse to CREATE (joining is always fine) with
+    ``ShiftDayNotConfirmed`` — the caller asks the BA "Is your shift today?"
+    and comes back with the answer.
     """
     if actor is None:
         raise ValueError("find_or_create_walkin_event requires an actor.")
@@ -3223,6 +3261,11 @@ def find_or_create_walkin_event(
         # retail one does, or its recaps land under "No store recorded".
         if require_store and not _usable_store_name(store_name, address):
             raise ValueError(STORE_NAME_REQUIRED_ERROR)
+        # Opening the link on the wrong day used to mint an event for today
+        # and clock the BA in on it. Ask first; create nothing until they say
+        # the shift is today.
+        if require_shift_today:
+            raise ShiftDayNotConfirmed(SHIFT_TODAY_CONFIRM_ERROR)
 
         name = walkin_event_name(
             store_name=store_name,

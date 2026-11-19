@@ -31,6 +31,7 @@ import logging
 import re
 import secrets
 
+from django.conf import settings
 from django.core.cache import cache
 from django.utils import timezone as dj_tz
 from django.http import HttpRequest, HttpResponse, JsonResponse
@@ -721,6 +722,23 @@ def public_checkin_identify(request: HttpRequest, code: str) -> HttpResponse:
                         and not checkin_web.is_product_seeding_event_type(chosen_type)
                         and checkin_web.store_name_required(target, chosen_type)
                     ),
+                    # "Is your shift today?" — only when this would open a
+                    # NEW event for today or later on a clock-in link.
+                    require_shift_today=(
+                        bool(getattr(settings, "CHECKIN_REQUIRE_SHIFT_TODAY", False))
+                        and not recap_only
+                        and not checkin_web.is_past_shift_day(on_date)
+                        and not checkin_web.shift_today_confirmed(data)
+                    ),
+                )
+            except checkin_web.ShiftDayNotConfirmed as exc:
+                return JsonResponse(
+                    {
+                        "error": checkin_web.SHIFT_TODAY_CONFIRM_CODE,
+                        "message": str(exc),
+                        "shiftDate": on_date.isoformat(),
+                    },
+                    status=400,
                 )
             except ValueError as exc:
                 return _err(str(exc))

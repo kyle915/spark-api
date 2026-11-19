@@ -478,6 +478,14 @@ AMBASSADOR_FRONTEND_URL = env(
 ADMIN_FRONTEND_URL = env("ADMIN_FRONTEND_URL", default="http://localhost:3000")
 # BA-facing check-in / training / recap-form origin. Field phones have
 # failed to resolve admin.; mint client. unless an override is set.
+# Standing walk-up links: a check-in that would OPEN a new walk-in event for
+# today (or later) must carry ``shiftIsToday: true`` — the BA answered "Yes,
+# I'm working now" to "Is your shift today?". Without it identify answers 400
+# ``confirm_shift_today`` and creates nothing. Off by default so this API can
+# deploy before the front end that asks the question; turn it on once the
+# front end is live. Joining an existing event, recap-only links and
+# past-day recaps are never asked.
+CHECKIN_REQUIRE_SHIFT_TODAY = env.bool("CHECKIN_REQUIRE_SHIFT_TODAY", default=False)
 PUBLIC_CHECKIN_BASE_URL = env(
     "PUBLIC_CHECKIN_BASE_URL",
     default="https://client.igniteproductions.co",
@@ -496,6 +504,11 @@ QUO_FROM_NUMBER = env("QUO_FROM_NUMBER", default="+17754060435")
 SHIFT_SMS_EVENTS_FROM = env(
     "SHIFT_SMS_EVENTS_FROM", default="2026-11-14T08:00:00-08:00"
 )
+# Recap texts skip a walk-in shift (an event with no request behind it and no
+# approved booking for the ambassador) that was clocked in and out in less
+# than this many minutes: a BA who opened the link on the wrong day and
+# clocked straight back out owes no recap. 0 turns the check off.
+SHIFT_SMS_MIN_SHIFT_MINUTES = env.int("SHIFT_SMS_MIN_SHIFT_MINUTES", default=20)
 QUO_API_BASE_URL = env("QUO_API_BASE_URL", default="https://api.quo.com")
 # Absolute base for backend-rendered public pages linked from emails (e.g. the
 # one-click shift-extension approval page under /api/public/). Falls back to the
