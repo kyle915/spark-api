@@ -43,7 +43,6 @@ organization first.
 | `list_recaps` | Approved recaps: date, store, state, activation type, consumers sampled, engagements, link to Spark (50 per call, paged) |
 | `get_consumer_breakdown` | Consumers sampled by store, state or week; units sold and sampled by product |
 | `list_upcoming_events` | Next 1-30 days of events and not-yet-scheduled requests, with a count of booked brand ambassadors |
-| `list_pending_approvals` | Requests and recaps waiting on the brand (links only; approving happens in Spark) |
 | `get_weekly_summary` | The latest published weekly summary (or a given week) |
 | `get_connection_info` | Which brand this is and how many calls are left today |
 

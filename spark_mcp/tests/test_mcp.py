@@ -458,7 +458,6 @@ ALL_TOOL_CALLS = [
     ("get_consumer_breakdown", {"by": "week"}),
     ("get_consumer_breakdown", {"by": "product"}),
     ("list_upcoming_events", {"days": 14}),
-    ("list_pending_approvals", {}),
     ("get_weekly_summary", {}),
     ("get_connection_info", {}),
 ]
@@ -709,3 +708,14 @@ def test_email_link_only_works_in_the_browser_that_asked(world, monkeypatch):
     # Unknown emails get the same answer and no mail.
     c.post("/oauth/authorize", {"req": req, "form_token": form, "action": "email_link", "email": "nobody@x.test"})
     assert len(sent) == 1
+
+
+@pytest.mark.django_db
+def test_the_connector_does_not_offer_pending_approvals():
+    """The external connector returns approved recaps only; recaps awaiting
+    approval are not listed, even as links. The in-app chat keeps it."""
+    from brand_chat.tools import CHAT_TOOLS
+    from spark_mcp.tools import TOOLS
+
+    assert "list_pending_approvals" not in TOOLS
+    assert "list_pending_approvals" in CHAT_TOOLS
