@@ -31,6 +31,10 @@ class PayrollTimesheetRow:
     ambassador_uuid: str
     name: str
     email: str | None = None
+    # The BA's mobile number. Staff only: this whole query is
+    # IsSparkAdminAccess (brand users never see the timesheet). For a web
+    # check-in BA it is the phone they typed, which is also their identity.
+    phone: str | None = None
     shifts: int = 0
     hours: float = 0.0
     # How many of `shifts` fell back to scheduled length (no clock pair).
@@ -91,6 +95,113 @@ class PayrollShiftRow:
     estimated: bool = False
     rate: float | None = None
     pay: float | None = None
+    # Who worked it. Filled on the period-wide export
+    # (`payrollTimesheetExport`); the per-BA drill-down already knows.
+    ambassador_uuid: str | None = None
+    ambassador_name: str | None = None
+    ambassador_phone: str | None = None
+
+
+def _ambassador_label(amb) -> tuple[str, str | None, str | None]:
+    """(name, email, phone) for a timesheet row."""
+    u = getattr(amb, "user", None)
+    name = (
+        (f"{u.first_name or ''} {u.last_name or ''}".strip() or (u.email or ""))
+        if u
+        else ""
+    ) or "(unnamed)"
+    email = getattr(u, "email", None) if u else None
+    phone = (getattr(amb, "phone", None) or "").strip() or None
+    return name, email, phone
+
+
+def _shift_rows_for_bookings(bookings, *, with_ambassador: bool = False) -> list:
+    """One PayrollShiftRow per (event, ambassador) booking, oldest first.
+
+    Shared by the per-BA drill-down and the period-wide export so the two can
+    never disagree about a shift's hours, times or location.
+    """
+    from ambassadors.attendance_hours import (
+        clock_facts,
+        pay_for,
+        rate_map,
+        scheduled_hours,
+        worked_hours,
+    )
+    from ambassadors.models import Attendance
+    from events.venue_day import venue_local_date, venue_zone
+
+    if not bookings:
+        return []
+    event_ids = list({b.event_id for b in bookings})
+    amb_ids = list({b.ambassador_id for b in bookings})
+    facts = clock_facts(event_ids)
+    rates = rate_map(event_ids)
+
+    # First clock-in / last clock-out attendance uuid per (event, BA).
+    in_uuid: dict[tuple[int, int], str] = {}
+    out_uuid: dict[tuple[int, int], str] = {}
+    for ev_id, a_id, src, att_uuid in (
+        Attendance.objects.filter(
+            event_id__in=event_ids,
+            ambassador_id__in=amb_ids,
+            source__name__in=["clock_in", "clock_out"],
+        )
+        .order_by("clock_time", "id")
+        .values_list("event_id", "ambassador_id", "source__name", "uuid")
+    ):
+        if src == "clock_in":
+            in_uuid.setdefault((ev_id, a_id), str(att_uuid))
+        else:
+            out_uuid[(ev_id, a_id)] = str(att_uuid)
+
+    rows: list[PayrollShiftRow] = []
+    seen: set[tuple[int, int]] = set()
+    for b in bookings:
+        ev = b.event
+        if ev is None:
+            continue
+        key = (ev.id, b.ambassador_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        f = facts.get(key) or {}
+        sched = scheduled_hours(
+            getattr(ev, "start_time", None), getattr(ev, "end_time", None)
+        )
+        wh, est = worked_hours(f or None, sched)
+        rate = rates.get(key)
+        on_clock = f.get("latest_kind") == "clock_in"
+        t_in, t_out = f.get("first_in"), f.get("last_out")
+        row = PayrollShiftRow(
+            event_uuid=str(ev.uuid),
+            event_name=ev.name or "",
+            date=(d.isoformat() if (d := venue_local_date(ev)) else None),
+            tenant_name=getattr(ev.tenant, "name", None),
+            address=ev.address or None,
+            time_zone=venue_zone(ev).key,
+            clock_in_at=t_in.isoformat() if t_in else None,
+            clock_out_at=(t_out.isoformat() if t_out and not on_clock else None),
+            clock_in_attendance_uuid=in_uuid.get(key),
+            clock_out_attendance_uuid=(None if on_clock else out_uuid.get(key)),
+            on_the_clock=on_clock,
+            scheduled_hours=sched,
+            hours=wh,
+            estimated=bool(est) and wh is not None,
+            rate=rate,
+            pay=(
+                round(pay_for(wh, rate), 2)
+                if wh is not None and rate is not None
+                else None
+            ),
+        )
+        if with_ambassador and b.ambassador is not None:
+            name, _email, phone = _ambassador_label(b.ambassador)
+            row.ambassador_uuid = str(b.ambassador.uuid)
+            row.ambassador_name = name
+            row.ambassador_phone = phone
+        rows.append(row)
+    return rows
 
 
 @strawberry.type
@@ -154,7 +265,7 @@ class PayrollQueries:
             # ambassador_id -> aggregate dict
             agg: dict[int, dict] = defaultdict(
                 lambda: {
-                    "uuid": None, "name": "", "email": None,
+                    "uuid": None, "name": "", "email": None, "phone": None,
                     "shifts": 0, "hours": 0.0, "estimated_shifts": 0,
                     "pay": 0.0, "any_pay": False, "missing_rate": 0,
                 }
@@ -175,13 +286,8 @@ class PayrollQueries:
                     rate = rates.get(key)
                     a = agg[amb.id]
                     if a["uuid"] is None:
-                        u = getattr(amb, "user", None)
                         a["uuid"] = str(amb.uuid)
-                        a["name"] = (
-                            (f"{u.first_name or ''} {u.last_name or ''}".strip()
-                             or (u.email or "")) if u else ""
-                        ) or "(unnamed)"
-                        a["email"] = getattr(u, "email", None) if u else None
+                        a["name"], a["email"], a["phone"] = _ambassador_label(amb)
                     a["shifts"] += 1
                     if wh is not None:
                         a["hours"] += wh
@@ -232,6 +338,7 @@ class PayrollQueries:
                         ambassador_uuid=a["uuid"] or "",
                         name=a["name"],
                         email=a["email"],
+                        phone=a["phone"],
                         shifts=a["shifts"],
                         hours=round(a["hours"], 2),
                         estimated_shifts=a["estimated_shifts"],
@@ -283,15 +390,7 @@ class PayrollQueries:
                 resolved_tid = None
 
         def _go() -> list[PayrollShiftRow]:
-            from ambassadors.attendance_hours import (
-                clock_facts,
-                pay_for,
-                rate_map,
-                scheduled_hours,
-                worked_hours,
-            )
-            from ambassadors.models import AmbassadorEvent, Attendance
-            from events.venue_day import venue_local_date, venue_zone
+            from ambassadors.models import AmbassadorEvent
 
             try:
                 start = _date.fromisoformat(str(start_date))
@@ -310,77 +409,60 @@ class PayrollQueries:
             elif resolved_tid is not None:
                 qs = qs.filter(event__tenant_id=resolved_tid)
             bookings = list(qs.order_by("event__date", "id")[:500])
-            if not bookings:
+            return _shift_rows_for_bookings(bookings)
+
+        return await sync_to_async(_go)()
+
+    @strawberry.field(permission_classes=[IsSparkAdminAccess])
+    async def payroll_timesheet_export(
+        self,
+        info: strawberry.Info,
+        start_date: str,
+        end_date: str,
+        tenant_id: strawberry.ID | None = None,
+    ) -> list[PayrollShiftRow]:
+        """Every confirmed shift in [start_date, end_date] (inclusive, by
+        event date), one row per BA per shift, with who worked it — the
+        time-sheet CSV (name, phone, date, location, clock in/out, hours).
+
+        Same scope, clock join and rate join as `payroll_timesheet`; a
+        walk-up still pending in the Walk-ups queue is not on it, exactly as
+        it isn't in the timesheet totals. Admins only (carries phones)."""
+        user = info.context.request.user
+        is_admin, allowed = await _accessible_tenants(user)
+        resolved_tid = None
+        if tenant_id is not None:
+            try:
+                resolved_tid = resolve_id_to_int(tenant_id)
+            except Exception:  # noqa: BLE001
+                resolved_tid = None
+
+        def _go() -> list[PayrollShiftRow]:
+            from ambassadors.models import AmbassadorEvent
+
+            try:
+                start = _date.fromisoformat(str(start_date))
+                end = _date.fromisoformat(str(end_date))
+            except (TypeError, ValueError):
                 return []
 
-            amb_id = bookings[0].ambassador_id
-            event_ids = [b.event_id for b in bookings]
-            facts = clock_facts(event_ids)
-            rates = rate_map(event_ids)
-
-            # First clock-in / last clock-out attendance uuid per event.
-            in_uuid: dict[int, str] = {}
-            out_uuid: dict[int, str] = {}
-            for ev_id, src, att_uuid in (
-                Attendance.objects.filter(
-                    event_id__in=event_ids,
-                    ambassador_id=amb_id,
-                    source__name__in=["clock_in", "clock_out"],
-                )
-                .order_by("clock_time", "id")
-                .values_list("event_id", "source__name", "uuid")
-            ):
-                if src == "clock_in":
-                    in_uuid.setdefault(ev_id, str(att_uuid))
-                else:
-                    out_uuid[ev_id] = str(att_uuid)
-
-            rows: list[PayrollShiftRow] = []
-            seen: set[int] = set()
-            for b in bookings:
-                ev = b.event
-                if ev is None or ev.id in seen:
-                    continue
-                seen.add(ev.id)
-                key = (ev.id, amb_id)
-                f = facts.get(key) or {}
-                sched = scheduled_hours(
-                    getattr(ev, "start_time", None), getattr(ev, "end_time", None)
-                )
-                wh, est = worked_hours(f or None, sched)
-                rate = rates.get(key)
-                on_clock = f.get("latest_kind") == "clock_in"
-                t_in, t_out = f.get("first_in"), f.get("last_out")
-                rows.append(
-                    PayrollShiftRow(
-                        event_uuid=str(ev.uuid),
-                        event_name=ev.name or "",
-                        date=(
-                            d.isoformat() if (d := venue_local_date(ev)) else None
-                        ),
-                        tenant_name=getattr(ev.tenant, "name", None),
-                        address=ev.address or None,
-                        time_zone=venue_zone(ev).key,
-                        clock_in_at=t_in.isoformat() if t_in else None,
-                        clock_out_at=(
-                            t_out.isoformat() if t_out and not on_clock else None
-                        ),
-                        clock_in_attendance_uuid=in_uuid.get(ev.id),
-                        clock_out_attendance_uuid=(
-                            None if on_clock else out_uuid.get(ev.id)
-                        ),
-                        on_the_clock=on_clock,
-                        scheduled_hours=sched,
-                        hours=wh,
-                        estimated=bool(est) and wh is not None,
-                        rate=rate,
-                        pay=(
-                            round(pay_for(wh, rate), 2)
-                            if wh is not None and rate is not None
-                            else None
-                        ),
-                    )
-                )
+            qs = AmbassadorEvent.objects.filter(
+                is_approved=True,
+                ambassador__isnull=False,
+                event__date__date__gte=start,
+                event__date__date__lte=end,
+            ).select_related(
+                "event", "event__tenant", "event__timezone", "ambassador__user"
+            )
+            if not is_admin:
+                qs = qs.filter(event__tenant_id__in=(allowed or set()))
+            elif resolved_tid is not None:
+                qs = qs.filter(event__tenant_id=resolved_tid)
+            bookings = list(qs.order_by("event__date", "id")[:5000])
+            rows = _shift_rows_for_bookings(bookings, with_ambassador=True)
+            rows.sort(
+                key=lambda r: (r.date or "", (r.ambassador_name or "").lower(), r.clock_in_at or "")
+            )
             return rows
 
         return await sync_to_async(_go)()
