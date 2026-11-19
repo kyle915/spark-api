@@ -68,6 +68,12 @@ on:
         description: "BA reference link on the check-in page. Blank = leave as-is"
         required: false
         default: ""
+      timesheet_only:
+        description: "on = time clock only (name, phone, GPS location, clock in/out; no recap, nothing chases one). off = normal recap flow. Blank = leave as-is"
+        required: false
+        default: ""
+        type: choice
+        options: ["", "on", "off"]
       apply:
         description: "Actually write (read the dry run first)"
         required: false
@@ -92,6 +98,7 @@ jobs:
           PHOTO_BUCKETS: ${{ github.event.inputs.photo_buckets }}
           LOCATION_MODE: ${{ github.event.inputs.location_mode }}
           TRAINING_URL: ${{ github.event.inputs.training_url }}
+          TIMESHEET_ONLY: ${{ github.event.inputs.timesheet_only }}
           APPLY: ${{ github.event.inputs.apply }}
         run: |
           if [ -z "$CRON_SECRET" ]; then
@@ -114,6 +121,7 @@ jobs:
             --data-urlencode "photo_buckets=$PHOTO_BUCKETS" \
             --data-urlencode "location_mode=$LOCATION_MODE" \
             --data-urlencode "training_url=$TRAINING_URL" \
+            --data-urlencode "timesheet_only=$TIMESHEET_ONLY" \
             --data-urlencode "apply=$APPLY")
           echo "HTTP $STATUS"
           # The command's own report is the point of this workflow, and it
