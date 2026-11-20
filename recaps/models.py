@@ -1,6 +1,7 @@
 from uuid6 import uuid7
 from django.db import models
 from django.conf import settings
+from django.utils import timezone
 from ambassadors.models import FileType, Ambassador
 from events.models import (
     Event,
@@ -1172,6 +1173,13 @@ class ReceiptReading(models.Model):
 
     STATUS_READ = "read"
     STATUS_UNREADABLE = "unreadable"
+    # Queued: the recap was submitted / approved and this photo is waiting
+    # for the background reader.
+    STATUS_PENDING = "pending"
+    # The download or the model call failed; retried a few times.
+    STATUS_FAILED = "failed"
+    # The model looked and said this photo is not a receipt.
+    STATUS_NOT_A_RECEIPT = "not_a_receipt"
 
     id = models.BigAutoField(primary_key=True)
     custom_recap_file = models.OneToOneField(
@@ -1179,7 +1187,7 @@ class ReceiptReading(models.Model):
         on_delete=models.CASCADE,
         related_name="receipt_reading",
     )
-    status = models.CharField(max_length=16, default=STATUS_UNREADABLE)
+    status = models.CharField(max_length=16, default=STATUS_UNREADABLE, db_index=True)
     total = models.DecimalField(max_digits=9, decimal_places=2, null=True, blank=True)
     merchant = models.CharField(max_length=120, blank=True, default="")
     # ISO date printed on the receipt, when legible; free of timezone.
@@ -1194,8 +1202,135 @@ class ReceiptReading(models.Model):
     reader_version = models.PositiveSmallIntegerField(default=1)
     read_at = models.DateTimeField(auto_now=True)
 
+    # ── Reader v3: the whole ticket, for spend and fraud checks ──────────
+    # Printed store address, when legible.
+    address = models.CharField(max_length=200, blank=True, default="")
+    city = models.CharField(max_length=80, blank=True, default="")
+    state_code = models.CharField(max_length=2, blank=True, default="")
+    ticket_number = models.CharField(max_length=32, blank=True, default="")
+    register = models.CharField(max_length=16, blank=True, default="")
+    # Wall-clock time printed on the receipt ("14:07"), no timezone.
+    purchase_time = models.CharField(max_length=5, blank=True, default="")
+    # [{"name", "qty", "unitPrice", "amount", "isBrand"}] — purchased items
+    # only; fees and tax are kept apart below.
+    line_items = models.JSONField(default=list, blank=True)
+    subtotal = models.DecimalField(max_digits=9, decimal_places=2, null=True, blank=True)
+    fees = models.DecimalField(max_digits=9, decimal_places=2, null=True, blank=True)
+    tax = models.DecimalField(max_digits=9, decimal_places=2, null=True, blank=True)
+    # Last four digits of the card, when printed. NEVER more than four.
+    card_last4 = models.CharField(max_length=4, blank=True, default="")
+    # 0..1: the model's own confidence, lowered when the arithmetic fails.
+    confidence = models.FloatField(null=True, blank=True)
+    # Lines + fees + tax == total (within 2 cents). Null when not checkable.
+    arithmetic_ok = models.BooleanField(null=True, blank=True)
+    arithmetic_note = models.CharField(max_length=200, blank=True, default="")
+    # The model's answer as returned (card-number-like digit runs scrubbed).
+    raw = models.JSONField(default=dict, blank=True)
+    model = models.CharField(max_length=64, blank=True, default="")
+    input_tokens = models.PositiveIntegerField(null=True, blank=True)
+    output_tokens = models.PositiveIntegerField(null=True, blank=True)
+    # When the model was last called for this photo; the daily cost cap
+    # counts these.
+    model_called_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    attempts = models.PositiveSmallIntegerField(default=0)
+    error = models.CharField(max_length=200, blank=True, default="")
+    # Duplicate-receipt keys (sha256 hex). ``fingerprint`` = store number +
+    # ticket + date + total; ``ticket_key`` = store number + ticket + date;
+    # ``loose_key`` = ticket + date + total (catches an edited store header).
+    fingerprint = models.CharField(max_length=64, blank=True, default="", db_index=True)
+    ticket_key = models.CharField(max_length=64, blank=True, default="", db_index=True)
+    loose_key = models.CharField(max_length=64, blank=True, default="", db_index=True)
+    # 64-bit difference hash of the photo, to spot a re-saved copy.
+    image_dhash = models.CharField(max_length=16, blank=True, default="")
+    created_at = models.DateTimeField(default=timezone.now, editable=False)
+
     def __str__(self) -> str:  # pragma: no cover - admin/debug only
         return f"file {self.custom_recap_file_id}: {self.status} {self.total}"
+
+
+class RecapFlag(models.Model):
+    """A fraud / quality flag on one custom recap. STAFF ONLY.
+
+    Written by ``recaps.receipt_flags`` from facts already stored (receipt
+    readings, photo hashes, clock punches, who filed the recap and when).
+    Never shown to brand users, never in brand emails, the AI connector or
+    brand chat. One row per (recap, kind, dedupe_key); a human resolves it
+    with a note. A flag whose condition stops holding is closed by the
+    checker with ``resolved_by`` empty, and reopened if it comes back.
+    Nothing here edits, approves or rejects the recap.
+    """
+
+    KIND_DUPLICATE_RECEIPT = "duplicate_receipt"
+    KIND_STORE_MISMATCH = "store_mismatch"
+    KIND_SHORT_CLOCK = "short_clock"
+    KIND_LATE_STAFF_FILING = "late_staff_filing"
+    KIND_DUPLICATE_PHOTO = "duplicate_photo"
+    KIND_RECEIPT_MATH = "receipt_math"
+    KIND_CHOICES = [
+        (KIND_DUPLICATE_RECEIPT, "Duplicate receipt"),
+        (KIND_STORE_MISMATCH, "Receipt from another store"),
+        (KIND_SHORT_CLOCK, "Very short clock-in"),
+        (KIND_LATE_STAFF_FILING, "Filed late by staff"),
+        (KIND_DUPLICATE_PHOTO, "Duplicate photo"),
+        (KIND_RECEIPT_MATH, "Receipt doesn't add up"),
+    ]
+    SEVERITY_HIGH = "high"
+    SEVERITY_MEDIUM = "medium"
+    SEVERITY_LOW = "low"
+    SEVERITY_CHOICES = [
+        (SEVERITY_HIGH, "High"),
+        (SEVERITY_MEDIUM, "Medium"),
+        (SEVERITY_LOW, "Low"),
+    ]
+    AUTO_CLEARED_NOTE = "No longer applies (cleared automatically)."
+
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    tenant = models.ForeignKey(
+        Tenant, on_delete=models.CASCADE, related_name="recap_flags"
+    )
+    custom_recap = models.ForeignKey(
+        CustomRecap, on_delete=models.CASCADE, related_name="staff_flags"
+    )
+    kind = models.CharField(max_length=32, choices=KIND_CHOICES)
+    severity = models.CharField(max_length=8, choices=SEVERITY_CHOICES)
+    explanation = models.TextField()
+    # Machine detail: the other recap (id/uuid/name), store numbers, reading
+    # and file ids — what the UI links to.
+    details = models.JSONField(default=dict, blank=True)
+    # Separates two flags of one kind on one recap (e.g. two different
+    # duplicated receipts). "" when the kind can only happen once.
+    dedupe_key = models.CharField(max_length=120, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    resolved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="recap_flags_resolved",
+    )
+    resolution_note = models.CharField(max_length=500, blank=True, default="")
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["custom_recap", "kind", "dedupe_key"],
+                name="recap_flag_recap_kind_key_uniq",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["tenant", "-created_at"], name="recap_flag_tenant_idx"
+            ),
+            models.Index(
+                fields=["kind", "resolved_at"], name="recap_flag_kind_open_idx"
+            ),
+        ]
+
+    def __str__(self) -> str:  # pragma: no cover - admin/debug only
+        return f"recap {self.custom_recap_id}: {self.kind} ({self.severity})"
 
 
 class CheckinFieldIssue(models.Model):

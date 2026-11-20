@@ -3495,13 +3495,22 @@ class AuditTenantAccountSpendView(View):
 class ReadRecapReceiptsView(View):
     """POST `/internal/cron/read-recap-receipts`.
 
-    Reads the printed total off receipt photos that have not been read yet
-    (see `recaps/receipt_reader.py`) so the review check can compare it with
-    the spend entered on the recap. Idempotent: each image is read once.
+    Reads receipt photos that have not been read yet (see
+    `recaps/receipt_reader.py`): store, ticket, items, fees, tax and total.
+    Idempotent: each image is read once. Then checks the staff-only fraud
+    flags (`recaps/receipt_flags.py`) on the recaps whose receipts were just
+    read plus recaps filed or updated recently — only when
+    RECEIPT_FLAGS_ENABLED is on, or `flags=force` on a dry run.
 
-    Params: tenant_id (optional), since_days (default 45), limit (default 40),
-    reread_older (re-read rows from the older reader to fill store numbers
-    and charge lines).
+    Params: tenant_id (optional), since_days (default 45), limit (default 40,
+    max 200), reread_older (re-read rows from an older reader), date_from /
+    date_to (YYYY-MM-DD, event date; replaces since_days — for a backfill),
+    dry_run (read nothing, write nothing, report what would happen; default
+    false so the hourly schedule keeps working), flags (`on` default, `off`
+    to skip the flag check, `force` to check even when RECEIPT_FLAGS_ENABLED
+    is off), flag_hours (recaps filed or updated in the last N hours, default
+    2; a date range replaces it), flag_limit (default 300). The daily cost
+    cap is RECEIPT_READER_DAILY_MAX_READS.
     """
 
     def _run(self, request: HttpRequest) -> HttpResponse:
@@ -3509,8 +3518,11 @@ class ReadRecapReceiptsView(View):
         if deny is not None:
             return deny
 
+        def _param(name: str) -> str:
+            return (request.POST.get(name) or request.GET.get(name) or "").strip()
+
         def _int(name: str, default: int | None) -> int | None:
-            raw = (request.POST.get(name) or request.GET.get(name) or "").strip()
+            raw = _param(name)
             if not raw:
                 return default
             try:
@@ -3518,22 +3530,63 @@ class ReadRecapReceiptsView(View):
             except ValueError:
                 return default
 
+        def _date(name: str):
+            from datetime import date as _d
+
+            raw = _param(name)
+            try:
+                return _d.fromisoformat(raw) if raw else None
+            except ValueError:
+                return None
+
+        def _bool(name: str) -> bool:
+            return _param(name).lower() in ("1", "true", "yes", "on")
+
+        from recaps.receipt_flags import check_recaps, flags_enabled
         from recaps.receipt_reader import read_pending_receipts
 
+        dry_run = _bool("dry_run")
+        tenant_id = _int("tenant_id", None)
+        date_from, date_to = _date("date_from"), _date("date_to")
+        if (_param("date_from") and date_from is None) or (_param("date_to") and date_to is None):
+            return JsonResponse({"ok": False, "error": "bad-date", "detail": "Use YYYY-MM-DD."}, status=400)
         try:
-            reread = (request.POST.get("reread_older") or request.GET.get("reread_older") or "")
             report = read_pending_receipts(
-                tenant_id=_int("tenant_id", None),
+                tenant_id=tenant_id,
                 since_days=max(1, min(_int("since_days", 45) or 45, 365)),
                 limit=max(1, min(_int("limit", 40) or 40, 200)),
-                reread_older=reread.strip().lower() in ("1", "true", "yes"),
+                reread_older=_bool("reread_older"),
+                dry_run=dry_run,
+                date_from=date_from,
+                date_to=date_to,
             )
         except Exception as exc:  # noqa: BLE001 — surface to caller
             logger.exception("Read recap receipts cron failed")
             return JsonResponse(
                 {"ok": False, "error": "read-failed", "detail": str(exc)}, status=500
             )
-        return JsonResponse({"ok": True, "report": report})
+
+        flags_mode = (_param("flags") or "on").lower()
+        flag_report: dict = {"skipped": True}
+        run_flags = flags_mode != "off" and (flags_enabled() or (flags_mode == "force" and dry_run))
+        if run_flags:
+            try:
+                flag_report = check_recaps(
+                    tenant_id=tenant_id,
+                    recap_ids=report.get("recap_ids") or [],
+                    since_hours=max(1, min(_int("flag_hours", 2) or 2, 24 * 60)),
+                    date_from=date_from,
+                    date_to=date_to,
+                    limit=max(1, min(_int("flag_limit", 300) or 300, 2000)),
+                    dry_run=dry_run,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("Receipt flag check failed")
+                flag_report = {"error": str(exc)[:200]}
+        elif flags_mode != "off":
+            flag_report = {"skipped": True, "reason": "RECEIPT_FLAGS_ENABLED is off"}
+        report = {**report, "recap_ids": len(report.get("recap_ids") or [])}
+        return JsonResponse({"ok": True, "report": report, "flags": flag_report})
 
     def post(self, request: HttpRequest) -> HttpResponse:
         return self._run(request)

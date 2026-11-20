@@ -227,7 +227,7 @@ class TestReceiptReadingDb(AmbassadorsGraphQLTestCase):
         )
         with patch("utils.gcs.download_blob_bytes", return_value=b"img"), patch(
             "utils.gcs.extract_blob_name_from_url", side_effect=lambda u: u
-        ), patch("recaps.pdf.downscale_image_bytes", side_effect=lambda b: b), patch(
+        ), patch("recaps.pdf.downscale_image_bytes", side_effect=lambda b, **k: b), patch(
             "recaps.receipt_reader.read_receipt_image", side_effect=lambda *a, **k: next(answers)
         ) as reader:
             first = read_pending_receipts(limit=10)
@@ -253,7 +253,7 @@ class TestReceiptReadingDb(AmbassadorsGraphQLTestCase):
         }
         with patch("utils.gcs.download_blob_bytes", return_value=b"img"), patch(
             "utils.gcs.extract_blob_name_from_url", side_effect=lambda u: u
-        ), patch("recaps.pdf.downscale_image_bytes", side_effect=lambda b: b), patch(
+        ), patch("recaps.pdf.downscale_image_bytes", side_effect=lambda b, **k: b), patch(
             "recaps.receipt_reader.read_receipt_image", return_value=new
         ) as reader:
             plain = read_pending_receipts(limit=10)
