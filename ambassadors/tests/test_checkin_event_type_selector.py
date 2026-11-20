@@ -386,7 +386,7 @@ class TestProductSeedingSkipsIdentifyLocation(AmbassadorsGraphQLTestCase):
         body = {
             "firstName": "Pat",
             "lastName": "Seeder",
-            "phone": "5550199",
+            "phone": "5055550199",
             "eventDate": self.on.isoformat(),
         }
         body.update(extra)

@@ -215,7 +215,7 @@ class TestIdentifyRequiresStoreName(AmbassadorsGraphQLTestCase):
         body = {
             "firstName": "Pat",
             "lastName": "Sampler",
-            "phone": "5550142",
+            "phone": "5055550142",
             "eventDate": dj_tz.localdate().isoformat(),
             "address": "17761 Cottonwood Dr, Parker, CO 80134",
         }

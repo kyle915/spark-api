@@ -1217,6 +1217,9 @@ class CheckinFieldIssue(models.Model):
         "punch_not_saved",
         "storage_unavailable",
         "recap_submit_failed",
+        # The check-in page hit an error it could not render past and showed
+        # its "your recap is saved on this phone" screen instead of a blank one.
+        "page_crashed",
         # Not a failure: the ambassador pressed Clock in / Clock out. Kept so
         # an attempt that never lands still leaves a trace (detail carries
         # "clock in <tapped-at>"). Left out of the issue summary.
@@ -1245,6 +1248,54 @@ class CheckinFieldIssue(models.Model):
 
     def __str__(self) -> str:  # pragma: no cover - admin/debug only
         return f"{self.kind} tenant={self.tenant_id} event={self.event_id}"
+
+
+class CheckinRecapSubmission(models.Model):
+    """One web check-in recap submit, keyed by the phone's idempotency key.
+
+    The check-in page queues a recap and retries it when a response is lost
+    (one bar of LTE, Cloud Run 502, the tab killed mid-request). For a recap
+    that updates the BA's one recap on the event a retry is harmless, but a
+    "file another" / recap-only filing creates a NEW recap every time, so a
+    retried submit whose first answer never reached the phone filed it
+    twice. This row is the durable record that a key already landed — the
+    process cache is per instance and cannot answer that on Cloud Run.
+
+    ``recap`` is null while the first request is still being processed (the
+    claim); a stale claim is retaken (see ``events.checkin_views``).
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    key = models.CharField(max_length=80)
+    ambassador = models.ForeignKey(
+        "ambassadors.Ambassador",
+        on_delete=models.CASCADE,
+        related_name="checkin_recap_submissions",
+    )
+    event = models.ForeignKey(
+        "events.Event",
+        on_delete=models.CASCADE,
+        related_name="checkin_recap_submissions",
+    )
+    recap = models.ForeignKey(
+        "recaps.CustomRecap",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="checkin_submissions",
+    )
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["ambassador", "key"],
+                name="uniq_checkin_recap_submission_key",
+            )
+        ]
+
+    def __str__(self) -> str:  # pragma: no cover - admin/debug only
+        return f"{self.key} recap={self.recap_id}"
 
 
 class RetailerProposal(models.Model):

@@ -479,6 +479,60 @@ def _stub_emails(phone_digits: str) -> list[str]:
     return emails
 
 
+US_PHONE_DIGITS = 10
+
+
+def is_us_phone(phone: str | None) -> bool:
+    """Ten digits once a leading US country code is folded away.
+
+    A walk-up identity is keyed on the phone, so a number with a digit missing
+    is not a typo the system can shrug off: it mints a brand-new pending
+    account with none of the BA's open shift, clock-in or recap draft.
+    """
+    return len(_normalize_phone(phone)) == US_PHONE_DIGITS
+
+
+def same_name_other_phone_hint(
+    *, tenant, first_name: str, last_name: str, phone: str
+) -> str | None:
+    """Last two digits of the number an earlier BA with this exact name used on
+    this brand, when the typed number is a DIFFERENT one with no account yet.
+
+    Used to ask "Is this you? Your number ends in ..29" instead of silently
+    minting a second account for someone who just mistyped their cell.
+    Two digits only: enough for the BA to recognise, nothing anyone could
+    dial. None when the typed phone already has an account, when nobody
+    with this name has worked this brand, or for a blank name.
+    """
+    from ambassadors.models import Ambassador
+
+    first = (first_name or "").strip()
+    last = (last_name or "").strip()
+    typed = _normalize_phone(phone)
+    if tenant is None or not first or not last or not typed:
+        return None
+    if _stub_users(typed):
+        return None
+    rows = (
+        Ambassador.objects.filter(
+            ambassadors_events__tenant=tenant,
+            user__first_name__iexact=first,
+            user__last_name__iexact=last,
+        )
+        .select_related("user")
+        .distinct()[:5]
+    )
+    for amb in rows:
+        theirs = _normalize_phone(getattr(amb, "phone", "") or "")
+        if not theirs:
+            email = (getattr(amb.user, "email", "") or "").lower()
+            m = re.match(r"^checkin-(\d+)@walkup\.spark$", email)
+            theirs = _normalize_phone(m.group(1)) if m else ""
+        if len(theirs) >= 2 and theirs != typed:
+            return theirs[-2:]
+    return None
+
+
 def _stub_users(phone_digits: str) -> list:
     emails = _stub_emails(phone_digits)
     if not emails:

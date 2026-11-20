@@ -51,7 +51,7 @@ class TestShiftTodayConfirmation(AmbassadorsGraphQLTestCase):
         )
         self.http = DjangoClient()
 
-    def _identify(self, *, code=None, phone="5550142", **extra):
+    def _identify(self, *, code=None, phone="5055550142", **extra):
         body = {
             "firstName": "Pat",
             "lastName": "Sampler",
@@ -102,7 +102,7 @@ class TestShiftTodayConfirmation(AmbassadorsGraphQLTestCase):
     def test_joining_an_event_that_already_exists_is_never_asked(self):
         assert self._identify(shiftIsToday=True).status_code == 200
         # A second BA at the same place on the same day joins that event.
-        res = self._identify(phone="5550199", firstName="Sam")
+        res = self._identify(phone="5055550199", firstName="Sam")
         assert res.status_code == 200, res.content
         assert Event.objects.filter(tenant=self.tenant).count() == 1
 
