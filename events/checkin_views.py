@@ -16,7 +16,8 @@ Routes (mounted under ``/api/public/`` in ``events/urls.py``):
     POST checkin/<code>/clear-clock    → {cleared, clockedOut, clock}
     POST checkin/<code>/upload-url     → {uploadUrl, blobName}
     POST checkin/<code>/photo-check    → advisory bucket classification
-    POST checkin/<code>/voice-draft    → notes/feedback/competitor draft
+    POST checkin/<code>/voice-draft    → proposals for every recap field
+    POST checkin/<code>/voice-transcribe → audio → transcript + proposals
     POST checkin/<code>/tally-read     → numbers proposed from a tally photo
     POST checkin/<code>/product-question → short answer from brand notes only
     POST checkin/<code>/recap          → {success}
@@ -30,6 +31,7 @@ import logging
 import re
 import secrets
 
+from django.conf import settings
 from django.core.cache import cache
 from django.utils import timezone as dj_tz
 from django.http import HttpRequest, HttpResponse, JsonResponse
@@ -711,6 +713,32 @@ def public_checkin_identify(request: HttpRequest, code: str) -> HttpResponse:
                 event, _new = checkin_web.find_or_create_walkin_event(
                     tenant=target, store_name=store_name, address=address,
                     on_date=on_date, actor=ambassador.user, event_type=chosen_type,
+                    # Retail sampling at a store: a new walk-in event needs
+                    # the store's name. Roaming markets, product seeding and
+                    # the recap-only links (own rules above) never ask here.
+                    require_store=(
+                        not market_mode
+                        and not recap_only
+                        and not checkin_web.is_product_seeding_event_type(chosen_type)
+                        and checkin_web.store_name_required(target, chosen_type)
+                    ),
+                    # "Is your shift today?" — only when this would open a
+                    # NEW event for today or later on a clock-in link.
+                    require_shift_today=(
+                        bool(getattr(settings, "CHECKIN_REQUIRE_SHIFT_TODAY", False))
+                        and not recap_only
+                        and not checkin_web.is_past_shift_day(on_date)
+                        and not checkin_web.shift_today_confirmed(data)
+                    ),
+                )
+            except checkin_web.ShiftDayNotConfirmed as exc:
+                return JsonResponse(
+                    {
+                        "error": checkin_web.SHIFT_TODAY_CONFIRM_CODE,
+                        "message": str(exc),
+                        "shiftDate": on_date.isoformat(),
+                    },
+                    status=400,
                 )
             except ValueError as exc:
                 return _err(str(exc))
@@ -1106,28 +1134,163 @@ def public_checkin_photo_check(request: HttpRequest, code: str) -> HttpResponse:
 
 
 # --------------------------------------------------------------------------
-# POST voice-draft  (text fields only; does not file or approve)
+# POST voice-draft  (proposals for the whole form; does not file or approve)
+# POST voice-transcribe  (audio → text → the same proposals; audio not kept)
 # --------------------------------------------------------------------------
+# Each draft is a paid model call; each transcription is two. A BA records
+# once or twice a shift.
+VOICE_DRAFT_IP_LIMIT = 30  # per 5 minutes
+VOICE_DRAFT_SESSION_LIMIT = 12  # per hour, one BA on one shift
+VOICE_AUDIO_IP_LIMIT = 12  # per 5 minutes
+VOICE_AUDIO_SESSION_LIMIT = 8  # per hour, one BA on one shift
+VOICE_AUDIO_MAX_BYTES = 10 * 1024 * 1024
+VOICE_AUDIO_MAX_SECONDS = 180
+# The page stops recording at 3:00; allow a little for the stop to land.
+_VOICE_AUDIO_DURATION_GRACE_MS = 5_000
+_VOICE_TRANSCRIBE_TIMEOUT = 45.0
+VOICE_TRANSCRIBE_UNAVAILABLE = "Couldn't hear that recording. Type what happened instead."
+
+
+def _voice_template(event) -> tuple[list[dict], list[dict]]:
+    """The host template's fields (form order) and its product list."""
+    template = checkin_web.serialize_template(event) or {}
+    fields = [
+        field
+        for section in template.get("sections") or []
+        for field in section.get("fields") or []
+        if isinstance(field, dict)
+    ]
+    products = [p for p in template.get("products") or [] if isinstance(p, dict)]
+    return fields, products
+
+
 @csrf_exempt
 @require_http_methods(["POST"])
 def public_checkin_voice_draft(request: HttpRequest, code: str) -> HttpResponse:
-    if _over_limit("voice-draft-ip", _client_ip(request), limit=30, window=300):
+    if _over_limit("voice-draft-ip", _client_ip(request), limit=VOICE_DRAFT_IP_LIMIT, window=300):
         return _rate_limited()
     data = _body(request)
     loaded, err = _load_session(code, data.get("session") or "")
     if err is not None:
         return err
-    event, _ambassador = loaded
-    template = checkin_web.serialize_template(event) or {}
-    fields: list[dict] = []
-    for section in template.get("sections") or []:
-        for field in section.get("fields") or []:
-            if isinstance(field, dict):
-                fields.append(field)
+    event, ambassador = loaded
+    who = f"{event.id}:{getattr(ambassador, 'id', '')}"
+    if _over_limit("voice-draft-session", who, limit=VOICE_DRAFT_SESSION_LIMIT, window=3600):
+        return _rate_limited()
+    fields, products = _voice_template(event)
     transcript = data.get("transcript") or ""
     if not isinstance(transcript, str):
         transcript = ""
-    return JsonResponse(structure_transcript(transcript, fields))
+    return JsonResponse(structure_transcript(transcript, fields, products))
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def public_checkin_voice_transcribe(request: HttpRequest, code: str) -> HttpResponse:
+    """A short recording of the BA talking about the shift → the transcript
+    plus proposals for the form (the same shape as voice-draft).
+
+    Multipart: ``session``, ``audio`` (webm / mp4 / m4a / mp3 / ogg / wav),
+    optional ``durationMs``. The audio is held in memory for this request,
+    sent to speech-to-text once, and dropped. It is never written to storage
+    and never logged; only its size, type and length are.
+    """
+    from recaps.voice_draft import transcription_hint
+    from utils.ai_text import AiUnavailable, transcribe_audio, transcription_extension
+
+    ip = _client_ip(request)
+    if _over_limit("voice-audio-ip", ip, limit=VOICE_AUDIO_IP_LIMIT, window=300):
+        return _rate_limited()
+    try:
+        declared = int(request.META.get("CONTENT_LENGTH") or 0)
+    except (TypeError, ValueError):
+        declared = 0
+    # Refuse an oversized body before reading it.
+    if declared > VOICE_AUDIO_MAX_BYTES + 64 * 1024:
+        return _err("That recording is too long. Keep it under 3 minutes.", status=413, code="too_large")
+    try:
+        session = request.POST.get("session") or ""
+        upload = request.FILES.get("audio")
+    except Exception:  # noqa: BLE001 — a malformed multipart body
+        return _err("Send the recording again.", code="bad_audio")
+    loaded, err = _load_session(code, session)
+    if err is not None:
+        return err
+    event, ambassador = loaded
+    who = f"{event.id}:{getattr(ambassador, 'id', '')}"
+    if upload is None:
+        return _err("Send the recording again.", code="bad_audio")
+    content_type = (getattr(upload, "content_type", "") or "").lower()
+    if transcription_extension(content_type) is None:
+        return _err("That recording format can't be read.", code="bad_audio")
+    if upload.size <= 0:
+        return _err("That recording was empty.", code="bad_audio")
+    if upload.size > VOICE_AUDIO_MAX_BYTES:
+        return _err("That recording is too long. Keep it under 3 minutes.", status=413, code="too_large")
+    try:
+        duration_ms = int(request.POST.get("durationMs") or 0)
+    except (TypeError, ValueError):
+        duration_ms = 0
+    if duration_ms > VOICE_AUDIO_MAX_SECONDS * 1000 + _VOICE_AUDIO_DURATION_GRACE_MS:
+        return _err("That recording is too long. Keep it under 3 minutes.", status=413, code="too_large")
+    if _over_limit("voice-audio-session", who, limit=VOICE_AUDIO_SESSION_LIMIT, window=3600):
+        return _rate_limited()
+
+    fields, products = _voice_template(event)
+    audio = upload.read()
+    ok = False
+    transcript = ""
+    try:
+        transcript = transcribe_audio(
+            audio,
+            content_type=content_type,
+            prompt=transcription_hint(fields, products),
+            timeout=_VOICE_TRANSCRIBE_TIMEOUT,
+        )
+        ok = True
+    except AiUnavailable:
+        transcript = ""
+    except Exception:  # noqa: BLE001 — the BA can still type
+        logger.exception("checkin voice transcribe failed code=%s", code)
+        transcript = ""
+    finally:
+        size = len(audio)
+        del audio
+        logger.info(
+            "checkin voice transcribe code=%s bytes=%d type=%s duration_ms=%d ok=%s chars=%d",
+            code,
+            size,
+            content_type.split(";", 1)[0],
+            duration_ms,
+            ok,
+            len(transcript),
+        )
+    if not ok:
+        return JsonResponse(
+            {
+                "transcribed": False,
+                "transcript": "",
+                "message": VOICE_TRANSCRIBE_UNAVAILABLE,
+                "draft": None,
+            }
+        )
+    if not transcript:
+        return JsonResponse(
+            {
+                "transcribed": True,
+                "transcript": "",
+                "message": "Didn't catch any words. Try again a little closer to the phone.",
+                "draft": None,
+            }
+        )
+    return JsonResponse(
+        {
+            "transcribed": True,
+            "transcript": transcript,
+            "message": "",
+            "draft": structure_transcript(transcript, fields, products),
+        }
+    )
 
 
 # --------------------------------------------------------------------------
@@ -1323,6 +1486,16 @@ def public_checkin_recap(request: HttpRequest, code: str) -> HttpResponse:
     if err is not None:
         return err
     event, ambassador = loaded
+
+    # A time-sheet-only brand never takes a recap through the link — the page
+    # never offers one, and a stale page or a replayed offline queue must not
+    # file one against the brand's blank template either.
+    if checkin_web.is_timesheet_only(getattr(event, "tenant", None)):
+        return _err(
+            "This link is a time clock only — there's no recap to file.",
+            status=409,
+            code="timesheet_only",
+        )
 
     template = checkin_web.resolve_template_for_event(event)
     if template is None:

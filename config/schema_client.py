@@ -10,6 +10,7 @@ from recaps.recap_ai import RecapAiMutations, RecapAiQueries
 from recaps.feedback_themes import FeedbackThemeMutations, FeedbackThemeQueries
 from recaps.comment_insights import CommentInsightQueries
 from consumer_mentions.trends import MentionTrendQueries
+from photo_library.schema import PhotoLibraryQueries
 from recaps.weekly_summary import WeeklySummaryMutations, WeeklySummaryQueries
 from brand_insights.schema import BrandInsightMutations, BrandInsightQueries
 from brand_chat.schema import BrandChatMutations, BrandChatQueries
@@ -60,6 +61,8 @@ from tenants.notification_pref_schema import (
 from spark_mcp.schema import AiConnectionMutations, AiConnectionQueries
 from sales_assist.schema import SalesAssistMutations, SalesAssistQueries
 from utils.utils import BlockIntrospectionForAnonymous
+from legal.graphql_extension import LegalAcceptanceGate
+from legal.schema import LegalMutations, LegalQueries
 from utils.graphql.gcs_schema import GCSQuery
 from utils.abuse.graphql_extension import guardrail_extensions
 
@@ -86,6 +89,7 @@ QueryClients = merge_types(
         FeedbackThemeQueries,
         CommentInsightQueries,
         MentionTrendQueries,
+        PhotoLibraryQueries,
         WeeklySummaryQueries,
         BrandInsightQueries,
         BrandChatQueries,
@@ -107,6 +111,7 @@ QueryClients = merge_types(
         ClockLinkQueries,
         AiConnectionQueries,
         SalesAssistQueries,
+        LegalQueries,
     ),
 )
 MutationClients = merge_types(
@@ -143,6 +148,7 @@ MutationClients = merge_types(
         BaProductQaMutations,
         AiConnectionMutations,
         SalesAssistMutations,
+        LegalMutations,
     ),
 )
 
@@ -152,6 +158,7 @@ schema_clients = JwtSchema(
     extensions=[
         DjangoOptimizerExtension,
         BlockIntrospectionForAnonymous,
+        LegalAcceptanceGate,
         # Anti-scraping guardrails: token/depth/alias limits, per-user rate
         # limits, brand page-size cap, export/bulk caps + audit, usage log.
         *guardrail_extensions(),

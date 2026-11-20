@@ -365,6 +365,22 @@ class Tenant(Asyncable, models.Model):
     # a tenant configured before this field existed. Set with
     # `set_checkin_resources`.
     checkin_resources = models.JSONField(null=True, blank=True)
+    # TIME-SHEET-ONLY check-in. The standing link (and any event walk-up code
+    # on this tenant) becomes a plain time clock: name + mobile phone, where
+    # they are (phone GPS, reverse-geocoded; typed only if location is
+    # denied), clock in, clock out, done. No program picker unless the brand
+    # really has several, no store-name gate, no recap step, no resources.
+    #
+    # Tenant-wide rather than per-link on purpose: "is a recap owed for this
+    # shift?" is asked from the EVENT (Missing Recaps, recap texts, brand
+    # dashboards, digests all start from event.tenant) and the link code that
+    # opened an event is never recorded on it. A per-link flag could switch
+    # off the recap step but not the chasing. recaps.dismissals reads this so
+    # every list, count and reminder that chases a recap skips these shifts.
+    # Hours are untouched: they flow to the timesheet / payroll exactly like
+    # any web check-in (pending until staff confirm the walk-up).
+    # Set with `setup_tenant_checkin --timesheet-only`.
+    checkin_timesheet_only = models.BooleanField(default=False)
     # Facts staff write for this brand's ambassadors — ingredients, caffeine,
     # ABV, sizes, talking points, what NOT to say. The product-questions box
     # on the web check-in answers ONLY from this text, the brand's product
@@ -686,7 +702,7 @@ def monthly_report_subscriber_emails(tenant) -> list[str]:
     report and can still see that brand: an active user who is either an
     active member of the tenant or Ignite staff. Deduped, lower-cased order
     of first appearance."""
-    from utils.graphql.permissions import _is_admin_access  # lazy: avoid cycles
+    from utils.graphql.permissions import user_grants_ignite_admin  # lazy: avoid cycles
 
     subs = (
         ClientReportSubscription.objects.filter(
@@ -707,13 +723,7 @@ def monthly_report_subscriber_emails(tenant) -> list[str]:
         email = (getattr(user, "email", "") or "").strip()
         if not email:
             continue
-        is_staff_user = _is_admin_access(
-            (getattr(getattr(user, "role", None), "slug", "") or "").lower(),
-            bool(getattr(user, "is_staff", False)),
-            bool(getattr(user, "is_superuser", False)),
-            email,
-        )
-        if user.id not in member_ids and not is_staff_user:
+        if user.id not in member_ids and not user_grants_ignite_admin(user):
             continue
         key = email.lower()
         if key in seen:

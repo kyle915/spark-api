@@ -82,6 +82,11 @@ urlpatterns = [
         name="events.public_checkin_voice_draft",
     ),
     path(
+        "checkin/<str:code>/voice-transcribe",
+        checkin_views.public_checkin_voice_transcribe,
+        name="events.public_checkin_voice_transcribe",
+    ),
+    path(
         "checkin/<str:code>/recap-check",
         checkin_views.public_checkin_recap_check,
         name="events.public_checkin_recap_check",

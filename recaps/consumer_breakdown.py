@@ -28,6 +28,13 @@ and state win over / fill in for its event's, the same order the recap info
 panel uses; the recap location normalizer (:mod:`recaps.recap_location`)
 fills them from free text.
 
+When no retailer resolves at all, a walk-in event's title still names the
+place: "M/D/YYYY - <address> (<place>) · <program>". That place is used
+(:func:`place_from_walkin_title`): an event activation (festival, venue) is
+counted under a row of ``kind="venue"`` so it reads as a venue, not a store;
+any other program (a retail store typed at check-in, e.g. "Sunoco") is
+counted as a named store. Venue rows rank with named rows by consumers.
+
 A recap whose event has no store or no state is not dropped: it is counted
 under a row of ``kind="missing"`` so the split still adds up and the gap in
 the data stays visible. Recaps whose event has no date at all cannot be
@@ -38,7 +45,9 @@ READ-ONLY. No ambassador names leave this module.
 
 from __future__ import annotations
 
+import re
 from datetime import date, timedelta
+from types import SimpleNamespace
 
 from recaps import metric_mapping
 from recaps.models import ConsumerEngagements, CustomFieldValue, CustomRecap
@@ -57,6 +66,67 @@ TOP_STORES = 30
 KIND_NAMED = "named"
 KIND_MISSING = "missing"
 KIND_OTHER = "other"
+# A festival / event-activation venue named only by the walk-in title.
+KIND_VENUE = "venue"
+# Rows that name a real place (a store, a state, or an event venue).
+LABELED_KINDS = (KIND_NAMED, KIND_VENUE)
+
+_WALKIN_DATE = re.compile(r"^\d{1,2}/\d{1,2}/\d{4}\s*-\s*")
+_PROGRAM_SEP = " · "
+_NOT_A_PLACE = re.compile(r"^(product seeding|walk-in event)\b", re.I)
+
+
+def place_from_walkin_title(
+    name: str | None, address: str | None, event_type_name: str | None = None
+) -> tuple[str, str]:
+    """``(label, kind)`` for the place a walk-in event's title names, else
+    ``("", "")``.
+
+    Walk-in titles read "M/D/YYYY - <address> (<place>) · <program>"; the
+    place is the trailing parenthetical once the " · <program>" suffix is
+    off. A title with no parenthetical names the place directly
+    ("8/16/2026 - Wisconsin State Fair · Event Activation") unless what is
+    left is just the street address. ``kind`` is ``venue`` when the event
+    type (or the program suffix) is an event activation / guerilla shift,
+    otherwise ``named`` (a store typed at check-in).
+    """
+    from ambassadors.checkin_web import (
+        _looks_like_address,
+        _trailing_parenthetical,
+        is_event_activation_type,
+        normalize_place,
+    )
+
+    title = (name or "").strip()
+    if not _WALKIN_DATE.match(title):
+        return "", ""
+    programs: list[str] = []
+    while _PROGRAM_SEP in title:
+        cut = title.rfind(_PROGRAM_SEP)
+        tail = title[cut + len(_PROGRAM_SEP) :]
+        if tail.count("(") != tail.count(")"):
+            break  # the separator sits inside the place's parenthetical
+        programs.append(tail.strip())
+        title = title[:cut].rstrip()
+    addr_key = normalize_place(address or "")
+    inner = _trailing_parenthetical(title)
+    if inner:
+        label = inner.split(_PROGRAM_SEP)[0].strip()
+    else:
+        label = _WALKIN_DATE.sub("", title).strip()
+        if _looks_like_address(label):
+            return "", ""
+    key = normalize_place(label)
+    if (
+        not key
+        or _NOT_A_PLACE.match(label)
+        or (addr_key and (key == addr_key or (label[:1].isdigit() and key in addr_key)))
+    ):
+        return "", ""
+    venue = is_event_activation_type(SimpleNamespace(name=event_type_name)) or any(
+        is_event_activation_type(SimpleNamespace(name=p)) for p in programs
+    )
+    return label, KIND_VENUE if venue else KIND_NAMED
 
 
 def week_start(day: date) -> date:
@@ -67,9 +137,10 @@ def week_start(day: date) -> date:
 def _ranked(groups: dict[str, dict], limit: int | None) -> tuple[list[dict], int]:
     """Named rows largest first, then "other", then "missing" last.
 
-    ``groups`` maps a case-folded key to ``{label, consumers, recaps}``; the
-    ``""`` key is the recaps with nothing recorded. Returns the rows and the
-    number of distinct named groups.
+    ``groups`` maps a case-folded key to ``{label, consumers, recaps}`` (and
+    ``kind`` for a venue); the ``""`` key is the recaps with nothing
+    recorded. Venue rows rank with named rows by consumers. Returns the rows
+    and the number of distinct labeled groups.
     """
     named = sorted(
         (g for key, g in groups.items() if key and g["consumers"] > 0),
@@ -77,7 +148,7 @@ def _ranked(groups: dict[str, dict], limit: int | None) -> tuple[list[dict], int
     )
     head = named if limit is None else named[:limit]
     tail = [] if limit is None else named[limit:]
-    rows = [{**g, "kind": KIND_NAMED} for g in head]
+    rows = [{**g, "kind": g.get("kind") or KIND_NAMED} for g in head]
     if tail:
         rows.append(
             {
@@ -100,8 +171,9 @@ def summarize_consumers(
     top_stores: int = TOP_STORES,
 ) -> dict:
     """Pure roll-up. Each row is one recap: ``consumers`` (int), ``day``
-    (date of the event), ``store`` and ``state`` (may be blank), and ``event``
-    (its id, optional).
+    (date of the event), ``store`` and ``state`` (may be blank), ``event``
+    (its id, optional) and ``store_kind`` (``"venue"`` when ``store`` is an
+    event venue rather than a store; optional).
 
     Weeks run Monday to Sunday and are contiguous, zero-filled, from the
     first week to the last: the window's own weeks when ``start`` / ``end``
@@ -112,10 +184,16 @@ def summarize_consumers(
     stores: dict[str, dict] = {}
     states: dict[str, dict] = {}
 
-    def add(groups: dict[str, dict], raw: str | None, consumers: int) -> None:
+    def add(
+        groups: dict[str, dict], raw: str | None, consumers: int, kind: str | None = None
+    ) -> None:
         label = (raw or "").strip()
+        venue = bool(label) and kind == KIND_VENUE
+        # A venue never merges into a store row of the same name.
+        key = f"venue:{label.casefold()}" if venue else label.casefold()
         bucket = groups.setdefault(
-            label.casefold(), {"label": label, "consumers": 0, "recaps": 0}
+            key,
+            {"label": label, "consumers": 0, "recaps": 0, **({"kind": KIND_VENUE} if venue else {})},
         )
         bucket["consumers"] += consumers
         bucket["recaps"] += 1
@@ -127,7 +205,7 @@ def summarize_consumers(
         week = weeks.setdefault(monday, {"consumers": 0, "recaps": 0})
         week["consumers"] += consumers
         week["recaps"] += 1
-        add(stores, r.get("store"), consumers)
+        add(stores, r.get("store"), consumers, r.get("store_kind"))
         add(states, (r.get("state") or "").upper(), consumers)
 
     mondays = list(weeks)
@@ -184,6 +262,26 @@ def _numbered(name: str | None, store_number: str | None) -> str:
     return f"{cleaned} #{number}"
 
 
+def _where(
+    aliases: dict[str, str] | None,
+    event_name: str | None,
+    address: str | None,
+    event_type: str | None,
+    *names: str | None,
+) -> dict:
+    """``store`` (and ``store_kind`` for a venue) for one recap: the first
+    retailer name recorded, else the place its walk-in title names."""
+    store = _store(*names, aliases=aliases)
+    if store:
+        return {"store": store}
+    label, kind = place_from_walkin_title(event_name, address, event_type)
+    if not label:
+        return {"store": ""}
+    if kind == KIND_VENUE:
+        return {"store": label, "store_kind": KIND_VENUE}
+    return {"store": _store(label, aliases=aliases)}
+
+
 def consumer_rows(
     tenant_id: int,
     start: date | None,
@@ -194,7 +292,8 @@ def consumer_rows(
     """One row per approved recap that recorded consumers sampled.
 
     Each row: ``kind`` ("custom" / "legacy"), ``id``, ``day``, ``store``,
-    ``state``, ``consumers``. ``include_archived=False`` also leaves out
+    ``state``, ``consumers``, and ``store_kind="venue"`` when ``store`` is an
+    event venue taken from a walk-in title. ``include_archived=False`` also leaves out
     archived recaps (the dashboard totals count them today; the sentences
     written from these rows must not).
     """
@@ -233,6 +332,8 @@ def consumer_rows(
             "event__state__code",
             "state__code",
             "event__address",
+            "event__name",
+            "event__event_type__name",
         )
     )
     for (
@@ -247,6 +348,8 @@ def consumer_rows(
         state,
         recap_state,
         address,
+        event_name,
+        event_type,
     ) in custom.iterator():
         placed[recap_id] = {
             "event": event_id,
@@ -254,13 +357,17 @@ def consumer_rows(
             "id": recap_id,
             "day": day.date(),
             # The recap's own retailer first (the eventRetailer resolver's
-            # order), with its store number when one is known.
-            "store": _store(
+            # order), with its store number when one is known; then the
+            # place a walk-in title names.
+            **_where(
+                aliases,
+                event_name,
+                address,
+                event_type,
                 _numbered(recap_retailer, store_number),
                 retailer,
                 req_retailer,
                 req_name,
-                aliases=aliases,
             ),
             # The event's state, then the recap's own, then the address.
             "state": state or recap_state or extract_state_code(address) or "",
@@ -320,11 +427,15 @@ def consumer_rows(
             "recap__event_id",
             "total_consumer",
             "_day",
+            "recap__retailer__name",
             "recap__event__retailer__name",
             "recap__event__request__retailer__name",
             "recap__event__request__retailer_name",
             "recap__event__state__code",
+            "recap__state__code",
             "recap__event__address",
+            "recap__event__name",
+            "recap__event__event_type__name",
         )
     )
     for (
@@ -332,11 +443,15 @@ def consumer_rows(
         event_id,
         consumers,
         day,
+        recap_retailer,
         retailer,
         req_retailer,
         req_name,
         state,
+        recap_state,
         address,
+        event_name,
+        event_type,
     ) in engagements.iterator():
         row = legacy.setdefault(
             recap_id,
@@ -345,8 +460,19 @@ def consumer_rows(
                 "kind": "legacy",
                 "id": recap_id,
                 "day": day.date(),
-                "store": _store(retailer, req_retailer, req_name, aliases=aliases),
-                "state": state or extract_state_code(address) or "",
+                # Same order as the custom path: the recap's own retailer
+                # wins, its own state fills in for the event's.
+                **_where(
+                    aliases,
+                    event_name,
+                    address,
+                    event_type,
+                    recap_retailer,
+                    retailer,
+                    req_retailer,
+                    req_name,
+                ),
+                "state": state or recap_state or extract_state_code(address) or "",
                 "consumers": 0,
             },
         )

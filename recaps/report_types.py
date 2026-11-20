@@ -4125,9 +4125,11 @@ class ConsumerWeek:
 class ConsumerBreakdownRow:
     """Consumers sampled at one store or in one state.
 
-    ``kind`` is ``named`` for a real store / state, ``other`` for the folded
-    tail of a long list, and ``missing`` for recaps whose event has no store
-    or no state recorded (``label`` is blank for the last two)."""
+    ``kind`` is ``named`` for a real store / state, ``venue`` for a festival
+    or event activation named only by its walk-in event title (store split
+    only), ``other`` for the folded tail of a long list, and ``missing`` for
+    recaps whose event has no store or no state recorded (``label`` is blank
+    for the last two)."""
 
     label: str
     kind: str

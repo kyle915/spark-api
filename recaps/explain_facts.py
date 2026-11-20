@@ -51,6 +51,8 @@ _PLACE_FIELDS = (
     "event__request__retailer_name",
     "event__state__code",
     "event__address",
+    "event__name",
+    "event__event_type__name",
 )
 
 
@@ -83,11 +85,17 @@ def recap_facts(tenant_id: int, start: date | None, end: date | None) -> list[di
     (the retailer name the store chart uses, may be blank), ``place`` (the
     folded street address, blank when there is none), ``state``, ``city``,
     ``consumers`` (None when the recap recorded none), and ``base`` /
-    ``units`` (None when the recap is not in the conversion rate)."""
+    ``units`` (None when the recap is not in the conversion rate).
+
+    When ``store`` is blank, ``title_place`` is the place a walk-in event
+    title names (blank when none) and ``title_place_kind`` is ``"venue"``
+    for an event activation, ``"named"`` for a store typed at check-in, the
+    same rule the by-store chart uses
+    (:func:`recaps.consumer_breakdown.place_from_walkin_title`)."""
     from events.map_points import is_lookup_worthy, normalise_address
     from events.market import parse_address_geo
     from events.retailer_aliases import accepted_alias_map, resolve_store_name
-    from recaps.consumer_breakdown import consumer_rows
+    from recaps.consumer_breakdown import consumer_rows, place_from_walkin_title
 
     window = _inclusive_dates_to_window(start, end)
     # Accepted store-name aliases, so a sentence names a store the way the
@@ -98,18 +106,31 @@ def recap_facts(tenant_id: int, start: date | None, end: date | None) -> list[di
         ("custom", CustomRecap, {"tenant_id": tenant_id}),
         ("legacy", Recap, {"event__tenant_id": tenant_id}),
     ):
-        for recap_id, day, event_id, retailer, req_retailer, req_name, state, address in (
-            _live(model, tenant_filter, window).values_list(*_PLACE_FIELDS).iterator()
-        ):
+        for (
+            recap_id,
+            day,
+            event_id,
+            retailer,
+            req_retailer,
+            req_name,
+            state,
+            address,
+            event_name,
+            event_type,
+        ) in _live(model, tenant_filter, window).values_list(*_PLACE_FIELDS).iterator():
             geo = parse_address_geo(address)
+            store = resolve_store_name(_first(retailer, req_retailer, req_name), aliases)
+            title_place, title_kind = (
+                ("", "") if store else place_from_walkin_title(event_name, address, event_type)
+            )
             rows[(kind, recap_id)] = {
                 "kind": kind,
                 "id": recap_id,
                 "event_id": event_id,
                 "day": day.date(),
-                "store": resolve_store_name(
-                    _first(retailer, req_retailer, req_name), aliases
-                ),
+                "store": store,
+                "title_place": title_place,
+                "title_place_kind": title_kind,
                 "place": normalise_address(address) if is_lookup_worthy(address) else "",
                 "state": (state or geo.state_code or "").upper(),
                 "city": (geo.city or "").strip(),

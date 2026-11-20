@@ -63,6 +63,12 @@ class TestClientsTenantsSwitcher(BaseGraphQLTestCase):
             role=self.roles["client"],
             is_staff=False,
         )
+        # The domain grant needs a verified (inbox-proven) account.
+        from gqlauth.models import UserStatus
+
+        await sync_to_async(UserStatus.objects.update_or_create)(
+            user=teammate, defaults={"verified": True, "archived": False}
+        )
         assert await self._tenant_names(teammate) == {"Alpha Co", "Bravo Co"}
 
     @pytest.mark.asyncio

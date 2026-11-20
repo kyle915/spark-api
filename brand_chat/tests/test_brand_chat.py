@@ -493,3 +493,41 @@ def test_turn_rows_never_store_tool_payloads(world, fake):
     assert "pricey" not in json.dumps(turn.tools_used)
     assert turn.tools_used[0]["args"]["keywords"] == "price"
     assert turn.created_at <= timezone.now() + timedelta(seconds=1)
+
+
+def test_store_performance_names_walkin_venues_instead_of_no_store(monkeypatch):
+    from datetime import date as _date
+
+    from brand_chat import tools
+    from recaps import explain_facts
+    from spark_mcp.tools import ToolContext
+
+    def fact(store, consumers, title_place="", title_kind=""):
+        return {
+            "store": store, "state": "TX", "consumers": consumers, "base": None,
+            "units": None, "title_place": title_place, "title_place_kind": title_kind,
+        }
+
+    monkeypatch.setattr(
+        explain_facts,
+        "recap_facts",
+        lambda tenant_id, start, end: [
+            fact("", 5000, "BBQ Fest", "venue"),
+            fact("", 28, "Sunoco", "named"),
+            fact("", 12),
+            fact("Costco", 100),
+        ],
+    )
+    ctx = ToolContext(tenant_id=1, tenant_name="Brand", user_id=1, connection=None)
+    payload, _ = tools.get_store_performance(
+        ctx, {"start_date": _date(2026, 10, 19).isoformat(), "end_date": "2026-11-18",
+              "sort_by": "consumers"},
+    )
+    got = {(r["store"], r.get("event_venue", False), r["consumers_sampled"]) for r in payload["stores"]}
+    assert got == {
+        ("BBQ Fest", True, 5000),
+        ("Sunoco", False, 28),
+        ("No store recorded", False, 12),
+        ("Costco", False, 100),
+    }
+    assert sum(r["consumers_sampled"] for r in payload["stores"]) == 5140

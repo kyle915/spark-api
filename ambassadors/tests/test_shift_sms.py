@@ -326,6 +326,84 @@ class TestShiftSms(AmbassadorsGraphQLTestCase):
         assert self._run()["sent"] == 1
         assert ShiftSms.objects.get().kind == "recap_due"
 
+    # --- short walk-in shifts -------------------------------------------
+
+    def _walk_in(self, *, minutes):
+        """A walk-in like the one the check-in link mints: no request, no
+        start or end time, clocked in and out ``minutes`` apart, finishing
+        an hour before ``self.now``."""
+        event = self._event(
+            start=None, end=None, name="11/10/2026 - 100 Test Rd (Shells) · Retail Sampling"
+        )
+        out = self.now - timedelta(hours=1)
+        self._punch(event, "clock_in", out - timedelta(minutes=minutes))
+        self._punch(event, "clock_out", out)
+        return event
+
+    @override_settings(**LIVE)
+    def test_a_short_walk_in_gets_neither_recap_text(self):
+        """Opened the link on the wrong day, clocked in and straight back out:
+        no "recap isn't in yet" text, and no morning follow-up."""
+        self._walk_in(minutes=10)
+        assert self._run()["sent"] == 0
+        assert self._run(now=self.now + timedelta(hours=18, minutes=30))["sent"] == 0
+        assert self._run(dry_run=True)["would_send"] == 0
+        assert self.sent == [] and ShiftSms.objects.count() == 0
+
+    @override_settings(**LIVE)
+    def test_a_walk_in_of_the_minimum_length_or_longer_is_still_texted(self):
+        self._walk_in(minutes=20)
+        result = self._run()
+        assert result["sent"] == 1
+        assert ShiftSms.objects.get().kind == "recap_due"
+        assert self._run(now=self.now + timedelta(hours=18, minutes=30))["sent"] == 1
+
+    @override_settings(**{**LIVE, "SHIFT_SMS_MIN_SHIFT_MINUTES": 0})
+    def test_minimum_zero_turns_the_short_shift_check_off(self):
+        self._walk_in(minutes=5)
+        assert self._run()["sent"] == 1
+
+    @override_settings(**LIVE)
+    def test_a_short_booked_shift_is_still_texted(self):
+        """An approved booking is a real shift however short it was."""
+        event = self._event(
+            start=self.now - timedelta(hours=2), end=self.now - timedelta(hours=1)
+        )
+        self._book(event)
+        self._punch(event, "clock_in", self.now - timedelta(hours=1, minutes=10))
+        self._punch(event, "clock_out", self.now - timedelta(hours=1))
+        assert self._run()["sent"] == 1
+
+    @override_settings(**LIVE)
+    def test_a_short_shift_on_a_requested_event_is_still_texted(self):
+        """An event with a request behind it was planned, even if this BA
+        walked up to it without a booking."""
+        from events import models as event_models
+
+        event = self._walk_in(minutes=10)
+        request = event_models.Request.objects.create(
+            name="Plano demo",
+            address="3205 Plano Rd",
+            tenant=self.tenant,
+            status=self.create_request_status(
+                name="Approved", tenant=self.tenant, slug="approved"
+            ),
+            request_type=self.create_request_type(name="Retail", tenant=self.tenant),
+            created_by=None,
+        )
+        event_models.Event.objects.filter(id=event.id).update(request=request)
+        assert self._run()["sent"] == 1
+
+    @override_settings(**LIVE)
+    def test_a_walk_in_still_on_the_clock_is_unaffected(self):
+        """Only a finished shift can be short. One still clocked in on an
+        event that has ended is texted as before."""
+        event = self._event(
+            start=self.now - timedelta(hours=2), end=self.now - timedelta(minutes=45)
+        )
+        self._punch(event, "clock_in", self.now - timedelta(minutes=50))
+        assert self._run()["sent"] == 1
+
     # --- next morning ----------------------------------------------------
 
     @override_settings(**LIVE)

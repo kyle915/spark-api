@@ -41,9 +41,11 @@ ALERT_MAX_AGE_DAYS = 14
 
 
 def auto_publish_recommendations() -> bool:
-    """Off: staff publish recommendations too. One setting turns it on, the
-    way weekly summaries publish as soon as they are written."""
-    return bool(getattr(settings, "BRAND_INSIGHTS_AUTO_PUBLISH_RECOMMENDATIONS", False))
+    """On (the default): store recommendations publish to the brand as soon
+    as they are worked out, the way weekly summaries do. Alerts still wait
+    for staff. ``BRAND_INSIGHTS_AUTO_PUBLISH_RECOMMENDATIONS=false`` holds
+    recommendations as drafts again."""
+    return bool(getattr(settings, "BRAND_INSIGHTS_AUTO_PUBLISH_RECOMMENDATIONS", True))
 
 
 def ops_today() -> date:
@@ -125,7 +127,9 @@ def generate_for_tenant(tenant_id: int, today: date | None = None, *, use_model:
             period_start__in={start for start, _end in periods.values()},
         )
     }
+    auto = auto_publish_recommendations()
     to_write: list[tuple[Finding, date, date, Row | None]] = []
+    to_publish: list[Row] = []
     seen: set[tuple] = set()
     for finding, start, end in found:
         key = (finding.kind, finding.code, finding.scope_key, start)
@@ -139,13 +143,22 @@ def generate_for_tenant(tenant_id: int, today: date | None = None, *, use_model:
             and row.facts_text == finding.facts_text
             and row.template == finding.template
         ):
+            # Unchanged draft: keep its wording, but publish it if
+            # recommendations publish on their own.
+            if auto and finding.kind == Row.KIND_RECOMMENDATION:
+                to_publish.append(row)
             continue
         to_write.append((finding, start, end, row))
 
     words = _phrase([f for f, *_rest in to_write], use_model=use_model)
-    auto = auto_publish_recommendations()
-    counts = {"found": len(found), "written": 0, "stale": 0}
+    counts = {"found": len(found), "written": 0, "stale": 0, "published": 0}
     with transaction.atomic():
+        for row in to_publish:
+            row.status = Row.STATUS_PUBLISHED
+            row.reviewed_by = None
+            row.reviewed_at = now
+            row.save(update_fields=["status", "reviewed_by", "reviewed_at", "updated_at"])
+            counts["published"] += 1
         for finding, start, end, row in to_write:
             text, source = words[f"{finding.code}|{finding.scope_key}"]
             publish = auto and finding.kind == Row.KIND_RECOMMENDATION
@@ -172,6 +185,8 @@ def generate_for_tenant(tenant_id: int, today: date | None = None, *, use_model:
                 defaults=values,
             )
             counts["written"] += 1
+            if publish:
+                counts["published"] += 1
         for key, row in existing.items():
             if key not in seen and row.status == Row.STATUS_DRAFT:
                 row.status = Row.STATUS_STALE

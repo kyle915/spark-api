@@ -58,13 +58,20 @@ def get_store_performance(ctx: mcp.ToolContext, args: dict) -> tuple[dict, int]:
         raise mcp.ToolInputError("state must be a two-letter state code.")
     state = state.strip().upper() if state else None
 
-    by_store: dict[tuple[str, str], dict] = defaultdict(
+    by_store: dict[tuple[str, str, bool], dict] = defaultdict(
         lambda: {"recaps": 0, "consumers": 0, "units": 0, "base": 0, "counted": 0}
     )
     for row in recap_facts(ctx.tenant_id, start, end):
         if state and row["state"] != state:
             continue
-        key = (row["store"] or "No store recorded", row["state"] or "")
+        # No retailer: a walk-in title's place (a festival / activation
+        # venue, or a store typed at check-in) before "No store recorded".
+        venue = not row["store"] and row.get("title_place_kind") == "venue"
+        key = (
+            row["store"] or row.get("title_place") or "No store recorded",
+            row["state"] or "",
+            venue,
+        )
         held = by_store[key]
         held["recaps"] += 1
         held["consumers"] += int(row["consumers"] or 0)
@@ -74,12 +81,14 @@ def get_store_performance(ctx: mcp.ToolContext, args: dict) -> tuple[dict, int]:
             held["units"] += int(row["units"] or 0)
 
     rows = []
-    for (store, st), held in by_store.items():
+    for (store, st, venue), held in by_store.items():
         if held["recaps"] < min_recaps:
             continue
         rows.append(
             {
                 "store": store,
+                # A festival / event activation, named by its walk-in title.
+                **({"event_venue": True} if venue else {}),
                 "state": st or None,
                 "recaps": held["recaps"],
                 "consumers_sampled": held["consumers"],
@@ -108,7 +117,9 @@ def get_store_performance(ctx: mcp.ToolContext, args: dict) -> tuple[dict, int]:
                 "Approved recaps only, dated by the event date. Conversion is units "
                 "sold over the conversion base, as the dashboard's Conversion tile "
                 "works it out; visits with no product are left out of it. "
-                "conversion_pct is null when a store has no recap in the conversion rate."
+                "conversion_pct is null when a store has no recap in the conversion rate. "
+                "event_venue=true marks a festival or event activation named by its event "
+                "title: a venue, not a store."
             ),
             "untrusted_text_note": UNTRUSTED_NOTE,
             "store_count": len(rows),
@@ -270,8 +281,14 @@ CHAT_TOOLS: dict[str, ChatTool] = {
             "get_consumer_breakdown", "Consumer breakdown", "/client-dashboard#performance", "Performance"
         ),
         _from_mcp("list_upcoming_events", "Upcoming events", "/upcoming", "Upcoming"),
-        _from_mcp(
-            "list_pending_approvals", "Pending approvals", "/client-dashboard#approvals", "Approvals"
+        ChatTool(
+            "list_pending_approvals",
+            "Pending approvals",
+            mcp.PENDING_APPROVALS_DESCRIPTION,
+            {"type": "object", "properties": {}, "additionalProperties": False},
+            mcp.list_pending_approvals,
+            "/client-dashboard#approvals",
+            "Approvals",
         ),
         _from_mcp("get_weekly_summary", "Weekly summary", "/client-dashboard", "Home"),
         ChatTool(

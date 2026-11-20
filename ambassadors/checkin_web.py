@@ -1351,6 +1351,64 @@ def is_event_activation_type(event_type) -> bool:
     return bool(re.search(r"\bactivation\b|\bguerr?ill?a\b", name, re.I))
 
 
+def is_retail_sampling_type(event_type) -> bool:
+    """True for an in-store program ("Retail Sampling"): the BA is standing
+    in a store, so the store's name is part of where the work happened.
+    Event activations, guerilla shifts and product seeding are not."""
+    name = (getattr(event_type, "name", None) or "").strip()
+    if not name or is_event_activation_type(event_type) or is_product_seeding_event_type(event_type):
+        return False
+    return bool(re.search(r"\bretail\b", name, re.I))
+
+
+def store_name_required(tenant, event_type=None) -> bool:
+    """Must a walk-up check-in name the store? Only for retail sampling (the
+    BA's pick, else the link's default program). Without it the recap lands
+    under "No store recorded" on the brand's dashboards."""
+    if is_timesheet_only(tenant):
+        # A time clock asks where you are, never what the store is called.
+        return False
+    chosen = event_type if event_type is not None else _default_event_type(tenant)
+    return is_retail_sampling_type(chosen)
+
+
+STORE_NAME_REQUIRED_ERROR = "Enter the store name so your work counts for the right store."
+
+# "Is your shift today?" — see settings.CHECKIN_REQUIRE_SHIFT_TODAY.
+SHIFT_TODAY_CONFIRM_CODE = "confirm_shift_today"
+# Read by BAs on the old page too (it shows the message as-is), so it says
+# what to do either way.
+SHIFT_TODAY_CONFIRM_ERROR = (
+    "Is your shift today? Only start a check-in on the day you're working. "
+    "If your shift is another day, open this link again when it starts. "
+    "If it is today, refresh this page and try again."
+)
+# The latest-running US time zone the field works in. A date before today
+# HERE is before today for every BA, so it is a past-day recap, not a shift.
+_SHIFT_DAY_TZ = "America/Los_Angeles"
+
+
+class ShiftDayNotConfirmed(ValueError):
+    """A new walk-in event would be opened without the BA confirming the
+    shift is today. Nothing was created."""
+
+
+def is_past_shift_day(on_date) -> bool:
+    """True when ``on_date`` is before today for every US BA: a past-day
+    recap, which never asks "Is your shift today?"."""
+    from zoneinfo import ZoneInfo
+
+    if on_date is None:
+        return False
+    return on_date < dj_tz.now().astimezone(ZoneInfo(_SHIFT_DAY_TZ)).date()
+
+
+def shift_today_confirmed(data: dict) -> bool:
+    """The identify body says the BA answered "Yes, I'm working now"."""
+    raw = (data or {}).get("shiftIsToday")
+    return raw is True or (isinstance(raw, str) and raw.strip().lower() == "true")
+
+
 def requires_store_identity(tenant, event=None) -> bool:
     """Brands whose recap title must be "Store Name #1234" (client ask).
 
@@ -2205,13 +2263,17 @@ def build_public_context(event, ambassador=None) -> dict:
         # clocked-in page cannot tell market (Feel Free) from store (Torch)
         # and hides Log this stop.
         "locationMode": tenant_location_mode(tenant),
+        # Time-sheet-only brand: the page is a clock and nothing else.
+        "timesheetOnly": is_timesheet_only(tenant),
     }
-    if ambassador is not None:
+    if payload["timesheetOnly"]:
+        strip_for_timesheet_only(payload)
+    if ambassador is not None and not payload["timesheetOnly"]:
         # The product-questions box only shows once the BA has identified.
         from ambassadors.product_qa import public_state
 
         payload["productQa"] = public_state(tenant)
-    if requires_store_identity(tenant, event):
+    if requires_store_identity(tenant, event) and not payload["timesheetOnly"]:
         payload["storeIdentity"] = store_identity_prefill(event)
     # Which program this event is — so a BA who picked one can see the page
     # agreed with them before they start filling in a 15-field form.
@@ -2952,6 +3014,9 @@ def checkin_program_picker(tenant) -> tuple[list[dict], str]:
                     "name": et.name or "",
                     "label": str(row.get("label") or "").strip(),
                     "description": str(row.get("description") or "").strip(),
+                    "storeNameRequired": (
+                        is_retail_sampling_type(et) and not is_timesheet_only(tenant)
+                    ),
                 },
             )
         )
@@ -3050,7 +3115,8 @@ def store_name_match_allowed(typed_address: str | None, event_address: str | Non
 
 
 def find_or_create_walkin_event(
-    *, tenant, store_name: str, address: str, on_date, actor, event_type=None
+    *, tenant, store_name: str, address: str, on_date, actor, event_type=None,
+    require_store: bool = False, require_shift_today: bool = False,
 ):
     """The event for (tenant, address, date, event type) — found, else created.
 
@@ -3075,6 +3141,10 @@ def find_or_create_walkin_event(
     ``None`` here would raise IntegrityError on the very first check-in. The
     caller identifies the BA first and passes their user, which also gives the
     Walk-ups queue honest attribution for who opened the event.
+
+    ``require_shift_today``: refuse to CREATE (joining is always fine) with
+    ``ShiftDayNotConfirmed`` — the caller asks the BA "Is your shift today?"
+    and comes back with the answer.
     """
     if actor is None:
         raise ValueError("find_or_create_walkin_event requires an actor.")
@@ -3090,7 +3160,16 @@ def find_or_create_walkin_event(
     lo = day_start.replace(hour=0, minute=0)
     hi = day_start.replace(hour=23, minute=59)
 
+    timesheet = is_timesheet_only(tenant)
+    if timesheet:
+        # A time clock records an event LOCATION, never a store: no store
+        # name in the title, no retailer matching, and the event runs an
+        # event-type program so nothing reads it as retail.
+        store_name = ""
+        require_store = False
     chosen_type = event_type or _default_event_type(tenant)
+    if timesheet:
+        chosen_type = timesheet_event_type(tenant, chosen_type)
     type_id = getattr(chosen_type, "id", None)
     # Only NAME the program when the brand actually runs more than one. A
     # single-program brand's event titles stay exactly as they read today.
@@ -3100,6 +3179,8 @@ def find_or_create_walkin_event(
         if chosen_type is not None and len(offered) > 1
         else ""
     )
+    if timesheet:
+        program = ""  # time sheet titles are date + address, nothing else
 
     core_key = address_core_key(address)
 
@@ -3187,7 +3268,24 @@ def find_or_create_walkin_event(
     with transaction.atomic():
         existing = _match()
         if existing is not None:
+            if getattr(existing, "request_id", None) is None:
+                # A walk-in event opened earlier without a store (or state):
+                # this BA's store name can fill the blank. Never overwrites.
+                try:
+                    stamp_walkin_location(existing, store_name=store_name, actor=actor)
+                except Exception:  # noqa: BLE001
+                    logger.warning("checkin: location stamp failed for event=%s", existing.id)
             return existing, False
+
+        # Joining an existing event never asks for the store; opening a new
+        # retail one does, or its recaps land under "No store recorded".
+        if require_store and not _usable_store_name(store_name, address):
+            raise ValueError(STORE_NAME_REQUIRED_ERROR)
+        # Opening the link on the wrong day used to mint an event for today
+        # and clock the BA in on it. Ask first; create nothing until they say
+        # the shift is today.
+        if require_shift_today:
+            raise ShiftDayNotConfirmed(SHIFT_TODAY_CONFIRM_ERROR)
 
         name = walkin_event_name(
             store_name=store_name,
@@ -3210,23 +3308,137 @@ def find_or_create_walkin_event(
             updated_by=actor,
         )
 
-    # Stamp the state from the address so the row shows a Market in the tracker
-    # and counts in the geo breakdown. Best-effort: a geo miss must never block
-    # a BA from checking in.
+    # Stamp the store and the state so the row shows a Market in the tracker
+    # and its recaps count under a store and a state on the brand dashboards
+    # (the recap copies both off the event at submit). Best-effort: a miss
+    # must never block a BA from checking in.
     try:
-        from events.routing import extract_state_code
-        from tenants.models import State
-
-        code = extract_state_code(event.address or "")
-        if code:
-            st = State.objects.filter(code__iexact=code).first()
-            if st is not None:
-                event.state = st
-                event.save(update_fields=["state"])
+        stamp_walkin_location(event, store_name=store_name, actor=actor)
     except Exception:  # noqa: BLE001
-        logger.warning("checkin: state stamp failed for event=%s", event.id)
+        logger.warning("checkin: location stamp failed for event=%s", event.id)
 
     return event, True
+
+
+def _usable_store_name(store_name: str | None, address: str | None) -> str:
+    """The typed store name, or "" when it is blank or is really the address
+    (or an old walk-in title) pasted into the store box."""
+    store = re.sub(r"\s+", " ", store_name or "").strip()
+    if not store:
+        return ""
+    addr = normalize_place(address or "")
+    key = normalize_place(store)
+    # The address (or the start of it) pasted into the store box.
+    if addr and (key == addr or addr in key or (key[:1].isdigit() and key in addr)):
+        return ""
+    if re.match(r"^\d{1,2}/\d{1,2}/\d{4}", store):
+        return ""
+    return store
+
+
+def resolve_walkin_location(tenant, *, store_name: str, address: str, exclude_event_id=None) -> dict:
+    """Where a walk-in event is, as the brand's records already know it.
+
+    ``retailer_id`` / ``retailer_name``: the typed store resolved to the
+    tenant's own Retailer (case- and accepted-alias-insensitive), else to a
+    known chain (``recaps.recap_location.CHAINS``; ``retailer_id`` None means
+    the tenant has no row for it yet). With no store typed, the store another
+    event of the brand names at the same street address, when exactly one
+    does. ``state_code``: from the address, else from other places at the
+    same address when they agree. Sources say which rule answered.
+    """
+    from events.market import parse_address_geo
+    from events.models import Retailer
+    from events.retailer_aliases import resolve_store_name
+    from events.routing import extract_state_code
+    from recaps.recap_location import AddressBook, ChainIndex, chain_in_text, street_key
+
+    out = {
+        "retailer_id": None, "retailer_name": "", "retailer_source": "",
+        "state_code": "", "state_source": "",
+    }
+    retailers = list(
+        Retailer.objects.filter(tenant_id=tenant.id).exclude(name="").order_by("id").values_list("id", "name")
+    )
+    index = ChainIndex.for_tenant(tenant.id, retailers)
+    typed = _usable_store_name(store_name, address)
+    if typed:
+        resolved = re.sub(r"\s+", " ", resolve_store_name(typed, index.aliases)).strip()
+        exact = next((rid for rid, name in retailers if name.strip().casefold() == resolved.casefold()), None)
+        if exact is not None:
+            out.update(retailer_id=exact, retailer_name=dict(retailers)[exact], retailer_source="tenant_retailer")
+        else:
+            chain = index.canonical(resolved)
+            number = ""
+            if not chain:
+                chain, number = chain_in_text(resolved, index)
+            if chain:
+                rid, name = index.target(chain, number)
+                out.update(retailer_id=rid, retailer_name=name, retailer_source="typed_store")
+
+    code = (parse_address_geo(address or "").state_code or extract_state_code(address or "") or "").upper()
+    if code:
+        out.update(state_code=code, state_source="address")
+
+    key = street_key(address)
+    if key is not None and ((not typed and not out["retailer_name"]) or not code):
+        book = AddressBook.for_tenant(tenant.id, index, house_number=key.number)
+        exclude = (exclude_event_id,) if exclude_event_id else ()
+        if not typed and not out["retailer_name"]:
+            place, _stores = book.store_at([address], exclude_event_ids=exclude)
+            if place is not None:
+                rid, name = (
+                    (place.retailer_id, place.chain) if place.retailer_id else index.target(place.chain)
+                )
+                out.update(retailer_id=rid, retailer_name=name, retailer_source="same_address")
+        if not code:
+            same, _codes, _place = book.state_at([address], exclude_event_ids=exclude)
+            if same:
+                out.update(state_code=same, state_source="same_address")
+    return out
+
+
+def stamp_walkin_location(event, *, store_name: str, actor=None) -> dict:
+    """Fill a walk-in event's blank retailer and state (never overwrites).
+
+    Returns the fields written. A chain the tenant has no Retailer row for
+    yet gets one, found-or-created by name the way the request importer
+    links accounts (``events.batch_requests._ensure_retailer_account``)."""
+    from events.batch_requests import _ensure_retailer_account
+    from events.models import Event, Retailer, State
+
+    if event.retailer_id and event.state_id:
+        return {}
+    if is_timesheet_only(getattr(event, "tenant", None)):
+        # Locations, not stores: never resolve or link a retailer.
+        store_name = ""
+    found = resolve_walkin_location(
+        event.tenant, store_name=store_name, address=event.address or "", exclude_event_id=event.id
+    )
+    updates: dict = {}
+    if is_timesheet_only(getattr(event, "tenant", None)):
+        found["retailer_name"] = ""
+    if not event.retailer_id and found["retailer_name"]:
+        rid = found["retailer_id"]
+        if rid is None and actor is not None:
+            rid = _ensure_retailer_account(event.tenant_id, found["retailer_name"], None, actor)
+        if rid:
+            updates["retailer"] = Retailer.objects.get(pk=rid)
+    if not event.state_id and found["state_code"]:
+        st = State.objects.filter(code__iexact=found["state_code"]).order_by("id").first()
+        if st is not None:
+            updates["state"] = st
+    if updates:
+        # update(), not save(): the address-geo mixin would re-derive the
+        # state from an address that names none and undo the fill.
+        Event.objects.filter(pk=event.pk).update(**{f"{k}_id": v.pk for k, v in updates.items()})
+        for k, v in updates.items():
+            setattr(event, k, v)
+        logger.info(
+            "checkin: walk-in event=%s location %s (retailer=%s state=%s)",
+            event.id, sorted(updates), found["retailer_source"], found["state_source"],
+        )
+    return {k: getattr(v, "name", None) or getattr(v, "code", "") for k, v in updates.items()}
 
 
 def build_tenant_context(
@@ -3242,10 +3454,11 @@ def build_tenant_context(
     but it keeps the program picker and the BA link's full resource list.
     """
     agency = recap_only and not team
+    timesheet = is_timesheet_only(tenant) and not recap_only
     stores = [] if recap_only else recent_checkin_locations(tenant)
     resources = build_checkin_resources(tenant, recap_only=agency)
     programs, program_title = ([], "") if agency else checkin_program_picker(tenant)
-    return {
+    payload = {
         "mode": "tenant",
         "needsEventDetails": True,
         "recapOnly": bool(recap_only),
@@ -3261,6 +3474,9 @@ def build_tenant_context(
         # default program (Torch TH-AGENCY = store demos only).
         "eventTypes": programs,
         "programPickerTitle": program_title,
+        # The link's default program asks for the store name (retail
+        # sampling). A picked program carries its own storeNameRequired.
+        "storeNameRequired": (not agency) and store_name_required(tenant),
         # BA-facing resources (training deck, photo-release QR, the brand's
         # /training/<code> hub) as ordered buttons. See build_checkin_resources.
         # Agency twin drops hideOnRecapOnly rows (Torch Sampling Guide).
@@ -3276,7 +3492,11 @@ def build_tenant_context(
         "sourceLabel": (getattr(tenant, "checkin_team_label", "") or "").strip()
         if team
         else "",
+        "timesheetOnly": timesheet,
     }
+    if timesheet:
+        strip_for_timesheet_only(payload)
+    return payload
 
 
 def checkin_recap_open_url(recap) -> str:
@@ -3686,9 +3906,70 @@ def stop_mileage_leg(*, ambassador, event, coordinates) -> tuple[dict | None, st
 # store address the BA types; a roaming crew keys it on the MARKET they picked,
 # and the individual spots become SamplingStops.
 
+def is_timesheet_only(tenant) -> bool:
+    """True when this brand's check-in is a plain time clock (no recap).
+
+    See ``Tenant.checkin_timesheet_only``. Never raises: a missing tenant or
+    a column that isn't there yet reads as the normal recap flow.
+    """
+    return bool(getattr(tenant, "checkin_timesheet_only", False))
+
+
+def timesheet_event_type(tenant, chosen=None):
+    """The program a time-sheet-only walk-in event runs: an EVENT-type one.
+
+    These shifts happen at event locations, not stores, so anything that
+    keys off the program (recap type, store vs venue charts) must read them
+    as events. Keeps ``chosen`` when it already classifies as an event;
+    otherwise the tenant's event-type program (an "Activation" name first);
+    falls back to ``chosen`` only when the tenant has none.
+    """
+    from events.models import EventType
+    from recaps.recap_types import RECAP_TYPE_EVENT, recap_type_for_name
+
+    if chosen is not None and recap_type_for_name(chosen.name) == RECAP_TYPE_EVENT:
+        return chosen
+    candidates = [
+        et
+        for et in EventType.objects.filter(tenant_id=getattr(tenant, "id", None)).order_by("id")
+        if recap_type_for_name(et.name) == RECAP_TYPE_EVENT
+    ]
+    candidates.sort(key=lambda et: 0 if is_event_activation_type(et) else 1)
+    return candidates[0] if candidates else chosen
+
+
+def strip_for_timesheet_only(payload: dict) -> dict:
+    """Drop everything recap-shaped from a check-in payload, in place.
+
+    The page renders a time clock when ``timesheetOnly`` is set; this is the
+    server half, so a stale page can't offer a form, photo dropzones, product
+    questions or training buttons the brand never asked for.
+    """
+    payload["timesheetOnly"] = True
+    payload["storeNameRequired"] = False
+    payload["resources"] = []
+    payload["trainingUrl"] = ""
+    for key in ("template", "photoBuckets", "coBrands"):
+        if key in payload:
+            payload[key] = [] if key == "photoBuckets" else None
+    payload.pop("productQa", None)
+    payload.pop("storeIdentity", None)
+    # A time clock keys the event on where the phone is (GPS → address), so
+    # it never asks for a roaming market.
+    payload["locationMode"] = "address"
+    if "markets" in payload:
+        payload["markets"] = []
+    if "unfiledShifts" in payload:
+        payload["unfiledShifts"] = []
+    return payload
+
+
 def tenant_location_mode(tenant) -> str:
     from tenants.models import Tenant
 
+    if is_timesheet_only(tenant):
+        # GPS → address. A time clock never asks for a roaming market.
+        return Tenant.CHECKIN_LOCATION_ADDRESS
     mode = (getattr(tenant, "checkin_location_mode", "") or "").strip()
     return mode if mode == Tenant.CHECKIN_LOCATION_MARKET else Tenant.CHECKIN_LOCATION_ADDRESS
 

@@ -1,4 +1,10 @@
-"""Wingspan GraphQL queries — admin-only, read-only."""
+"""Wingspan GraphQL queries — Ignite-staff only, read-only.
+
+Every field here exposes Ignite's whole Wingspan account (every contractor's
+name, email and pay across ALL clients), so they are gated on
+``IsSparkAdminAccess`` (``_is_admin_access``) — brand/client users are
+refused even though the web app talks to the clients schema.
+"""
 
 from __future__ import annotations
 
@@ -6,14 +12,14 @@ from typing import List
 
 import strawberry
 
-from utils.graphql.permissions import IsClientOrSparkAdmin
+from utils.graphql.permissions import IsSparkAdminAccess
 
 from . import client, types
 
 
 @strawberry.type
 class WingspanQueries:
-    @strawberry.field(permission_classes=[IsClientOrSparkAdmin])
+    @strawberry.field(permission_classes=[IsSparkAdminAccess])
     async def wingspan_status(self, info: strawberry.Info) -> types.WingspanStatus:
         """Connection check — does this tenant have a key wired?"""
         if client.is_connected():
@@ -30,7 +36,7 @@ class WingspanQueries:
             ),
         )
 
-    @strawberry.field(permission_classes=[IsClientOrSparkAdmin])
+    @strawberry.field(permission_classes=[IsSparkAdminAccess])
     async def wingspan_payroll_periods(
         self,
         info: strawberry.Info,
@@ -57,7 +63,7 @@ class WingspanQueries:
             for p in periods
         ]
 
-    @strawberry.field(permission_classes=[IsClientOrSparkAdmin])
+    @strawberry.field(permission_classes=[IsSparkAdminAccess])
     async def wingspan_payments(
         self,
         info: strawberry.Info,

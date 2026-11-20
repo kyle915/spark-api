@@ -91,6 +91,21 @@ class Command(BaseCommand):
                 f"Donor   : {preview['donor']['template_name']!r} -> "
                 f"{preview['donor']['new_template_name']!r}"
             )
+        for pf in preview["product_fields"]:
+            self.stdout.write(
+                f"Products: {pf['name']!r} -> {len(pf['options'])} option(s) "
+                f"from the new catalog (donor had {len(pf['donor_options'])})"
+            )
+            for opt in pf["options"]:
+                self.stdout.write(f"    - {opt}")
+        for change in preview["swap_changes"]:
+            where = f" in {change['field']!r}" if change["field"] else ""
+            self.stdout.write(
+                f"Swap    : {change['kind']}{where}: "
+                f"{change['before']!r} -> {change['after']!r}"
+            )
+        for warning in preview["warnings"]:
+            self.stdout.write(self.style.WARNING(f"Warning : {warning}"))
         if not apply:
             self.stdout.write(self.style.WARNING("DRY-RUN — no writes. Re-run with --apply."))
             return
@@ -110,6 +125,8 @@ class Command(BaseCommand):
             )
         except LaunchError as exc:
             raise CommandError(str(exc)) from exc
+        for warning in result["warnings"]:
+            self.stdout.write(self.style.WARNING(f"Warning : {warning}"))
         self.stdout.write(self.style.SUCCESS(result["checkin_url"]))
         self.stdout.write(self.style.SUCCESS(result["spark_form_url"]))
 
