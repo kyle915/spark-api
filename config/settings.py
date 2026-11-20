@@ -651,6 +651,18 @@ OPENAI_MODEL_SMALL = env("OPENAI_MODEL_SMALL", default="gpt-5-mini")
 # this id is not available on the account.
 OPENAI_TRANSCRIBE_MODEL = env("OPENAI_TRANSCRIBE_MODEL", default="gpt-4o-transcribe")
 
+# Receipt reading + fraud flags (recaps/receipt_reader.py, recaps/receipt_flags.py).
+# The reader runs from the "Read recap receipts" cron; this caps model calls
+# per UTC day across all tenants. RECEIPT_READER_USE_SMALL_MODEL reads with
+# OPENAI_MODEL_SMALL instead of OPENAI_MODEL (cheaper, less exact).
+RECEIPT_READER_DAILY_MAX_READS = env.int("RECEIPT_READER_DAILY_MAX_READS", default=300)
+RECEIPT_READER_USE_SMALL_MODEL = env.bool("RECEIPT_READER_USE_SMALL_MODEL", default=False)
+# Staff-only fraud / quality flags on recaps. Off until switched on; the
+# readings and spend work either way.
+RECEIPT_FLAGS_ENABLED = env.bool("RECEIPT_FLAGS_ENABLED", default=False)
+RECEIPT_FLAG_SHORT_CLOCK_MINUTES = env.int("RECEIPT_FLAG_SHORT_CLOCK_MINUTES", default=15)
+RECEIPT_FLAG_LATE_FILING_DAYS = env.int("RECEIPT_FLAG_LATE_FILING_DAYS", default=7)
+
 # Hours check before payroll (hours_check/thresholds.py has the defaults and
 # what each key means). JSON in the env, e.g. {"far_miles": 0.5}; unknown
 # keys and bad values are ignored.
