@@ -116,6 +116,10 @@ INSTALLED_APPS = [
     # text extracted from the brand's uploaded documents and a bounded crawl
     # of its website. See product_knowledge/.
     "product_knowledge",
+    # Spark numbers -> DRAFT notes/emails on Close leads (renewal recaps for
+    # clients, anonymized proposals for new leads). Never sends. See
+    # docs/sales-assist.md.
+    "sales_assist",
     # Versioned Terms / Privacy / AUP acceptance + the GraphQL gate.
     "legal",
 ]
@@ -664,6 +668,31 @@ try:
     )
 except ValueError:
     HOURS_CHECK_THRESHOLDS = {}
+
+# ── Sales assist (sales_assist/) ─────────────────────────────────────
+# Close CRM API key. Set on Cloud Run only; never committed or logged. When
+# empty every Close step is a clean no-op ("close-not-configured").
+CLOSE_API_KEY = env("CLOSE_API_KEY", default="")
+# Second lock: even with apply=true, nothing is written to Close unless this
+# is true. Until Kyle flips it, every run (scheduled ones too) is a dry run.
+SALES_ASSIST_ENABLED = env.bool("SALES_ASSIST_ENABLED", default=False)
+# Cost caps per cron run.
+SALES_ASSIST_MAX_PROSPECTS_PER_RUN = env.int("SALES_ASSIST_MAX_PROSPECTS_PER_RUN", default=10)
+SALES_ASSIST_MAX_RENEWALS_PER_RUN = env.int("SALES_ASSIST_MAX_RENEWALS_PER_RUN", default=30)
+SALES_ASSIST_MAX_AI_CALLS_PER_RUN = env.int("SALES_ASSIST_MAX_AI_CALLS_PER_RUN", default=40)
+SALES_ASSIST_MAX_USD_PER_RUN = env.float("SALES_ASSIST_MAX_USD_PER_RUN", default=1.0)
+# More new leads than this since the last poll = a bulk import, not inbound
+# leads: they are skipped (cursor moves past them) instead of drafted.
+SALES_ASSIST_IMPORT_BURST = env.int("SALES_ASSIST_IMPORT_BURST", default=40)
+# Renewal drafts are also made this many days before CloseLink.renewal_date.
+SALES_ASSIST_RENEWAL_LEAD_DAYS = env.int("SALES_ASSIST_RENEWAL_LEAD_DAYS", default=45)
+# Optional: only draft for new leads in these Close lead status ids
+# (comma-separated). Empty = every new lead.
+SALES_ASSIST_PROSPECT_STATUS_IDS = env("SALES_ASSIST_PROSPECT_STATUS_IDS", default="")
+# Rough model prices for the cost estimate in the audit log (USD per 1M
+# tokens). Estimates only; OpenAI's usage page is the real bill.
+SALES_ASSIST_USD_PER_M_INPUT = env.float("SALES_ASSIST_USD_PER_M_INPUT", default=2.5)
+SALES_ASSIST_USD_PER_M_OUTPUT = env.float("SALES_ASSIST_USD_PER_M_OUTPUT", default=10.0)
 
 _job_extension_rate_default = env("JOB_EXTENSION_RATE_DEFAULT", default=8)
 if _job_extension_rate_default in (None, ""):
