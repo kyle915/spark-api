@@ -9,7 +9,7 @@ class Migration(migrations.Migration):
     dependencies = [
         ('ambassadors', '0047_shiftsms_attempts'),
         ('events', '0072_retailer_alias'),
-        ('recaps', '0054_customrecap_location_fill'),
+        ('recaps', '0055_receipt_reading_v3_and_recap_flags'),
     ]
 
     operations = [
