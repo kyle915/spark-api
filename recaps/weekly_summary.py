@@ -37,7 +37,12 @@ from asgiref.sync import sync_to_async
 from django.db.models import Count
 from django.utils import timezone
 
-from recaps.consumer_breakdown import KIND_NAMED, tenant_consumer_breakdown
+from recaps.consumer_breakdown import (
+    KIND_NAMED,
+    KIND_VENUE,
+    LABELED_KINDS,
+    tenant_consumer_breakdown,
+)
 from recaps.feedback_themes import (
     KIND_DECLINE,
     KIND_QUESTION,
@@ -219,10 +224,16 @@ def week_facts(
             "note": "Conversion counts retail and on-premise events only.",
         }
 
-    stores = [r for r in breakdown["by_store"] if r["kind"] == KIND_NAMED][:MAX_STORES]
+    stores = [r for r in breakdown["by_store"] if r["kind"] in LABELED_KINDS][:MAX_STORES]
     if stores:
         facts["stores"] = [
-            {"store": r["label"], "consumers_sampled": r["consumers"]} for r in stores
+            {
+                "store": r["label"],
+                "consumers_sampled": r["consumers"],
+                # A festival / activation venue, not a store.
+                **({"event_venue": True} if r["kind"] == KIND_VENUE else {}),
+            }
+            for r in stores
         ]
         facts["store_count"] = breakdown["store_count"]
     states = [r for r in breakdown["by_state"] if r["kind"] == KIND_NAMED]

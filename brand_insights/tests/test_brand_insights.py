@@ -264,6 +264,9 @@ class TestBrandInsightsSchema(AmbassadorsGraphQLTestCase):
 
         settings.OPENAI_API_KEY = "test-key-not-real"
         settings.OPENAI_MODEL = ""
+        # Review-flow tests start from drafts; the auto-publish tests turn
+        # it on explicitly.
+        settings.BRAND_INSIGHTS_AUTO_PUBLISH_RECOMMENDATIONS = False
 
         self.roles = self.setup_default_roles()
         self.schema = schema_clients
@@ -587,12 +590,35 @@ class TestBrandInsightsSchema(AmbassadorsGraphQLTestCase):
         codes = {i["code"] for i in data["brandInsightReview"][0]["items"]}
         assert "repeat_no_product" not in codes
 
+    def test_recommendations_publish_on_their_own_by_default(self):
+        from django.conf import settings as live
+
+        from brand_insights import service
+
+        del live.BRAND_INSIGHTS_AUTO_PUBLISH_RECOMMENDATIONS
+        assert service.auto_publish_recommendations() is True
+
     @pytest.mark.asyncio
     async def test_recommendations_can_publish_on_their_own_when_turned_on(self):
         with override_settings(BRAND_INSIGHTS_AUTO_PUBLISH_RECOMMENDATIONS=True):
             await self._generate()
         rows = await self._rows()
         assert {r.status for r in rows if r.kind == "recommendation"} == {"published"}
+        assert {r.status for r in rows if r.kind == "alert"} == {"draft"}
+
+    @pytest.mark.asyncio
+    async def test_existing_recommendation_drafts_publish_once_turned_on(self):
+        with override_settings(BRAND_INSIGHTS_AUTO_PUBLISH_RECOMMENDATIONS=False):
+            await self._generate()
+        rows = await self._rows()
+        assert {r.status for r in rows if r.kind == "recommendation"} == {"draft"}
+        before = {r.id: r.body for r in rows if r.kind == "recommendation"}
+        with override_settings(BRAND_INSIGHTS_AUTO_PUBLISH_RECOMMENDATIONS=True):
+            await self._generate()
+        rows = await self._rows()
+        recs = [r for r in rows if r.kind == "recommendation"]
+        assert {r.status for r in recs} == {"published"}
+        assert {r.id: r.body for r in recs} == before
         assert {r.status for r in rows if r.kind == "alert"} == {"draft"}
 
     # ── cron ──────────────────────────────────────────────────────────

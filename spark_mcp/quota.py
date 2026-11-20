@@ -27,12 +27,18 @@ from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
+from django.db import connection as db_connection, transaction
 from django.utils import timezone
 
 from . import conf
 from .models import McpToolCall
 
 OPS_TZ = ZoneInfo("America/Los_Angeles")
+# pg_advisory_xact_lock namespace for "one brand's quota" (first key).
+_LOCK_NAMESPACE = 0x5350  # "SP"
+# At most this many refused calls are logged per connection per minute, so a
+# client hammering a closed quota can't fill the table.
+MAX_REFUSED_LOGGED_PER_MINUTE = 5
 COUNTED = (McpToolCall.STATUS_OK, McpToolCall.STATUS_ERROR)
 
 
@@ -105,6 +111,53 @@ def record(
         client_name=connection.client.display_name[:200],
         tool=tool[:80],
         args_summary=args_summary,
+        status=status,
+        result_count=result_count,
+        latency_ms=latency_ms,
+        error=(error or "")[:300],
+    )
+
+
+def _lock_tenant(tenant_id: int) -> None:
+    if db_connection.vendor != "postgresql":
+        return
+    with db_connection.cursor() as cur:
+        cur.execute("SELECT pg_advisory_xact_lock(%s, %s)", [_LOCK_NAMESPACE, int(tenant_id)])
+
+
+def reserve(connection, *, tool: str, args_summary: dict) -> tuple[Verdict, McpToolCall | None]:
+    """Check the limits and claim a slot in one step.
+
+    The check and the row that counts against the quota are written under a
+    per-brand lock, so two simultaneous calls can't both see "one left" and
+    both run. The returned row is the call's log entry: ``finish`` fills in
+    the outcome. Refused calls get a log row too, capped per minute."""
+    now = timezone.now()
+    with transaction.atomic():
+        _lock_tenant(connection.tenant_id)
+        verdict = check(connection, now)
+        if not verdict.allowed:
+            refused_recently = McpToolCall.objects.filter(
+                connection=connection,
+                created_at__gte=now - timedelta(seconds=60),
+                status__in=(McpToolCall.STATUS_RATE, McpToolCall.STATUS_QUOTA),
+            ).count()
+            if refused_recently < MAX_REFUSED_LOGGED_PER_MINUTE:
+                record(connection, tool=tool, args_summary=args_summary, status=verdict.status)
+            return verdict, None
+        row = record(connection, tool=tool, args_summary=args_summary, status=McpToolCall.STATUS_OK)
+    return verdict, row
+
+
+def finish(
+    row: McpToolCall,
+    *,
+    status: str,
+    result_count: int | None = None,
+    latency_ms: int | None = None,
+    error: str = "",
+) -> None:
+    McpToolCall.objects.filter(pk=row.pk).update(
         status=status,
         result_count=result_count,
         latency_ms=latency_ms,

@@ -34,6 +34,10 @@ SECRET_KEY = env("SECRET_KEY")
 DEBUG = env("DEBUG")
 
 ALLOWED_HOSTS = env.list("ALLOWED_HOSTS")
+# Session cookie (used by the AI connection page) only over HTTPS outside
+# local development. Browsers see HTTPS on Cloud Run even though Django sits
+# behind the TLS proxy.
+SESSION_COOKIE_SECURE = env.bool("SESSION_COOKIE_SECURE", default=not DEBUG)
 CORS_ALLOWED_ORIGINS = env.list(
     "CORS_ALLOWED_ORIGINS", default=["http://localhost:3000"]
 )
@@ -95,10 +99,17 @@ INSTALLED_APPS = [
     "timeclock",
     "recap_decks",
     "consumer_mentions",
+    "photo_library",
+    "hours_check",
+    # Anti-scraping guardrails: shared Postgres rate limiter, audit log,
+    # usage rollups (app label "abuse"). See utils/abuse/__init__.py.
+    "utils.abuse",
     # Cloud Tasks handler endpoints (no models). Registered so its app label
     # resolves; the routes are mounted under `api/tasks/` in config/urls.py.
     "tasks",
     "brand_insights",
+    # Brand chat on the brand dashboard (read-only; see brand_chat/).
+    "brand_chat",
     # Official Spark MCP server (AI app connections): OAuth 2.1 + /mcp.
     "spark_mcp",
     # What the BA product-questions box can answer from beyond staff notes:
@@ -469,6 +480,14 @@ AMBASSADOR_FRONTEND_URL = env(
 ADMIN_FRONTEND_URL = env("ADMIN_FRONTEND_URL", default="http://localhost:3000")
 # BA-facing check-in / training / recap-form origin. Field phones have
 # failed to resolve admin.; mint client. unless an override is set.
+# Standing walk-up links: a check-in that would OPEN a new walk-in event for
+# today (or later) must carry ``shiftIsToday: true`` — the BA answered "Yes,
+# I'm working now" to "Is your shift today?". Without it identify answers 400
+# ``confirm_shift_today`` and creates nothing. Off by default so this API can
+# deploy before the front end that asks the question; turn it on once the
+# front end is live. Joining an existing event, recap-only links and
+# past-day recaps are never asked.
+CHECKIN_REQUIRE_SHIFT_TODAY = env.bool("CHECKIN_REQUIRE_SHIFT_TODAY", default=False)
 PUBLIC_CHECKIN_BASE_URL = env(
     "PUBLIC_CHECKIN_BASE_URL",
     default="https://client.igniteproductions.co",
@@ -487,6 +506,11 @@ QUO_FROM_NUMBER = env("QUO_FROM_NUMBER", default="+17754060435")
 SHIFT_SMS_EVENTS_FROM = env(
     "SHIFT_SMS_EVENTS_FROM", default="2026-11-14T08:00:00-08:00"
 )
+# Recap texts skip a walk-in shift (an event with no request behind it and no
+# approved booking for the ambassador) that was clocked in and out in less
+# than this many minutes: a BA who opened the link on the wrong day and
+# clocked straight back out owes no recap. 0 turns the check off.
+SHIFT_SMS_MIN_SHIFT_MINUTES = env.int("SHIFT_SMS_MIN_SHIFT_MINUTES", default=20)
 QUO_API_BASE_URL = env("QUO_API_BASE_URL", default="https://api.quo.com")
 # Absolute base for backend-rendered public pages linked from emails (e.g. the
 # one-click shift-extension approval page under /api/public/). Falls back to the
@@ -625,6 +649,21 @@ OPENAI_MODEL = env("OPENAI_MODEL", default="gpt-6.1-terra")
 # checks) run many times and need no long reasoning, so they use a smaller
 # model. Set to "" to run everything on OPENAI_MODEL.
 OPENAI_MODEL_SMALL = env("OPENAI_MODEL_SMALL", default="gpt-5-mini")
+# Speech-to-text for the check-in voice recap. Falls back to whisper-1 when
+# this id is not available on the account.
+OPENAI_TRANSCRIBE_MODEL = env("OPENAI_TRANSCRIBE_MODEL", default="gpt-4o-transcribe")
+
+# Hours check before payroll (hours_check/thresholds.py has the defaults and
+# what each key means). JSON in the env, e.g. {"far_miles": 0.5}; unknown
+# keys and bad values are ignored.
+try:
+    import json as _json
+
+    HOURS_CHECK_THRESHOLDS = _json.loads(
+        env("HOURS_CHECK_THRESHOLDS", default="{}") or "{}"
+    )
+except ValueError:
+    HOURS_CHECK_THRESHOLDS = {}
 
 _job_extension_rate_default = env("JOB_EXTENSION_RATE_DEFAULT", default=8)
 if _job_extension_rate_default in (None, ""):
@@ -661,6 +700,45 @@ BACKEND_ERROR_ALERTS_ENABLED = env.bool(
 BACKEND_ERROR_ALERT_EMAILS = env.list(
     "BACKEND_ERROR_ALERT_EMAILS", default=["kyle@igniteproductions.co"]
 )
+
+# ---------------------------------------------------------------------------
+# Abuse guardrails (utils/abuse) — brand users must not bulk-export data.
+# Every limit is env-overridable; see utils/abuse/policy.py for the buckets.
+# ---------------------------------------------------------------------------
+ABUSE_GUARDRAILS_ENABLED = env.bool("ABUSE_GUARDRAILS_ENABLED", default=True)
+# X-Forwarded-For entries appended by trusted proxies. Cloud Run's Google
+# front end appends the real client IP as the LAST entry → 1. Use 2 if an
+# external HTTPS load balancer is ever put in front of the service.
+ABUSE_TRUSTED_PROXY_COUNT = env.int("ABUSE_TRUSTED_PROXY_COUNT", default=1)
+ABUSE_GQL_USER_PER_MINUTE = env.int("ABUSE_GQL_USER_PER_MINUTE", default=120)
+ABUSE_GQL_USER_PER_HOUR = env.int("ABUSE_GQL_USER_PER_HOUR", default=3000)
+ABUSE_GQL_ADMIN_PER_MINUTE = env.int("ABUSE_GQL_ADMIN_PER_MINUTE", default=600)
+ABUSE_GQL_ADMIN_PER_HOUR = env.int("ABUSE_GQL_ADMIN_PER_HOUR", default=15000)
+ABUSE_GQL_ANON_IP_PER_MINUTE = env.int("ABUSE_GQL_ANON_IP_PER_MINUTE", default=120)
+ABUSE_GQL_ANON_IP_PER_HOUR = env.int("ABUSE_GQL_ANON_IP_PER_HOUR", default=2000)
+ABUSE_AMBASSADOR_PER_MINUTE = env.int("ABUSE_AMBASSADOR_PER_MINUTE", default=30)
+ABUSE_AMBASSADOR_PER_HOUR = env.int("ABUSE_AMBASSADOR_PER_HOUR", default=300)
+ABUSE_AMBASSADOR_PER_DAY = env.int("ABUSE_AMBASSADOR_PER_DAY", default=1000)
+ABUSE_AMBASSADOR_DISTINCT_PER_DAY = env.int("ABUSE_AMBASSADOR_DISTINCT_PER_DAY", default=500)
+ABUSE_EXPORTS_PER_HOUR = env.int("ABUSE_EXPORTS_PER_HOUR", default=20)
+ABUSE_EXPORTS_PER_DAY = env.int("ABUSE_EXPORTS_PER_DAY", default=100)
+ABUSE_TENANT_EXPORTS_PER_DAY = env.int("ABUSE_TENANT_EXPORTS_PER_DAY", default=300)
+ABUSE_ADMIN_EXPORTS_PER_HOUR = env.int("ABUSE_ADMIN_EXPORTS_PER_HOUR", default=200)
+ABUSE_BULK_PER_HOUR = env.int("ABUSE_BULK_PER_HOUR", default=60)
+ABUSE_ADMIN_BULK_PER_HOUR = env.int("ABUSE_ADMIN_BULK_PER_HOUR", default=600)
+ABUSE_BULK_MAX_ITEMS = env.int("ABUSE_BULK_MAX_ITEMS", default=200)
+ABUSE_ADMIN_BULK_MAX_ITEMS = env.int("ABUSE_ADMIN_BULK_MAX_ITEMS", default=2000)
+ABUSE_IMPORT_MAX_ROWS = env.int("ABUSE_IMPORT_MAX_ROWS", default=500)
+ABUSE_DOWNLOADS_PER_HOUR = env.int("ABUSE_DOWNLOADS_PER_HOUR", default=600)
+ABUSE_LOGIN_IP_PER_15M = env.int("ABUSE_LOGIN_IP_PER_15M", default=50)
+ABUSE_LOGIN_IDENTIFIER_PER_15M = env.int("ABUSE_LOGIN_IDENTIFIER_PER_15M", default=10)
+ABUSE_CLIENT_PAGE_CAP = env.int("ABUSE_CLIENT_PAGE_CAP", default=200)
+ABUSE_PAGE_CAP_EXEMPT_FIELDS = env.list("ABUSE_PAGE_CAP_EXEMPT_FIELDS", default=[])
+ABUSE_GQL_MAX_DEPTH = env.int("ABUSE_GQL_MAX_DEPTH", default=12)
+ABUSE_GQL_MAX_ALIASES = env.int("ABUSE_GQL_MAX_ALIASES", default=20)
+ABUSE_GQL_MAX_TOKENS = env.int("ABUSE_GQL_MAX_TOKENS", default=4000)
+# Daily detector report recipients (Ignite team only — never brands).
+ABUSE_ALERT_EMAILS = env.list("ABUSE_ALERT_EMAILS", default=BACKEND_ERROR_ALERT_EMAILS)
 
 # Weekly mileage reimbursement report recipients (Monday cron).
 MILEAGE_REPORT_EMAILS = env.list(
@@ -740,16 +818,35 @@ MCP_ENABLED = env.bool("MCP_ENABLED", default=True)
 # the test suite turns it off (root conftest.py) and enables it per test.
 LEGAL_ACCEPTANCE_ENFORCED = env.bool("LEGAL_ACCEPTANCE_ENFORCED", default=True)
 # Optional rollout allowlist of tenant ids ("17,18"); empty → every brand.
+# Kill switch: False (the default) → /mcp and /oauth/* answer 503 and tokens
+# stop working. Production turns it on with MCP_ENABLED=true on Cloud Run.
+MCP_ENABLED = env.bool("MCP_ENABLED", default=False)
+
+# Brand "Where to go next" store recommendations publish to the brand as soon
+# as they are worked out (alerts still wait for staff review). Set false to
+# hold recommendations as drafts again.
+BRAND_INSIGHTS_AUTO_PUBLISH_RECOMMENDATIONS = env.bool(
+    "BRAND_INSIGHTS_AUTO_PUBLISH_RECOMMENDATIONS", default=True
+)
+# Rollout allowlist of tenant ids ("17,18"); "all" → every brand; empty →
+# no brand (spark_mcp.conf), so turning MCP_ENABLED on alone exposes nothing.
 MCP_ALLOWED_TENANT_IDS = env.list("MCP_ALLOWED_TENANT_IDS", default=[])
 MCP_DAILY_CALLS_PER_TENANT = env.int("MCP_DAILY_CALLS_PER_TENANT", default=500)
 MCP_CALLS_PER_MINUTE_PER_CONNECTION = env.int(
     "MCP_CALLS_PER_MINUTE_PER_CONNECTION", default=30
 )
+MCP_RPC_PER_MINUTE_PER_CONNECTION = env.int("MCP_RPC_PER_MINUTE_PER_CONNECTION", default=120)
 MCP_ACCESS_TOKEN_TTL_SECONDS = env.int("MCP_ACCESS_TOKEN_TTL_SECONDS", default=3600)
 MCP_REFRESH_TOKEN_TTL_DAYS = env.int("MCP_REFRESH_TOKEN_TTL_DAYS", default=30)
+# Web app that runs "Continue with Google" for the consent page; empty →
+# CLIENT_FRONTEND_URL.
+MCP_SIGNIN_FRONTEND_URL = env("MCP_SIGNIN_FRONTEND_URL", default="")
 # Unset → the built-in lists in spark_mcp/conf.py (Claude + ChatGPT hosts).
-if env("MCP_ALLOWED_REDIRECT_HOSTS", default=None) is not None:
-    MCP_ALLOWED_REDIRECT_HOSTS = env.list("MCP_ALLOWED_REDIRECT_HOSTS")
+# Exact callback URLs (comma separated); unset → Claude + ChatGPT defaults.
+if env("MCP_ALLOWED_REDIRECT_URIS", default=None) is not None:
+    MCP_ALLOWED_REDIRECT_URIS = env.list("MCP_ALLOWED_REDIRECT_URIS")
+# X-Forwarded-For entries appended by trusted proxies (Cloud Run front end: 1).
+MCP_TRUSTED_PROXY_HOPS = env.int("MCP_TRUSTED_PROXY_HOPS", default=1)
 if env("MCP_ALLOWED_CIMD_HOSTS", default=None) is not None:
     MCP_ALLOWED_CIMD_HOSTS = env.list("MCP_ALLOWED_CIMD_HOSTS")
 if env("MCP_ALLOWED_ORIGINS", default=None) is not None:

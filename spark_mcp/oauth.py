@@ -13,10 +13,13 @@ Endpoints (all under the API's public origin, the issuer):
 Client ID Metadata Documents are supported too: an https ``client_id`` on an
 allowed host is fetched and its ``redirect_uris`` are used.
 
-Sign-in reuses Spark accounts: email + password (the same backend as the
-app's login) or a one-time email link for people who normally use Google
-sign-in or magic links. The sign-in lives only in this page's session key
-(``SESSION_USER_KEY``); it is not a Django login and grants nothing else.
+Sign-in reuses Spark accounts: "Continue with Google" (handed off to the
+Spark web app's own Google sign-in, see ``McpSignInHandoff``), email +
+password (the same backend as the app's login), or a one-time email link.
+Every path requires a verified account (gqlauth ``UserStatus.verified``, the
+gate the app's own sign-in uses). The sign-in lives only in this page's
+session key (``SESSION_USER_KEY``); it is not a Django login and grants
+nothing else.
 """
 
 from __future__ import annotations
@@ -27,13 +30,13 @@ import ipaddress
 import json
 import logging
 import secrets
+import time
 from datetime import timedelta
 from urllib.parse import urlencode, urlsplit
 
 import httpx
 from django.contrib.auth import authenticate, get_user_model
 from django.core import signing
-from django.core.cache import cache
 from django.db import transaction
 from django.http import HttpRequest, HttpResponse, HttpResponseRedirect, JsonResponse
 from django.shortcuts import render
@@ -41,15 +44,30 @@ from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_http_methods, require_POST
 
-from . import conf
-from .access import eligible_tenants
-from .models import McpAuthorizationCode, McpClient, McpConnection, McpToken, digest
+from . import conf, throttle
+from .access import eligible_tenants, is_verified
+from .models import (
+    McpAuthorizationCode,
+    McpClient,
+    McpConnection,
+    McpSignInHandoff,
+    McpToken,
+    digest,
+)
 
 logger = logging.getLogger(__name__)
 
 SESSION_USER_KEY = "spark_mcp_uid"
 SESSION_LINK_NONCE = "spark_mcp_link_nonce"
 SESSION_FORM_TOKEN = "spark_mcp_form_token"
+SESSION_HANDOFF_BINDING = "spark_mcp_handoff_binding"
+SESSION_USER_AT = "spark_mcp_uid_at"
+# A sign-in on this page is good for one approval, within 10 minutes.
+SIGNIN_MAX_AGE = 10 * 60
+NOT_VERIFIED = (
+    "Please verify your account first. Use the verification email Spark sent you, "
+    "or ask your Ignite contact."
+)
 REQUEST_SALT = "spark.mcp.authorize.v1"
 LINK_SALT = "spark.mcp.signin-link.v1"
 REQUEST_MAX_AGE = 30 * 60
@@ -57,6 +75,8 @@ LINK_MAX_AGE = 15 * 60
 LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "[::1]", "::1"}
 CIMD_REFRESH = timedelta(hours=24)
 CIMD_MAX_BYTES = 64 * 1024
+CIMD_DEADLINE_SECONDS = 5.0
+CIMD_FAILURE_MEMO_SECONDS = 10 * 60
 
 
 # ─── Small helpers ─────────────────────────────────────────────────
@@ -70,24 +90,12 @@ def _disabled() -> JsonResponse:
 
 
 def _client_ip(request: HttpRequest) -> str:
-    fwd = request.META.get("HTTP_X_FORWARDED_FOR", "")
-    return (fwd.split(",")[0].strip() if fwd else request.META.get("REMOTE_ADDR", "")) or "?"
+    return throttle.client_ip(request)
 
 
 def _throttled(bucket: str, limit: int, seconds: int) -> bool:
-    """Best-effort per-instance throttle on the Django cache."""
-    key = f"spark_mcp:throttle:{bucket}"
-    try:
-        count = cache.get_or_set(key, 0, seconds)
-        if count >= limit:
-            return True
-        try:
-            cache.incr(key)
-        except ValueError:
-            cache.set(key, 1, seconds)
-    except Exception:  # noqa: BLE001 — a cache outage must not block sign-in
-        return False
-    return False
+    """Shared across instances (database), keyed on the trusted client IP."""
+    return throttle.hit(bucket, limit, seconds)
 
 
 def _oauth_error(error: str, description: str, status: int = 400) -> JsonResponse:
@@ -101,8 +109,9 @@ def _new_secret(prefix: str) -> str:
 
 
 def _host_allowed(host: str, allowed: list[str]) -> bool:
+    """Exact host match only: no subdomains."""
     host = (host or "").lower().rstrip(".")
-    return any(host == h or host.endswith("." + h) for h in allowed)
+    return host in allowed
 
 
 def _is_loopback(parts) -> bool:
@@ -118,12 +127,17 @@ def redirect_uri_allowed_for_registration(uri: str) -> bool:
         return False
     if _is_loopback(parts):
         return True
-    return parts.scheme == "https" and _host_allowed(parts.hostname, conf.allowed_redirect_hosts())
+    # Anything else must be one of the exact callback URLs Ignite approved.
+    return parts.scheme == "https" and uri in conf.allowed_redirect_uris()
 
 
 def redirect_uri_matches(uri: str, registered: list[str]) -> bool:
     """Exact match, except loopback redirects match on any port (RFC 8252 §7.3;
-    Claude Code and the MCP Inspector pick a port per session)."""
+    Claude Code and the MCP Inspector pick a port per session). The URI must
+    also still be on today's allow-list, so tightening the list cuts off
+    clients that registered under an older, looser one."""
+    if not redirect_uri_allowed_for_registration(uri):
+        return False
     if uri in registered:
         return True
     try:
@@ -310,15 +324,16 @@ def _cimd_url_ok(client_id: str) -> bool:
 
 
 def _fetch_cimd(client_id: str) -> dict | None:
+    deadline = time.monotonic() + CIMD_DEADLINE_SECONDS
     try:
-        with httpx.Client(timeout=5.0, follow_redirects=False) as http:
+        with httpx.Client(timeout=CIMD_DEADLINE_SECONDS, follow_redirects=False) as http:
             with http.stream("GET", client_id, headers={"Accept": "application/json"}) as resp:
                 if resp.status_code != 200:
                     return None
                 chunks, size = [], 0
                 for chunk in resp.iter_bytes():
                     size += len(chunk)
-                    if size > CIMD_MAX_BYTES:
+                    if size > CIMD_MAX_BYTES or time.monotonic() > deadline:
                         return None
                     chunks.append(chunk)
         doc = json.loads(b"".join(chunks))
@@ -347,8 +362,15 @@ def resolve_client(client_id: str) -> McpClient | None:
         return None
     if client is not None and client.updated_at > timezone.now() - CIMD_REFRESH:
         return client
+    # Fetching is triggered by anyone loading the consent page, so a failing
+    # document is remembered for 10 minutes and fetches are capped per id.
+    if throttle.marked_within(f"cimd-fail:{client_id}", CIMD_FAILURE_MEMO_SECONDS):
+        return client
+    if throttle.hit(f"cimd-fetch:{client_id}", 10, 3600):
+        return client
     doc = _fetch_cimd(client_id)
     if doc is None:
+        throttle.mark(f"cimd-fail:{client_id}")
         return client  # keep using the last good copy if we had one
     uris = [u for u in doc["redirect_uris"] if redirect_uri_allowed_for_registration(u)]
     if not uris:
@@ -428,14 +450,55 @@ def _validate_authorize(params) -> tuple[dict | None, HttpResponse | None, str]:
     )
 
 
+def _sign_in(request, user) -> None:
+    request.session.cycle_key()
+    request.session[SESSION_USER_KEY] = user.pk
+    request.session[SESSION_USER_AT] = int(time.time())
+
+
+def _sign_out(request) -> None:
+    request.session.pop(SESSION_USER_KEY, None)
+    request.session.pop(SESSION_USER_AT, None)
+
+
 def _session_user(request):
     uid = request.session.get(SESSION_USER_KEY)
     if not uid:
         return None
+    at = request.session.get(SESSION_USER_AT)
+    if not isinstance(at, int) or time.time() - at > SIGNIN_MAX_AGE:
+        _sign_out(request)
+        return None
     user = get_user_model().objects.filter(pk=uid, is_active=True).first()
     if user is None:
-        request.session.pop(SESSION_USER_KEY, None)
+        _sign_out(request)
     return user
+
+
+def _client_labels(client: McpClient | None, redirect_uri: str) -> dict:
+    """What the consent page may say about the app. A name an app registered
+    for itself (dynamic registration) is only a claim, so it's never the
+    headline; a Client ID Metadata Document fetched from an approved host
+    (claude.ai, chatgpt.com, ...) is vouched for by that host."""
+    verified = (
+        client is not None
+        and client.kind == McpClient.KIND_CIMD
+        and _cimd_url_ok(client.client_id)
+    )
+    if verified:
+        host = urlsplit(client.client_id).hostname or ""
+        return {
+            "client_name": (client.client_name or "").strip() or host,
+            "client_verified": True,
+            "client_host": host,
+            "claimed_name": "",
+        }
+    return {
+        "client_name": "An AI app",
+        "client_verified": False,
+        "client_host": "",
+        "claimed_name": (client.client_name or "").strip()[:80] if client else "",
+    }
 
 
 def _render_step(request, req: dict, *, error: str = "", notice: str = "", status: int = 200):
@@ -444,7 +507,8 @@ def _render_step(request, req: dict, *, error: str = "", notice: str = "", statu
     redirect_host = urlsplit(req["redirect_uri"]).hostname or ""
     common = {
         "req": blob,
-        "client_name": client.display_name if client else "An AI app",
+        **_client_labels(client, req["redirect_uri"]),
+        "redirect_uri": req["redirect_uri"],
         "redirect_host": redirect_host,
         "loopback": redirect_host.lower() in LOOPBACK_HOSTS,
         "error": error,
@@ -452,6 +516,10 @@ def _render_step(request, req: dict, *, error: str = "", notice: str = "", statu
     }
     common["form_token"] = _form_token(request)
     user = _session_user(request)
+    if user is not None and not is_verified(user):
+        _sign_out(request)
+        user = None
+        common["error"] = NOT_VERIFIED
     if user is None:
         return _page(request, "login", status=status, **common)
     tenants = list(eligible_tenants(user).values("uuid", "name")[:500])
@@ -511,10 +579,13 @@ def authorize_view(request: HttpRequest) -> HttpResponse:
         return _do_login(request, req)
     if action == "email_link":
         return _do_email_link(request, req)
+    if action == "google":
+        return _do_google_handoff(request, req)
     if action == "switch":
-        request.session.pop(SESSION_USER_KEY, None)
+        _sign_out(request)
         return _render_step(request, req)
     if action == "deny":
+        _sign_out(request)
         return _redirect_with(
             req["redirect_uri"],
             {"error": "access_denied", "error_description": "The user declined.", "state": req["state"]},
@@ -535,14 +606,22 @@ def _load_req(blob: str) -> dict | None:
 def _do_login(request, req):
     email = (request.POST.get("email") or "").strip()
     password = request.POST.get("password") or ""
-    bucket = f"login:{email.lower()}:{_client_ip(request)}"
-    if _throttled(bucket, 10, 900):
-        return _render_step(request, req, error="Too many tries. Wait 15 minutes, or use the email link instead.", status=429)
+    # Per account whatever the IP (rotating addresses don't buy more guesses),
+    # plus per IP across accounts.
+    if _throttled(f"login-acct:{email.lower()}", 10, 900) or _throttled(
+        f"login-ip:{_client_ip(request)}", 50, 900
+    ):
+        return _render_step(
+            request, req,
+            error="Too many password tries. Use Continue with Google or the email link, or wait 15 minutes.",
+            status=429,
+        )
     user = authenticate(request, username=email, password=password) if email and password else None
     if user is None:
         return _render_step(request, req, error="That email and password didn't match a Spark account.", status=400)
-    request.session.cycle_key()
-    request.session[SESSION_USER_KEY] = user.pk
+    if not is_verified(user):
+        return _render_step(request, req, error=NOT_VERIFIED, status=400)
+    _sign_in(request, user)
     return _render_step(request, req)
 
 
@@ -554,7 +633,7 @@ def _do_email_link(request, req):
     ):
         return _render_step(request, req, notice=notice)
     user = get_user_model().objects.filter(email__iexact=email, is_active=True).first()
-    if user is not None:
+    if user is not None and is_verified(user):
         # The link only works in the browser that asked for it: the session
         # holds a nonce the link must match. A link forwarded to (or phished
         # out of) someone else's inbox can't finish someone else's connection.
@@ -595,13 +674,146 @@ def signin_link_view(request: HttpRequest) -> HttpResponse:
     user = get_user_model().objects.filter(pk=data.get("u"), is_active=True).first()
     if user is None or user.email != data.get("e"):
         return _page(request, "message", status=400, message="This sign-in link isn't valid.")
-    request.session.cycle_key()
+    if not is_verified(user):
+        return _page(request, "message", status=400, message=NOT_VERIFIED)
     request.session.pop(SESSION_LINK_NONCE, None)
-    request.session[SESSION_USER_KEY] = user.pk
+    _sign_in(request, user)
     req = data.get("r") or {}
     return HttpResponseRedirect(
         "/oauth/authorize?" + urlencode({"req": signing.dumps(req, salt=REQUEST_SALT)})
     )
+
+
+# ─── "Continue with Google" (handoff to the Spark web app) ─────────
+#
+# Why a handoff: Google Identity Services only runs on origins listed on the
+# OAuth client, and the consent page's hosts aren't. The web app already runs
+# Google sign-in (and matches the Google email to a Spark account), so the
+# consent page borrows it. Three secrets keep it tight:
+#   start nonce  — in the link to the web app; burned by the approve mutation
+#   return nonce — minted by that mutation, seen only by the approving browser
+#   binding      — lives in the consent page's session in the starting browser
+# Finishing needs the return nonce AND the binding, so a link phished into
+# someone else's browser can't finish, and the person who started can't
+# finish someone else's approval either (they never see the return nonce).
+
+
+def _do_google_handoff(request, req):
+    if _throttled(f"handoff:{_client_ip(request)}", 20, 900):
+        return _render_step(request, req, error="Too many tries. Wait 15 minutes and try again.", status=429)
+    frontend = conf.signin_frontend_url()
+    if not frontend:
+        return _render_step(request, req, error="Google sign-in isn't available right now. Use your password or an email link.", status=503)
+    start = secrets.token_urlsafe(32)
+    binding = secrets.token_urlsafe(32)
+    request.session[SESSION_HANDOFF_BINDING] = binding
+    McpSignInHandoff.objects.create(
+        start_hash=digest(start),
+        binding_hash=digest(binding),
+        request=req,
+        expires_at=timezone.now() + timedelta(seconds=conf.signin_handoff_ttl_seconds()),
+    )
+    resp = HttpResponseRedirect(f"{frontend}/connect-ai?{urlencode({'h': start})}")
+    resp["Cache-Control"] = "no-store"
+    resp["Referrer-Policy"] = "no-referrer"
+    return resp
+
+
+NOT_A_BRAND_ACCOUNT = (
+    "This account can't connect AI apps. Brand ambassador accounts can't, and "
+    "other accounts need to be a member of a brand. Ask your Ignite contact."
+)
+
+
+def approve_handoff(user, start_nonce: str) -> tuple[bool, str, str]:
+    """Called by the web app (``approveAiSignIn``) once ``user`` is signed in
+    there. Returns (ok, message, return_url)."""
+    expired = "This sign-in request expired. Start again from your AI app."
+    if not conf.enabled():
+        return False, "AI connections are turned off right now.", ""
+    if not start_nonce or len(start_nonce) > 200:
+        return False, expired, ""
+    if _throttled(f"handoff-approve:{user.pk}", 10, 900):
+        return False, "Too many tries. Wait 15 minutes and try again.", ""
+    now = timezone.now()
+    with transaction.atomic():
+        row = (
+            McpSignInHandoff.objects.select_for_update()
+            .filter(start_hash=digest(start_nonce))
+            .first()
+        )
+        if row is None or row.approved_at or row.used_at or row.expires_at <= now:
+            return False, expired, ""
+        db_user = get_user_model().objects.filter(pk=user.pk, is_active=True).first()
+        if db_user is None or not is_verified(db_user):
+            reason, message = "not verified", NOT_VERIFIED
+        elif not eligible_tenants(db_user).exists():
+            reason, message = "no brand", NOT_A_BRAND_ACCOUNT
+        else:
+            reason, message = "", ""
+        if reason:
+            row.used_at = now
+            row.refused_reason = reason
+            row.user = db_user
+            row.save(update_fields=["used_at", "refused_reason", "user"])
+            return False, message, ""
+        back = secrets.token_urlsafe(32)
+        row.return_hash = digest(back)
+        row.user = db_user
+        row.approved_at = now
+        row.save(update_fields=["return_hash", "user", "approved_at"])
+    logger.info("MCP Google sign-in handoff approved user=%s", user.pk)
+    return True, "Signed in.", f"{conf.issuer()}/oauth/authorize/google?{urlencode({'h': back})}"
+
+
+@require_GET
+def google_return_view(request: HttpRequest) -> HttpResponse:
+    """Back from the web app. Only the browser that started, once, in time."""
+    if not conf.enabled():
+        return _page(request, "message", status=503, message="AI connections are turned off right now.")
+    expired = "This sign-in didn't finish. Start again from your AI app."
+    if _throttled(f"handoff-return:{_client_ip(request)}", 30, 900):
+        return _page(request, "message", status=429, message="Too many tries. Wait 15 minutes and try again.")
+    back = request.GET.get("h", "")
+    if not back or len(back) > 200:
+        return _page(request, "message", status=400, message=expired)
+    binding = request.session.get(SESSION_HANDOFF_BINDING) or ""
+    now = timezone.now()
+    with transaction.atomic():
+        row = (
+            McpSignInHandoff.objects.select_for_update(of=("self",))
+            .select_related("user")
+            .filter(return_hash=digest(back))
+            .first()
+        )
+        if row is None or row.used_at is not None:
+            return _page(request, "message", status=400, message=expired)
+        # Single use whatever happens next: a wrong-browser attempt burns it.
+        row.used_at = now
+        ok_binding = bool(binding) and secrets.compare_digest(digest(binding), row.binding_hash)
+        if not ok_binding:
+            row.refused_reason = "wrong browser"
+        row.save(update_fields=["used_at", "refused_reason"])
+    if not ok_binding:
+        return _page(
+            request,
+            "message",
+            status=400,
+            message="Finish signing in in the same browser where you started connecting your AI app.",
+        )
+    if row.expires_at <= now or row.approved_at is None:
+        return _page(request, "message", status=400, message=expired)
+    user = row.user
+    if user is None or not user.is_active or not is_verified(user):
+        return _page(request, "message", status=400, message=NOT_VERIFIED)
+    request.session.pop(SESSION_HANDOFF_BINDING, None)
+    _sign_in(request, user)
+    # A path on this host, never a URL from the request.
+    resp = HttpResponseRedirect(
+        "/oauth/authorize?" + urlencode({"req": signing.dumps(row.request, salt=REQUEST_SALT)})
+    )
+    resp["Cache-Control"] = "no-store"
+    return resp
 
 
 def _do_approve(request, req):
@@ -632,6 +844,7 @@ def _do_approve(request, req):
             scope=req["scope"],
             expires_at=timezone.now() + timedelta(seconds=conf.auth_code_ttl_seconds()),
         )
+    _sign_out(request)  # one sign-in, one approval
     logger.info(
         "MCP connection approved user=%s tenant=%s client=%s", user.pk, tenant.pk, client.client_id
     )
@@ -641,7 +854,9 @@ def _do_approve(request, req):
 # ─── Token endpoint ────────────────────────────────────────────────
 
 
-def _issue_tokens(connection: McpConnection, *, resource: str, scope: str) -> dict:
+def _issue_tokens(
+    connection: McpConnection, *, resource: str, scope: str, auth_code_id: int | None = None
+) -> dict:
     now = timezone.now()
     access = _new_secret("spk_at_")
     refresh = _new_secret("spk_rt_")
@@ -651,6 +866,7 @@ def _issue_tokens(connection: McpConnection, *, resource: str, scope: str) -> di
                 token_hash=digest(access),
                 kind=McpToken.KIND_ACCESS,
                 connection=connection,
+                auth_code_id=auth_code_id,
                 resource=resource,
                 scope=scope,
                 expires_at=now + timedelta(seconds=conf.access_token_ttl_seconds()),
@@ -659,6 +875,7 @@ def _issue_tokens(connection: McpConnection, *, resource: str, scope: str) -> di
                 token_hash=digest(refresh),
                 kind=McpToken.KIND_REFRESH,
                 connection=connection,
+                auth_code_id=auth_code_id,
                 resource=resource,
                 scope=scope,
                 expires_at=now + timedelta(seconds=conf.refresh_token_ttl_seconds()),
@@ -700,10 +917,15 @@ def token_view(request: HttpRequest) -> JsonResponse:
 
 
 def _grant_code(data, client_id: str) -> JsonResponse:
+    """Everything that proves the caller is the client the code was issued to
+    (client_id, redirect_uri, PKCE verifier) is checked before the code is
+    touched, so a leaked code alone can neither use nor burn anything. A
+    genuine replay (all checks pass, code already used) revokes the tokens
+    minted from that code and nothing else (RFC 6819 §4.4.1.1)."""
     code = data.get("code", "")
     with transaction.atomic():
         row = (
-            McpAuthorizationCode.objects.select_for_update()
+            McpAuthorizationCode.objects.select_for_update(of=("self",))
             .select_related("connection", "connection__client")
             .filter(code_hash=digest(code))
             .first()
@@ -713,25 +935,27 @@ def _grant_code(data, client_id: str) -> JsonResponse:
         if row is None:
             return _oauth_error("invalid_grant", "Unknown authorization code.")
         connection = row.connection
+        if not client_id or client_id != connection.client.client_id:
+            return _oauth_error("invalid_grant", "Code was issued to a different client.")
+        if data.get("redirect_uri", "") != row.redirect_uri:
+            return _oauth_error("invalid_grant", "redirect_uri does not match.")
+        if not _pkce_ok(data.get("code_verifier", ""), row.code_challenge):
+            return _oauth_error("invalid_grant", "PKCE verification failed.")
         if row.used_at is not None:
-            # Replay of a code: kill everything minted from it (RFC 6819 §4.4.1.1).
-            connection.revoke(reason="authorization code replayed")
+            McpToken.objects.filter(auth_code=row, revoked_at__isnull=True).update(
+                revoked_at=timezone.now()
+            )
+            logger.warning("MCP authorization code replayed; its tokens revoked (connection %s)", connection.pk)
             return _oauth_error("invalid_grant", "Authorization code already used.")
+        if row.expires_at <= timezone.now():
+            return _oauth_error("invalid_grant", "Authorization code expired.")
+        if not _canonical_resource_ok(data.get("resource")):
+            return _oauth_error("invalid_target", f"Unknown resource. Use {conf.resource_url()}.")
+        if not connection.is_active or connection.client.disabled:
+            return _oauth_error("invalid_grant", "This connection was revoked.")
         row.used_at = timezone.now()
         row.save(update_fields=["used_at"])
-    if row.expires_at <= timezone.now():
-        return _oauth_error("invalid_grant", "Authorization code expired.")
-    if client_id != connection.client.client_id:
-        return _oauth_error("invalid_grant", "Code was issued to a different client.")
-    if data.get("redirect_uri", "") != row.redirect_uri:
-        return _oauth_error("invalid_grant", "redirect_uri does not match.")
-    if not _pkce_ok(data.get("code_verifier", ""), row.code_challenge):
-        return _oauth_error("invalid_grant", "PKCE verification failed.")
-    if not _canonical_resource_ok(data.get("resource")):
-        return _oauth_error("invalid_target", f"Unknown resource. Use {conf.resource_url()}.")
-    if not connection.is_active or connection.client.disabled:
-        return _oauth_error("invalid_grant", "This connection was revoked.")
-    body = _issue_tokens(connection, resource=row.resource, scope=row.scope)
+        body = _issue_tokens(connection, resource=row.resource, scope=row.scope, auth_code_id=row.pk)
     resp = JsonResponse(body)
     resp["Cache-Control"] = "no-store"
     resp["Pragma"] = "no-cache"
@@ -752,14 +976,16 @@ def _grant_refresh(data, client_id: str) -> JsonResponse:
         if token is None:
             return _oauth_error("invalid_grant", "Unknown refresh token.")
         connection = token.connection
+        # client_id is required and checked first: a leaked refresh token
+        # without the client's id can't use or burn anything.
+        if not client_id or client_id != connection.client.client_id:
+            return _oauth_error("invalid_grant", "Refresh token was issued to a different client.")
         if token.used_at is not None:
             connection.revoke(reason="refresh token reused")
             logger.warning("MCP refresh token reuse; connection %s revoked", connection.pk)
             return _oauth_error("invalid_grant", "Refresh token already used.")
         if token.revoked_at is not None or token.expires_at <= timezone.now():
             return _oauth_error("invalid_grant", "Refresh token expired or revoked.")
-        if client_id and client_id != connection.client.client_id:
-            return _oauth_error("invalid_grant", "Refresh token was issued to a different client.")
         if not connection.is_active or connection.client.disabled:
             return _oauth_error("invalid_grant", "This connection was revoked.")
         if not _canonical_resource_ok(data.get("resource")):
@@ -773,7 +999,9 @@ def _grant_refresh(data, client_id: str) -> JsonResponse:
         token.save(update_fields=["used_at"])
         # The old access tokens of this connection stay valid until expiry;
         # only the refresh token rotates.
-        body = _issue_tokens(connection, resource=token.resource, scope=token.scope)
+        body = _issue_tokens(
+            connection, resource=token.resource, scope=token.scope, auth_code_id=token.auth_code_id
+        )
     resp = JsonResponse(body)
     resp["Cache-Control"] = "no-store"
     resp["Pragma"] = "no-cache"

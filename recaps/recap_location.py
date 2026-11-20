@@ -148,6 +148,7 @@ CHAINS: dict[str, tuple[str, ...]] = {
     "King Soopers": ("kingsoopers",),
     "Fry's Food Stores": ("frysfood", "frysfoodstores", "frysmarketplace"),
     "Fred Meyer": ("fredmeyer",),
+    "Market of Choice": ("marketofchoice",),
     "Winn-Dixie": ("winndixie",),
     "ShopRite": ("shoprite",),
     "Stop & Shop": ("stopandshop", "stopshop"),
@@ -498,6 +499,9 @@ def gather_snippets(recap) -> list[Snippet]:
     if event is not None:
         add("event_address", event.address)
         add("event_name", event.name)
+        # A walk-in title carries the BA's typed store in parentheses:
+        # "10/20/2026 - 123 Main St (Savor St Pete) · Retail Sampling".
+        add(TITLE_STORE_SOURCE, title_store_text(event.name))
     if request is not None:
         add("request_address", request.address)
         add("request_address", request.retailer_address)
@@ -656,6 +660,311 @@ def _catalog_states(city: str) -> set[str]:
     }
 
 
+# ─── Same address ───────────────────────────────────────────────────
+#
+# A walk-in event is often opened with no store name, at an address another
+# event of the same brand already names ("8031 Wadsworth Blvd" today, a
+# scheduled "King Soopers, 8031 Wadsworth Boulevard, Arvada, CO 80003" last
+# month). Matching is on house number + street name only: case, punctuation,
+# street-type spelling (Boulevard/Blvd, Drive/Dr, Road/Rd, Street/St) and
+# directionals (NE/N.E./Northeast) are folded, and the city / state / ZIP
+# after the street are ignored. Two different stores at one address, or two
+# different states, fill nothing.
+
+SAME_ADDRESS_SOURCE = "same_address"
+TITLE_STORE_SOURCE = "title_store"
+
+_STREET_TYPES = {
+    "street": "st", "st": "st", "avenue": "ave", "ave": "ave", "av": "ave",
+    "boulevard": "blvd", "blvd": "blvd", "drive": "dr", "dr": "dr",
+    "road": "rd", "rd": "rd", "lane": "ln", "ln": "ln", "court": "ct",
+    "ct": "ct", "circle": "cir", "cir": "cir", "place": "pl", "pl": "pl",
+    "parkway": "pkwy", "pkwy": "pkwy", "highway": "hwy", "hwy": "hwy",
+    "way": "way", "terrace": "ter", "ter": "ter", "trail": "trl", "trl": "trl",
+    "square": "sq", "sq": "sq", "pike": "pike", "plaza": "plz", "plz": "plz",
+    "expressway": "expy", "expy": "expy", "freeway": "fwy", "fwy": "fwy",
+    "crossing": "xing", "xing": "xing", "loop": "loop", "center": "ctr",
+    "ctr": "ctr", "commons": "cmns", "cmns": "cmns",
+}
+_DIRECTIONS = {
+    "north": "n", "n": "n", "south": "s", "s": "s", "east": "e", "e": "e",
+    "west": "w", "w": "w", "northeast": "ne", "ne": "ne", "northwest": "nw",
+    "nw": "nw", "southeast": "se", "se": "se", "southwest": "sw", "sw": "sw",
+}
+_UNIT_WORDS = {"suite", "ste", "unit", "apt", "bldg", "building", "space", "spc"}
+
+
+@dataclass(frozen=True)
+class StreetKey:
+    number: str
+    name: tuple[str, ...]
+    street_type: str = ""
+    directions: frozenset = frozenset()
+
+    def same_place(self, other: "StreetKey") -> bool:
+        if self.number != other.number or self.name != other.name:
+            return False
+        if self.street_type and other.street_type and self.street_type != other.street_type:
+            return False
+        if self.directions and other.directions and self.directions != other.directions:
+            return False
+        return True
+
+
+def street_key(address: str | None) -> StreetKey | None:
+    """House number + street of an address, spelling-folded; None when the
+    address does not start with a house number."""
+    text = (address or "").casefold().replace(".", "").replace("#", " # ")
+    if not text.strip():
+        return None
+    had_comma = "," in text
+    line = text.split(",", 1)[0]
+    tokens = re.findall(r"[a-z0-9]+|#", line)
+    if not tokens or not tokens[0].isdigit():
+        return None
+    number = tokens[0].lstrip("0") or "0"
+    name: list[str] = []
+    dirs: set[str] = set()
+    street_type = ""
+    rest = tokens[1:]
+    i = 0
+    while i < len(rest):
+        tok = rest[i]
+        if tok == "#" or tok in _UNIT_WORDS:
+            break
+        if tok in _STREET_TYPES and name:
+            street_type = _STREET_TYPES[tok]
+            # Trailing directionals ("Monroe Dr NE"), then stop: what follows
+            # without a comma is the city.
+            for nxt in rest[i + 1 :]:
+                if nxt in _DIRECTIONS:
+                    dirs.add(_DIRECTIONS[nxt])
+                else:
+                    break
+            break
+        if tok in _DIRECTIONS and (not name or i == len(rest) - 1 or rest[i + 1] in _DIRECTIONS):
+            dirs.add(_DIRECTIONS[tok])
+            i += 1
+            continue
+        name.append(tok)
+        i += 1
+    if not street_type and not had_comma:
+        # "8031 Wadsworth Arvada CO 80003": no street type and no comma, so
+        # the city may be in the name. Drop a trailing ZIP and state; what
+        # is left must then match exactly, so a stray city fails closed.
+        while name and (re.fullmatch(r"\d{5}", name[-1]) or state_code_of(name[-1])):
+            name.pop()
+    if not name:
+        return None
+    return StreetKey(number, tuple(name), street_type, frozenset(dirs))
+
+
+def same_street_address(a: str | None, b: str | None) -> bool:
+    """True when two addresses are the same house number on the same street,
+    and they do not name two different states."""
+    ka, kb = street_key(a), street_key(b)
+    if ka is None or kb is None or not ka.same_place(kb):
+        return False
+    sa, sb = parse_address_geo(a or "").state_code, parse_address_geo(b or "").state_code
+    return not (sa and sb and sa != sb)
+
+
+_WALKIN_TITLE_RE = re.compile(r"^\s*\d{1,2}/\d{1,2}/\d{4}\s*-\s*")
+
+
+def title_store_text(name: str | None) -> str:
+    """The store a walk-in title names in parentheses, else "".
+
+    "10/20/2026 - 123 Main St (Savor St Pete) · Retail Sampling" -> "Savor St
+    Pete". Only walk-in titles (date first): a scheduled event's own name
+    ("Kroger (Houston)") is read by the event-name rule."""
+    from ambassadors.checkin_web import _trailing_parenthetical
+
+    text = _clean(name)
+    if not _WALKIN_TITLE_RE.match(text):
+        return ""
+    text = re.sub(r"\s+·\s+[^()·]*$", "", text).strip()
+    inner = _trailing_parenthetical(text)
+    if not inner or _WALKIN_TITLE_RE.match(inner):
+        return ""
+    return inner
+
+
+@dataclass
+class Place:
+    """One address the tenant already knows, with the store and state on it."""
+
+    address: str
+    key: StreetKey
+    chain: str = ""
+    retailer_id: int | None = None
+    state_code: str = ""
+    event_id: int | None = None
+    origin: str = ""  # event | recap | request | retailer
+
+
+class AddressBook:
+    """A tenant's known places, looked up by street address."""
+
+    def __init__(self, places: list[Place] | None = None):
+        self._by_street: dict[tuple[str, tuple[str, ...]], list[Place]] = {}
+        for place in places or ():
+            self.add(place)
+
+    def add(self, place: Place) -> None:
+        self._by_street.setdefault((place.key.number, place.key.name), []).append(place)
+
+    def __len__(self) -> int:
+        return sum(len(v) for v in self._by_street.values())
+
+    @classmethod
+    def for_tenant(cls, tenant_id: int, index: ChainIndex, *, house_number: str = "") -> AddressBook:
+        """Every event, recap, live request and retailer of the tenant that
+        has an address. ``house_number`` narrows the read to addresses that
+        contain it (one check-in, not a whole backfill)."""
+        from events.models import Event, Request, Retailer
+        from recaps.models import CustomRecap
+
+        book = cls()
+
+        def chain_of(name: str | None) -> str:
+            name = _clean(name)
+            if not name or is_junk_name(name):
+                return ""
+            return index.canonical(name) or chain_in_text(name, index)[0] or name
+
+        def add(address, *, chain="", retailer_id=None, state="", event_id=None, origin=""):
+            key = street_key(address)
+            if key is None:
+                return
+            state = (state or "").strip().upper() or (parse_address_geo(address).state_code or "")
+            if not chain and not state:
+                return
+            book.add(Place(_clean(address), key, chain, retailer_id, state, event_id, origin))
+
+        def narrowed(qs, field_name):
+            qs = qs.exclude(**{f"{field_name}__isnull": True}).exclude(**{field_name: ""})
+            if house_number:
+                qs = qs.filter(**{f"{field_name}__contains": house_number})
+            return qs
+
+        events = narrowed(Event.objects.filter(tenant_id=tenant_id), "address").values_list(
+            "id", "address", "name", "retailer_id", "retailer__name", "state__code",
+            "request__retailer_id", "request__retailer__name", "request__retailer_name",
+        )
+        for eid, addr, name, rid, rname, state, req_rid, req_rname, req_typed in events.iterator():
+            chain, chain_rid = "", None
+            if rid:
+                chain, chain_rid = chain_of(rname), rid
+            elif req_rid:
+                chain, chain_rid = chain_of(req_rname), req_rid
+            elif _clean(req_typed):
+                chain = index.canonical(req_typed) or chain_in_text(req_typed, index)[0]
+            else:
+                chain = chain_in_text(title_store_text(name), index)[0] if title_store_text(name) else ""
+            add(addr, chain=chain, retailer_id=chain_rid, state=state or "", event_id=eid, origin="event")
+
+        recaps = narrowed(
+            CustomRecap.objects.filter(tenant_id=tenant_id, retailer__isnull=False), "event__address"
+        ).values_list("event_id", "event__address", "retailer_id", "retailer__name", "state__code")
+        for eid, addr, rid, rname, state in recaps.iterator():
+            add(addr, chain=chain_of(rname), retailer_id=rid, state=state or "", event_id=eid, origin="recap")
+
+        requests = narrowed(
+            Request.objects.filter(tenant_id=tenant_id, deleted_at__isnull=True), "address"
+        ).values_list("address", "retailer_id", "retailer__name", "retailer_name", "state__code")
+        for addr, rid, rname, typed, state in requests.iterator():
+            if rid:
+                chain = chain_of(rname)
+            else:
+                chain = (index.canonical(typed) or chain_in_text(typed, index)[0]) if _clean(typed) else ""
+            add(addr, chain=chain, retailer_id=rid, state=state or "", origin="request")
+
+        retailers = narrowed(Retailer.objects.filter(tenant_id=tenant_id), "address").values_list(
+            "id", "address", "name", "location__state__code"
+        )
+        for rid, addr, rname, state in retailers.iterator():
+            add(addr, chain=chain_of(rname), retailer_id=rid, state=state or "", origin="retailer")
+        return book
+
+    def matches(self, address: str | None, *, exclude_event_ids=()) -> list[Place]:
+        key = street_key(address)
+        if key is None:
+            return []
+        excluded = {e for e in exclude_event_ids if e}
+        out = []
+        for place in self._by_street.get((key.number, key.name), ()):
+            if place.event_id and place.event_id in excluded:
+                continue
+            if same_street_address(address, place.address):
+                out.append(place)
+        return out
+
+    def store_at(self, addresses, *, exclude_event_ids=()) -> tuple[Place | None, list[str]]:
+        """The one store the tenant's other places name at these addresses,
+        and the distinct stores found (more than one: ambiguous, no answer)."""
+        found: dict[str, Place] = {}
+        for address in addresses:
+            for place in self.matches(address, exclude_event_ids=exclude_event_ids):
+                if place.chain:
+                    found.setdefault(place.chain.casefold(), place)
+        stores = sorted(p.chain for p in found.values())
+        if len(found) != 1:
+            return None, stores
+        return next(iter(found.values())), stores
+
+    def state_at(self, addresses, *, exclude_event_ids=()) -> tuple[str, list[str], Place | None]:
+        found: dict[str, Place] = {}
+        for address in addresses:
+            for place in self.matches(address, exclude_event_ids=exclude_event_ids):
+                if place.state_code:
+                    found.setdefault(place.state_code, place)
+        codes = sorted(found)
+        if len(codes) != 1:
+            return "", codes, None
+        return codes[0], codes, found[codes[0]]
+
+
+_ADDRESS_SOURCES = ("event_address", "request_address", "typed_address", "address_field")
+
+
+def _recap_addresses(snippets: list[Snippet]) -> list[str]:
+    return [s.text for s in snippets if s.source in _ADDRESS_SOURCES]
+
+
+def _same_address_chain(recap, snippets, book: AddressBook, notes: list[str]) -> tuple[str, str, str]:
+    addresses = _recap_addresses(snippets)
+    if not addresses:
+        return "", "", ""
+    place, stores = book.store_at(addresses, exclude_event_ids=(recap.event_id,))
+    if place is None:
+        if len(stores) > 1:
+            notes.append(
+                "retailer: other events at this address name different stores ("
+                + ", ".join(stores) + "); left blank"
+            )
+        return "", "", ""
+    where = f"{place.origin} {place.event_id}" if place.event_id else place.origin
+    notes.append(f"retailer: {place.chain} from the same address ({place.address}, {where})")
+    return place.chain, SAME_ADDRESS_SOURCE, CONF_MEDIUM
+
+
+def _same_address_state(recap, snippets, book: AddressBook, notes: list[str]) -> str:
+    addresses = _recap_addresses(snippets)
+    if not addresses:
+        return ""
+    code, codes, place = book.state_at(addresses, exclude_event_ids=(recap.event_id,))
+    if not code:
+        if len(codes) > 1:
+            notes.append(
+                "state_code: other places at this address are in different states ("
+                + ", ".join(codes) + "); left blank"
+            )
+        return ""
+    notes.append(f"state_code: {code} from the same address ({place.address})")
+    return code
+
+
 # ─── Proposals ──────────────────────────────────────────────────────
 
 
@@ -728,10 +1037,16 @@ def _pick(values: list[tuple[str, str]], field_name: str, notes: list[str]) -> t
 _LOOKUP = object()
 
 
-def propose(recap, index: ChainIndex, gps: ClockinGps | None = _LOOKUP) -> Proposal:  # type: ignore[assignment]
+def propose(
+    recap,
+    index: ChainIndex,
+    gps: ClockinGps | None = _LOOKUP,  # type: ignore[assignment]
+    book: AddressBook | None = None,
+) -> Proposal:
     """Deterministic proposal for one recap (no network). ``gps``: the
     recap's clock-in fixes from :func:`clockin_gps_for` (looked up here when
-    not given)."""
+    not given). ``book``: the tenant's other places by street address, for
+    the same-address rule (skipped when not given)."""
     cur = current_values(recap)
     snippets = gather_snippets(recap)
     when = None
@@ -764,10 +1079,13 @@ def propose(recap, index: ChainIndex, gps: ClockinGps | None = _LOOKUP) -> Propo
         strong = [
             (chain_in_text(s.text, index)[0], s.source)
             for s in snippets
-            if s.source in ("store_field", "typed_store")
+            if s.source in ("store_field", "typed_store", TITLE_STORE_SOURCE)
         ]
         chain, src = _pick([c for c in strong if c[0]], "retailer", notes)
-        conf = CONF_HIGH
+        # The title's store is what the BA typed at check-in, read against
+        # the tenant's own retailer names too, but one step removed from an
+        # answer on the recap itself.
+        conf = CONF_MEDIUM if src == TITLE_STORE_SOURCE else CONF_HIGH
         if not chain and not any(c[0] for c in strong):
             weak = [
                 (chain_in_text(s.text, index, builtin_only=True)[0], s.source)
@@ -776,6 +1094,8 @@ def propose(recap, index: ChainIndex, gps: ClockinGps | None = _LOOKUP) -> Propo
             ]
             chain, src = _pick([c for c in weak if c[0]], "retailer", notes)
             conf = CONF_MEDIUM
+        if not chain and book is not None and not any("retailer:" in n for n in notes):
+            chain, src, conf = _same_address_chain(recap, snippets, book, notes)
         if chain:
             prop.chain = chain
             prop.sources["retailer"] = src
@@ -795,7 +1115,7 @@ def propose(recap, index: ChainIndex, gps: ClockinGps | None = _LOOKUP) -> Propo
                 digits = re.sub(r"\D", "", s.text)
                 if 1 <= len(digits) <= 6:
                     numbers.append((digits.lstrip("0") or "0", s.source))
-            elif s.source in ("store_field", "typed_store", "event_name", "request_name"):
+            elif s.source in ("store_field", "typed_store", TITLE_STORE_SOURCE, "event_name", "request_name"):
                 found_chain, num = chain_in_text(
                     s.text, index, builtin_only=s.source in ("event_name", "request_name")
                 )
@@ -835,6 +1155,12 @@ def propose(recap, index: ChainIndex, gps: ClockinGps | None = _LOOKUP) -> Propo
                 if city:
                     cities.append((city, s.source))
 
+    if not cur.state_code and not states and book is not None:
+        # The address names no state, but another event of this brand at
+        # the same street address does.
+        code = _same_address_state(recap, snippets, book, notes)
+        if code:
+            states.append((code, SAME_ADDRESS_SOURCE))
     if not cur.state_code:
         # After the addresses and answers, so one of them is the source
         # whenever they agree with the GPS; a disagreement blanks the state.
@@ -848,7 +1174,11 @@ def propose(recap, index: ChainIndex, gps: ClockinGps | None = _LOOKUP) -> Propo
         if value:
             prop.after["state_code"] = value
             prop.sources["state_code"] = src
-            prop.confidence["state_code"] = gps_conf if src == GPS_SOURCE else CONF_HIGH
+            prop.confidence["state_code"] = (
+                gps_conf if src == GPS_SOURCE
+                else CONF_MEDIUM if src == SAME_ADDRESS_SOURCE
+                else CONF_HIGH
+            )
     state = prop.after.get("state_code") or ""
     if not cur.city:
         value, src = _pick(cities, "city", notes)
@@ -1299,6 +1629,7 @@ def run(
         Retailer.objects.filter(tenant_id=tenant.id).exclude(name="").order_by("id").values_list("id", "name")
     )
     index = ChainIndex.for_tenant(tenant.id, retailers)
+    book = AddressBook.for_tenant(tenant.id, index)
     base_qs = recaps_for(tenant.id, since=since, until=until)
 
     writer = None
@@ -1347,7 +1678,7 @@ def run(
         gps = clockin_gps_for([r for r in page if not current_values(r).state_code])
         items = []
         for recap in page:
-            prop = propose(recap, index, gps.get(recap.id))
+            prop = propose(recap, index, gps.get(recap.id), book)
             texts = None
             if ai_on and _needs_ai(prop):
                 texts = ai_texts(recap, gather_snippets(recap)) or None

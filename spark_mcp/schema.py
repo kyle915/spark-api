@@ -39,6 +39,15 @@ class AiConnectorInfo:
 
 
 @strawberry.type
+class ApproveAiSignInResult:
+    ok: bool
+    message: str
+    # Where to send the browser next: the AI connection page on the API.
+    # Built on the server; the web app follows nothing else.
+    return_url: str | None = None
+
+
+@strawberry.type
 class RevokeAiConnectionResult:
     ok: bool
     message: str
@@ -102,6 +111,21 @@ class AiConnectionQueries:
 
 @strawberry.type
 class AiConnectionMutations:
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def approve_ai_sign_in(
+        self, info: strawberry.Info, handoff: str
+    ) -> ApproveAiSignInResult:
+        """"Continue with Google" on the AI connection page: the web app calls
+        this after its own sign-in, with the one-time code from the link.
+        Brand members only (ambassadors and unverified accounts refused)."""
+        from .oauth import approve_handoff
+
+        user = _user(info)
+        ok, message, url = await sync_to_async(approve_handoff, thread_sensitive=True)(
+            user, handoff
+        )
+        return ApproveAiSignInResult(ok=ok, message=message, return_url=url or None)
+
     @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
     async def revoke_ai_connection(
         self, info: strawberry.Info, id: strawberry.ID

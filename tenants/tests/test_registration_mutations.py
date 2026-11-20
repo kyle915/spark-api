@@ -164,6 +164,20 @@ class TestAmbassadorsRegistration(BaseGraphQLTestCase):
         assert count == 1
 
 
+def _verified_admin(case):
+    from gqlauth.models import UserStatus
+
+    admin = case.create_user(
+        username="reg-admin@test.com",
+        email="reg-admin@test.com",
+        role=case.roles["spark_admin"],
+    )
+    UserStatus.objects.update_or_create(
+        user=admin, defaults={"verified": True, "archived": False}
+    )
+    return admin
+
+
 @pytest.mark.django_db(transaction=True)
 class TestSparkRegistration(BaseGraphQLTestCase):
     """Tests for SparkCustomRegister.register mutation."""
@@ -175,6 +189,23 @@ class TestSparkRegistration(BaseGraphQLTestCase):
         self.roles = self.setup_default_roles()
         self.schema = schema_spark
         self.endpoint_path = "/api/v1/graphql/spark"
+        # spark register creates a spark-admin, so only an Ignite admin may
+        # call it (it used to be public and leak the activation token).
+        self.admin = _verified_admin(self)
+
+    @pytest.mark.asyncio
+    async def test_register_spark_admin_refused_for_anonymous(self):
+        mutation = """
+        mutation RegisterSpark($input: BaseRegisterInput!) {
+            register(input: $input) { success message activationToken }
+        }
+        """
+        variables = {"input": {"firstName": "Eve", "email": "eve@test.com",
+                               "password1": "sparkpass123", "password2": "sparkpass123"}}
+        result = await self._execute_mutation(mutation, variables, self.endpoint_path)
+        assert result.data["register"]["success"] is False
+        assert result.data["register"]["activationToken"] is None
+        assert not await sync_to_async(User.objects.filter(email="eve@test.com").exists)()
 
     @pytest.mark.asyncio
     async def test_register_spark_admin_success(self):
@@ -201,13 +232,14 @@ class TestSparkRegistration(BaseGraphQLTestCase):
         }
 
         result = await self._execute_mutation(
-            mutation, variables, self.endpoint_path)
+            mutation, variables, self.endpoint_path, user=self.admin)
 
         assert result.data is not None
         assert result.data["register"]["success"] is True
         assert "successfully" in result.data["register"]["message"].lower()
-        # Spark registration doesn't use auto_verify, so activationToken is generated
-        assert result.data["register"]["activationToken"] is not None
+        # Admin-created: auto-verified, and the activation token is never
+        # handed back to the caller.
+        assert result.data["register"]["activationToken"] is None
         assert result.data["register"]["clientMutationId"] == "spark-123"
 
         user = await sync_to_async(User.objects.get)(email="spark@test.com")
@@ -240,7 +272,7 @@ class TestSparkRegistration(BaseGraphQLTestCase):
         }
 
         result = await self._execute_mutation(
-            mutation, variables, self.endpoint_path)
+            mutation, variables, self.endpoint_path, user=self.admin)
 
         assert result.data is not None
         assert result.data["register"]["success"] is False
@@ -284,7 +316,7 @@ class TestSparkRegistration(BaseGraphQLTestCase):
         }
 
         result = await self._execute_mutation(
-            mutation, variables, self.endpoint_path)
+            mutation, variables, self.endpoint_path, user=self.admin)
 
         assert result.data is not None
         assert result.data["register"]["success"] is False
@@ -304,6 +336,9 @@ class TestClientsRegistration(BaseGraphQLTestCase):
         self.tenant = self.create_tenant(name="Test Company")
         self.schema = schema_clients
         self.endpoint_path = "/api/v1/graphql/clients"
+        # tenantId / spark-admin need an Ignite-admin caller; anonymous
+        # callers can't attach themselves to a brand any more.
+        self.admin = _verified_admin(self)
 
     @pytest.mark.asyncio
     async def test_register_client_success(self):
@@ -332,13 +367,14 @@ class TestClientsRegistration(BaseGraphQLTestCase):
         }
 
         result = await self._execute_mutation(
-            mutation, variables, self.endpoint_path)
+            mutation, variables, self.endpoint_path, user=self.admin)
 
         assert result.data is not None
         assert result.data["register"]["success"] is True
         assert "successfully" in result.data["register"]["message"].lower()
-        # Client registration doesn't use auto_verify, so activationToken is generated
-        assert result.data["register"]["activationToken"] is not None
+        # Admin-created: auto-verified, and the activation token is never
+        # handed back to the caller.
+        assert result.data["register"]["activationToken"] is None
         assert result.data["register"]["clientMutationId"] == "client-123"
 
         user = await sync_to_async(User.objects.get)(email="client@test.com")
@@ -376,7 +412,7 @@ class TestClientsRegistration(BaseGraphQLTestCase):
         }
 
         result = await self._execute_mutation(
-            mutation, variables, self.endpoint_path)
+            mutation, variables, self.endpoint_path, user=self.admin)
 
         assert result.data is not None
         assert result.data["register"]["success"] is False
@@ -422,7 +458,7 @@ class TestClientsRegistration(BaseGraphQLTestCase):
         }
 
         result = await self._execute_mutation(
-            mutation, variables, self.endpoint_path)
+            mutation, variables, self.endpoint_path, user=self.admin)
 
         assert result.data is not None
         assert result.data["register"]["success"] is False
@@ -466,7 +502,7 @@ class TestClientsRegistration(BaseGraphQLTestCase):
         }
 
         result = await self._execute_mutation(
-            mutation, variables, self.endpoint_path)
+            mutation, variables, self.endpoint_path, user=self.admin)
 
         # This will actually succeed because AMBASSADOR is a valid enum
         # But the user will be created as an ambassador, not a client
@@ -501,7 +537,7 @@ class TestClientsRegistration(BaseGraphQLTestCase):
         }
 
         result = await self._execute_mutation(
-            mutation, variables, self.endpoint_path)
+            mutation, variables, self.endpoint_path, user=self.admin)
 
         assert result.data is not None
         assert result.data["register"]["success"] is False

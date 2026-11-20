@@ -365,6 +365,50 @@ async def _get_active_tenant_ids(user) -> list[int]:
     )
 
 
+async def _register_policy(info, role_slug: str, email: str, tenant_id=None):
+    """Who may create which account through the ``register`` mutations.
+
+    Returns ``(error_message_or_None, auto_verify)``.
+
+    - Ignite admins (spark-admin / staff / trusted Ignite domain): any role,
+      any email, auto-verified (they vouch for the address).
+    - Brand (client) users: client or ambassador accounts, auto-verified (the
+      admin "create client" flow, PR #805); never spark-admin.
+    - Anyone else, including anonymous callers: client or ambassador only,
+      never spark-admin, never an Ignite-domain address, and NOT verified —
+      the activation link goes to the inbox and only the inbox owner can
+      use it.
+    - ``tenant_id`` (brand membership for the new account) is honored only
+      for Ignite admins and for brand users who are themselves an active
+      member of that brand — otherwise anyone could self-register straight
+      into a victim brand.
+    """
+    from utils.graphql.permissions import reserved_signup_email_error
+
+    requester = getattr(getattr(info.context, "request", None), "user", None)
+    is_spark = is_client = False
+    if requester is not None and getattr(requester, "is_authenticated", False):
+        _allowed, is_spark, is_client, _err = await _check_client_or_spark_admin(
+            requester
+        )
+    if is_spark:
+        return None, True
+    if tenant_id is not None:
+        is_member = bool(is_client) and await sync_to_async(
+            TenantedUser.objects.filter(
+                user_id=requester.pk, tenant_id=tenant_id, is_active=True
+            ).exists
+        )()
+        if not is_member:
+            return "You do not have permission to perform this action.", False
+    if role_slug == Role.SPARK_ADMIN_SLUG:
+        return "You do not have permission to perform this action.", False
+    reserved = reserved_signup_email_error(email)
+    if reserved:
+        return reserved, False
+    return None, bool(is_client)
+
+
 async def register_user_with_role(
     first_name: str,
     email: str,
@@ -384,7 +428,10 @@ async def register_user_with_role(
             client_mutation_id=client_mutation_id,
         )
 
-    if await sync_to_async(User.objects.filter(email=email).exists)():
+    from utils.graphql.permissions import normalize_email
+
+    email = normalize_email(email)
+    if await sync_to_async(User.objects.filter(email__iexact=email).exists)():
         return RegisterResponse(
             success=False,
             message="Email already exists.",
@@ -471,6 +518,9 @@ async def register_user_with_role(
         )
         verification_email = EmailVerificationMailer(user, activation_url)
         await verification_email.send_async()
+        # The activation token only proves inbox ownership if it travels by
+        # email; handing it back to the caller let anyone verify any address.
+        activation_token = None
 
     message = (
         "User registered successfully."
@@ -511,6 +561,16 @@ class AmbassadorsCustomRegister:
             resolve_id_to_int(input.tenant_id) if input.tenant_id else None
         )
 
+        error, auto_verify = await _register_policy(
+            info, role.slug, input.email, resolved_tenant_id
+        )
+        if error:
+            return RegisterResponse(
+                success=False,
+                message=error,
+                client_mutation_id=input.client_mutation_id,
+            )
+
         return await register_user_with_role(
             first_name=input.first_name,
             email=input.email,
@@ -519,7 +579,7 @@ class AmbassadorsCustomRegister:
             role_id=resolved_role_id,
             image=input.image,
             tenant_id=resolved_tenant_id,
-            auto_verify=True,
+            auto_verify=auto_verify,
             client_mutation_id=input.client_mutation_id,
             referral_code=input.referral_code,
         )
@@ -559,6 +619,18 @@ class SparkCustomRegister:
         info: strawberry.Info,
         input: BaseRegisterInput,
     ) -> RegisterResponse:
+        # Creates a spark-admin: Ignite admins only. It was public, and it
+        # handed the activation token back, so anyone could mint a verified
+        # spark-admin for any address.
+        error, auto_verify = await _register_policy(
+            info, Role.SPARK_ADMIN_SLUG, input.email
+        )
+        if error:
+            return RegisterResponse(
+                success=False,
+                message=error,
+                client_mutation_id=input.client_mutation_id,
+            )
         return await register_user_with_role(
             first_name=input.first_name,
             email=input.email,
@@ -566,6 +638,7 @@ class SparkCustomRegister:
             password2=input.password2,
             role_id=ROLE_ID.SparkAdmin,
             image=input.image,
+            auto_verify=auto_verify,
             client_mutation_id=input.client_mutation_id,
         )
 
@@ -791,6 +864,26 @@ class SparkUserMutations:
             return MagicLinkLoginResponse(success=False, message="Account not found.")
         if not user.is_active:
             return MagicLinkLoginResponse(success=False, message="Account is inactive.")
+        # Same gate as tokenAuth (gqlauth UserStatus.verified). Consuming the
+        # link deliberately does NOT verify the account: someone can register
+        # an address they don't own with their own password, and if the real
+        # owner's link click verified it, that password would then sign in to
+        # the owner's account. Unverified people verify through the activation
+        # email (or staff run verify_user); invited accounts are verified when
+        # they're invited (_ensure_verified), so invite links still work.
+        verified = await sync_to_async(
+            lambda: UserStatus.objects.filter(user_id=user.id, verified=True).exists()
+        )()
+        if not verified:
+            return MagicLinkLoginResponse(
+                success=False,
+                message="Please verify your account first. Use the verification email we sent, or ask your Ignite contact.",
+            )
+
+        # The link was emailed to this address, so using it proves the inbox:
+        # record that (Ignite-domain admin access requires a verified account,
+        # so a staffer left unverified regains it just by signing in this way).
+        await sync_to_async(_ensure_verified)(user)
 
         # Mint a real gqlauth JWT (TokenType), same as Google SSO / tokenAuth.
         # django.core.signing get_token() looks similar but Authorization:
@@ -1585,6 +1678,17 @@ class SparkUserMutations:
                 client_mutation_id=input.client_mutation_id,
             )
 
+        from utils.graphql.permissions import reserved_signup_email_error
+
+        # A brand user creating a verified client on Ignite's domain would be
+        # minting an Ignite admin. Only Ignite admins may use that domain.
+        if not is_spark_admin and reserved_signup_email_error(input.email):
+            return RegisterResponse(
+                success=False,
+                message=reserved_signup_email_error(input.email),
+                client_mutation_id=input.client_mutation_id,
+            )
+
         if input.role == UserRoleEnum.CLIENT:
             if not resolved_tenant_id:
                 return RegisterResponse(
@@ -1676,8 +1780,24 @@ class SparkUserMutations:
         previous_image_name = target_user.image.name if target_user.image else None
 
         if input.email:
+            from utils.graphql.permissions import (
+                normalize_email,
+                reserved_signup_email_error,
+            )
+
+            # Only Ignite admins may put an address on Ignite's own domain on
+            # an account: on a verified client account it would confer the
+            # domain admin grant.
+            if not is_spark_admin and reserved_signup_email_error(input.email):
+                return UpdateUserResponse(
+                    success=False,
+                    message=reserved_signup_email_error(input.email),
+                    client_mutation_id=input.client_mutation_id,
+                )
             email_exists = await sync_to_async(
-                User.objects.exclude(pk=target_user.pk).filter(email=input.email).exists
+                User.objects.exclude(pk=target_user.pk)
+                .filter(email__iexact=normalize_email(input.email))
+                .exists
             )()
             if email_exists:
                 return UpdateUserResponse(
@@ -1996,10 +2116,15 @@ class ClientsCustomRegister:
         # (e.g. Stone House Bread — see verify_user PR #803). Anonymous /
         # self-service registration is NOT auto-verified (still must confirm
         # the email), so this opens no public self-verify hole.
-        requester = info.context.request.user
-        is_admin_caller, _is_spark, _is_client, _err = (
-            await _check_client_or_spark_admin(requester)
+        error, is_admin_caller = await _register_policy(
+            info, role.slug, input.email, resolved_tenant_id
         )
+        if error:
+            return RegisterResponse(
+                success=False,
+                message=error,
+                client_mutation_id=input.client_mutation_id,
+            )
 
         return await register_user_with_role(
             first_name=input.first_name,

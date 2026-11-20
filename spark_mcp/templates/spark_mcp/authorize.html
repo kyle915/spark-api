@@ -34,6 +34,11 @@
     background: var(--accent); color: var(--accent-ink);
   }
   .btn.secondary { background: #fff; border-color: var(--line); color: var(--ink); font-weight: 500; }
+  .btn.google { display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 4px;
+    background: #fff; border-color: #c9ccd3; color: var(--ink); font-weight: 600; }
+  .btn.google svg { flex: none; }
+  .or { display: flex; align-items: center; gap: 10px; margin: 20px 0 2px; font-size: 13px; color: var(--muted); }
+  .or::before, .or::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
   .row { display: flex; gap: 10px; }
   .row .btn { width: 50%; }
   .error { color: var(--danger); font-size: 14px; margin: 0 0 12px; }
@@ -45,6 +50,10 @@
   .warn { font-size: 13px; color: var(--danger); }
   .linkbtn { background: none; border: 0; padding: 0; color: var(--ink); text-decoration: underline; font: inherit; font-size: 13px; cursor: pointer; }
   code { font-size: 13px; }
+  code.url { word-break: break-all; }
+  .ident { font-size: 13px; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin: 0 0 14px; }
+  .ident p { margin: 0 0 4px; color: var(--ink); font-size: 13px; }
+  .ident p:last-child { margin: 0; }
 </style>
 </head>
 <body>
@@ -59,8 +68,19 @@
     {% if notice %}<p class="notice">{{ notice }}</p>{% endif %}
 
     {% if mode == "login" %}
-      <h1>Sign in to connect {{ client_name }}</h1>
-      <p>{{ client_name }} is asking to read your brand's Spark data. Sign in with your Spark account to continue.</p>
+      <h1>Sign in to connect {% if client_verified %}{{ client_name }}{% else %}an AI app{% endif %}</h1>
+      <p>{% if client_verified %}{{ client_name }}{% else %}An AI app{% endif %} is asking to read your brand's Spark data. Sign in with your Spark account to continue.</p>
+      {% include "spark_mcp/_app_identity.html" %}
+      <form method="post" action="/oauth/authorize">
+        <input type="hidden" name="req" value="{{ req }}">
+        <input type="hidden" name="form_token" value="{{ form_token }}">
+        <button class="btn google" name="action" value="google" type="submit">
+          <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+          Continue with Google
+        </button>
+      </form>
+      <p class="small" style="margin:8px 0 0">Opens Spark to sign in with Google, then brings you back here.</p>
+      <div class="or">or use your Spark password</div>
       <form method="post" action="/oauth/authorize">
         <input type="hidden" name="req" value="{{ req }}">
         <input type="hidden" name="form_token" value="{{ form_token }}">
@@ -92,7 +112,8 @@
       </form>
 
     {% elif mode == "consent" %}
-      <h1>Allow {{ client_name }} to read your Spark data?</h1>
+      <h1>Allow {% if client_verified %}{{ client_name }}{% else %}this AI app{% endif %} to read your Spark data?</h1>
+      {% include "spark_mcp/_app_identity.html" %}
       <p>Signed in as {{ user_email }}.</p>
       <form method="post" action="/oauth/authorize">
         <input type="hidden" name="req" value="{{ req }}">
@@ -101,12 +122,12 @@
         <select id="tenant" name="tenant" required>
           {% for t in tenants %}<option value="{{ t.uuid }}">{{ t.name }}</option>{% endfor %}
         </select>
-        <p style="margin-top:14px" class="ink">{{ client_name }} will be able to:</p>
+        <p style="margin-top:14px" class="ink">{% if client_verified %}{{ client_name }}{% else %}The app{% endif %} will be able to:</p>
         <ul>
           <li>Read this brand's program results, recaps, consumer breakdowns, upcoming events, pending approvals and published weekly summaries</li>
           <li>Nothing else: it can't change anything, see other brands, or see brand ambassadors' personal details</li>
         </ul>
-        <p class="small">Daily limits apply. You can disconnect it at any time from Settings in Spark. After you allow, you'll go back to <b>{{ redirect_host }}</b>.</p>
+        <p class="small">Daily limits apply. You can disconnect it at any time from Settings in Spark. After you allow, you'll go back to <code class="url">{{ redirect_uri }}</code>.</p>
         {% if loopback %}<p class="warn">This app runs on your own computer ({{ redirect_host }}). Only continue if you started this connection yourself.</p>{% endif %}
         <div class="row">
           <button class="btn secondary" name="action" value="deny" type="submit" formnovalidate>Cancel</button>

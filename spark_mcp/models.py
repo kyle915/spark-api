@@ -144,6 +144,15 @@ class McpToken(models.Model):
     # one again is treated as theft and revokes the whole connection.
     used_at = models.DateTimeField(null=True, blank=True)
     revoked_at = models.DateTimeField(null=True, blank=True)
+    # The authorization code this token descends from (through refreshes),
+    # so replaying that code revokes exactly these tokens.
+    auth_code = models.ForeignKey(
+        McpAuthorizationCode,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="tokens",
+    )
 
     class Meta:
         indexes = [models.Index(fields=["connection", "kind"])]
@@ -191,3 +200,67 @@ class McpToolCall(models.Model):
             models.Index(fields=["tenant", "created_at"]),
             models.Index(fields=["connection", "created_at"]),
         ]
+
+
+class McpSignInHandoff(models.Model):
+    """"Continue with Google" on the consent page, via the Spark web app.
+
+    The consent page can't run Google sign-in itself (its host isn't an
+    authorized origin on Spark's Google client), so it hands the person to
+    the web app's normal sign-in and gets them back:
+
+    1. The consent page stores the pending authorization request here with
+       the digest of a random ``start`` nonce and the digest of a secret it
+       keeps in this browser's session (``binding_hash``), then sends the
+       browser to the web app with the start nonce.
+    2. The web app signs the person in (Google), and an authenticated
+       mutation marks the handoff approved for that user. It burns the start
+       nonce and mints a fresh ``return`` nonce, which only that browser sees.
+    3. The browser comes back to the consent page with the return nonce. It
+       only finishes in the browser that started (session binding), once,
+       within ``expires_at``.
+
+    Only digests are stored, never the nonces themselves.
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    start_hash = models.CharField(max_length=64, unique=True)
+    return_hash = models.CharField(max_length=64, unique=True, null=True, blank=True)
+    binding_hash = models.CharField(max_length=64)
+    request = models.JSONField(default=dict)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    approved_at = models.DateTimeField(null=True, blank=True)
+    used_at = models.DateTimeField(null=True, blank=True)
+    refused_reason = models.CharField(max_length=200, blank=True, default="")
+
+    class Meta:
+        verbose_name = "AI sign-in handoff"
+        verbose_name_plural = "AI sign-in handoffs"
+        indexes = [models.Index(fields=["expires_at"])]
+
+
+class McpThrottle(models.Model):
+    """Fixed-window counters for sign-in, registration and token throttles.
+
+    In the database so every Cloud Run instance shares them (the old
+    per-instance cache let each instance grant its own allowance). ``key`` is
+    a SHA-256 digest of the bucket name, so emails and IPs aren't stored.
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    key = models.CharField(max_length=64, unique=True)
+    window_start = models.DateTimeField()
+    count = models.IntegerField(default=0)
+
+    class Meta:
+        verbose_name = "AI throttle counter"
+        verbose_name_plural = "AI throttle counters"
+        indexes = [models.Index(fields=["window_start"])]

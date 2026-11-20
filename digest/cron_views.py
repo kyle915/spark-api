@@ -2207,6 +2207,68 @@ class AuditTenantOnboardingView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
+class AuditRecapProductOptionsView(View):
+    """POST `/internal/cron/audit-recap-product-options`.
+
+    READ-ONLY. For every tenant, compares each recap template's
+    product-choice fields (Products Sampled & aliases, or any choice field
+    whose options are catalog products) against the tenant's own Product
+    names and lists mismatches — especially options that are ANOTHER
+    tenant's products (the CoHo Imports clone that kept Mark Anthony's Long
+    Drink SKUs). Never writes; there is no execute flag.
+
+    Query / body params (all optional):
+      - tenant_slug: exact slug to audit one tenant.
+      - include_ok: "1"/"true" — also list product fields with no issues.
+      - include_archived: "1"/"true" — include [ARCHIVED] tenants.
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _param(name: str) -> str:
+            return (request.GET.get(name) or request.POST.get(name) or "").strip()
+
+        def _bool(name: str) -> bool:
+            return _param(name).lower() in ("1", "true", "yes", "on")
+
+        from recaps.product_options_audit import (
+            audit_product_choice_options,
+            format_report,
+        )
+
+        include_ok = _bool("include_ok")
+        try:
+            result = audit_product_choice_options(
+                tenant_slug=_param("tenant_slug") or None,
+                include_archived=_bool("include_archived"),
+            )
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("Recap product-options audit failed")
+            return JsonResponse(
+                {"ok": False, "error": "audit-failed", "detail": str(exc)}, status=500
+            )
+        fields = [r for r in result["fields"] if include_ok or r["issues"]]
+        return JsonResponse(
+            {
+                "ok": True,
+                "read_only": True,
+                "summary": result["summary"],
+                "fields": fields,
+                "log": format_report(result, include_ok=include_ok),
+            }
+        )
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        return JsonResponse({"ok": True, "endpoint": "audit-recap-product-options"})
+
+
+@method_decorator(csrf_exempt, name="dispatch")
 class DedupeSkillsView(View):
     """POST `/internal/cron/dedupe-skills`.
 
@@ -2608,6 +2670,44 @@ class VerifyUserView(View):
         if deny is not None:
             return deny
         return JsonResponse({"ok": True, "endpoint": "verify-user"})
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class AuditIgniteDomainAccountsView(View):
+    """POST/GET `/internal/cron/audit-ignite-domain-accounts`.
+
+    READ-ONLY report (``audit_ignite_domain_accounts``): every Ignite-domain
+    account with role / verified / created / last login / memberships and
+    whether it had admin before vs after the domain-trust fix; spark-admin or
+    staff accounts on other domains (email domain only); every spark_mcp
+    connection with its tool-call count. Writes nothing.
+    """
+
+    def _run(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        from tenants.ignite_domain_audit import build_ignite_domain_audit
+
+        try:
+            cap = int(request.GET.get("cap") or request.POST.get("cap") or 500)
+        except ValueError:
+            cap = 500
+        cap = max(1, min(cap, 5000))
+        try:
+            payload = build_ignite_domain_audit(cap=cap)
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            logger.exception("audit_ignite_domain_accounts failed")
+            return JsonResponse(
+                {"ok": False, "error": "audit-failed", "detail": str(exc)}, status=500
+            )
+        return JsonResponse({"ok": True, "read_only": True, **payload})
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        return self._run(request)
 
 
 @method_decorator(csrf_exempt, name="dispatch")
@@ -9051,7 +9151,8 @@ class SetupTenantCheckinView(View):
     first entry pinned as the default.
 
     Params: tenant_id (preferred) or tenant, code, code_prefix, event_type,
-    photo_buckets (JSON), location_mode, training_url, apply (default DRY RUN).
+    photo_buckets (JSON), location_mode, training_url, timesheet_only
+    (on/off, blank = leave), apply (default DRY RUN).
     """
 
     def _run(self, request: HttpRequest) -> HttpResponse:
@@ -9097,6 +9198,12 @@ class SetupTenantCheckinView(View):
             kwargs["apply"] = True
         if _param("recap_only").lower() in ("1", "true", "yes", "on"):
             kwargs["recap_only"] = True
+        # Tri-state: blank leaves the tenant's time-sheet-only flag alone.
+        ts = _param("timesheet_only").lower()
+        if ts in ("1", "true", "yes", "on"):
+            kwargs["timesheet_only"] = "on"
+        elif ts in ("0", "false", "no", "off"):
+            kwargs["timesheet_only"] = "off"
 
         out = io.StringIO()
         try:
@@ -12369,6 +12476,7 @@ def _registered_views() -> dict[str, Any]:
         "repair-request-activation-time": RepairRequestActivationTimeView,
         "backfill-girlbeer-receipts": BackfillGirlBeerReceiptsView,
         "audit-tenant-onboarding": AuditTenantOnboardingView,
+        "audit-recap-product-options": AuditRecapProductOptionsView,
         "audit-tenant-consumers": AuditTenantConsumersView,
         "audit-tenant-account-spend": AuditTenantAccountSpendView,
         "dump-tenant-receipts": DumpTenantReceiptsView,
@@ -12388,6 +12496,7 @@ def _registered_views() -> dict[str, Any]:
         "import-event-schedule": ImportEventScheduleView,
         "verify-user": VerifyUserView,
         "demote-admin": DemoteAdminView,
+        "audit-ignite-domain-accounts": AuditIgniteDomainAccountsView,
         "ensure-ambassador-profile": EnsureAmbassadorProfileView,
         "set-event-date": SetEventDateView,
         "book-ambassador-on-event": BookAmbassadorOnEventView,

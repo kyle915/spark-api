@@ -73,6 +73,8 @@ urlpatterns = [
     path("internal/cron/", include("timeclock.cron_urls")),
     path("internal/cron/", include("product_knowledge.cron_urls")),
     path("internal/cron/", include("consumer_mentions.cron_urls")),
+    path("internal/cron/", include("photo_library.cron_urls")),
+    path("internal/cron/", include("utils.abuse.urls")),
     # Public, token-authenticated endpoints (no JWT). These power the
     # one-click "Review & approve" email flow — clients click a signed
     # link and land on a page they can actually act on, even if they're

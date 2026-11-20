@@ -3561,13 +3561,13 @@ def _get_ignite_domain_emails() -> list[str]:
     @igniteproductions.co address as an admin) but doesn't carry the
     spark-admin role slug is still copied. So adding a new Ignite person needs
     no settings edit or code change — an @igniteproductions.co login is enough."""
-    from django.contrib.auth import get_user_model
+    from utils.graphql.permissions import trusted_ignite_domain_users
 
-    User = get_user_model()
+    # Only TRUSTED Ignite-domain accounts (active, verified, client/spark-admin
+    # role): a self-registered lookalike must never be CC'd brand requests.
     try:
         emails = list(
-            User.objects.filter(is_active=True)
-            .filter(email__iendswith="@igniteproductions.co")
+            trusted_ignite_domain_users()
             .exclude(email__isnull=True)
             .exclude(email__exact="")
             .values_list("email", flat=True)
@@ -4095,6 +4095,11 @@ class RequestMutations:
                 sheet_name=sheet_name,
                 dry_run=input.dry_run,
                 rollback_on_error=input.rollback_on_error,
+                max_rows=(
+                    None
+                    if is_spark_request
+                    else int(getattr(settings, "ABUSE_IMPORT_MAX_ROWS", 500))
+                ),
             )
 
             rows = [

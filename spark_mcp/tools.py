@@ -99,7 +99,7 @@ def _int_arg(args: dict, name: str, default: int, lo: int, hi: int) -> int:
         raise ToolInputError(f"{name} must be a whole number.")
     try:
         value = int(raw)
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, OverflowError) as exc:
         raise ToolInputError(f"{name} must be a whole number.") from exc
     if value < lo or value > hi:
         raise ToolInputError(f"{name} must be between {lo} and {hi}.")
@@ -363,7 +363,9 @@ def get_consumer_breakdown(ctx: ToolContext, args: dict) -> tuple[dict, int]:
             "basis": (
                 "Consumers sampled on approved recaps, dated by the event date. Each "
                 "split adds up to total_consumers_sampled. kind 'missing' = recaps whose "
-                "event has no store/state recorded; kind 'other' = the smaller stores folded together."
+                "event has no store/state recorded; kind 'venue' = a festival or event activation "
+                "named by its walk-in event title (a venue, not a store); kind 'other' = the "
+                "smaller stores folded together."
             ),
             "total_consumers_sampled": data["total"],
             "recaps": data["recaps"],
@@ -488,6 +490,17 @@ def list_upcoming_events(ctx: ToolContext, args: dict) -> tuple[dict, int]:
         },
         len(rows),
     )
+
+
+# Not exposed on the external AI connector: it lists recaps that are not
+# approved yet, and the connector returns approved recaps only. The in-app
+# brand chat (brand_chat.tools), where the signed-in brand already sees its
+# approvals, still uses it.
+PENDING_APPROVALS_DESCRIPTION = (
+    "What is waiting on the connected brand in Spark: event requests pending "
+    "approval and recaps awaiting approval, with totals and links (up to 50 of "
+    "each). Read only — approving or declining happens in Spark."
+)
 
 
 def list_pending_approvals(ctx: ToolContext, args: dict) -> tuple[dict, int]:
@@ -738,15 +751,6 @@ TOOLS: dict[str, Tool] = {
                 "additionalProperties": False,
             },
             list_upcoming_events,
-        ),
-        Tool(
-            "list_pending_approvals",
-            "Pending approvals",
-            "What is waiting on the connected brand in Spark: event requests pending "
-            "approval and recaps awaiting approval, with totals and links (up to 50 of "
-            "each). Read only — approving or declining happens in Spark.",
-            {"type": "object", "properties": {}, "additionalProperties": False},
-            list_pending_approvals,
         ),
         Tool(
             "get_weekly_summary",
