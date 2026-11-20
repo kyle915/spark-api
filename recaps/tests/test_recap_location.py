@@ -43,6 +43,8 @@ from recaps.us_state_geo import state_at
         ("HEB 1234 Main St, Austin TX", ("H-E-B", "")),
         ("HEB - Shift #2", ("H-E-B", "")),
         ("Total Wine & More #1203", ("Total Wine & More", "1203")),
+        ("Market of Choice", ("Market of Choice", "")),
+        ("market of choice - eugene", ("Market of Choice", "")),
         ("Demo at the farmers market", ("", "")),
     ],
 )

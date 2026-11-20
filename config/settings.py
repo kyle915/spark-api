@@ -808,12 +808,8 @@ for _logger_cfg in LOGGING["loggers"].values():
 # URL is <this>/mcp). Falls back to PUBLIC_API_BASE_URL.
 MCP_PUBLIC_BASE_URL = env("MCP_PUBLIC_BASE_URL", default="")
 # Kill switch: False (the default) → /mcp and /oauth/* answer 503 and tokens
-# stop working.
+# stop working. Production turns it on with MCP_ENABLED=true on Cloud Run.
 MCP_ENABLED = env.bool("MCP_ENABLED", default=False)
-# Rollout allowlist of tenant ids ("17,18"); "all" → every brand; empty →
-# no brand.
-# Kill switch: False → /mcp and /oauth/* answer 503 and tokens stop working.
-MCP_ENABLED = env.bool("MCP_ENABLED", default=True)
 
 # Brand "Where to go next" store recommendations publish to the brand as soon
 # as they are worked out (alerts still wait for staff review). Set false to
@@ -821,7 +817,8 @@ MCP_ENABLED = env.bool("MCP_ENABLED", default=True)
 BRAND_INSIGHTS_AUTO_PUBLISH_RECOMMENDATIONS = env.bool(
     "BRAND_INSIGHTS_AUTO_PUBLISH_RECOMMENDATIONS", default=True
 )
-# Optional rollout allowlist of tenant ids ("17,18"); empty → every brand.
+# Rollout allowlist of tenant ids ("17,18"); "all" → every brand; empty →
+# no brand (spark_mcp.conf), so turning MCP_ENABLED on alone exposes nothing.
 MCP_ALLOWED_TENANT_IDS = env.list("MCP_ALLOWED_TENANT_IDS", default=[])
 MCP_DAILY_CALLS_PER_TENANT = env.int("MCP_DAILY_CALLS_PER_TENANT", default=500)
 MCP_CALLS_PER_MINUTE_PER_CONNECTION = env.int(
