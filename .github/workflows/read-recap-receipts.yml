@@ -1,39 +1,64 @@
 name: Read recap receipts
 
-# Fires `/internal/cron/read-recap-receipts` on Cloud Run. Reads the printed
-# total off receipt photos that have not been read yet, so the review check
-# can compare it with the spend entered on the recap. See
-# recaps/receipt_reader.py.
+# Fires `/internal/cron/read-recap-receipts` on Cloud Run. Reads receipt
+# photos that have not been read yet (store, ticket, items, fees, tax, total;
+# see recaps/receipt_reader.py), then runs the staff-only fraud / quality
+# flag check (recaps/receipt_flags.py) when RECEIPT_FLAGS_ENABLED is on.
 #
 # Each image is read once (the result is stored), so this is cheap to run
-# often: a run with nothing new makes no vision calls.
+# often: a run with nothing new makes no vision calls. Model calls are capped
+# per UTC day by RECEIPT_READER_DAILY_MAX_READS (default 300).
+#
+# Schedule: every 15 minutes, never a dry run.
+# Manual runs (backfill): DRY RUN BY DEFAULT — read nothing, write nothing,
+# report what would be read and which flags would be raised. Untick dry_run
+# to do it for real. Use tenant_id + date_from/date_to (event dates) to
+# backfill one program; reread_older re-reads receipts read before reader v3
+# so they get ticket numbers and line items.
 #
 # Secret-gated via `X-Cron-Secret` (shared INTERNAL_CRON_SECRET).
-#
-# Schedule: hourly at :23 (offset from :00 so crons don't stampede).
 
 on:
   schedule:
-    - cron: "23 * * * *"
+    - cron: "8,23,38,53 * * * *"
   workflow_dispatch:
     inputs:
+      dry_run:
+        description: "Dry run: read nothing, write nothing, just report"
+        required: false
+        default: true
+        type: boolean
       tenant_id:
         description: "Limit to one tenant id (blank = all tenants)"
         required: false
         default: ""
+      date_from:
+        description: "Event date from, YYYY-MM-DD (blank = use since_days)"
+        required: false
+        default: ""
+      date_to:
+        description: "Event date to, YYYY-MM-DD (blank = use since_days)"
+        required: false
+        default: ""
       since_days:
-        description: "Only recaps created in the last N days"
+        description: "Without dates: only recaps filed in the last N days"
         required: false
         default: "45"
       limit:
-        description: "Receipt images to read this run"
+        description: "Receipt images to read this run (max 200; the daily cap still applies)"
         required: false
         default: "40"
       reread_older:
-        description: "Also re-read receipts read before store numbers/charge lines were captured"
+        description: "Also re-read receipts read by an older reader (fills ticket numbers and lines)"
         required: false
         default: false
         type: boolean
+      flags:
+        description: "Flag check: on (when RECEIPT_FLAGS_ENABLED), off, or force (dry runs only: preview flags even while switched off)"
+        required: false
+        default: "on"
+        type: choice
+        options: ["on", "off", "force"]
 
 concurrency:
   group: ${{ github.workflow }}
@@ -48,24 +73,34 @@ jobs:
         env:
           CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/read-recap-receipts
           CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          # Scheduled runs are never dry runs; manual runs default to one.
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.dry_run || 'false' }}
           TENANT_ID: ${{ github.event.inputs.tenant_id || '' }}
+          DATE_FROM: ${{ github.event.inputs.date_from || '' }}
+          DATE_TO: ${{ github.event.inputs.date_to || '' }}
           SINCE_DAYS: ${{ github.event.inputs.since_days || '45' }}
           LIMIT: ${{ github.event.inputs.limit || '40' }}
           REREAD_OLDER: ${{ github.event.inputs.reread_older || 'false' }}
+          FLAGS: ${{ github.event.inputs.flags || 'on' }}
         run: |
           set -euo pipefail
           if [ -z "$CRON_SECRET" ]; then
             echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
             exit 1
           fi
+          echo "dry_run=$DRY_RUN tenant_id=${TENANT_ID:-all} dates=${DATE_FROM:-}..${DATE_TO:-} since_days=$SINCE_DAYS limit=$LIMIT reread_older=$REREAD_OLDER flags=$FLAGS"
           STATUS=$(curl -sS -o /tmp/resp.json -w '%{http_code}' \
             --max-time 900 \
             -X POST "$CRON_URL" \
             -H "X-Cron-Secret: $CRON_SECRET" \
+            --data-urlencode "dry_run=$DRY_RUN" \
             --data-urlencode "tenant_id=$TENANT_ID" \
+            --data-urlencode "date_from=$DATE_FROM" \
+            --data-urlencode "date_to=$DATE_TO" \
             --data-urlencode "since_days=$SINCE_DAYS" \
             --data-urlencode "limit=$LIMIT" \
-            --data-urlencode "reread_older=$REREAD_OLDER")
+            --data-urlencode "reread_older=$REREAD_OLDER" \
+            --data-urlencode "flags=$FLAGS")
           echo "HTTP $STATUS"
           cat /tmp/resp.json
           echo
