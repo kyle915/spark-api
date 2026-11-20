@@ -148,6 +148,7 @@ CHAINS: dict[str, tuple[str, ...]] = {
     "King Soopers": ("kingsoopers",),
     "Fry's Food Stores": ("frysfood", "frysfoodstores", "frysmarketplace"),
     "Fred Meyer": ("fredmeyer",),
+    "Market of Choice": ("marketofchoice",),
     "Winn-Dixie": ("winndixie",),
     "ShopRite": ("shoprite",),
     "Stop & Shop": ("stopandshop", "stopshop"),
