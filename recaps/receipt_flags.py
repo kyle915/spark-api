@@ -674,28 +674,33 @@ def duplicate_photo_flags(recap, family: set[int], skip_other_receipts: set[int]
                 Q(custom_recap__event__date__date__range=(lo, hi))
                 | Q(custom_recap__event__date__isnull=True)
             )
+        # Scan light rows (id + hashes), then load only the matches.
+        near_rels = [r for r in rels if r != "receipt_reading"]
         hashed = Q()
-        for rel in rels:
-            field = "image_dhash" if rel == "receipt_reading" else "dhash"
-            hashed |= Q(**{f"{rel}__{field}__gt": ""})
-        candidates = (
-            CustomRecapFile.objects.filter(window, hashed)
-            .exclude(custom_recap_id__in=family)
-            .select_related("custom_recap", "custom_recap__event", "file_recap_category", *rels)[:5000]
-        )
-        for other in candidates:
-            other_cat = getattr(other.file_recap_category, "name", "") if other.file_recap_category_id else ""
-            if RECEIPT_CATEGORY_RE.search(other_cat or ""):
-                continue
-            other_hash = _file_dhash(other)
-            if not other_hash:
-                continue
-            for item in with_hash:
-                if hash_distance(item["dhash"], other_hash) > NEAR_PHOTO_BITS:
-                    continue
-                if item["receipt"] and other.custom_recap_id in skip_other_receipts:
-                    continue
-                note(other.custom_recap, item["file"], other, "near")
+        hash_fields = []
+        for rel in near_rels:
+            hashed |= Q(**{f"{rel}__dhash__gt": ""})
+            hash_fields.append(f"{rel}__dhash")
+        matched: dict[int, list[dict]] = defaultdict(list)
+        if hash_fields:
+            rows = (
+                CustomRecapFile.objects.filter(window, hashed)
+                .exclude(custom_recap_id__in=family)
+                .exclude(custom_recap__isnull=True)
+                .exclude(file_recap_category__name__iregex=RECEIPT_CATEGORY_RE.pattern)
+                .values_list("id", *hash_fields)[:20000]
+            )
+            for row in rows:
+                hashes = [h for h in row[1:] if h]
+                for item in with_hash:
+                    if any(hash_distance(item["dhash"], h) <= NEAR_PHOTO_BITS for h in hashes):
+                        matched[row[0]].append(item)
+        if matched:
+            for other in CustomRecapFile.objects.filter(id__in=list(matched)).select_related(
+                "custom_recap", "custom_recap__event"
+            ):
+                for item in matched[other.id]:
+                    note(other.custom_recap, item["file"], other, "near")
 
     for other_id, slot in sorted(matches.items()):
         other = slot["recap"]
@@ -855,14 +860,15 @@ def check_recaps(
     *,
     tenant_id: int | None = None,
     recap_ids: list[int] | None = None,
-    since_days: int = 3,
+    since_hours: int = 2,
     date_from: date | None = None,
     date_to: date | None = None,
     limit: int = 300,
     dry_run: bool = False,
 ) -> dict:
     """Check a batch of recaps: the given ids, plus recaps filed or updated
-    in the last ``since_days`` days (or whose event falls in the date range)."""
+    in the last ``since_hours`` hours (or whose event falls in the date
+    range, for a backfill)."""
     from recaps.models import CustomRecap
     from recaps.receipt_reader import _event_window_q
 
@@ -873,7 +879,7 @@ def check_recaps(
     if date_from or date_to:
         qs = qs.filter(_event_window_q("", date_from, date_to))
     else:
-        since = timezone.now() - timedelta(days=max(1, since_days))
+        since = timezone.now() - timedelta(hours=max(1, since_hours))
         qs = qs.filter(Q(created_at__gte=since) | Q(updated_at__gte=since))
     for rid in qs.order_by("-id").values_list("id", flat=True)[: max(1, limit)]:
         if rid not in ids:

@@ -3508,7 +3508,8 @@ class ReadRecapReceiptsView(View):
     dry_run (read nothing, write nothing, report what would happen; default
     false so the hourly schedule keeps working), flags (`on` default, `off`
     to skip the flag check, `force` to check even when RECEIPT_FLAGS_ENABLED
-    is off), flag_days (default 3), flag_limit (default 300). The daily cost
+    is off), flag_hours (recaps filed or updated in the last N hours, default
+    2; a date range replaces it), flag_limit (default 300). The daily cost
     cap is RECEIPT_READER_DAILY_MAX_READS.
     """
 
@@ -3573,7 +3574,7 @@ class ReadRecapReceiptsView(View):
                 flag_report = check_recaps(
                     tenant_id=tenant_id,
                     recap_ids=report.get("recap_ids") or [],
-                    since_days=max(1, min(_int("flag_days", 3) or 3, 60)),
+                    since_hours=max(1, min(_int("flag_hours", 2) or 2, 24 * 60)),
                     date_from=date_from,
                     date_to=date_to,
                     limit=max(1, min(_int("flag_limit", 300) or 300, 2000)),

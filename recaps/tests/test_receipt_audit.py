@@ -218,7 +218,8 @@ class TestReceiptAudit(AmbassadorsGraphQLTestCase):
         with patch("utils.gcs.download_blob_bytes", side_effect=download), patch(
             "utils.gcs.extract_blob_name_from_url", side_effect=lambda u: u
         ), patch("recaps.receipt_reader.generate_vision_json", side_effect=vision):
-            return read_pending_receipts(limit=50, **kw)
+            kw.setdefault("limit", 50)
+            return read_pending_receipts(**kw)
 
     def flags_of(self, recap):
         return {
@@ -429,6 +430,21 @@ class TestReceiptAudit(AmbassadorsGraphQLTestCase):
         self.read_all({"q.jpg": receipt()})
         row.refresh_from_db()
         assert row.status == "read"
+
+    def test_spend_check_waits_for_queued_receipts(self):
+        from recaps.recap_review_checks import _Facts, _check_receipt_total
+
+        r = self.recap("Total Wine #903 Palm Beach Gardens")
+        self.file(r, "one.jpg")
+        self.file(r, "two.jpg")
+        self.read_all({"two.jpg": receipt()}, limit=1)  # newest first: two.jpg only
+        queue_recap_receipts(r.id)  # one.jpg now pending
+        facts = _Facts()
+        facts.account_spend = 200.0
+        assert _check_receipt_total(r.id, True, facts)["status"] == "na"
+        self.read_all({"one.jpg": receipt(ticket="999", total="137.30", tax="", subtotal="",
+                                          items=[])})
+        assert _check_receipt_total(r.id, True, facts)["status"] == "pass"
 
     def test_check_recaps_dry_run_writes_nothing(self):
         pbg, nmb = self.pivot_pair()
