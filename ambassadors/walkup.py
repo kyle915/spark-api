@@ -334,6 +334,11 @@ class WalkupShiftType:
     distance_from_venue_mi: float | None = None
     has_recap: bool = False
     created_at: str | None = None
+    # Set when the BA switched their program on the check-in page
+    # ("Wrong program? Change it") — the latest switch only.
+    program_changed_from: str | None = None
+    program_changed_to: str | None = None
+    program_changed_at: str | None = None
 
 
 @strawberry.input
@@ -437,7 +442,17 @@ def _build_walkup_row(amb_event) -> WalkupShiftType:
         )
     except Exception:  # noqa: BLE001 — recap presence is decorative
         has_recap = False
+    change = None
+    try:
+        from ambassadors.program_change import latest_program_change
+
+        change = latest_program_change(event_id=event.id, ambassador_id=amb.id)
+    except Exception:  # noqa: BLE001 — the note is decorative
+        change = None
     return WalkupShiftType(
+        program_changed_from=(change.from_name or None) if change else None,
+        program_changed_to=(change.to_name or None) if change else None,
+        program_changed_at=change.created_at.isoformat() if change else None,
         ambassador_event_uuid=str(amb_event.uuid),
         event_uuid=str(event.uuid),
         event_name=event.name,

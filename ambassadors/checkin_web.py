@@ -2337,6 +2337,13 @@ def build_public_context(event, ambassador=None) -> dict:
             "id": str(etype.id),
             "name": etype.name or "",
         }
+    # The link's programs, so a BA who picked the wrong one can switch
+    # ("Wrong program? Change it"). Only on a brand that runs more than one.
+    if ambassador is not None and not payload["timesheetOnly"]:
+        programs, program_title = checkin_program_picker(tenant)
+        if len(programs) > 1:
+            payload["eventTypes"] = programs
+            payload["programPickerTitle"] = program_title
     if ambassador is not None:
         payload["session"] = {
             "ambassadorName": (
@@ -2355,6 +2362,12 @@ def build_public_context(event, ambassador=None) -> dict:
             # odometer above). Present when Tenant.checkin_storage_units is set.
             "payableMileage": _payable_mileage_session(ambassador=ambassador, event=event),
         }
+        if payload.get("eventTypes"):
+            from ambassadors.program_change import program_change_state
+
+            payload["session"]["programChange"] = program_change_state(
+                event=event, ambassador=ambassador
+            )
         from ambassadors.walkup_draft import drafts_for_session
 
         drafts = drafts_for_session(event=event, ambassador=ambassador)

@@ -22,6 +22,7 @@ Routes (mounted under ``/api/public/`` in ``events/urls.py``):
     POST checkin/<code>/product-question → short answer from brand notes only
     POST checkin/<code>/recap          → {success}
     POST checkin/<code>/recap-draft    → {saved, filed: false}  (not a submit)
+    POST checkin/<code>/change-program → switch this BA's walk-in event program
 """
 from __future__ import annotations
 
@@ -220,6 +221,11 @@ def _stamp_recap_only(payload: dict, code: str, tenant) -> dict:
         payload["trainingUrl"] = checkin_web._training_url_from_resources(resources)
         if "template" in payload:
             payload["template"] = checkin_web.strip_recap_only_sections(payload["template"])
+        # The agency link stays on the brand's default program.
+        payload.pop("eventTypes", None)
+        payload.pop("programPickerTitle", None)
+        if isinstance(payload.get("session"), dict):
+            payload["session"].pop("programChange", None)
     return payload
 
 
@@ -1570,6 +1576,30 @@ def _claim_recap_submission(*, key: str, ambassador, event, force_new: bool):
     )
 
 
+def _stale_template_error(data: dict, template) -> JsonResponse | None:
+    """409 when the page filled a different form than the event has now.
+
+    The BA switched program ("Wrong program? Change it") from another tab, or
+    a recap queued offline before the switch is replaying. Its field ids
+    belong to the old form, so filing it would save a recap with no answers
+    and lock the shift. Pages that predate the switch send no ``templateId``
+    and are not checked."""
+    sent = str(data.get("templateId") or data.get("template_id") or "").strip()
+    if not sent or template is None or sent == str(template.id):
+        return None
+    logger.warning(
+        "checkin recap refused, stale form sent=%s current=%s", sent, template.id
+    )
+    return _err(
+        "Your program was changed, so this page has the old questions. "
+        "Reload to see the new form. Your answers are still on this phone.",
+        # Not 409: the page's offline queue reads 409 as "already filed" and
+        # would drop the answers. 422 keeps them on the phone as refused.
+        status=422,
+        code="program_changed",
+    )
+
+
 @csrf_exempt
 @require_http_methods(["POST"])
 def public_checkin_recap(request: HttpRequest, code: str) -> HttpResponse:
@@ -1598,6 +1628,9 @@ def public_checkin_recap(request: HttpRequest, code: str) -> HttpResponse:
             status=409,
             code="no_template",
         )
+    stale = _stale_template_error(data, template)
+    if stale is not None:
+        return stale
 
     field_values = data.get("fieldValues") or data.get("field_values") or []
     files = data.get("files") or []
@@ -1774,6 +1807,12 @@ def public_checkin_recap_draft(request: HttpRequest, code: str) -> HttpResponse:
     draft = data.get("draft")
     if not isinstance(draft, dict):
         return _err("Malformed draft.")
+    if data.get("templateId") not in (None, ""):
+        stale = _stale_template_error(
+            data, checkin_web.resolve_template_for_event(event)
+        )
+        if stale is not None:
+            return stale
     scope = data.get("scope") or "shift"
     if not isinstance(scope, str):
         scope = "shift"
@@ -1792,6 +1831,75 @@ def public_checkin_recap_draft(request: HttpRequest, code: str) -> HttpResponse:
         logger.exception("checkin recap draft failed code=%s", code)
         return _err("Couldn't save your draft. Try again.", status=500, code="server")
     return JsonResponse(result)
+
+
+# --------------------------------------------------------------------------
+# POST change-program  ("Wrong program? Change it")
+# --------------------------------------------------------------------------
+@csrf_exempt
+@require_http_methods(["POST"])
+def public_checkin_change_program(request: HttpRequest, code: str) -> HttpResponse:
+    """Switch this BA's own walk-in event to another program on the link.
+
+    Body: ``{session, eventTypeId, storeName?, draft?}``. Allowed only on an
+    event this BA's check-in opened that nobody else is on, before their
+    recap is filed (see ``ambassadors.program_change``). The clock-in,
+    booking and GPS stay where they are. Returns the refreshed check-in
+    context, with ``session.recapDraft`` re-keyed for the new form, plus
+    ``programChange`` (what carried over)."""
+    if _over_limit("program-change-ip", _client_ip(request), limit=30, window=600):
+        return _rate_limited()
+    data = _body(request)
+    loaded, err = _load_session(code, data.get("session") or "")
+    if err is not None:
+        return err
+    event, ambassador = loaded
+    kind, target = checkin_web.resolve_checkin_target(code)
+    if kind == "tenant" and checkin_web.is_third_party_code(code, target):
+        return _err(
+            "This link files recaps for one program only.",
+            status=409,
+            code="no_programs",
+        )
+    if _over_limit("program-change-shift", f"{event.id}:{ambassador.id}", limit=8, window=3600):
+        return _rate_limited()
+
+    from ambassadors.program_change import ProgramChangeRefused, change_checkin_program
+
+    draft = data.get("draft")
+    try:
+        result = change_checkin_program(
+            event=event,
+            ambassador=ambassador,
+            event_type_id=data.get("eventTypeId") or data.get("event_type_id"),
+            store_name=_str_field(data, "storeName"),
+            client_draft=draft if isinstance(draft, dict) else None,
+        )
+    except ProgramChangeRefused as exc:
+        return _err(str(exc), status=exc.status, code=exc.code)
+    except Exception:  # noqa: BLE001
+        logger.exception("checkin program change failed code=%s", code)
+        return _err("Couldn't change your program. Try again.", status=500, code="server")
+
+    event = result["event"]
+    payload = checkin_web.build_public_context(event, ambassador)
+    if kind == "tenant":
+        payload["mode"] = "tenant"
+        payload["unfiledShifts"] = checkin_web.unfiled_shifts_for(
+            ambassador=ambassador, tenant=target
+        )
+        _stamp_recap_only(payload, code, target)
+    change = result["change"]
+    summary = result["summary"]
+    payload["programChange"] = {
+        "from": change.from_name,
+        "to": change.to_name,
+        "carried": summary["carried"],
+        "dropped": summary["dropped"],
+        "photos": summary["photos"],
+        "photosMoved": summary["photosMoved"],
+    }
+    return JsonResponse(payload)
 
 
 # --------------------------------------------------------------------------

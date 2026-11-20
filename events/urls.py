@@ -104,6 +104,11 @@ urlpatterns = [
         name="events.public_checkin_product_question",
     ),
     path(
+        "checkin/<str:code>/change-program",
+        checkin_views.public_checkin_change_program,
+        name="events.public_checkin_change_program",
+    ),
+    path(
         "checkin/<str:code>/where",
         checkin_views.public_checkin_where,
         name="events.public_checkin_where",

@@ -1882,3 +1882,66 @@ class ShiftSms(models.Model):
         ]
         indexes = [models.Index(fields=["created_at"])]
 
+
+
+class CheckinProgramChange(models.Model):
+    """A BA switched their own walk-in shift to another program.
+
+    Written by ``ambassadors.program_change.change_checkin_program`` from the
+    public check-in page ("Wrong program? Change it"). One row per switch, so
+    staff can see who moved the shift, from what, to what and when. The event
+    and booking are changed in place; clock-ins, booking and GPS are not.
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    tenant = models.ForeignKey(
+        Tenant, on_delete=models.CASCADE, related_name="checkin_program_changes"
+    )
+    event = models.ForeignKey(
+        Event, on_delete=models.CASCADE, related_name="checkin_program_changes"
+    )
+    ambassador = models.ForeignKey(
+        Ambassador, on_delete=models.CASCADE, related_name="checkin_program_changes"
+    )
+    from_event_type = models.ForeignKey(
+        "events.EventType",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    to_event_type = models.ForeignKey(
+        "events.EventType",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    # Names copied at the time of the switch, so the note still reads right
+    # after a program is renamed or removed.
+    from_name = models.CharField(max_length=255, blank=True, default="")
+    to_name = models.CharField(max_length=255, blank=True, default="")
+    from_template_id = models.IntegerField(null=True, blank=True)
+    to_template_id = models.IntegerField(null=True, blank=True)
+    old_event_name = models.CharField(max_length=255, blank=True, default="")
+    new_event_name = models.CharField(max_length=255, blank=True, default="")
+    store_name = models.CharField(max_length=255, blank=True, default="")
+    # What happened to the BA's unsent answers: counts plus the field names
+    # that had no home on the new form.
+    detail = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+
+    class Meta:
+        indexes = [
+            models.Index(
+                fields=["event", "ambassador", "-created_at"],
+                name="ambassadors_event_i_cpc_idx",
+            ),
+        ]
+
+    def __str__(self):
+        return (
+            f"program-change {self.ambassador_id}@{self.event_id} "
+            f"{self.from_name} -> {self.to_name}"
+        )
