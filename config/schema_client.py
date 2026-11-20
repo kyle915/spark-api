@@ -60,6 +60,8 @@ from tenants.notification_pref_schema import (
 )
 from spark_mcp.schema import AiConnectionMutations, AiConnectionQueries
 from utils.utils import BlockIntrospectionForAnonymous
+from legal.graphql_extension import LegalAcceptanceGate
+from legal.schema import LegalMutations, LegalQueries
 from utils.graphql.gcs_schema import GCSQuery
 from utils.abuse.graphql_extension import guardrail_extensions
 
@@ -107,6 +109,7 @@ QueryClients = merge_types(
         JobBoardQueries,
         ClockLinkQueries,
         AiConnectionQueries,
+        LegalQueries,
     ),
 )
 MutationClients = merge_types(
@@ -142,6 +145,7 @@ MutationClients = merge_types(
         ClockLinkMutations,
         BaProductQaMutations,
         AiConnectionMutations,
+        LegalMutations,
     ),
 )
 
@@ -151,6 +155,7 @@ schema_clients = JwtSchema(
     extensions=[
         DjangoOptimizerExtension,
         BlockIntrospectionForAnonymous,
+        LegalAcceptanceGate,
         # Anti-scraping guardrails: token/depth/alias limits, per-user rate
         # limits, brand page-size cap, export/bulk caps + audit, usage log.
         *guardrail_extensions(),
