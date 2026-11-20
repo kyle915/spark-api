@@ -505,6 +505,15 @@ def public_checkin_identify(request: HttpRequest, code: str) -> HttpResponse:
             )
         else:
             return _err("Enter a phone number so your lead can confirm you.")
+    elif not checkin_web.is_us_phone(phone):
+        # Identity is keyed on the phone: a digit short is a different person
+        # to the server — a fresh pending account with no open shift and no
+        # recap draft (FAMUS, Nov 2026). Refuse it instead.
+        return _err(
+            "Enter your full 10-digit cell number.",
+            status=400,
+            code="bad_phone",
+        )
 
     # A standing tenant link carries no event, so the BA supplies the store and
     # the date and we find-or-create it. Several BAs at the same store on the
@@ -545,6 +554,31 @@ def public_checkin_identify(request: HttpRequest, code: str) -> HttpResponse:
     # event may not exist yet and Event.created_by is NOT NULL, so we need a
     # real user in hand before creating one — and attributing it to the BA who
     # opened it is what the Walk-ups queue wants to show anyway.
+    if ambassador is None and not recap_only and not data.get("newIdentityConfirmed"):
+        # Same name as a BA who has worked this brand, but a number with no
+        # account: almost always a mistyped cell. Ask before minting a second
+        # identity. Only the last two digits are ever returned.
+        hint_tenant = target if kind == "tenant" else getattr(target, "tenant", None)
+        hint = checkin_web.same_name_other_phone_hint(
+            tenant=hint_tenant,
+            first_name=first_name,
+            last_name=last_name,
+            phone=phone,
+        )
+        if hint:
+            logger.info("checkin identify asked to confirm identity code=%s", code)
+            return JsonResponse(
+                {
+                    "error": "confirm_identity",
+                    "message": (
+                        f"Is this you? You've checked in before with a number "
+                        f"ending in {hint}."
+                    ),
+                    "phoneHint": hint,
+                },
+                status=400,
+            )
+
     if ambassador is None:
         try:
             ambassador, _ = checkin_web.get_or_create_checkin_ambassador(
@@ -1476,6 +1510,66 @@ def public_checkin_recap_check(request: HttpRequest, code: str) -> HttpResponse:
 # --------------------------------------------------------------------------
 # POST recap
 # --------------------------------------------------------------------------
+# A claim younger than this is a first request still being processed; an
+# older one with no recap is a request that died mid-flight (instance killed).
+RECAP_CLAIM_STALE_SECONDS = 120
+
+
+def _claim_recap_submission(*, key: str, ambassador, event, force_new: bool):
+    """Record that recap submit ``key`` is being processed.
+
+    Returns ``(claim, early_response)``. ``early_response`` is set when this
+    request must not run: the same key already filed a NEW recap (a retried
+    "file another" whose first answer was lost — re-running it files a
+    duplicate), or the first request with this key is still in flight (503, so
+    the phone keeps the recap queued and asks again). A retry of the default
+    update-my-recap submit runs again on purpose: it updates the same recap
+    and is how photos left behind on a slow upload join it.
+    """
+    from datetime import timedelta
+
+    from django.db import IntegrityError, transaction
+
+    from recaps.models import CheckinRecapSubmission
+
+    try:
+        with transaction.atomic():
+            claim = CheckinRecapSubmission.objects.create(
+                key=key, ambassador=ambassador, event=event
+            )
+        return claim, None
+    except IntegrityError:
+        pass
+    prior = CheckinRecapSubmission.objects.filter(
+        ambassador=ambassador, key=key
+    ).first()
+    if prior is None:
+        return None, None
+    if prior.recap_id:
+        if force_new:
+            logger.info(
+                "checkin recap replay ignored (already filed) recap=%s", prior.recap_id
+            )
+            return prior, JsonResponse(
+                {
+                    "success": True,
+                    "already": True,
+                    "replayed": True,
+                    "message": "Recap submitted. Thanks!",
+                    "pendingReview": not bool(getattr(ambassador, "is_active", False)),
+                }
+            )
+        return prior, None
+    if prior.created_at < dj_tz.now() - timedelta(seconds=RECAP_CLAIM_STALE_SECONDS):
+        CheckinRecapSubmission.objects.filter(pk=prior.pk).update(created_at=dj_tz.now())
+        return prior, None
+    return None, _err(
+        "Still sending your recap. It's saved on your phone and will finish.",
+        status=503,
+        code="in_progress",
+    )
+
+
 @csrf_exempt
 @require_http_methods(["POST"])
 def public_checkin_recap(request: HttpRequest, code: str) -> HttpResponse:
@@ -1541,8 +1635,38 @@ def public_checkin_recap(request: HttpRequest, code: str) -> HttpResponse:
     ):
         shift_label = shift_label or checkin_web.SECOND_SHIFT_LABEL
 
+    idem = str(data.get("idempotencyKey") or data.get("idempotency_key") or "")
+    idem = idem.strip()[:80]
+    claim = None
+    if idem:
+        claim, early = _claim_recap_submission(
+            key=idem, ambassador=ambassador, event=event, force_new=force_new
+        )
+        if early is not None:
+            return early
+
+    response = _submit_recap_and_respond(
+        request, code, data, event, ambassador, template, kind, _target,
+        field_values=field_values, files=files, product_samples=product_samples,
+        total_engagements=total_engagements, force_new=force_new,
+        shift_label=shift_label, claim=claim,
+    )
+    if claim is not None and claim.recap_id is None and response.status_code != 200:
+        # Nothing was filed: free the key so the phone's retry is not
+        # answered "in progress" for the next two minutes.
+        from recaps.models import CheckinRecapSubmission
+
+        CheckinRecapSubmission.objects.filter(pk=claim.pk, recap__isnull=True).delete()
+    return response
+
+
+def _submit_recap_and_respond(
+    request, code, data, event, ambassador, template, kind, _target, *,
+    field_values, files, product_samples, total_engagements, force_new,
+    shift_label, claim,
+) -> HttpResponse:
     try:
-        checkin_web.submit_checkin_recap(
+        recap = checkin_web.submit_checkin_recap(
             event=event,
             ambassador=ambassador,
             template=template,
@@ -1615,6 +1739,10 @@ def public_checkin_recap(request: HttpRequest, code: str) -> HttpResponse:
     except Exception:  # noqa: BLE001
         logger.exception("checkin recap submit failed code=%s", code)
         return _err("Couldn't submit your recap. Try again.", status=500, code="server")
+    if claim is not None and getattr(recap, "pk", None):
+        if claim.recap_id != recap.pk:
+            claim.recap = recap
+            claim.save(update_fields=["recap"])
     return JsonResponse(
         {
             "success": True,

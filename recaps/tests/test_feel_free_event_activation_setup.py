@@ -204,7 +204,7 @@ class TestSetupCommand(AmbassadorsGraphQLTestCase):
         body = {
             "firstName": "Pat",
             "lastName": "Sampler",
-            "phone": "5550142",
+            "phone": "5055550142",
             "eventDate": timezone.localdate().isoformat(),
         }
         body.update(extra)
@@ -311,7 +311,9 @@ class TestSetupCommand(AmbassadorsGraphQLTestCase):
             eventTypeId=str(ea.id),
             address=venue,
             storeName="Zilker Park",
-            phone="5550143",
+            phone="5055550143",
+            # Same name, another number: a different BA (they said so).
+            newIdentityConfirmed=True,
         )
         assert act.status_code == 200, act.content
         ev = Event.objects.get(uuid=act.json()["event"]["uuid"])
@@ -319,7 +321,8 @@ class TestSetupCommand(AmbassadorsGraphQLTestCase):
 
         # A cached page that still sends only the market keeps working.
         legacy = self._identify(
-            eventTypeId=str(ea.id), market="Miami, FL", phone="5550144"
+            eventTypeId=str(ea.id), market="Miami, FL", phone="5055550144",
+            newIdentityConfirmed=True,
         )
         assert legacy.status_code == 200, legacy.content
         assert (
@@ -329,7 +332,8 @@ class TestSetupCommand(AmbassadorsGraphQLTestCase):
 
         # Retail still refuses a market that isn't on the list.
         bad = self._identify(
-            eventTypeId=str(self.default.id), market="Nowhere", phone="5550145"
+            eventTypeId=str(self.default.id), market="Nowhere", phone="5055550145",
+            newIdentityConfirmed=True,
         )
         assert bad.status_code == 400
 
