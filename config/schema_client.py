@@ -15,6 +15,7 @@ from recaps.weekly_summary import WeeklySummaryMutations, WeeklySummaryQueries
 from brand_insights.schema import BrandInsightMutations, BrandInsightQueries
 from brand_chat.schema import BrandChatMutations, BrandChatQueries
 from recaps.flag_explanation import RecapFlagExplanationQueries
+from recaps.receipt_audit_schema import ReceiptAuditMutations, ReceiptAuditQueries
 from recaps.metric_mapping_schema import (
     RecapMetricMappingMutations,
     RecapMetricMappingQueries,
@@ -59,7 +60,10 @@ from tenants.notification_pref_schema import (
     NotificationPreferenceQueries,
 )
 from spark_mcp.schema import AiConnectionMutations, AiConnectionQueries
+from sales_assist.schema import SalesAssistMutations, SalesAssistQueries
 from utils.utils import BlockIntrospectionForAnonymous
+from legal.graphql_extension import LegalAcceptanceGate
+from legal.schema import LegalMutations, LegalQueries
 from utils.graphql.gcs_schema import GCSQuery
 from utils.abuse.graphql_extension import guardrail_extensions
 
@@ -91,6 +95,7 @@ QueryClients = merge_types(
         BrandInsightQueries,
         BrandChatQueries,
         RecapFlagExplanationQueries,
+        ReceiptAuditQueries,
         RecapMetricMappingQueries,
         AmbassadorQueryClient,
         QueryClients,
@@ -107,6 +112,8 @@ QueryClients = merge_types(
         JobBoardQueries,
         ClockLinkQueries,
         AiConnectionQueries,
+        SalesAssistQueries,
+        LegalQueries,
     ),
 )
 MutationClients = merge_types(
@@ -121,6 +128,7 @@ MutationClients = merge_types(
         BrandInsightMutations,
         BrandChatMutations,
         RecapMetricMappingMutations,
+        ReceiptAuditMutations,
         TenantGoalsMutations,
         ScheduledReportMutations,
         NotificationPreferenceMutations,
@@ -142,6 +150,8 @@ MutationClients = merge_types(
         ClockLinkMutations,
         BaProductQaMutations,
         AiConnectionMutations,
+        SalesAssistMutations,
+        LegalMutations,
     ),
 )
 
@@ -151,6 +161,7 @@ schema_clients = JwtSchema(
     extensions=[
         DjangoOptimizerExtension,
         BlockIntrospectionForAnonymous,
+        LegalAcceptanceGate,
         # Anti-scraping guardrails: token/depth/alias limits, per-user rate
         # limits, brand page-size cap, export/bulk caps + audit, usage log.
         *guardrail_extensions(),

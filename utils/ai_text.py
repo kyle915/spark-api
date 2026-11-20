@@ -385,6 +385,7 @@ def generate_vision_json(
     max_tokens: int = 400,
     small: bool = False,
     timeout: float | None = None,
+    meta: dict | None = None,
 ) -> dict | None:
     """Classify one image with a strict JSON schema.
 
@@ -393,6 +394,8 @@ def generate_vision_json(
     to identify people — this helper does not add a face feature of its own.
     ``timeout`` is seconds per HTTP attempt (default
     :data:`DEFAULT_TIMEOUT_SECONDS`), for a caller someone is waiting on.
+    ``meta``, when given, is filled with the model that answered and its
+    token usage (``model``, ``input_tokens``, ``output_tokens``).
 
     Raises:
         AiUnavailable: Only when ``OPENAI_API_KEY`` is unset.
@@ -433,6 +436,12 @@ def generate_vision_json(
             headers,
             timeout=timeout or DEFAULT_TIMEOUT_SECONDS,
         )
+        if meta is not None:
+            usage = body.get("usage") if isinstance(body, dict) else None
+            usage = usage if isinstance(usage, dict) else {}
+            meta["model"] = str(body.get("model") or model_name)[:64]
+            meta["input_tokens"] = usage.get("prompt_tokens")
+            meta["output_tokens"] = usage.get("completion_tokens")
         content = _extract_message_text(body)
         parsed = json.loads(content)
         if not isinstance(parsed, dict):

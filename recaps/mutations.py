@@ -3924,6 +3924,18 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
             await sync_to_async(auto_attach_quietly)(
                 kind="custom", recap_id=custom_recap.id, actor=self.user
             )
+            # Queue the receipt photos for the background reader and run the
+            # staff-only checks that need no reading. Never fails approval.
+            try:
+                from recaps.receipt_flags import check_recap_quietly
+
+                await sync_to_async(check_recap_quietly, thread_sensitive=True)(
+                    custom_recap.id
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    "receipt checks failed for custom_recap=%s", custom_recap.id
+                )
 
         if self.input.approved:
             custom_recap = await sync_to_async(

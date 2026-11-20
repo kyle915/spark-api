@@ -116,6 +116,12 @@ INSTALLED_APPS = [
     # text extracted from the brand's uploaded documents and a bounded crawl
     # of its website. See product_knowledge/.
     "product_knowledge",
+    # Spark numbers -> DRAFT notes/emails on Close leads (renewal recaps for
+    # clients, anonymized proposals for new leads). Never sends. See
+    # docs/sales-assist.md.
+    "sales_assist",
+    # Versioned Terms / Privacy / AUP acceptance + the GraphQL gate.
+    "legal",
 ]
 
 AUTH_USER_MODEL = "tenants.User"
@@ -651,6 +657,18 @@ OPENAI_MODEL_SMALL = env("OPENAI_MODEL_SMALL", default="gpt-5-mini")
 # this id is not available on the account.
 OPENAI_TRANSCRIBE_MODEL = env("OPENAI_TRANSCRIBE_MODEL", default="gpt-4o-transcribe")
 
+# Receipt reading + fraud flags (recaps/receipt_reader.py, recaps/receipt_flags.py).
+# The reader runs from the "Read recap receipts" cron; this caps model calls
+# per UTC day across all tenants. RECEIPT_READER_USE_SMALL_MODEL reads with
+# OPENAI_MODEL_SMALL instead of OPENAI_MODEL (cheaper, less exact).
+RECEIPT_READER_DAILY_MAX_READS = env.int("RECEIPT_READER_DAILY_MAX_READS", default=300)
+RECEIPT_READER_USE_SMALL_MODEL = env.bool("RECEIPT_READER_USE_SMALL_MODEL", default=False)
+# Staff-only fraud / quality flags on recaps. Off until switched on; the
+# readings and spend work either way.
+RECEIPT_FLAGS_ENABLED = env.bool("RECEIPT_FLAGS_ENABLED", default=False)
+RECEIPT_FLAG_SHORT_CLOCK_MINUTES = env.int("RECEIPT_FLAG_SHORT_CLOCK_MINUTES", default=15)
+RECEIPT_FLAG_LATE_FILING_DAYS = env.int("RECEIPT_FLAG_LATE_FILING_DAYS", default=7)
+
 # Hours check before payroll (hours_check/thresholds.py has the defaults and
 # what each key means). JSON in the env, e.g. {"far_miles": 0.5}; unknown
 # keys and bad values are ignored.
@@ -662,6 +680,31 @@ try:
     )
 except ValueError:
     HOURS_CHECK_THRESHOLDS = {}
+
+# ── Sales assist (sales_assist/) ─────────────────────────────────────
+# Close CRM API key. Set on Cloud Run only; never committed or logged. When
+# empty every Close step is a clean no-op ("close-not-configured").
+CLOSE_API_KEY = env("CLOSE_API_KEY", default="")
+# Second lock: even with apply=true, nothing is written to Close unless this
+# is true. Until Kyle flips it, every run (scheduled ones too) is a dry run.
+SALES_ASSIST_ENABLED = env.bool("SALES_ASSIST_ENABLED", default=False)
+# Cost caps per cron run.
+SALES_ASSIST_MAX_PROSPECTS_PER_RUN = env.int("SALES_ASSIST_MAX_PROSPECTS_PER_RUN", default=10)
+SALES_ASSIST_MAX_RENEWALS_PER_RUN = env.int("SALES_ASSIST_MAX_RENEWALS_PER_RUN", default=30)
+SALES_ASSIST_MAX_AI_CALLS_PER_RUN = env.int("SALES_ASSIST_MAX_AI_CALLS_PER_RUN", default=40)
+SALES_ASSIST_MAX_USD_PER_RUN = env.float("SALES_ASSIST_MAX_USD_PER_RUN", default=1.0)
+# More new leads than this since the last poll = a bulk import, not inbound
+# leads: they are skipped (cursor moves past them) instead of drafted.
+SALES_ASSIST_IMPORT_BURST = env.int("SALES_ASSIST_IMPORT_BURST", default=40)
+# Renewal drafts are also made this many days before CloseLink.renewal_date.
+SALES_ASSIST_RENEWAL_LEAD_DAYS = env.int("SALES_ASSIST_RENEWAL_LEAD_DAYS", default=45)
+# Optional: only draft for new leads in these Close lead status ids
+# (comma-separated). Empty = every new lead.
+SALES_ASSIST_PROSPECT_STATUS_IDS = env("SALES_ASSIST_PROSPECT_STATUS_IDS", default="")
+# Rough model prices for the cost estimate in the audit log (USD per 1M
+# tokens). Estimates only; OpenAI's usage page is the real bill.
+SALES_ASSIST_USD_PER_M_INPUT = env.float("SALES_ASSIST_USD_PER_M_INPUT", default=2.5)
+SALES_ASSIST_USD_PER_M_OUTPUT = env.float("SALES_ASSIST_USD_PER_M_OUTPUT", default=10.0)
 
 _job_extension_rate_default = env("JOB_EXTENSION_RATE_DEFAULT", default=8)
 if _job_extension_rate_default in (None, ""):
@@ -807,6 +850,15 @@ for _logger_cfg in LOGGING["loggers"].values():
 # Public origin of this API as brands/AI apps see it (OAuth issuer; the MCP
 # URL is <this>/mcp). Falls back to PUBLIC_API_BASE_URL.
 MCP_PUBLIC_BASE_URL = env("MCP_PUBLIC_BASE_URL", default="")
+# Kill switch: False → /mcp and /oauth/* answer 503 and tokens stop working.
+MCP_ENABLED = env.bool("MCP_ENABLED", default=True)
+
+# Legal acceptance gate (legal/graphql_extension.py): admin + client users
+# must accept the current Terms / AUP / Privacy (versions in legal/versions.py)
+# before the clients/spark GraphQL schemas serve them data. On by default;
+# the test suite turns it off (root conftest.py) and enables it per test.
+LEGAL_ACCEPTANCE_ENFORCED = env.bool("LEGAL_ACCEPTANCE_ENFORCED", default=True)
+# Optional rollout allowlist of tenant ids ("17,18"); empty → every brand.
 # Kill switch: False (the default) → /mcp and /oauth/* answer 503 and tokens
 # stop working. Production turns it on with MCP_ENABLED=true on Cloud Run.
 MCP_ENABLED = env.bool("MCP_ENABLED", default=False)

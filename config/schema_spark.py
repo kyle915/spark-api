@@ -16,13 +16,15 @@ from wingspan.schema import WingspanQuerySpark
 from chats.schema import ChatQuerySpark, ChatMutationsSpark
 from announcements.schema import AnnouncementQuerySpark, AnnouncementMutationsSpark
 from utils.utils import BlockIntrospectionForAnonymous
+from legal.graphql_extension import LegalAcceptanceGate
+from legal.schema import LegalMutations, LegalQueries
 from utils.graphql.gcs_schema import GCSQuery
 
 # Spark Schemas
 QuerySpark = merge_types(
-    "Query", (EventQuerySpark, RecapQuerySpark, AmbassadorQuerySpark, QuerySpark, SparkJobQueries, DashboardQueries, GCSQuery, AcademyQuerySpark, WingspanQuerySpark, ChatQuerySpark, AnnouncementQuerySpark))
+    "Query", (EventQuerySpark, RecapQuerySpark, AmbassadorQuerySpark, QuerySpark, SparkJobQueries, DashboardQueries, GCSQuery, AcademyQuerySpark, WingspanQuerySpark, ChatQuerySpark, AnnouncementQuerySpark, LegalQueries))
 MutationSpark = merge_types(
-    "Mutation", (EventMutationsSpark, RecapMutationsSpark, MutationSpark, SparkJobMutations, AmbassadorMutationsSpark, DashboardMutations, AcademyMutationsSpark, ChatMutationsSpark, AnnouncementMutationsSpark))
+    "Mutation", (EventMutationsSpark, RecapMutationsSpark, MutationSpark, SparkJobMutations, AmbassadorMutationsSpark, DashboardMutations, AcademyMutationsSpark, ChatMutationsSpark, AnnouncementMutationsSpark, LegalMutations))
 
 schema_spark = JwtSchema(
     query=QuerySpark,
@@ -30,5 +32,6 @@ schema_spark = JwtSchema(
     extensions=[
         DjangoOptimizerExtension,
         BlockIntrospectionForAnonymous,
+        LegalAcceptanceGate,
     ],
 )

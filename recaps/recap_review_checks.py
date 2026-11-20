@@ -529,10 +529,14 @@ def _check_receipt_total(recap_id: int, is_custom: bool, facts: _Facts) -> dict:
                 file_recap_category__name__iregex=RECEIPT_CATEGORY_RE.pattern,
             ).values_list("id", flat=True)
         )
+        # A photo still queued or whose read failed has not been read: leave
+        # it out so the comparison waits for it instead of judging early.
         readings = list(
-            ReceiptReading.objects.filter(custom_recap_file_id__in=receipt_ids).values(
-                "status", "total"
+            ReceiptReading.objects.filter(custom_recap_file_id__in=receipt_ids)
+            .exclude(
+                status__in=(ReceiptReading.STATUS_PENDING, ReceiptReading.STATUS_FAILED)
             )
+            .values("status", "total")
         )
         result = compare_spend_to_receipts(
             _spend_total(facts), readings, len(receipt_ids)
