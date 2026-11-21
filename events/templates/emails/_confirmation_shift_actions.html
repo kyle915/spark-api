@@ -37,16 +37,47 @@ Famus, Wook, or Alcohol Armor — renders this block with no extra heading.
   {% endfor %}
 {% endif %}
 
-{% if checkin_url %}
+{% if preview_url %}
   {% comment %}
-  Clock in/out first — that's what the BA does on arrival / departure.
-  Same standing /checkin/<code> page as the recap CTA below (Torch
-  TH-2HRV3D, LD LD-…, Famus FM-PAG4TX, Wook WW-36DJAJ, Alcohol Armor
-  AA-RPP85E). One real route; two clear jobs called out.
+  No-login, read-only recap preview (/checkin/<code>/preview, with
+  ?program=<eventTypeId> on multi-program links). Opening it never
+  identifies the BA or clocks anything in — it exists so a BA on one bar
+  of signal knows which numbers to keep and which photos to take BEFORE
+  the shift, instead of finding out after a late clock-in. Hidden for
+  time-sheet-only brands (no recap).
   {% endcomment %}
   <p style="margin: 0 0 14px 0;">
-    <strong style="color: #202036;">On shift,</strong> use the link below to
-    clock in when you arrive and clock out when you leave.
+    <strong style="color: #202036;">Know what the recap asks.</strong> Preview it
+    before your shift so you know which numbers to keep track of and which photos to
+    take. You don't need to check in to see it.
+  </p>
+  <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin: 0 0 8px 0;">
+    <tr>
+      <td align="center" bgcolor="#101014" style="background-color: #101014; border-radius: 6px; mso-padding-alt: 14px 30px;">
+        <a href="{{ preview_url }}" target="_blank" rel="noopener noreferrer" style="display: inline-block; padding: 14px 30px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 15px; line-height: 1.2; font-weight: 700; color: #ffffff !important; text-decoration: none; border-radius: 6px; white-space: nowrap;">
+          Preview your recap
+        </a>
+      </td>
+    </tr>
+  </table>
+  <p style="margin: 0 0 26px 0; font-size: 13px; line-height: 1.5; color: #666666; word-break: break-all;">
+    Or open: <a href="{{ preview_url }}" target="_blank" rel="noopener noreferrer" style="color: #202036; text-decoration: underline;">{{ preview_url }}</a>
+  </p>
+{% endif %}
+
+{% if checkin_url %}
+  {% comment %}
+  The standing /checkin/<code> page (Torch TH-2HRV3D, LD LD-…, Famus
+  FM-PAG4TX, Wook WW-36DJAJ, Alcohol Armor AA-RPP85E): clock in on
+  arrival, clock out on departure, and file the recap from the same page.
+  It only works on shift day — the preview above is for before.
+  {% endcomment %}
+  <p style="margin: 0 0 14px 0;">
+    <strong style="color: #202036;">On the day of your shift,</strong> check
+    in with the link below: clock in when you arrive and clock out when you
+    leave.{% if preview_url %} After your activation, submit your recap from
+    the same check-in page—this ensures your payment is processed
+    promptly.{% endif %}
   </p>
   <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin: 0 0 8px 0;">
     <tr>
@@ -57,28 +88,7 @@ Famus, Wook, or Alcohol Armor — renders this block with no extra heading.
       </td>
     </tr>
   </table>
-  <p style="margin: 0 0 26px 0; font-size: 13px; line-height: 1.5; color: #666666; word-break: break-all;">
-    Or open: <a href="{{ checkin_url }}" target="_blank" rel="noopener noreferrer" style="color: #202036; text-decoration: underline;">{{ checkin_url }}</a>
-  </p>
-{% endif %}
-
-{% if recap_url %}
-  <p style="margin: 0 0 14px 0;">
-    <strong style="color: #202036;">After your activation,</strong> submit
-    your recap from the same check-in page—this ensures your payment is
-    processed promptly. You can also review the form before your demo.
-  </p>
-
-  <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin: 0 0 8px 0;">
-    <tr>
-      <td align="center" bgcolor="#101014" style="background-color: #101014; border-radius: 6px; mso-padding-alt: 14px 30px;">
-        <a href="{{ recap_url }}" target="_blank" rel="noopener noreferrer" style="display: inline-block; padding: 14px 30px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 15px; line-height: 1.2; font-weight: 700; color: #ffffff !important; text-decoration: none; border-radius: 6px; white-space: nowrap;">
-          Open Recap Form
-        </a>
-      </td>
-    </tr>
-  </table>
   <p style="margin: 0 0 28px 0; font-size: 13px; line-height: 1.5; color: #666666; word-break: break-all;">
-    Or open: <a href="{{ recap_url }}" target="_blank" rel="noopener noreferrer" style="color: #202036; text-decoration: underline;">{{ recap_url }}</a>
+    Or open: <a href="{{ checkin_url }}" target="_blank" rel="noopener noreferrer" style="color: #202036; text-decoration: underline;">{{ checkin_url }}</a>
   </p>
 {% endif %}

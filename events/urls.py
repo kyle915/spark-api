@@ -37,6 +37,11 @@ urlpatterns = [
         name="events.public_checkin_context",
     ),
     path(
+        "checkin/<str:code>/preview",
+        checkin_views.public_checkin_recap_preview,
+        name="events.public_checkin_recap_preview",
+    ),
+    path(
         "checkin/<str:code>/identify",
         checkin_views.public_checkin_identify,
         name="events.public_checkin_identify",

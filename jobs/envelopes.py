@@ -37,6 +37,28 @@ def _checkin_deep_link(*, tenant, event=None) -> str:
     return ""
 
 
+def _recap_preview_link(*, tenant, event=None) -> str:
+    """No-login, read-only recap preview for BA assign/reminder emails.
+
+    ``/checkin/<code>/preview`` on the tenant's standing link (with the
+    shift's program on multi-program brands), else the event's own walk-up
+    code. Opening it never identifies the BA or clocks anything in. Empty for
+    a time-sheet-only brand, which has no recap.
+    """
+    from ambassadors.checkin_web import is_timesheet_only
+    from events.event_confirmations import public_page_base, recap_preview_url_for
+
+    if tenant is None or is_timesheet_only(tenant):
+        return ""
+    url = recap_preview_url_for(tenant, getattr(event, "event_type", None))
+    if url:
+        return url
+    walkup = (getattr(event, "walkup_code", None) or "").strip()
+    if walkup:
+        return f"{public_page_base()}/checkin/{walkup}/preview"
+    return ""
+
+
 class AmbassadorJobApprovedNotificationMailer(Mailer):
     def __init__(
         self,
@@ -370,6 +392,7 @@ def _build_job_booking_email_context(job: "models.Job") -> dict[str, object]:
         pay = "-"
 
     deep_link = _checkin_deep_link(tenant=tenant, event=event)
+    preview_link = _recap_preview_link(tenant=tenant, event=event)
 
     return {
         "request_id": request_id,
@@ -386,6 +409,7 @@ def _build_job_booking_email_context(job: "models.Job") -> dict[str, object]:
         "end_time": end_time,
         "pay": pay,
         "deep_link": deep_link,
+        "preview_link": preview_link,
         "event_notes": getattr(event, "notes", None) or job.description or "-",
     }
 
@@ -772,6 +796,7 @@ def _build_ambassador_job_email_context(
     start_time = _format_dt_no_tz(start_dt, "%I:%M %p", event_timezone)
     end_time = _format_dt_no_tz(end_dt, "%I:%M %p", event_timezone)
     deep_link = _checkin_deep_link(tenant=tenant, event=event)
+    preview_link = _recap_preview_link(tenant=tenant, event=event)
 
     return {
         "request_id": request_id,
@@ -787,6 +812,7 @@ def _build_ambassador_job_email_context(
         "start_time": start_time,
         "end_time": end_time,
         "deep_link": deep_link,
+        "preview_link": preview_link,
         "event_notes": event.notes or job.description or "-",
     }
 

@@ -68,7 +68,7 @@ TORCH_CHROME = (
     "letter-spacing: 1.2px",
     "background-color: #f7f7f8",
     "Clock in / Clock out",
-    "Open Recap Form",
+    "Preview your recap",
     "The Ignite Team",
     "Ignite Productions LLC",
     "This is an automated message.",
@@ -467,7 +467,7 @@ class TestBrandGroupEmailUsesTorchTemplate:
         for marker in TORCH_CHROME:
             assert marker in html
         assert html.count("Clock in / Clock out") == 2
-        assert html.count("Open Recap Form") == 2
+        assert html.count("Preview your recap") == 2
         assert "FM-PAG4TX" in html
         assert "WW-36DJAJ" in html
         assert "brand-guidelines.pdf" in html
@@ -690,7 +690,7 @@ class TestPivotEmailUsesTorchTemplate:
         for marker in TORCH_CHROME:
             assert marker in html
         assert html.count("Clock in / Clock out") == 1
-        assert html.count("Open Recap Form") == 1
+        assert html.count("Preview your recap") == 1
         assert "PE-Y7VPYC" in html
         assert "BA Guide" in html
         assert "Retail Sampling FAQ" in html
