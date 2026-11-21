@@ -24,6 +24,8 @@ Routes (mounted under ``/api/public/`` in ``events/urls.py``):
     POST checkin/<code>/recap          → {success}
     POST checkin/<code>/recap-draft    → {saved, filed: false}  (not a submit)
     POST checkin/<code>/change-program → switch this BA's walk-in event program
+    POST checkin/<code>/store-lookup   → GPS/typed address → place + known store
+    POST checkin/<code>/change-store   → move this BA's walk-in event to the right store
 """
 from __future__ import annotations
 
@@ -227,6 +229,7 @@ def _stamp_recap_only(payload: dict, code: str, tenant) -> dict:
         payload.pop("programPickerTitle", None)
         if isinstance(payload.get("session"), dict):
             payload["session"].pop("programChange", None)
+            payload["session"].pop("storeChange", None)
     return payload
 
 
@@ -1937,6 +1940,137 @@ def public_checkin_change_program(request: HttpRequest, code: str) -> HttpRespon
         "dropped": summary["dropped"],
         "photos": summary["photos"],
         "photosMoved": summary["photosMoved"],
+    }
+    return JsonResponse(payload)
+
+
+# --------------------------------------------------------------------------
+# POST store-lookup / change-store  ("Wrong store? Fix it")
+# --------------------------------------------------------------------------
+def _gps_from(data: dict):
+    from ambassadors.store_change import parse_point
+
+    return parse_point(data.get("latitude"), data.get("longitude"))
+
+
+def _store_change_gate(request: HttpRequest, code: str, data: dict, scope: str):
+    """``((event, ambassador), None)`` or ``(None, error)`` for the two
+    store-fix calls: a valid session on a link with a time clock."""
+    if _over_limit(f"{scope}-ip", _client_ip(request), limit=60, window=600):
+        return None, _rate_limited()
+    blocked = _reject_clock_on_recap_link(code)
+    if blocked is not None:
+        return None, blocked
+    loaded, err = _load_session(code, data.get("session") or "")
+    if err is not None:
+        return None, err
+    return loaded, None
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def public_checkin_store_lookup(request: HttpRequest, code: str) -> HttpResponse:
+    """Where the BA is, before they confirm a store fix. Writes nothing.
+
+    Body: ``{session, latitude?, longitude?, address?, includeStores?}``.
+    With no ``address`` the GPS fix is reverse-geocoded; with one, the
+    address is geocoded and measured against the fix. Returns the address,
+    ``distanceKm`` / ``far`` against ``maxDistanceKm``, the store Spark
+    already knows there (``store``), and with ``includeStores`` the brand's
+    known stores for the search box."""
+    data = _body(request)
+    loaded, err = _store_change_gate(request, code, data, "store-lookup")
+    if err is not None:
+        return err
+    event, ambassador = loaded
+    if _over_limit("store-lookup-shift", f"{event.id}:{ambassador.id}", limit=40, window=3600):
+        return _rate_limited()
+
+    from ambassadors.store_change import lookup_place, store_change_state
+
+    state = store_change_state(event=event, ambassador=ambassador)
+    if not state["allowed"]:
+        return _err(state["message"], status=409, code=state["code"])
+    try:
+        result = lookup_place(
+            event=event, gps=_gps_from(data), address=_str_field(data, "address")
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("checkin store lookup failed code=%s", code)
+        result = {"address": "", "store": None}
+    if data.get("includeStores") and not state["addressOnly"]:
+        result["stores"] = checkin_web.recent_checkin_locations(event.tenant)
+    result["storeChange"] = state
+    return JsonResponse(result)
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def public_checkin_change_store(request: HttpRequest, code: str) -> HttpResponse:
+    """Move this BA's own walk-in shift to the store they're really at.
+
+    Body: ``{session, address, storeName?, storeNumber?, latitude?,
+    longitude?, accuracy?, placeLatitude?, placeLongitude?, state?,
+    addressSource?, confirmFar?, requestKey?}``. Same ownership rules as
+    change-program (see ``ambassadors.store_change``). Refused with 409
+    ``far_from_gps`` (and ``distanceKm``) when the address is more than
+    ``CHECKIN_STORE_FIX_MAX_KM`` from the phone until the BA sends
+    ``confirmFar``. Returns the refreshed check-in context plus
+    ``storeChange``."""
+    data = _body(request)
+    loaded, err = _store_change_gate(request, code, data, "store-change")
+    if err is not None:
+        return err
+    event, ambassador = loaded
+    if _over_limit("store-change-shift", f"{event.id}:{ambassador.id}", limit=10, window=3600):
+        return _rate_limited()
+
+    from ambassadors.store_change import (
+        StoreChangeRefused,
+        change_checkin_store,
+        parse_point,
+        store_change_payload,
+    )
+
+    confirm = data.get("confirmFar")
+    try:
+        result = change_checkin_store(
+            event=event,
+            ambassador=ambassador,
+            address=_str_field(data, "address"),
+            store_name=_str_field(data, "storeName"),
+            store_number=_str_field(data, "storeNumber"),
+            gps=_gps_from(data),
+            gps_accuracy_m=data.get("accuracy"),
+            place=parse_point(data.get("placeLatitude"), data.get("placeLongitude")),
+            geocoded_state=_str_field(data, "state"),
+            address_source=_str_field(data, "addressSource"),
+            confirm_far=confirm is True or (isinstance(confirm, str) and confirm.lower() == "true"),
+            request_key=_str_field(data, "requestKey"),
+        )
+    except StoreChangeRefused as exc:
+        res = _err(str(exc), status=exc.status, code=exc.code)
+        if exc.extra:
+            body = json.loads(res.content)
+            body.update(exc.extra)
+            return JsonResponse(body, status=exc.status)
+        return res
+    except Exception:  # noqa: BLE001
+        logger.exception("checkin store change failed code=%s", code)
+        return _err("Couldn't move your shift. Try again.", status=500, code="server")
+
+    event = result["event"]
+    kind, target = checkin_web.resolve_checkin_target(code)
+    payload = checkin_web.build_public_context(event, ambassador)
+    if kind == "tenant":
+        payload["mode"] = "tenant"
+        payload["unfiledShifts"] = checkin_web.unfiled_shifts_for(
+            ambassador=ambassador, tenant=target
+        )
+        _stamp_recap_only(payload, code, target)
+    payload["storeChange"] = {
+        **store_change_payload(result["change"]),
+        "repeated": bool(result["repeated"]),
     }
     return JsonResponse(payload)
 

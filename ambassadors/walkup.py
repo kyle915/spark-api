@@ -339,6 +339,16 @@ class WalkupShiftType:
     program_changed_from: str | None = None
     program_changed_to: str | None = None
     program_changed_at: str | None = None
+    # Set when the BA moved their shift to another store on the check-in page
+    # ("Wrong store? Fix it") — the latest move only.
+    store_changed_from: str | None = None
+    store_changed_to: str | None = None
+    store_changed_at: str | None = None
+    store_change_distance_km: float | None = None
+    store_change_far_override: bool = False
+    # The move created a store Spark had never seen (unverified).
+    store_change_created_store: bool = False
+    store_change_retailer_uuid: str | None = None
 
 
 @strawberry.input
@@ -449,7 +459,30 @@ def _build_walkup_row(amb_event) -> WalkupShiftType:
         change = latest_program_change(event_id=event.id, ambassador_id=amb.id)
     except Exception:  # noqa: BLE001 — the note is decorative
         change = None
+    move = None
+    try:
+        from ambassadors.store_change import latest_store_change
+
+        move = latest_store_change(event_id=event.id, ambassador_id=amb.id)
+    except Exception:  # noqa: BLE001 — the note is decorative
+        move = None
+
+    def _place(address: str, store: str) -> str | None:
+        address, store = (address or "").strip(), (store or "").strip()
+        if store and address:
+            return f"{store} · {address}"
+        return store or address or None
+
     return WalkupShiftType(
+        store_changed_from=_place(move.from_address, move.from_store_name) if move else None,
+        store_changed_to=_place(move.to_address, move.to_store_name) if move else None,
+        store_changed_at=move.created_at.isoformat() if move else None,
+        store_change_distance_km=move.distance_km if move else None,
+        store_change_far_override=bool(move.far_override) if move else False,
+        store_change_created_store=bool(move.created_retailer) if move else False,
+        store_change_retailer_uuid=(
+            str(move.to_retailer.uuid) if move and move.to_retailer_id else None
+        ),
         program_changed_from=(change.from_name or None) if change else None,
         program_changed_to=(change.to_name or None) if change else None,
         program_changed_at=change.created_at.isoformat() if change else None,

@@ -1945,3 +1945,82 @@ class CheckinProgramChange(models.Model):
             f"program-change {self.ambassador_id}@{self.event_id} "
             f"{self.from_name} -> {self.to_name}"
         )
+
+
+class CheckinStoreChange(models.Model):
+    """A BA moved their own walk-in shift to the store they are really at.
+
+    Written by ``ambassadors.store_change.change_checkin_store`` from the
+    public check-in page ("Wrong store? Fix it"). One row per move, so staff
+    can see who moved the shift, from where, to where, what GPS said and
+    whether the BA overrode a far-away warning. The event is changed in
+    place; clock-ins, booking, GPS pings and mileage are not.
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    tenant = models.ForeignKey(
+        Tenant, on_delete=models.CASCADE, related_name="checkin_store_changes"
+    )
+    event = models.ForeignKey(
+        Event, on_delete=models.CASCADE, related_name="checkin_store_changes"
+    )
+    ambassador = models.ForeignKey(
+        Ambassador, on_delete=models.CASCADE, related_name="checkin_store_changes"
+    )
+    # Addresses and store names copied at the time of the move, so the note
+    # still reads right after a retailer is renamed or merged.
+    from_address = models.TextField(blank=True, default="")
+    to_address = models.TextField(blank=True, default="")
+    from_store_name = models.CharField(max_length=255, blank=True, default="")
+    to_store_name = models.CharField(max_length=255, blank=True, default="")
+    store_number = models.CharField(max_length=64, blank=True, default="")
+    from_retailer = models.ForeignKey(
+        "events.Retailer",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    to_retailer = models.ForeignKey(
+        "events.Retailer",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    # True when this move created ``to_retailer`` (a store Spark had never
+    # seen). Unverified until staff review it from the Walk-ups card.
+    created_retailer = models.BooleanField(default=False)
+    old_event_name = models.CharField(max_length=255, blank=True, default="")
+    new_event_name = models.CharField(max_length=255, blank=True, default="")
+    # The phone's GPS fix used to verify the move (null when location was off).
+    gps_latitude = models.FloatField(null=True, blank=True)
+    gps_longitude = models.FloatField(null=True, blank=True)
+    gps_accuracy_m = models.FloatField(null=True, blank=True)
+    # Where the chosen address is (geocoded), and how far that is from GPS.
+    place_latitude = models.FloatField(null=True, blank=True)
+    place_longitude = models.FloatField(null=True, blank=True)
+    distance_km = models.FloatField(null=True, blank=True)
+    # The address was far from GPS and the BA said "I'm sure".
+    far_override = models.BooleanField(default=False)
+    # gps (reverse-geocoded), search (picked from known stores) or typed.
+    address_source = models.CharField(max_length=16, blank=True, default="")
+    # The page's per-attempt key, so a retry or double tap is one move.
+    request_key = models.CharField(max_length=64, blank=True, default="")
+    detail = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+
+    class Meta:
+        indexes = [
+            models.Index(
+                fields=["event", "ambassador", "-created_at"],
+                name="ambassadors_event_i_csc_idx",
+            ),
+        ]
+
+    def __str__(self):
+        return (
+            f"store-change {self.ambassador_id}@{self.event_id} "
+            f"{self.from_address} -> {self.to_address}"
+        )
