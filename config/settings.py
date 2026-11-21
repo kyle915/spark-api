@@ -492,6 +492,9 @@ ADMIN_FRONTEND_URL = env("ADMIN_FRONTEND_URL", default="http://localhost:3000")
 # front end is live. Joining an existing event, recap-only links and
 # past-day recaps are never asked.
 CHECKIN_REQUIRE_SHIFT_TODAY = env.bool("CHECKIN_REQUIRE_SHIFT_TODAY", default=False)
+# "Wrong store? Fix it": a corrected address farther than this from the BA's
+# phone GPS needs an explicit "I'm sure" (recorded on CheckinStoreChange).
+CHECKIN_STORE_FIX_MAX_KM = env.float("CHECKIN_STORE_FIX_MAX_KM", default=1.0)
 PUBLIC_CHECKIN_BASE_URL = env(
     "PUBLIC_CHECKIN_BASE_URL",
     default="https://client.igniteproductions.co",

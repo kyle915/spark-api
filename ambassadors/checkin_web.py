@@ -2368,6 +2368,15 @@ def build_public_context(event, ambassador=None) -> dict:
             payload["session"]["programChange"] = program_change_state(
                 event=event, ambassador=ambassador
             )
+        # "Wrong store? Fix it" (or "Wrong location?" on a time clock).
+        try:
+            from ambassadors.store_change import store_change_state
+
+            payload["session"]["storeChange"] = store_change_state(
+                event=event, ambassador=ambassador
+            )
+        except Exception:  # noqa: BLE001 — the fix control is optional
+            logger.exception("store change state failed event=%s", event.id)
         from ambassadors.walkup_draft import drafts_for_session
 
         drafts = drafts_for_session(event=event, ambassador=ambassador)
