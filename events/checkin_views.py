@@ -11,6 +11,7 @@ these views are thin HTTP wrappers (parse → authorize → delegate → JSON).
 Routes (mounted under ``/api/public/`` in ``events/urls.py``):
 
     GET  checkin/<code>                → event + brand + template (+ session state)
+    GET  checkin/<code>/preview        → read-only recap form structure (no session)
     POST checkin/<code>/identify       → {sessionToken, session}
     POST checkin/<code>/clock          → {clock}
     POST checkin/<code>/clear-clock    → {cleared, clockedOut, clock}
@@ -450,6 +451,44 @@ def public_checkin_context(request: HttpRequest, code: str) -> HttpResponse:
         logger.exception("checkin context build failed code=%s", code)
         return _err("Couldn't load this check-in.", status=500, code="server")
     return JsonResponse(payload)
+
+
+# --------------------------------------------------------------------------
+# GET recap preview (read-only, no session)
+# --------------------------------------------------------------------------
+# Generous: a BA flipping programs in the preview sheet is a handful of calls,
+# and a crew sharing one store Wi-Fi shares one IP.
+PREVIEW_IP_LIMIT = 60
+PREVIEW_IP_WINDOW_S = 300
+
+
+@csrf_exempt
+@require_http_methods(["GET"])
+def public_checkin_recap_preview(request: HttpRequest, code: str) -> HttpResponse:
+    """What the recap will ask, before the BA clocks in.
+
+    Form structure only (questions, options, required flags, photo buckets).
+    Never identifies anyone, never clocks, never creates an event or booking —
+    see ``ambassadors/recap_preview.py``. ``?program=<eventTypeId>`` picks the
+    program on a multi-program standing link; anything outside the link's own
+    programs is ignored.
+    """
+    from ambassadors.recap_preview import PreviewUnavailable, build_recap_preview
+
+    if _over_limit("preview-ip", _client_ip(request), limit=PREVIEW_IP_LIMIT, window=PREVIEW_IP_WINDOW_S):
+        return _rate_limited()
+    try:
+        payload = build_recap_preview(code, request.GET.get("program"))
+    except PreviewUnavailable as exc:
+        return _err(exc.message, status=exc.status, code=exc.code)
+    except Exception:  # noqa: BLE001
+        logger.exception("checkin recap preview failed code=%s", code)
+        return _err("Couldn't load the recap preview.", status=500, code="server")
+    response = JsonResponse(payload)
+    # Short shared cache: the form changes rarely, and the check-in service
+    # worker keeps its own offline copy.
+    response["Cache-Control"] = "public, max-age=300"
+    return response
 
 
 # --------------------------------------------------------------------------

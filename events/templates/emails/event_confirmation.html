@@ -100,7 +100,7 @@ the email body (and into the plain-text alternative, where it's very visible).
 
       {% if brand_blocks %}
         {% for block in brand_blocks %}
-          {% include "emails/_confirmation_shift_actions.html" with training_resources=block.training_resources checkin_url=block.checkin_url recap_url=block.recap_url brand_name=block.name %}
+          {% include "emails/_confirmation_shift_actions.html" with training_resources=block.training_resources checkin_url=block.checkin_url recap_url=block.recap_url preview_url=block.preview_url brand_name=block.name %}
         {% endfor %}
       {% else %}
         {% include "emails/_confirmation_shift_actions.html" %}

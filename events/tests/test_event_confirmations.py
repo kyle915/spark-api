@@ -183,7 +183,7 @@ class TestConfirmationContent:
         html = env.render_template()
         for artifact in ("{#", "#}", "{%", "{{"):
             assert artifact not in html
-        assert "Open Recap Form" in html
+        assert "Preview your recap" in html
         assert "Clock in / Clock out" in html
         assert "Review Training Site" in html
         # Real <a href> with a full https URL — a styled <td> with no href
@@ -429,7 +429,7 @@ class TestTorchConfirmationContent:
         assert "Liquid Death" not in html
         assert 'href="https://client.igniteproductions.co/checkin/TH-2HRV3D"' in html
         assert "Clock in / Clock out" in html
-        assert "Open Recap Form" in html
+        assert "Preview your recap" in html
         assert "BA Sampling Guide" in html
         assert "Product Sales Sheets" in html
         assert "ba-sampling-guide.pdf" in html
@@ -889,3 +889,86 @@ class TestFailedRemindersAreRetried:
         c.event = self._event_for(c.tenant, request_status="approved")
         c.save(update_fields=["event"])
         assert len(due_reminders()) == 1
+
+
+# ---------------------------------------------------------------------------
+# Recap preview link — read the recap before the shift, no check-in needed
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestRecapPreviewLink:
+    def _multi_program_tenant(self):
+        from events.models import EventType
+
+        tenant = _tenant()
+        retail = EventType.objects.create(
+            name="Retail Sampling", tenant=tenant, created_by=_system_user()
+        )
+        activation = EventType.objects.create(
+            name="Event Activation", tenant=tenant, created_by=_system_user()
+        )
+        tenant.checkin_event_types.set([retail, activation])
+        return tenant, retail, activation
+
+    def test_preview_link_replaces_open_recap_form_in_html_and_text(self):
+        from events.event_confirmations import EventConfirmationMailer
+
+        tenant = _tenant()
+        c = _confirmation(tenant, starts_at=datetime(2026, 8, 1, 13, 0, tzinfo=CHICAGO))
+        env = EventConfirmationMailer(c, EventConfirmation.STAGE_T24).envelope()
+        html = env.render_template()
+        preview = "https://client.igniteproductions.co/checkin/LD-TNBJ8K/preview"
+
+        assert "Open Recap Form" not in html
+        assert "review the form before your demo" not in html
+        assert "Preview your recap" in html
+        assert f'href="{preview}"' in html
+        assert "On the day of your shift," in html
+        # The check-in link stays, for shift day.
+        assert 'href="https://client.igniteproductions.co/checkin/LD-TNBJ8K"' in html
+
+        text = env.render_text()
+        assert f"Preview your recap ({preview})" in text
+        assert "Open Recap Form" not in text
+        assert "On the day of your shift" in text
+
+    def test_multi_program_brand_links_the_shifts_program(self):
+        tenant, retail, activation = self._multi_program_tenant()
+        c = _confirmation(
+            tenant,
+            starts_at=datetime(2026, 8, 1, 13, 0, tzinfo=CHICAGO),
+            event_type_label="event activation",
+        )
+        ctx = build_context(c, EventConfirmation.STAGE_BOOKED)
+        assert ctx["preview_url"].endswith(
+            f"/checkin/LD-TNBJ8K/preview?program={activation.id}"
+        )
+
+    def test_unknown_program_label_opens_the_preview_picker(self):
+        tenant, _, _ = self._multi_program_tenant()
+        c = _confirmation(
+            tenant,
+            starts_at=datetime(2026, 8, 1, 13, 0, tzinfo=CHICAGO),
+            event_type_label="Something typed by hand",
+        )
+        ctx = build_context(c, EventConfirmation.STAGE_BOOKED)
+        assert ctx["preview_url"].endswith("/checkin/LD-TNBJ8K/preview")
+
+    def test_single_program_brand_gets_a_plain_preview_link(self):
+        tenant = _tenant()
+        c = _confirmation(tenant, starts_at=datetime(2026, 8, 1, 13, 0, tzinfo=CHICAGO))
+        ctx = build_context(c, EventConfirmation.STAGE_BOOKED)
+        assert ctx["preview_url"] == (
+            "https://client.igniteproductions.co/checkin/LD-TNBJ8K/preview"
+        )
+
+    def test_time_sheet_only_brand_gets_no_recap_block(self):
+        from events.event_confirmations import EventConfirmationMailer
+
+        tenant = _tenant(checkin_timesheet_only=True)
+        c = _confirmation(tenant, starts_at=datetime(2026, 8, 1, 13, 0, tzinfo=CHICAGO))
+        assert build_context(c, EventConfirmation.STAGE_BOOKED)["preview_url"] == ""
+        html = EventConfirmationMailer(c, EventConfirmation.STAGE_BOOKED).envelope().render_template()
+        assert "Preview your recap" not in html
+        assert "submit your recap" not in html
+        assert "Clock in / Clock out" in html

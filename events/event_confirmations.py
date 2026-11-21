@@ -37,6 +37,7 @@ a fallback). Everything else here is tenant-generic.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from urllib.parse import quote_plus, urlparse, urlunparse
@@ -287,6 +288,68 @@ def recap_url_for(tenant) -> str:
     GraphQL options keep reading one shared builder.
     """
     return checkin_url_for(tenant)
+
+
+def recap_preview_url_for(tenant, event_type=None) -> str:
+    """No-login, read-only preview of the recap for the tenant's standing link.
+
+    ``/checkin/<code>/preview`` shows every recap question, the photos to take
+    and a "before your shift" checklist without identifying the BA or clocking
+    anything in (spark-api ``ambassadors/recap_preview.py``). On a brand that
+    runs several programs off one link, ``?program=<eventTypeId>`` opens the
+    right form; it is added only when it resolves to one of THIS link's
+    programs. Empty for a time-sheet-only brand (no recap) or a tenant with no
+    check-in code.
+    """
+    from ambassadors.checkin_web import is_timesheet_only, selectable_event_types
+
+    code = (getattr(tenant, "checkin_code", "") or "").strip()
+    if not code or is_timesheet_only(tenant):
+        return ""
+    url = f"{public_page_base()}/checkin/{code}/preview"
+    et_id = getattr(event_type, "id", None)
+    if et_id is not None and getattr(event_type, "tenant_id", None) == tenant.id:
+        offered = selectable_event_types(tenant)
+        if len(offered) > 1 and any(et.id == et_id for et in offered):
+            url += f"?program={et_id}"
+    return url
+
+
+def _program_match_key(value) -> str:
+    return re.sub(r"[^a-z0-9]+", "", (value or "").lower())
+
+
+def confirmation_event_type(confirmation: EventConfirmation, tenant):
+    """The program this confirmation is for on ``tenant``'s link, or None.
+
+    The shift's own event type when the admin picked an existing shift;
+    otherwise the free-text ``event_type_label`` matched against the brand's
+    check-in programs (by event type name or the picker's BA-facing label).
+    """
+    event = getattr(confirmation, "event", None)
+    if (
+        event is not None
+        and getattr(event, "tenant_id", None) == tenant.id
+        and getattr(event, "event_type", None) is not None
+    ):
+        return event.event_type
+    wanted = _program_match_key(confirmation.event_type_label)
+    if not wanted:
+        return None
+    from ambassadors.checkin_web import checkin_program_picker, selectable_event_types
+
+    offered = selectable_event_types(tenant)
+    for et in offered:
+        if _program_match_key(et.name) == wanted:
+            return et
+    try:
+        options, _ = checkin_program_picker(tenant)
+    except Exception:  # noqa: BLE001 — copy config never blocks an email
+        options = []
+    for opt in options:
+        if opt.get("label") and _program_match_key(opt["label"]) == wanted:
+            return next((et for et in offered if str(et.id) == opt["id"]), None)
+    return None
 
 
 def training_url_for(tenant) -> str:
@@ -578,18 +641,25 @@ def build_context(confirmation: EventConfirmation, stage: str) -> dict:
                     "name": (getattr(tenant, "name", "") or "").strip(),
                     "checkin_url": url,
                     "recap_url": url,
+                    "preview_url": recap_preview_url_for(
+                        tenant, confirmation_event_type(confirmation, tenant)
+                    ),
                     "training_resources": email_training_resources(tenant),
                 }
             )
         training_resources: list[dict] = []
         checkin_url = ""
         recap_url = ""
+        preview_url = ""
     else:
         tenant = tenants[0]
         brand_blocks = []
         training_resources = email_training_resources(tenant)
         checkin_url = checkin_url_for(tenant)
         recap_url = checkin_url
+        preview_url = recap_preview_url_for(
+            tenant, confirmation_event_type(confirmation, tenant)
+        )
 
     return {
         "eyebrow": eyebrow,
@@ -611,6 +681,10 @@ def build_context(confirmation: EventConfirmation, stage: str) -> dict:
         # brands render, each through the same button partial.
         "checkin_url": checkin_url,
         "recap_url": recap_url,
+        # No-login, read-only recap preview (questions + photos + checklist)
+        # so the BA knows what to collect BEFORE clocking in. "" for a
+        # time-sheet-only brand, which hides the recap block entirely.
+        "preview_url": preview_url,
         "training_resources": training_resources,
         "brand_blocks": brand_blocks,
         # First pdf/link — GraphQL form options + older single-button callers.

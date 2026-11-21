@@ -145,7 +145,7 @@
         <li><strong>5. Recap &amp; Wrap-Up</strong>
           <ul style="padding-left: 18px; margin: 8px 0 0 0;">
             <li>{% if deep_link %}Open <a href="{{ deep_link }}" target="_blank" rel="noopener noreferrer">check-in</a> to complete your recap.{% else %}Open check-in to complete your recap.{% endif %}</li>
-            <li>Check the recap form when you arrive so you know what photos/details are required.</li>
+            <li>{% if preview_link %}<a href="{{ preview_link }}" target="_blank" rel="noopener noreferrer">Preview your recap</a> before your shift so you know which numbers and photos are required.{% else %}Check the recap form before your shift so you know what photos/details are required.{% endif %}</li>
             <li>Submit your recap before leaving (use the last 10 minutes of your shift to finalize)</li>
             <li>Payment is only processed upon completion of the recap.</li>
             <li>Leftover products should not be used for other demos. You may take them home or dispose of them.</li>

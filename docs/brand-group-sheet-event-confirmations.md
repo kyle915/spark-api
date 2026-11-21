@@ -44,8 +44,8 @@ There is no Brand column. Every confirmation is Pivot Energy Drink
 (`pivot-energy-drink`). Standing check-in, do not remint:
 `https://client.igniteproductions.co/checkin/PE-Y7VPYC`.
 
-Clock in / Clock out and Open Recap Form use that URL on
-`client.igniteproductions.co`. The email keeps the walk-up **BA Guide** when
+Clock in / Clock out uses that URL on `client.igniteproductions.co`;
+Preview your recap uses `/checkin/PE-Y7VPYC/preview` (read-only, no login). The email keeps the walk-up **BA Guide** when
 that tenant has it, and always includes:
 
 - **Retail Sampling FAQ** — `https://client.igniteproductions.co/training/pivot-energy-drink/retail-sampling-faq.pdf`
