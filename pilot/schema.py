@@ -46,12 +46,19 @@ from pilot.finance import (
     request_finance_clarification,
     resolve_finance_exception,
 )
+from pilot.buyer_digest import set_buyer_weekly_digest
 from pilot.imports import (
     IMPORT_PRESETS,
     commit_provider_import,
     preview_provider_import,
     resolve_provider_import_row,
     sync_existing_events_to_canonical_visits,
+)
+from pilot.ingest import (
+    list_pos_feed_configs,
+    list_recent_pos_feed_drops,
+    pos_presets_payload,
+    upsert_pos_feed_config,
 )
 from pilot.models import (
     CanonicalVisit,
@@ -257,6 +264,8 @@ class WorkspaceOverview:
     mode: str
     plan_tier: str
     default_contribution_per_unit: str | None
+    buyer_weekly_digest_enabled: bool
+    buyer_digest_recipient_emails: str
     viewer_role: str
     viewer_provider_uuid: str | None
     viewer_provider_name: str | None
@@ -275,6 +284,52 @@ class WorkspaceOverview:
     programs: list[SimpleCatalogItem]
     stores: list[SimpleCatalogItem]
     products: list[SimpleCatalogItem]
+
+
+@strawberry.type
+class PosPresetItem:
+    key: str
+    label: str
+    column_map_json: str
+    default_banner: str
+
+
+@strawberry.type
+class PosFeedConfigItem:
+    uuid: str
+    retailer_banner: str
+    preset_key: str
+    source_kind: str
+    ingest_token: str
+    enabled: bool
+    default_feed_completeness: str
+    notes: str
+    last_ingested_at: str | None
+    drop_url_path: str
+    created_at: str
+
+
+@strawberry.type
+class PosFeedDropItem:
+    uuid: str
+    feed_uuid: str
+    retailer_banner: str
+    status: str
+    filename: str
+    source_from_email: str
+    error_message: str
+    sales_import_uuid: str | None
+    matched_rows: int | None
+    unmatched_rows: int | None
+    received_at: str
+    processed_at: str | None
+
+
+@strawberry.type
+class PosAutomationWorkspace:
+    presets: list[PosPresetItem]
+    feeds: list[PosFeedConfigItem]
+    recent_drops: list[PosFeedDropItem]
 
 
 @strawberry.type
@@ -1160,6 +1215,17 @@ class PilotQueries:
                     if profile.default_contribution_per_unit is not None
                     else None
                 ),
+                buyer_weekly_digest_enabled=bool(
+                    profile.buyer_weekly_digest_enabled
+                ),
+                # Recipient override may include external buyer/finance
+                # addresses — withhold from provider-scoped members (same
+                # gate as setBuyerWeeklyDigest / member list).
+                buyer_digest_recipient_emails=(
+                    (profile.buyer_digest_recipient_emails or "")
+                    if access.can_manage_pos
+                    else ""
+                ),
                 viewer_role=access.workspace_role,
                 viewer_provider_uuid=(
                     str(access.provider.uuid) if access.provider else None
@@ -1759,6 +1825,76 @@ class PilotQueries:
             if store_key:
                 qs = qs.filter(store_key=store_key)
             return [_serialize_action(a) for a in qs.order_by("-created_at")[:100]]
+
+        return await sync_to_async(_run, thread_sensitive=True)()
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def pos_automation_workspace(
+        self, info: strawberry.Info
+    ) -> PosAutomationWorkspace:
+        def _run():
+            access = _access_for_info(info)
+            presets = [
+                PosPresetItem(
+                    key=p["key"],
+                    label=p["label"],
+                    column_map_json=json.dumps(p["column_map"]),
+                    default_banner=p.get("default_banner") or "",
+                )
+                for p in pos_presets_payload()
+            ]
+            feeds = [
+                PosFeedConfigItem(
+                    uuid=str(cfg.uuid),
+                    retailer_banner=cfg.retailer_banner,
+                    preset_key=cfg.preset_key,
+                    source_kind=cfg.source_kind,
+                    ingest_token=cfg.ingest_token if access.can_manage_pos else "",
+                    enabled=cfg.enabled,
+                    default_feed_completeness=cfg.default_feed_completeness,
+                    notes=cfg.notes,
+                    last_ingested_at=(
+                        cfg.last_ingested_at.isoformat()
+                        if cfg.last_ingested_at
+                        else None
+                    ),
+                    drop_url_path=(
+                        f"/api/public/pos-feed/{cfg.ingest_token}"
+                        if access.can_manage_pos
+                        else ""
+                    ),
+                    created_at=cfg.created_at.isoformat(),
+                )
+                for cfg in list_pos_feed_configs(access)
+            ]
+            drops = [
+                PosFeedDropItem(
+                    uuid=str(d.uuid),
+                    feed_uuid=str(d.feed_config.uuid),
+                    retailer_banner=d.feed_config.retailer_banner,
+                    status=d.status,
+                    filename=d.filename,
+                    source_from_email=d.source_from_email,
+                    error_message=d.error_message,
+                    sales_import_uuid=(
+                        str(d.sales_import.uuid) if d.sales_import_id else None
+                    ),
+                    matched_rows=(
+                        d.sales_import.matched_rows if d.sales_import_id else None
+                    ),
+                    unmatched_rows=(
+                        d.sales_import.unmatched_rows if d.sales_import_id else None
+                    ),
+                    received_at=d.received_at.isoformat(),
+                    processed_at=(
+                        d.processed_at.isoformat() if d.processed_at else None
+                    ),
+                )
+                for d in list_recent_pos_feed_drops(access)
+            ]
+            return PosAutomationWorkspace(
+                presets=presets, feeds=feeds, recent_drops=drops
+            )
 
         return await sync_to_async(_run, thread_sensitive=True)()
 
@@ -2725,6 +2861,7 @@ class PilotMutations:
         filename: str = "pos.csv",
         feed_completeness: str = "complete",
         column_map_json: str | None = None,
+        preset_key: str | None = None,
     ) -> PilotMutationOutcome:
         def _run():
             try:
@@ -2736,9 +2873,66 @@ class PilotMutations:
                     csv_text=csv_text,
                     filename=filename,
                     column_map=cmap,
+                    preset_key=preset_key,
                     feed_completeness=feed_completeness,
                 )
                 return PilotMutationOutcome(ok=True, target_uuid=str(imp.uuid))
+            except Exception as exc:  # noqa: BLE001
+                return PilotMutationOutcome(ok=False, error=str(exc))
+
+        return await sync_to_async(_run, thread_sensitive=True)()
+
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def upsert_pos_feed_config(
+        self,
+        info: strawberry.Info,
+        retailer_banner: str,
+        preset_key: str = "",
+        source_kind: str = "email_drop",
+        enabled: bool = True,
+        default_feed_completeness: str = "complete",
+        notes: str = "",
+        remint_token: bool = False,
+        feed_uuid: str | None = None,
+    ) -> PilotMutationOutcome:
+        def _run():
+            try:
+                access = _access_for_info(info)
+                cfg = upsert_pos_feed_config(
+                    access,
+                    retailer_banner=retailer_banner,
+                    preset_key=preset_key,
+                    source_kind=source_kind,
+                    enabled=enabled,
+                    default_feed_completeness=default_feed_completeness,
+                    notes=notes,
+                    remint_token=remint_token,
+                    feed_uuid=feed_uuid,
+                )
+                return PilotMutationOutcome(ok=True, target_uuid=str(cfg.uuid))
+            except Exception as exc:  # noqa: BLE001
+                return PilotMutationOutcome(ok=False, error=str(exc))
+
+        return await sync_to_async(_run, thread_sensitive=True)()
+
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def set_buyer_weekly_digest(
+        self,
+        info: strawberry.Info,
+        enabled: bool,
+        recipient_emails: str | None = None,
+    ) -> PilotMutationOutcome:
+        def _run():
+            try:
+                access = _access_for_info(info)
+                profile = set_buyer_weekly_digest(
+                    access,
+                    enabled=enabled,
+                    recipient_emails=recipient_emails,
+                )
+                return PilotMutationOutcome(
+                    ok=True, target_uuid=str(profile.uuid)
+                )
             except Exception as exc:  # noqa: BLE001
                 return PilotMutationOutcome(ok=False, error=str(exc))
 
@@ -3022,6 +3216,13 @@ class PilotMutations:
         accept_terms: bool = True,
         force_new_workspace: bool = False,
         invitation_token: str = "",
+        utm_source: str = "",
+        utm_medium: str = "",
+        utm_campaign: str = "",
+        utm_id: str = "",
+        utm_content: str = "",
+        utm_term: str = "",
+        landing_path: str = "/onboarding",
     ) -> OnboardingSessionPayload:
         def _run():
             try:
@@ -3037,6 +3238,14 @@ class PilotMutations:
                     or req.META.get("REMOTE_ADDR", "127.0.0.1")
                 )
                 ua = req.META.get("HTTP_USER_AGENT", "spark-self-serve")
+                marketing_attribution = {
+                    "utm_source": utm_source,
+                    "utm_medium": utm_medium,
+                    "utm_campaign": utm_campaign,
+                    "utm_id": utm_id,
+                    "utm_content": utm_content,
+                    "utm_term": utm_term,
+                }
                 res = start_or_resume_self_serve_onboarding(
                     authenticated_user=actor_user,
                     email=email,
@@ -3050,6 +3259,8 @@ class PilotMutations:
                     invitation_token=invitation_token,
                     client_ip=ip_addr,
                     user_agent=ua,
+                    marketing_attribution=marketing_attribution,
+                    landing_path=landing_path or "/onboarding",
                 )
                 return OnboardingSessionPayload(
                     ok=True,

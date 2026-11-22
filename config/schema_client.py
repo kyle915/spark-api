@@ -18,6 +18,7 @@ from brand_insights.schema import (
     BrandInsightPacingQueries,
     BrandInsightQueries,
 )
+from brand_insights.pitch_schema import PitchDeckMutations, PitchDeckQueries
 from brand_chat.schema import BrandChatMutations, BrandChatQueries
 from recaps.flag_explanation import RecapFlagExplanationQueries
 from recaps.receipt_audit_schema import ReceiptAuditMutations, ReceiptAuditQueries
@@ -101,6 +102,7 @@ QueryClients = merge_types(
         WeeklySummaryQueries,
         BrandInsightQueries,
         BrandInsightPacingQueries,
+        PitchDeckQueries,
         BrandChatQueries,
         RecapFlagExplanationQueries,
         ReceiptAuditQueries,
@@ -137,6 +139,7 @@ MutationClients = merge_types(
         WeeklySummaryMutations,
         BrandInsightMutations,
         BrandInsightPacingMutations,
+        PitchDeckMutations,
         BrandChatMutations,
         RecapMetricMappingMutations,
         ReceiptAuditMutations,

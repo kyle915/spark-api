@@ -1,0 +1,55 @@
+name: Process POS feed drops
+
+# Fires `/internal/cron/process-pos-feed-drops` hourly so inbound portal CSV
+# drops (POST /api/public/pos-feed/<token>) import without waiting for a
+# brand user to click Upload. Empty queues exit quickly.
+#
+# NOTE: schedule only fires from default branch `main`; endpoint deploys from
+# `develop`. Keep this workflow on BOTH branches.
+
+on:
+  schedule:
+    # :20 past the hour — offset from other hourly crons.
+    - cron: "20 * * * *"
+  workflow_dispatch:
+    inputs:
+      tenant:
+        description: "Restrict to a single tenant id (optional)"
+        required: false
+        default: ""
+      limit:
+        description: "Max pending drops to process"
+        required: false
+        default: "50"
+
+jobs:
+  fire-process-pos-feed-drops:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire process-pos-feed-drops cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/process-pos-feed-drops
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          TENANT: ${{ github.event.inputs.tenant || '' }}
+          LIMIT: ${{ github.event.inputs.limit || '50' }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+
+          QS="limit=$LIMIT"
+          if [ -n "$TENANT" ]; then
+            QS="$QS&tenant=$TENANT"
+          fi
+
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL?$QS" \
+            -H "X-Cron-Secret: $CRON_SECRET")
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS — see body above."
+            exit 1
+          fi

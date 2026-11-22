@@ -12,6 +12,8 @@ import functools
 from django.urls import path
 from django.views.decorators.csrf import csrf_exempt
 
+from pilot.cron_views import PILOT_CRON_VIEWS
+
 from .cron_views import _registered_views
 from .models import record_cron_run
 from .rollup_cron_views import ROLLUP_VIEWS
@@ -41,5 +43,9 @@ urlpatterns = [
         csrf_exempt(_heartbeat(name, view.as_view())),
         name=f"digest-cron-{name}",
     )
-    for name, view in {**_registered_views(), **ROLLUP_VIEWS}.items()
+    for name, view in {
+        **_registered_views(),
+        **ROLLUP_VIEWS,
+        **PILOT_CRON_VIEWS,
+    }.items()
 ]

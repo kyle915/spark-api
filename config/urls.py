@@ -95,6 +95,9 @@ urlpatterns = [
     # PDF. See `billing/views.py`.
     path("api/public/", include("billing.urls")),
     path("api/public/", include("pilot.urls")),
+    # Public, token-authenticated Buyer Pitch Deck leave-behind (no JWT).
+    # Optional passcode unlock. See brand_insights/pitch_views.py.
+    path("api/public/", include("brand_insights.urls")),
     # Public, token-authenticated one-click shift-extension approval (no JWT).
     # The admin "Extension requested" email links here. See `ambassadors/views.py`.
     path("api/public/", include("ambassadors.urls")),
