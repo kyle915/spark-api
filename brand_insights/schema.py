@@ -613,10 +613,18 @@ class BrandInsightPacingQueries:
         tenant_id: strawberry.ID | None = None,
     ) -> TodayAttentionQueue | None:
         """Composite dashboard strip: receipts, missing recaps, unstaffed
-        shifts, and rebook recommendations."""
+        shifts, and rebook recommendations.
+
+        Ignite staff only — brand / agency clients never receive this queue
+        (ops chrome; staff preview Client view is gated on the front end).
+        """
         from brand_insights.attention_queue import build_today_attention_queue
+        from pilot.permissions import is_ignite_staff_user
 
         def _build():
+            user = info.context.request.user
+            if not is_ignite_staff_user(user):
+                return None
             access = _access_or_none(info, tenant_id)
             if access is None:
                 return None

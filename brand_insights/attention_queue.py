@@ -1,4 +1,6 @@
-"""Today's Attention composite queue for the brand/ops dashboard strip.
+"""Today's Attention composite queue for the Ignite ops dashboard strip.
+
+Exposed only to Ignite staff via ``todayAttentionQueue`` (not brand clients).
 
 Four buckets, each capped so the strip stays scannable:
 
