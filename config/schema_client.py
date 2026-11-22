@@ -12,7 +12,12 @@ from recaps.comment_insights import CommentInsightQueries
 from consumer_mentions.trends import MentionTrendQueries
 from photo_library.schema import PhotoLibraryQueries
 from recaps.weekly_summary import WeeklySummaryMutations, WeeklySummaryQueries
-from brand_insights.schema import BrandInsightMutations, BrandInsightQueries
+from brand_insights.schema import (
+    BrandInsightMutations,
+    BrandInsightPacingMutations,
+    BrandInsightPacingQueries,
+    BrandInsightQueries,
+)
 from brand_chat.schema import BrandChatMutations, BrandChatQueries
 from recaps.flag_explanation import RecapFlagExplanationQueries
 from recaps.receipt_audit_schema import ReceiptAuditMutations, ReceiptAuditQueries
@@ -95,6 +100,7 @@ QueryClients = merge_types(
         PhotoLibraryQueries,
         WeeklySummaryQueries,
         BrandInsightQueries,
+        BrandInsightPacingQueries,
         BrandChatQueries,
         RecapFlagExplanationQueries,
         ReceiptAuditQueries,
@@ -130,6 +136,7 @@ MutationClients = merge_types(
         ShelfCheckMutations,
         WeeklySummaryMutations,
         BrandInsightMutations,
+        BrandInsightPacingMutations,
         BrandChatMutations,
         RecapMetricMappingMutations,
         ReceiptAuditMutations,
