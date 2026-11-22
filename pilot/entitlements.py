@@ -293,6 +293,7 @@ class EffectiveBrandEntitlements:
     overage_unit_price_usd: Decimal | None
     is_quote_only: bool
     is_managed_sow: bool
+    addon_plan_code: str
     is_pilot: bool
     pilot_fee_usd: Decimal | None
     pilot_ends_at: datetime | None
@@ -458,6 +459,7 @@ def resolve_brand_entitlements(
         overage_unit_price_usd=sub.overage_unit_price_usd,
         is_quote_only=entry.is_quote_only,
         is_managed_sow=(effective_code == WorkspaceProfile.PLAN_MANAGED_SOW),
+        addon_plan_code=sub.addon_plan_code or "",
         is_pilot=bool(sub.is_pilot),
         pilot_fee_usd=sub.pilot_fee_usd,
         pilot_ends_at=sub.pilot_ends_at,

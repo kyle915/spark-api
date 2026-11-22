@@ -4177,14 +4177,19 @@ class RequestMutations:
         try:
             service = RequestWithDependenciesMutationService.with_input(input)
             await service.set_user_and_tenant(info)
-            if getattr(service, "tenant", None) is not None:
-                is_client_caller = (
-                    service.user is not None and await service.user.role.is_client
-                )
+            if getattr(service, "tenant_id", None) is not None:
+
+                def _enforce_visit_cap(tid: int, is_admin_caller: bool) -> None:
+                    tenant_obj = Tenant.objects.filter(id=tid).first()
+                    if tenant_obj is not None:
+                        require_new_visit_capacity(
+                            tenant_obj, is_ignite_admin=is_admin_caller
+                        )
+
                 try:
-                    await sync_to_async(require_new_visit_capacity)(
-                        service.tenant,
-                        is_ignite_admin=not is_client_caller,
+                    await sync_to_async(_enforce_visit_cap)(
+                        int(service.tenant_id),
+                        bool(getattr(service, "is_spark_schema", False)),
                     )
                 except PlanEntitlementError as exc:
                     raise GraphQLError(

@@ -14,7 +14,6 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-import secrets
 import time as time_module
 from datetime import datetime, timedelta, timezone as dt_timezone
 from decimal import Decimal
@@ -586,26 +585,44 @@ def change_subscription_plan(
         )
 
     now = timezone.now()
+    if profile.mode == WorkspaceProfile.MODE_MANAGED:
+        sub.plan_code = WorkspaceProfile.PLAN_MANAGED_SOW
+        sub.status = BrandSubscription.STATUS_MANAGED_SOW
+        sub.addon_plan_code = (
+            ""
+            if target_plan_code == WorkspaceProfile.PLAN_FREE
+            else target_plan_code
+        )
+        sub.recurring_billing_accepted_at = now
+        sub.recurring_billing_accepted_by = access.user
+        sub.save()
+        log_workspace_audit(
+            tenant=access.tenant,
+            actor=access.user,
+            category="billing",
+            action="managed_addon_updated",
+            target_type="BrandSubscription",
+            target_id=str(sub.uuid),
+            summary=(
+                f"Updated optional software add-on to {sub.addon_plan_code or 'none'} "
+                f"while preserving Managed SOW entitlements."
+            ),
+        )
+        return sub
+
     cur_rank = PLAN_RANK.get(sub.plan_code, 0)
     tgt_rank = PLAN_RANK.get(target_plan_code, 0)
 
     if tgt_rank > cur_rank:
-        if profile.mode == WorkspaceProfile.MODE_MANAGED:
-            sub.addon_plan_code = target_plan_code
-        else:
-            sub.plan_code = target_plan_code
-            profile.plan_tier = target_plan_code
-            if profile.mode == WorkspaceProfile.MODE_PILOT:
-                profile.mode = WorkspaceProfile.MODE_SELF_SERVE
-                sub.is_pilot = False
-            profile.save(update_fields=["mode", "plan_tier", "updated_at"])
+        sub.plan_code = target_plan_code
+        profile.plan_tier = target_plan_code
+        if profile.mode == WorkspaceProfile.MODE_PILOT:
+            profile.mode = WorkspaceProfile.MODE_SELF_SERVE
+            sub.is_pilot = False
+        profile.save(update_fields=["mode", "plan_tier", "updated_at"])
         sub.pending_plan_code = ""
         sub.cancel_at_period_end = False
-        sub.status = (
-            BrandSubscription.STATUS_MANAGED_SOW
-            if profile.mode == WorkspaceProfile.MODE_MANAGED
-            else BrandSubscription.STATUS_ACTIVE
-        )
+        sub.status = BrandSubscription.STATUS_ACTIVE
         if sub.current_period_start is None:
             sub.current_period_start = now
         if sub.current_period_end is None or sub.current_period_end <= now:
@@ -1112,7 +1129,12 @@ def process_stripe_webhook(
         if data_obj.get("id"):
             sub.stripe_latest_invoice_id = str(data_obj["id"])
         err_msg = (
-            str(data_obj.get("failure_message") or "").strip()
+            str(
+                data_obj.get("failure_message")
+                or (data_obj.get("last_finalization_error") or {}).get("message")
+                or (data_obj.get("last_payment_error") or {}).get("message")
+                or ""
+            ).strip()
             or "Card declined during recurring subscription renewal."
         )
         sub.last_payment_status = BrandSubscription.PAY_FAILED

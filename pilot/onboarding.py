@@ -10,10 +10,10 @@ from typing import Any
 
 from django.conf import settings
 from django.contrib.auth import authenticate
-from django.db import transaction
+from django.db import connection, transaction
 from django.utils import timezone
 from django.utils.text import slugify
-from gqlauth.core.utils import get_token
+from gqlauth.jwt.types_ import TokenType
 from gqlauth.models import RefreshToken, UserStatus
 
 from brand_insights.facts import store_identity
@@ -164,8 +164,29 @@ def _seed_tenant_operational_defaults(tenant: Tenant, owner: User) -> None:
         )
 
 
+def ensure_role_by_slug(slug: str, name: str) -> Role:
+    """Resolve or create a Role safely even on Postgres databases where
+    `tenants.0001_initial` seeded explicit IDs without advancing the sequence."""
+    role = (
+        Role.objects.filter(slug=slug).first()
+        or Role.objects.filter(name__iexact=name).first()
+    )
+    if role is not None:
+        if not role.slug:
+            role.slug = slug
+            role.save(update_fields=["slug"])
+        return role
+    if connection.vendor == "postgresql":
+        with connection.cursor() as cur:
+            cur.execute(
+                "SELECT setval(pg_get_serial_sequence('tenants_role', 'id'),"
+                " GREATEST(COALESCE((SELECT MAX(id) FROM tenants_role), 0), 1))"
+            )
+    return Role.objects.create(name=name, slug=slug)
+
+
 def _issue_auth_tokens(user: User) -> tuple[str, str]:
-    jwt_token = get_token(user)
+    jwt_token = TokenType.from_user(user).token
     refresh_obj = RefreshToken.from_user(user)
     return jwt_token, refresh_obj.token
 
@@ -238,9 +259,7 @@ def start_or_resume_self_serve_onboarding(
                 raise ValueError(
                     "Choose a password of at least 8 characters to secure your workspace."
                 )
-            client_role, _ = Role.objects.get_or_create(
-                slug=Role.CLIENT_SLUG, defaults={"name": "Client"}
-            )
+            client_role = ensure_role_by_slug(Role.CLIENT_SLUG, "Client")
             username_base = clean_email
             user = User.objects.create_user(
                 username=username_base,
@@ -772,9 +791,7 @@ def onboarding_invite_contributor(
     existing_user = User.objects.filter(email__iexact=clean_email).first()
     if existing_user is not None:
         if getattr(existing_user, "role_id", None) is None:
-            client_role, _ = Role.objects.get_or_create(
-                slug=Role.CLIENT_SLUG, defaults={"name": "Client"}
-            )
+            client_role = ensure_role_by_slug(Role.CLIENT_SLUG, "Client")
             existing_user.role = client_role
             existing_user.save(update_fields=["role"])
         scope = f"provider:{provider.id}" if provider else "brand"

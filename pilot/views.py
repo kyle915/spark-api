@@ -372,9 +372,6 @@ def public_provider_submission_view(
         if not progress.step_mobile_link_opened:
             progress.step_mobile_link_opened = True
             update_fields.append("step_mobile_link_opened")
-        if not progress.step_first_recap_submitted:
-            progress.step_first_recap_submitted = True
-            update_fields.append("step_first_recap_submitted")
         if progress.first_visit_id is None:
             progress.first_visit = visit
             update_fields.append("first_visit")

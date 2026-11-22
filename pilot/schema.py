@@ -11,7 +11,6 @@ from asgiref.sync import sync_to_async
 
 from django.conf import settings
 from events.models import Event, EventType, Product, Retailer
-from tenants.models import Tenant
 from pilot.actions import (
     build_weekly_buyer_store_report,
     complete_rebook_return_visit,
@@ -157,6 +156,7 @@ class PilotMutationOutcome:
     ok: bool
     error: str | None = None
     target_uuid: str | None = None
+    status: str | None = None
 
 
 @strawberry.type
