@@ -3406,10 +3406,24 @@ class JobBriefingMutations:
                 return None, "Job not found."
             if allowed is not None and job.tenant_id not in allowed:
                 return None, "Job not found."
+            next_title = (
+                input.title.strip()
+                if input.title is not None
+                else job.briefing_title
+            )
+            next_body = input.body if input.body is not None else job.briefing_body
+            try:
+                from store_logistics.service import strip_dynamic_logistics_from_briefing
+
+                next_title, next_body = strip_dynamic_logistics_from_briefing(
+                    job, next_title, next_body
+                )
+            except Exception:
+                pass
             if input.title is not None:
-                job.briefing_title = input.title.strip()
+                job.briefing_title = next_title or ""
             if input.body is not None:
-                job.briefing_body = input.body
+                job.briefing_body = next_body or ""
             job.save(update_fields=["briefing_title", "briefing_body", "updated_at"])
             if input.attachments is not None:
                 job.briefing_attachments.all().delete()

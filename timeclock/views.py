@@ -70,7 +70,7 @@ def public_clock_in(request: HttpRequest, token: str) -> HttpResponse:
     if link is None:
         return _not_found()
     try:
-        session = services.clock_in(
+        session, already_in = services.clock_in_with_meta(
             link,
             _body(request),
             ip=_client_ip(request),
@@ -78,13 +78,13 @@ def public_clock_in(request: HttpRequest, token: str) -> HttpResponse:
         )
     except services.ClockError as exc:
         return _clock_error(exc)
-    return JsonResponse(
-        {
-            "sessionToken": services.make_session_token(session),
-            "session": services.session_payload(session),
-        },
-        status=201,
-    )
+    payload = {
+        "sessionToken": services.make_session_token(session),
+        "session": services.session_payload(session),
+    }
+    if already_in:
+        payload["alreadyIn"] = True
+    return JsonResponse(payload, status=200 if already_in else 201)
 
 
 @csrf_exempt
@@ -101,16 +101,20 @@ def public_clock_out(request: HttpRequest, token: str) -> HttpResponse:
     if session_token:
         session = services.read_session_token(session_token, link)
     try:
-        if session is None and not data.get("email"):
+        has_idem = bool(data.get("idempotencyKey") or data.get("idempotency_key"))
+        if session is None and not data.get("email") and not has_idem:
             raise services.ClockError(
                 "We lost track of your clock-in on this phone. Enter your email to clock out.",
                 code="no_session",
                 status=401,
             )
-        session = services.clock_out(link, data, session=session)
+        session, already_out = services.clock_out_with_meta(link, data, session=session)
     except services.ClockError as exc:
         return _clock_error(exc)
-    return JsonResponse({"session": services.session_payload(session)})
+    payload: dict = {"session": services.session_payload(session)}
+    if already_out:
+        payload["alreadyOut"] = True
+    return JsonResponse(payload)
 
 
 @csrf_exempt

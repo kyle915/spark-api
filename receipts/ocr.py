@@ -43,7 +43,7 @@ class OcrResult:
     purchase_date: date | None = None
 
 
-def _vision_text(image_bytes: bytes) -> str:
+def _vision_text(image_bytes: bytes, *, timeout: float = 25) -> str:
     """Call Vision REST and return the full recognized text (may raise)."""
     import google.auth
     from google.auth.transport.requests import AuthorizedSession
@@ -60,7 +60,7 @@ def _vision_text(image_bytes: bytes) -> str:
             }
         ]
     }
-    resp = session.post(_VISION_ENDPOINT, json=payload, timeout=25)
+    resp = session.post(_VISION_ENDPOINT, json=payload, timeout=timeout)
     resp.raise_for_status()
     data = resp.json()
     responses = data.get("responses") or [{}]
@@ -135,12 +135,12 @@ def _parse_store(text: str) -> str:
     return ""
 
 
-def run_ocr(image_bytes: bytes) -> OcrResult:
+def run_ocr(image_bytes: bytes, *, timeout: float = 25) -> OcrResult:
     """Run OCR + parse store / amount / date. Never raises."""
     if not image_bytes:
         return OcrResult(ok=False, reason="No image bytes.")
     try:
-        text = _vision_text(image_bytes)
+        text = _vision_text(image_bytes, timeout=timeout)
     except ImportError as exc:
         logger.warning("receipts.ocr: dependency unavailable: %s", exc)
         return OcrResult(ok=False, reason="OCR dependency unavailable.")

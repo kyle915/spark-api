@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import base64
 import json
+import time
 from typing import Callable, TypeVar
 
 from django.conf import settings
@@ -385,6 +386,7 @@ def generate_vision_json(
     max_tokens: int = 400,
     small: bool = False,
     timeout: float | None = None,
+    deadline: float | None = None,
     meta: dict | None = None,
 ) -> dict | None:
     """Classify one image with a strict JSON schema.
@@ -394,6 +396,8 @@ def generate_vision_json(
     to identify people — this helper does not add a face feature of its own.
     ``timeout`` is seconds per HTTP attempt (default
     :data:`DEFAULT_TIMEOUT_SECONDS`), for a caller someone is waiting on.
+    ``deadline``, when given as a ``time.monotonic()`` timestamp, bounds all
+    model attempts combined so fallback retries stop once the budget expires.
     ``meta``, when given, is filled with the model that answered and its
     token usage (``model``, ``input_tokens``, ``output_tokens``).
 
@@ -408,6 +412,12 @@ def generate_vision_json(
     data_url = "data:" + mime + ";base64," + base64.b64encode(image_bytes).decode("ascii")
 
     def _ask(model_name: str) -> dict:
+        attempt_timeout = timeout or DEFAULT_TIMEOUT_SECONDS
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0.05:
+                raise AiUnavailable("Vision deadline expired.")
+            attempt_timeout = min(attempt_timeout, remaining)
         payload = {
             "model": model_name,
             "messages": [
@@ -434,7 +444,7 @@ def generate_vision_json(
             OPENAI_CHAT_COMPLETIONS_URL,
             payload,
             headers,
-            timeout=timeout or DEFAULT_TIMEOUT_SECONDS,
+            timeout=attempt_timeout,
         )
         if meta is not None:
             usage = body.get("usage") if isinstance(body, dict) else None

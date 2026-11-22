@@ -26,6 +26,7 @@ from events.models import EventConfirmation
 from jobboard.config import job_board_config_for
 from jobboard.gigs import STAFFING_EMAIL, Gig, date_label, list_gigs, time_label
 from jobboard.models import JobBoardBooking
+from jobboard.release import shift_release_url_for
 from utils.mailer import Envelope, Mailer
 
 logger = logging.getLogger(__name__)
@@ -62,6 +63,12 @@ class JobBoardBookedMailer(EventConfirmationMailer):
         brand = _brand_label(booking) if booking else (c.tenant.name or "")
         context = build_context(c, self.stage)
         gig = _gig_for(booking) if booking else None
+        gig_notes = (gig.public_notes or "").strip() if gig else ""
+        store_brief = (context.get("brief") or "").strip()
+        if gig_notes and store_brief and store_brief not in gig_notes:
+            merged_brief = f"{gig_notes}\n\n{store_brief}"
+        else:
+            merged_brief = gig_notes or store_brief
         context.update(
             {
                 "intro_html": (
@@ -71,7 +78,8 @@ class JobBoardBookedMailer(EventConfirmationMailer):
                 ),
                 "bring_items": BRING_ITEMS,
                 "contact_email": STAFFING_EMAIL,
-                "brief": gig.public_notes if gig else "",
+                "release_url": shift_release_url_for(booking=booking, confirmation=c),
+                "brief": merged_brief,
                 "sampling_label": (
                     SAMPLING_LABELS.get(gig.plan.sampling_format or "", "") if gig else ""
                 ),
