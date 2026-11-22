@@ -2382,11 +2382,26 @@ class ShiftAttendanceMutations:
         cmid = input.client_mutation_id
 
         def _claim():
+            from events.models import Event
+            from jobboard.gigs import list_gigs
+
             with transaction.atomic():
+                event_id = (
+                    OpenShift.objects.filter(uuid=str(input.open_shift_uuid))
+                    .values_list("event_id", flat=True)
+                    .first()
+                )
+                if event_id is None:
+                    return (False, "This shift is no longer available.", None, None)
+
+                # Lock Event before OpenShift (same lock order as jobboard._book_one)
+                # so public job-board bookings and OpenShift claims serialize cleanly.
+                Event.objects.select_for_update().filter(pk=event_id).first()
+
                 try:
                     row = (
-                        OpenShift.objects.select_for_update()
-                        .select_related("event")
+                        OpenShift.objects.select_for_update(of=("self",))
+                        .select_related("event", "event__tenant")
                         .get(uuid=str(input.open_shift_uuid))
                     )
                 except OpenShift.DoesNotExist:
@@ -2401,9 +2416,22 @@ class ShiftAttendanceMutations:
                     )
 
                 ev = row.event
+                now = _tz.now()
                 start = getattr(ev, "start_time", None)
-                if start is not None and start <= _tz.now():
+                if start is not None and start <= now:
                     return (False, "This shift has already started.", None, None)
+
+                if getattr(ev, "tenant", None) is not None:
+                    board_gigs = list_gigs(ev.tenant, now=now, event_ids=[ev.id])
+                    if board_gigs and board_gigs[0].on_board and board_gigs[0].spots_left <= 0:
+                        row.claimed_at = now
+                        row.save(update_fields=["claimed_at"])
+                        return (
+                            False,
+                            "This shift was just claimed by someone else.",
+                            None,
+                            None,
+                        )
 
                 ambassador = Ambassador.objects.filter(user=user).first()
                 if ambassador is None:
