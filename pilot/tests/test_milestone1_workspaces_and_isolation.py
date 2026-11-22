@@ -21,6 +21,8 @@ from gqlauth.models import UserStatus
 
 from brand_chat.service import resolve_tenant as resolve_brand_chat_tenant
 from config.schema_client import schema_clients
+from config.schema_mobile import schema_mobile
+from config.schema_spark import schema_spark
 from events.models import Event, EventType, Product, ProductType
 from pilot.models import (
     CanonicalVisit,
@@ -66,6 +68,7 @@ def _gql_exec(
     tenant: Tenant | None = None,
     membership: WorkspaceMembership | None = None,
     variables: dict | None = None,
+    schema=None,
 ):
     rf = RequestFactory()
     headers = {}
@@ -82,6 +85,7 @@ def _gql_exec(
             self.wsgi_request = wsgi_req
             self.user = user
             self.META = wsgi_req.META
+            self.headers = wsgi_req.headers
             self.scope = {
                 "type": "http",
                 "method": "POST",
@@ -101,8 +105,9 @@ def _gql_exec(
                 return self.request
             raise KeyError(key)
 
+    target_schema = schema or schema_clients
     return asyncio.run(
-        schema_clients.execute(
+        target_schema.execute(
             query,
             variable_values=variables or {},
             context_value=_Ctx(req),
@@ -796,4 +801,183 @@ class WorkspaceIsolationAndSecurityTests(TransactionTestCase):
             .filter(id=corrected_visit.id)
             .exists()
         )
+
+    def test_single_brand_client_cannot_list_or_spoof_other_workspaces_anywhere(self):
+        archived_brand = Tenant.objects.create(
+            name="[ARCHIVED] Carbliss",
+            slug="archived-carbliss",
+            created_by=self.ignite_admin,
+        )
+        TenantedUser.objects.create(
+            tenant=archived_brand, user=self.ignite_admin, is_active=True
+        )
+        Event.objects.create(
+            tenant=self.brand_b,
+            name="Cascade Secret Launch",
+            date=timezone.now(),
+            address="999 Pike St, Seattle, WA",
+            created_by=self.ignite_admin,
+        )
+
+        # 1. Single-brand client `myWorkspaceContexts` returns ONLY their 1 brand.
+        res_ctxs = _gql_exec(
+            """
+            query {
+              myWorkspaceContexts {
+                tenantUuid
+                tenantName
+                membershipUuid
+              }
+            }
+            """,
+            user=self.brand_a_admin,
+        )
+        self.assertIsNone(res_ctxs.errors)
+        self.assertEqual(
+            [c["tenantName"] for c in res_ctxs.data["myWorkspaceContexts"]],
+            ["Suncrest Sparkling"],
+        )
+
+        # 2. `tenants` on QueryClients, QuerySpark, and QueryMobile returns ONLY
+        #    their 1 brand — and returns [] if they pass another user's userUuid!
+        tenants_q = """
+          query($userUuid: ID) {
+            tenants(userUuid: $userUuid, first: 500) {
+              edges { node { uuid name } }
+            }
+          }
+        """
+        for target_schema in (schema_clients, schema_spark, schema_mobile):
+            res_own = _gql_exec(
+                tenants_q,
+                user=self.brand_a_admin,
+                schema=target_schema,
+            )
+            self.assertIsNone(res_own.errors)
+            names = [
+                e["node"]["name"]
+                for e in res_own.data["tenants"]["edges"]
+            ]
+            self.assertEqual(names, ["Suncrest Sparkling"])
+
+            res_spoof_uuid = _gql_exec(
+                tenants_q,
+                user=self.brand_a_admin,
+                variables={"userUuid": str(self.brand_b_admin.uuid)},
+                schema=target_schema,
+            )
+            self.assertIsNone(res_spoof_uuid.errors)
+            self.assertEqual(res_spoof_uuid.data["tenants"]["edges"], [])
+
+            res_spoof_staff = _gql_exec(
+                tenants_q,
+                user=self.brand_a_admin,
+                variables={"userUuid": str(self.ignite_admin.uuid)},
+                schema=target_schema,
+            )
+            self.assertIsNone(res_spoof_staff.errors)
+            self.assertEqual(res_spoof_staff.data["tenants"]["edges"], [])
+
+        # 3. Direct `tenant(uuid: ...)` lookup for Brand B is denied on both schemas.
+        for target_schema in (schema_clients, schema_spark):
+            res_single = _gql_exec(
+                'query($u: ID) { tenant(uuid: $u) { name } }',
+                user=self.brand_a_admin,
+                variables={"u": str(self.brand_b.uuid)},
+                schema=target_schema,
+            )
+            self.assertIsNotNone(res_single.errors)
+
+        # 4. `jumpSearch` with spoofed `X-Spark-Tenant` or `tenantId` never leaks
+        #    other brands' clients, ambassadors, events, or stores.
+        res_jump = _gql_exec(
+            """
+            query($tid: ID) {
+              jumpSearch(q: "Cascade", tenantId: $tid) {
+                clients { name tenantName }
+                ambassadors { name }
+                events { name }
+                requests { name }
+                stores { name }
+              }
+            }
+            """,
+            user=self.brand_a_admin,
+            tenant=self.brand_b,
+            variables={"tid": str(self.brand_b.id)},
+        )
+        self.assertIsNone(res_jump.errors)
+        jump = res_jump.data["jumpSearch"]
+        self.assertEqual(jump["clients"], [])
+        self.assertEqual(jump["ambassadors"], [])
+        self.assertEqual(jump["events"], [])
+
+        # 5. Spoofing X-Spark-Membership or switchWorkspaceContext for Brand B is rejected.
+        res_spoof_mem = _gql_exec(
+            "query { workspaceOverview { tenantName } }",
+            user=self.brand_a_admin,
+            tenant=self.brand_b,
+            membership=self.mem_b_admin,
+        )
+        self.assertIsNotNone(res_spoof_mem.errors)
+
+        res_spoof_switch = _gql_exec(
+            """
+            mutation($tid: String, $mid: String) {
+              switchWorkspaceContext(tenantUuid: $tid, membershipUuid: $mid) {
+                ok
+                error
+              }
+            }
+            """,
+            user=self.brand_a_admin,
+            variables={
+                "tid": str(self.brand_b.uuid),
+                "mid": str(self.mem_b_admin.uuid),
+            },
+        )
+        self.assertFalse(
+            res_spoof_switch.data["switchWorkspaceContext"]["ok"]
+        )
+
+        # 6. Ignite domain staff (even with client role) sees all active brands
+        #    in `myWorkspaceContexts`, excludes `[ARCHIVED]` brands, and can
+        #    switch cleanly into any active workspace!
+        ignite_domain_staff = _make_user(
+            "kyle-test@igniteproductions.co", Role.CLIENT_SLUG
+        )
+        res_staff_ctxs = _gql_exec(
+            "query { myWorkspaceContexts { tenantName displayLabel } }",
+            user=ignite_domain_staff,
+        )
+        self.assertIsNone(res_staff_ctxs.errors)
+        staff_names = [
+            c["tenantName"]
+            for c in res_staff_ctxs.data["myWorkspaceContexts"]
+        ]
+        self.assertIn("Suncrest Sparkling", staff_names)
+        self.assertIn("Cascade Cold Brew", staff_names)
+        self.assertNotIn("[ARCHIVED] Carbliss", staff_names)
+
+        res_staff_switch = _gql_exec(
+            """
+            mutation($tid: String) {
+              switchWorkspaceContext(tenantUuid: $tid) {
+                ok
+                targetUuid
+              }
+            }
+            """,
+            user=ignite_domain_staff,
+            variables={"tid": str(self.brand_b.uuid)},
+        )
+        self.assertIsNone(res_staff_switch.errors)
+        self.assertTrue(
+            res_staff_switch.data["switchWorkspaceContext"]["ok"]
+        )
+        self.assertEqual(
+            res_staff_switch.data["switchWorkspaceContext"]["targetUuid"],
+            str(self.brand_b.uuid),
+        )
+
 

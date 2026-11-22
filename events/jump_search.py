@@ -190,7 +190,10 @@ async def _resolve_jump_scope(
         try:
             resolved = await service.resolve_tenant_id(info, tenant_id=tenant_id)
         except Exception:
-            resolved = await service.resolve_tenant_id(info)
+            try:
+                resolved = await service.resolve_tenant_id(info)
+            except Exception:
+                return None, False
         return (int(resolved) if resolved is not None else None), False
 
     if tenant_id is not None and str(tenant_id).strip():

@@ -19,6 +19,7 @@ from pilot.models import (
     WorkspaceMembership,
 )
 from tenants.models import Role, Tenant, TenantedUser
+from utils.graphql.permissions import user_grants_ignite_admin
 
 SELECTED_TENANT_HEADER = "HTTP_X_SPARK_TENANT"
 SELECTED_MEMBERSHIP_HEADER = "HTTP_X_SPARK_MEMBERSHIP"
@@ -28,7 +29,9 @@ def is_ignite_staff_user(user: Any) -> bool:
     """True only for Ignite internal platform admins (never client or agency)."""
     if not user or not getattr(user, "is_authenticated", False):
         return False
-    if getattr(user, "is_superuser", False):
+    if getattr(user, "pk", None):
+        return user_grants_ignite_admin(user)
+    if getattr(user, "is_superuser", False) or getattr(user, "is_staff", False):
         return True
     role = getattr(user, "role", None)
     return bool(role and role.slug == Role.SPARK_ADMIN_SLUG)
