@@ -35,6 +35,8 @@ from events.activation_plans import ActivationPlanQueries, ActivationPlanMutatio
 from events.field_marketing import FieldMarketingMutations, FieldMarketingQueries
 from events.plan_results import PlanResultsMutations, PlanResultsQueries
 from events.field_marketing_recaps import FieldMarketingRecapQueries
+from events.jump_search import JumpSearchQueries
+from events.request_rollups import RequestRollupQueries
 from hours_check.schema import HoursCheckMutations, HoursCheckQueries
 
 
@@ -74,6 +76,8 @@ class EventQueryClient(
     FieldMarketingQueries,
     PlanResultsQueries,
     FieldMarketingRecapQueries,
+    JumpSearchQueries,
+    RequestRollupQueries,
     queries.EventTypeQueries,
     queries.EventStatusQueries,
     queries.ClientQueries,
