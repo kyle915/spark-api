@@ -5,7 +5,8 @@ Four buckets, each capped so the strip stays scannable:
 * ``receipt_checks`` — open finance exceptions (brand-visible cost proof
   issues). Staff also see unresolved recap staff flags.
 * ``missing_recaps`` — events that owe a filed recap (same definition as
-  ``/recaps/missing``).
+  ``/recaps/missing``). Ignite staff only — brand/client viewers do not
+  see this bucket.
 * ``unstaffed`` — events starting within the next 48 hours with nobody
   assigned (skip cancelled requests and co-activation host copies).
 * ``rebooks`` — open high-velocity store rebook actions → ``/buyer-report``.
@@ -297,7 +298,12 @@ def build_today_attention_queue(
     if access.can_view_brand_consolidated or is_staff or access.can_edit_finance:
         receipt_total, receipt_items = _receipt_items(access, is_staff=is_staff)
 
-    missing_total, missing_items = _missing_recap_items(access)
+    # Missing-recap chase is Ignite ops work (same surface as /recaps/missing).
+    # Brand/client users keep receipt checks + unstaffed + rebooks only.
+    if is_staff:
+        missing_total, missing_items = _missing_recap_items(access)
+    else:
+        missing_total, missing_items = 0, []
     unstaffed_total, unstaffed_items = _unstaffed_items(access)
     rebook_total, rebook_items = _rebook_items(access)
 

@@ -120,7 +120,12 @@ ATTENTION_Q = """
 query {
   todayAttentionQueue {
     totalCount
-    buckets { key label count items { title actionUrl severity refId } }
+    buckets {
+      key
+      label
+      count
+      items { title actionUrl actionLabel severity refId }
+    }
   }
 }
 """
@@ -390,6 +395,15 @@ class AttentionQueueTests(TransactionTestCase):
             end_time=now + timedelta(hours=16),
             created_by=self.admin,
         )
+        # Wrapped yesterday with no filed recap → Missing recaps (staff only).
+        self.due_event = Event.objects.create(
+            tenant=self.brand,
+            name="K Slope Marketplace",
+            event_type=self.et,
+            start_time=now - timedelta(days=1, hours=4),
+            end_time=now - timedelta(days=1),
+            created_by=self.admin,
+        )
         StoreRecommendationAction.objects.create(
             tenant=self.brand,
             finding_id_snapshot="f1",
@@ -416,6 +430,9 @@ class AttentionQueueTests(TransactionTestCase):
         assert keys["receipt_checks"].count >= 1
         assert keys["unstaffed"].count >= 1
         assert keys["rebooks"].count >= 1
+        # Brand/client viewers must not see Missing recaps / File recap.
+        assert keys["missing_recaps"].count == 0
+        assert keys["missing_recaps"].items == []
 
         res = _gql(ATTENTION_Q, user=self.brand_admin, tenant=self.brand)
         assert res.errors is None
@@ -424,3 +441,22 @@ class AttentionQueueTests(TransactionTestCase):
         by_key = {b["key"]: b for b in data["buckets"]}
         assert by_key["rebooks"]["items"][0]["actionUrl"] == "/buyer-report"
         assert by_key["receipt_checks"]["items"][0]["actionUrl"] == "/finance-queue"
+        assert by_key["missing_recaps"]["count"] == 0
+        assert by_key["missing_recaps"]["items"] == []
+
+    def test_staff_still_sees_missing_recaps(self):
+        access = resolve_workspace_access(self.admin, tenant=self.brand)
+        queue = build_today_attention_queue(access)
+        missing = {b.key: b for b in queue.buckets}["missing_recaps"]
+        assert missing.count >= 1
+        assert any("Recap due" in i.title for i in missing.items)
+        assert all(i.action_label == "File recap" for i in missing.items)
+
+        res = _gql(ATTENTION_Q, user=self.admin, tenant=self.brand)
+        assert res.errors is None
+        by_key = {b["key"]: b for b in res.data["todayAttentionQueue"]["buckets"]}
+        assert by_key["missing_recaps"]["count"] >= 1
+        assert by_key["missing_recaps"]["items"][0]["actionLabel"] == "File recap"
+        # Other client-facing buckets remain available to staff too.
+        assert by_key["receipt_checks"]["count"] >= 1
+        assert by_key["unstaffed"]["count"] >= 1
