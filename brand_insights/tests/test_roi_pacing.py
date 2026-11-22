@@ -24,6 +24,8 @@ from pilot.models import (
     BrandCostLine,
     CanonicalVisit,
     FinanceException,
+    RetailerSalesImport,
+    RetailerSalesRow,
     StoreRecommendationAction,
     WorkspaceMembership,
 )
@@ -228,6 +230,43 @@ class RoiPacingTests(TransactionTestCase):
         assert pacing.pace_status == "under_booked"
         assert pacing.can_edit_budget is True
 
+    def test_projected_vs_full_target_not_elapsed_slice(self):
+        """Fully booked mid-month is on_track (vs full target), not over_booked."""
+        upsert_budget_target(
+            self._access(),
+            month=self.month,
+            target_amount=Decimal("300.00"),
+        )
+        pacing = compute_budget_pacing(
+            self._access(), month=self.month, today=self.today
+        )
+        assert pacing.projected_amount == Decimal("300.00")
+        assert pacing.expected_spend_to_date is not None
+        assert pacing.expected_spend_to_date < Decimal("300.00")
+        assert pacing.pace_status == "on_track"
+
+    def test_future_incomplete_estimate_not_double_counted(self):
+        CanonicalVisit.objects.create(
+            tenant=self.brand,
+            visit_date=date(2026, 11, 28),
+            store_key="tw:999",
+            store_label="Future Store",
+            chain_key="total-wine",
+            chain_label="Total Wine",
+            status=CanonicalVisit.STATUS_SCHEDULED,
+            cached_supported_cost=Decimal("200.00"),
+            cached_total_cost=None,
+            cached_cost_incomplete=True,
+            event_type=self.et,
+        )
+        pacing = compute_budget_pacing(
+            self._access(), month=self.month, today=self.today
+        )
+        # Past visits $300 spent; future incomplete $200 committed once.
+        assert pacing.spent_amount == Decimal("300.00")
+        assert pacing.committed_amount == Decimal("200.00")
+        assert pacing.projected_amount == Decimal("500.00")
+
     def test_leaderboard_ranks_by_units_per_dollar(self):
         rows = compute_roi_leaderboard(
             self._access(),
@@ -240,6 +279,43 @@ class RoiPacingTests(TransactionTestCase):
         assert rows[0].units_per_dollar == Decimal("0.20")  # 40/200
         assert rows[1].group_key == "bevmo"
         assert all("999" not in (r.group_key + r.group_label) for r in rows)
+
+    def test_leaderboard_falls_back_to_rep_units_when_pos_units_absent(self):
+        imp = RetailerSalesImport.objects.create(
+            tenant=self.brand,
+            retailer_banner="Total Wine",
+            owner=self.admin,
+            period_start=date(2026, 11, 1),
+            period_end=date(2026, 11, 30),
+            filename="pos.csv",
+            file_sha256="a" * 64,
+            total_rows=1,
+            matched_rows=1,
+        )
+        # Sales dollars present, register_units null → use rep_observed_units.
+        RetailerSalesRow.objects.create(
+            sales_import=imp,
+            tenant=self.brand,
+            row_number=1,
+            store_key="tw:101",
+            store_label="Total Wine 101",
+            chain_key="total-wine",
+            week_start=date(2026, 11, 3),
+            week_end=date(2026, 11, 9),
+            register_units=None,
+            sales_dollars=Decimal("500.00"),
+            match_status=RetailerSalesRow.MATCH_MATCHED,
+        )
+        rows = compute_roi_leaderboard(
+            self._access(),
+            month=self.month,
+            group_by="retailer",
+            today=self.today,
+        )
+        tw = next(r for r in rows if r.group_key == "total-wine")
+        assert tw.units == 40  # rep-observed, not POS zero
+        assert tw.sales_dollars == Decimal("500.00")
+        assert tw.units_per_dollar == Decimal("0.20")
 
     def test_graphql_pacing_and_upsert_isolation(self):
         res = _gql(

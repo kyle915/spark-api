@@ -100,19 +100,28 @@ def _receipt_items(
             )
         )
 
-    if is_staff and len(items) < RECEIPT_CAP:
+    if is_staff:
+        flag_total = 0
+        flags: list = []
         try:
+            from recaps.models import RecapFlag
             from recaps.receipt_audit_schema import list_flags
 
-            flags = list_flags(
+            flag_total = RecapFlag.objects.filter(
                 tenant_id=access.tenant.id,
-                date_from=None,
-                date_to=None,
-                kind=None,
-                unresolved_only=True,
-                first=RECEIPT_CAP,
-            )
+                resolved_at__isnull=True,
+            ).count()
+            if len(items) < RECEIPT_CAP:
+                flags = list_flags(
+                    tenant_id=access.tenant.id,
+                    date_from=None,
+                    date_to=None,
+                    kind=None,
+                    unresolved_only=True,
+                    first=RECEIPT_CAP,
+                )
         except Exception:  # noqa: BLE001
+            flag_total = 0
             flags = []
         for flag in flags:
             if len(items) >= RECEIPT_CAP:
@@ -140,8 +149,8 @@ def _receipt_items(
                     ref_id=ref or f"flag-{len(items)}",
                 )
             )
-        if flags:
-            total = max(total, len(flags))
+        # Finance exceptions + unresolved recap flags are additive.
+        total = total + flag_total
 
     return total, items[:RECEIPT_CAP]
 

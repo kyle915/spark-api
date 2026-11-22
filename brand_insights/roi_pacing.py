@@ -118,8 +118,12 @@ def _visits_qs(access: ResolvedWorkspaceAccess, start: date, end: date):
     )
 
 
-def _spent_for_visits(visits) -> tuple[Decimal, int]:
-    """Return (spent, incomplete_visit_count) for the given visit queryset."""
+def _spent_for_visits(visits, *, today: date) -> tuple[Decimal, int]:
+    """Return (spent, incomplete_visit_count) for the given visit queryset.
+
+    Incomplete future-visit estimates are left for ``_committed_amount`` so
+    they are not double-counted in projected = spent + committed.
+    """
     visit_ids = list(visits.values_list("id", flat=True))
     if not visit_ids:
         return ZERO, 0
@@ -149,9 +153,13 @@ def _spent_for_visits(visits) -> tuple[Decimal, int]:
         elif visit.cached_total_cost is not None and not visit.cached_cost_incomplete:
             spent += quantize_money(visit.cached_supported_cost or ZERO)
         elif visit.cached_supported_cost and visit.cached_supported_cost > ZERO:
-            spent += quantize_money(visit.cached_supported_cost)
-            if visit.cached_cost_incomplete:
+            if visit.cached_cost_incomplete and visit.visit_date >= today:
+                # Future incomplete estimate belongs in committed only.
                 incomplete += 1
+            else:
+                spent += quantize_money(visit.cached_supported_cost)
+                if visit.cached_cost_incomplete:
+                    incomplete += 1
         else:
             incomplete += 1
     return quantize_money(spent), incomplete
@@ -160,7 +168,11 @@ def _spent_for_visits(visits) -> tuple[Decimal, int]:
 def _committed_amount(
     access: ResolvedWorkspaceAccess, start: date, end: date, today: date
 ) -> Decimal:
-    """Future scheduled visits this month without complete costs + open rebooks."""
+    """Future scheduled visits this month without complete costs + open rebooks.
+
+    Skips visits that already contributed known ``BrandCostLine`` amounts to
+    spent, so incomplete cache estimates are never double-counted.
+    """
     future = (
         _visits_qs(access, start, end)
         .filter(visit_date__gte=today)
@@ -171,14 +183,22 @@ def _committed_amount(
             }
         )
     )
+    future_ids = list(future.values_list("id", flat=True))
+    already_in_spent = set(
+        BrandCostLine.objects.filter(
+            canonical_visit_id__in=future_ids,
+            amount__isnull=False,
+        ).values_list("canonical_visit_id", flat=True)
+    )
     committed = ZERO
     for visit in future:
+        if visit.id in already_in_spent:
+            continue
         if visit.cached_cost_incomplete or visit.cached_total_cost is None:
             # Prefer agreement demo fee cache when present; else skip unknown.
             if visit.cached_supported_cost and visit.cached_supported_cost > ZERO:
                 committed += quantize_money(visit.cached_supported_cost)
-        # Fully costed future visits already count in spent via lines; do not
-        # double-count them here.
+        # Fully costed future visits already count in spent; skipped above.
 
     open_rebooks = StoreRecommendationAction.objects.filter(
         tenant=access.tenant,
@@ -273,19 +293,22 @@ def compute_budget_pacing(
 
     visits = _visits_qs(access, start, end)
     visit_count = visits.count()
-    spent, incomplete = _spent_for_visits(visits)
+    spent, incomplete = _spent_for_visits(visits, today=today)
     committed = _committed_amount(access, start, end, today)
-    # Spent already includes costed future visits; committed only adds
-    # incomplete future + rebook budgets. Projected = spent + committed.
+    # Spent = known costs (past + complete). Committed = incomplete future
+    # estimates + open rebook budgets. No overlap between the two.
     projected = quantize_money(spent + committed)
 
     targets = load_targets(access.tenant.id, month_start)
     target = workspace_target(targets)
+    # Elapsed expectation is for the pacing tick / UI only. Status compares
+    # full-month projected spend+commit against the full monthly target so a
+    # fully booked mid-month program is on_track, not over_booked.
     expected = (
         quantize_money(target * elapsed_pct) if target is not None else None
     )
     status, note = _pace_status(
-        target=target, projected=projected, expected=expected
+        target=target, projected=projected, expected=target
     )
 
     return PacingSummary(
@@ -362,7 +385,6 @@ def compute_roi_leaderboard(
 
     sales_by_store: dict[str, dict[str, Any]] = {}
     for row in sales_qs.select_related("product"):
-        units = int(row.register_units or 0) if row.register_units is not None else 0
         dollars = (
             quantize_money(row.sales_dollars)
             if row.sales_dollars is not None
@@ -370,10 +392,14 @@ def compute_roi_leaderboard(
         )
         if row.store_key:
             bucket = sales_by_store.setdefault(
-                row.store_key, {"units": 0, "dollars": ZERO}
+                row.store_key,
+                {"units": 0, "dollars": ZERO, "has_units": False},
             )
-            bucket["units"] += units
-            bucket["dollars"] += dollars
+            if row.register_units is not None:
+                bucket["units"] += int(row.register_units)
+                bucket["has_units"] = True
+            if dollars > ZERO:
+                bucket["dollars"] += dollars
 
     buckets: dict[str, dict[str, Any]] = {}
 
@@ -543,25 +569,33 @@ def compute_roi_leaderboard(
     for key, data in buckets.items():
         pos_units = 0
         pos_dollars = ZERO
-        has_pos = False
+        has_pos_rows = False
+        has_pos_units = False
         for sk in data.get("store_keys") or []:
             s = sales_by_store.get(sk)
             if not s:
                 continue
-            has_pos = True
-            pos_units += int(s["units"])
+            has_pos_rows = True
+            if s.get("has_units"):
+                has_pos_units = True
+                pos_units += int(s["units"])
             pos_dollars += s["dollars"]
 
-        # Prefer POS adjusted units when available; else rep-observed.
+        # Prefer POS units only when at least one row actually had units;
+        # otherwise fall back to rep-observed (sales dollars may still exist).
         units: int | None
-        if has_pos:
+        if has_pos_units:
             units = pos_units
         elif data["has_units"]:
             units = int(data["units"])
         else:
             units = None
 
-        sales = quantize_money(pos_dollars) if has_pos and pos_dollars > ZERO else None
+        sales = (
+            quantize_money(pos_dollars)
+            if has_pos_rows and pos_dollars > ZERO
+            else None
+        )
         demo = quantize_money(data["cost"])
         upd = (
             quantize_money(Decimal(units) / demo)
