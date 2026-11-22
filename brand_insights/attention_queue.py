@@ -299,40 +299,45 @@ def build_today_attention_queue(
         receipt_total, receipt_items = _receipt_items(access, is_staff=is_staff)
 
     # Missing-recap chase is Ignite ops work (same surface as /recaps/missing).
-    # Brand/client users keep receipt checks + unstaffed + rebooks only.
-    if is_staff:
-        missing_total, missing_items = _missing_recap_items(access)
-    else:
-        missing_total, missing_items = 0, []
+    # Brand/client users keep receipt checks + unstaffed + rebooks only — the
+    # missing_recaps bucket is omitted from the response entirely for them.
     unstaffed_total, unstaffed_items = _unstaffed_items(access)
     rebook_total, rebook_items = _rebook_items(access)
 
-    buckets = [
+    buckets: list[AttentionBucket] = [
         AttentionBucket(
             key="receipt_checks",
             label="Receipt checks",
             count=receipt_total,
             items=receipt_items,
         ),
-        AttentionBucket(
-            key="missing_recaps",
-            label="Missing recaps",
-            count=missing_total,
-            items=missing_items,
-        ),
-        AttentionBucket(
-            key="unstaffed",
-            label="Unstaffed (48h)",
-            count=unstaffed_total,
-            items=unstaffed_items,
-        ),
-        AttentionBucket(
-            key="rebooks",
-            label="Rebook stores",
-            count=rebook_total,
-            items=rebook_items,
-        ),
     ]
+    if is_staff:
+        missing_total, missing_items = _missing_recap_items(access)
+        buckets.append(
+            AttentionBucket(
+                key="missing_recaps",
+                label="Missing recaps",
+                count=missing_total,
+                items=missing_items,
+            )
+        )
+    buckets.extend(
+        [
+            AttentionBucket(
+                key="unstaffed",
+                label="Unstaffed (48h)",
+                count=unstaffed_total,
+                items=unstaffed_items,
+            ),
+            AttentionBucket(
+                key="rebooks",
+                label="Rebook stores",
+                count=rebook_total,
+                items=rebook_items,
+            ),
+        ]
+    )
     return AttentionQueue(
         buckets=buckets,
         total_count=sum(b.count for b in buckets),

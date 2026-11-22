@@ -430,9 +430,8 @@ class AttentionQueueTests(TransactionTestCase):
         assert keys["receipt_checks"].count >= 1
         assert keys["unstaffed"].count >= 1
         assert keys["rebooks"].count >= 1
-        # Brand/client viewers must not see Missing recaps / File recap.
-        assert keys["missing_recaps"].count == 0
-        assert keys["missing_recaps"].items == []
+        # Brand/client viewers must not receive the Missing recaps bucket at all.
+        assert "missing_recaps" not in keys
 
         res = _gql(ATTENTION_Q, user=self.brand_admin, tenant=self.brand)
         assert res.errors is None
@@ -441,8 +440,7 @@ class AttentionQueueTests(TransactionTestCase):
         by_key = {b["key"]: b for b in data["buckets"]}
         assert by_key["rebooks"]["items"][0]["actionUrl"] == "/buyer-report"
         assert by_key["receipt_checks"]["items"][0]["actionUrl"] == "/finance-queue"
-        assert by_key["missing_recaps"]["count"] == 0
-        assert by_key["missing_recaps"]["items"] == []
+        assert "missing_recaps" not in by_key
 
     def test_staff_still_sees_missing_recaps(self):
         access = resolve_workspace_access(self.admin, tenant=self.brand)
