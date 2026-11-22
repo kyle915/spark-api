@@ -10,7 +10,7 @@ class Migration(migrations.Migration):
 
     dependencies = [
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
-        ("pilot", "0001_initial"),
+        ("pilot", "0002_milestone2_subscriptions"),
         ("tenants", "0068_checkin_timesheet_only"),
     ]
 
