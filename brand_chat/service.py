@@ -119,13 +119,36 @@ def is_admin(user) -> bool:
 
 
 def _member_tenants(user):
+    from pilot.models import WorkspaceMembership
     from tenants.models import Tenant
 
-    return (
+    qs = (
         Tenant.objects.filter(tenanted_users__user_id=user.pk, tenanted_users__is_active=True)
         .distinct()
-        .order_by("id")
     )
+    active_brand_tids = set(
+        WorkspaceMembership.objects.filter(
+            user_id=user.pk,
+            status=WorkspaceMembership.STATUS_ACTIVE,
+            workspace_role__in=WorkspaceMembership.BRAND_ROLES,
+        ).values_list("tenant_id", flat=True)
+    )
+    blocked_tids = (
+        set(
+            WorkspaceMembership.objects.filter(
+                user_id=user.pk,
+                status=WorkspaceMembership.STATUS_ACTIVE,
+                workspace_role__in=WorkspaceMembership.PROVIDER_ROLES,
+            ).values_list("tenant_id", flat=True)
+        )
+        | set(
+            WorkspaceMembership.objects.filter(
+                user_id=user.pk,
+                status=WorkspaceMembership.STATUS_REVOKED,
+            ).values_list("tenant_id", flat=True)
+        )
+    ) - active_brand_tids
+    return qs.exclude(id__in=blocked_tids).order_by("id")
 
 
 def _parse_tenant_ref(raw) -> int | None:

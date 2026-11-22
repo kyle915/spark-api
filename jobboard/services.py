@@ -21,7 +21,8 @@ from django.db.models import Q
 from django.utils import timezone
 
 from ambassadors.checkin_web import get_or_create_checkin_ambassador
-from ambassadors.models import AmbassadorEvent, Attendance
+from ambassadors.models import AmbassadorEvent, Attendance, OpenShift
+from events.event_confirmations import training_url_for
 from events.models import (
     Event,
     EventConfirmation,
@@ -33,9 +34,10 @@ from events.models import (
 from events.plan_event_types import event_type_for_request
 from events.signals import create_pending_jobs_for_request
 from jobboard.config import JobBoardConfig
-from jobboard.gigs import Gig, date_label, list_gigs, waiting_reason
+from jobboard.gigs import Gig, date_label, list_gigs, time_label, waiting_reason
 from jobboard.mail import send_booking_emails, send_cancellation
 from jobboard.models import JobBoard, JobBoardBooking, JobBoardGig
+from jobboard.release import make_shift_release_token, shift_release_url_for
 from jobs.models import AmbassadorJob, Job, JobTitle, Rate, RateType, Status
 
 MAX_GIGS_PER_APPLY = 10
@@ -173,8 +175,51 @@ def _job_for(event: Event, tenant, actor) -> tuple[Job, Status, Rate]:
     return job, status, job.rate or rate
 
 
+def _booked_shift_payload(
+    *,
+    board: JobBoard,
+    tenant,
+    config: JobBoardConfig,
+    gig: Gig,
+    booking: JobBoardBooking,
+) -> dict:
+    start, end = _window(gig.starts_at, gig.ends_at)
+    release_token = make_shift_release_token(
+        booking=booking, confirmation=booking.confirmation
+    )
+    release_url = shift_release_url_for(
+        booking=booking,
+        confirmation=booking.confirmation,
+        board_token=board.token,
+    )
+    return {
+        "title": f"{config.brand_label} · {gig.type_label} — {gig.venue}",
+        "brandLabel": config.brand_label,
+        "typeLabel": gig.type_label,
+        "venue": gig.venue,
+        "address": (gig.event.address or "").strip(),
+        "startsAt": start.isoformat(),
+        "endsAt": end.isoformat(),
+        "timezone": gig.zone.key,
+        "dateLabel": date_label(gig),
+        "timeLabel": time_label(gig),
+        "brief": gig.public_notes,
+        "checkinCode": (getattr(tenant, "checkin_code", "") or "").strip(),
+        "trainingUrl": training_url_for(tenant),
+        "releaseToken": release_token,
+        "releaseUrl": release_url,
+    }
+
+
 def _book_one(
-    tenant, config: JobBoardConfig, event_uuid: str, applicant: Applicant, ambassador, *, now
+    board: JobBoard,
+    tenant,
+    config: JobBoardConfig,
+    event_uuid: str,
+    applicant: Applicant,
+    ambassador,
+    *,
+    now,
 ) -> dict:
     result = {"id": event_uuid}
     with transaction.atomic():
@@ -191,13 +236,25 @@ def _book_one(
         result["label"] = f"{gig.venue} · {date_label(gig)}"
 
         live = JobBoardBooking.objects.filter(event=gig.event, cancelled_at__isnull=True)
+        exact_own = live.filter(
+            phone=applicant.phone, email__iexact=applicant.email
+        ).select_related("confirmation").first()
         if (
             live.filter(Q(phone=applicant.phone) | Q(email__iexact=applicant.email)).exists()
             or AmbassadorEvent.objects.filter(
                 event=gig.event, ambassador=ambassador, is_approved=True
             ).exists()
         ):
-            return {**result, "status": "already", "message": "You're already booked on this gig."}
+            payload = {**result, "status": "already", "message": "You're already booked on this gig."}
+            if exact_own is not None:
+                payload["shift"] = _booked_shift_payload(
+                    board=board,
+                    tenant=tenant,
+                    config=config,
+                    gig=gig,
+                    booking=exact_own,
+                )
+            return payload
         if gig.spots_left <= 0:
             return {**result, "status": "full", "message": "All shifts were just taken."}
         clash = _conflicting_booking(applicant, gig)
@@ -224,6 +281,20 @@ def _book_one(
             ae.is_approved = True
             ae.updated_by = actor
             ae.save(update_fields=["is_approved", "updated_by", "updated_at"])
+
+        # Consume one unclaimed OpenShift vacancy for this event (if any) under the
+        # Event select_for_update lock so the mobile Open Shifts board cannot fill
+        # the same reopened slot a second time.
+        open_slot = (
+            OpenShift.objects.select_for_update()
+            .filter(event=gig.event, claimed_at__isnull=True)
+            .order_by("id")
+            .first()
+        )
+        if open_slot is not None:
+            open_slot.claimed_by = actor
+            open_slot.claimed_at = now
+            open_slot.save(update_fields=["claimed_by", "claimed_at"])
 
         job, status, rate = _job_for(gig.event, tenant, gig.event.created_by)
         aj = (
@@ -267,7 +338,18 @@ def _book_one(
             note=applicant.note,
         )
         transaction.on_commit(partial(send_booking_emails, booking.id))
-        return {**result, "status": "booked", "message": "You're booked."}
+        return {
+            **result,
+            "status": "booked",
+            "message": "You're booked.",
+            "shift": _booked_shift_payload(
+                board=board,
+                tenant=tenant,
+                config=config,
+                gig=gig,
+                booking=booking,
+            ),
+        }
 
 
 def apply_to_gigs(board: JobBoard, config: JobBoardConfig, applicant: Applicant, gig_ids, *, now=None) -> list[dict]:
@@ -291,7 +373,7 @@ def apply_to_gigs(board: JobBoard, config: JobBoardConfig, applicant: Applicant,
     for event_uuid in ids:
         try:
             results.append(
-                _book_one(board.tenant, config, event_uuid, applicant, ambassador, now=now)
+                _book_one(board, board.tenant, config, event_uuid, applicant, ambassador, now=now)
             )
         except (ValueError, ValidationError):
             results.append({"id": event_uuid, "status": "unavailable", "message": "This gig is no longer open."})

@@ -26,6 +26,7 @@ from events.models import EventConfirmation
 from jobboard.config import job_board_config_for
 from jobboard.gigs import STAFFING_EMAIL, Gig, date_label, list_gigs, time_label
 from jobboard.models import JobBoardBooking
+from jobboard.release import shift_release_url_for
 from utils.mailer import Envelope, Mailer
 
 logger = logging.getLogger(__name__)
@@ -77,6 +78,7 @@ class JobBoardBookedMailer(EventConfirmationMailer):
                 ),
                 "bring_items": BRING_ITEMS,
                 "contact_email": STAFFING_EMAIL,
+                "release_url": shift_release_url_for(booking=booking, confirmation=c),
                 "brief": merged_brief,
                 "sampling_label": (
                     SAMPLING_LABELS.get(gig.plan.sampling_format or "", "") if gig else ""

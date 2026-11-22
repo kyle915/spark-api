@@ -102,6 +102,12 @@ urlpatterns = [
         checkin_views.public_checkin_tally_read,
         name="events.public_checkin_tally_read",
     ),
+    # Proposes brand spend + mismatch/duplicate advisories from a receipt photo. Saves nothing.
+    path(
+        "checkin/<str:code>/receipt-read",
+        checkin_views.public_checkin_receipt_read,
+        name="events.public_checkin_receipt_read",
+    ),
     # Product questions, answered from the brand's own notes only.
     path(
         "checkin/<str:code>/product-question",

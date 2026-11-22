@@ -41,6 +41,7 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument("--radius-miles", type=float, default=DEFAULT_RADIUS_MILES)
         parser.add_argument("--max-per-shift", type=int, default=DEFAULT_MAX_PER_SHIFT)
+        parser.add_argument("--open-shift-id", type=int, default=None)
         parser.add_argument("--dry-run", action="store_true")
 
     def handle(self, *args, **opts):
@@ -63,16 +64,18 @@ class Command(BaseCommand):
 
         radius = float(opts["radius_miles"])
         max_per_shift = int(opts["max_per_shift"])
+        open_shift_id = opts.get("open_shift_id")
         dry_run = bool(opts["dry_run"])
         now = timezone.now()
 
-        open_shifts = list(
-            OpenShift.objects.select_related("event", "event__state").filter(
-                claimed_at__isnull=True,
-                notified_at__isnull=True,
-                event__start_time__gt=now,
-            )
+        qs = OpenShift.objects.select_related("event", "event__state").filter(
+            claimed_at__isnull=True,
+            notified_at__isnull=True,
+            event__start_time__gt=now,
         )
+        if open_shift_id is not None:
+            qs = qs.filter(pk=int(open_shift_id))
+        open_shifts = list(qs)
         if not open_shifts:
             self.stdout.write("open-shift alerts: nothing to alert.")
             return

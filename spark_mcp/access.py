@@ -81,6 +81,37 @@ def eligible_tenants(user):
     qs = Tenant.objects.filter(
         tenanted_users__user_id=db_user.pk, tenanted_users__is_active=True
     ).distinct()
+    if not is_admin(db_user):
+        from pilot.models import WorkspaceMembership
+
+        # Exclude tenants where the user only holds an external provider role
+        # or where their workspace membership has been revoked.
+        provider_only_tids = set(
+            WorkspaceMembership.objects.filter(
+                user_id=db_user.pk,
+                status=WorkspaceMembership.STATUS_ACTIVE,
+                workspace_role__in=WorkspaceMembership.PROVIDER_ROLES,
+            ).values_list("tenant_id", flat=True)
+        ) - set(
+            WorkspaceMembership.objects.filter(
+                user_id=db_user.pk,
+                status=WorkspaceMembership.STATUS_ACTIVE,
+                workspace_role__in=WorkspaceMembership.BRAND_ROLES,
+            ).values_list("tenant_id", flat=True)
+        )
+        revoked_tids = set(
+            WorkspaceMembership.objects.filter(
+                user_id=db_user.pk,
+                status=WorkspaceMembership.STATUS_REVOKED,
+            ).values_list("tenant_id", flat=True)
+        ) - set(
+            WorkspaceMembership.objects.filter(
+                user_id=db_user.pk,
+                status=WorkspaceMembership.STATUS_ACTIVE,
+                workspace_role__in=WorkspaceMembership.BRAND_ROLES,
+            ).values_list("tenant_id", flat=True)
+        )
+        qs = qs.exclude(id__in=provider_only_tids | revoked_tids)
     if allow is not None:
         qs = qs.filter(id__in=allow)
     return qs.order_by("name")

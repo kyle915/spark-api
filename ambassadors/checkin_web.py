@@ -2425,6 +2425,10 @@ def resolve_checkin_target(code: str):
     clean = (code or "").strip()
     if not clean:
         return None, None
+    if clean.upper().startswith("PA-"):
+        from pilot.workspaces import resolve_checkin_target_for_assignment
+
+        return resolve_checkin_target_for_assignment(clean)
     tenant = Tenant.objects.filter(checkin_code__iexact=clean).first()
     if tenant is not None:
         return "tenant", tenant
@@ -2445,6 +2449,12 @@ def _code_matches(code: str, stored) -> bool:
 def is_third_party_code(code: str, tenant) -> bool:
     """True when ``code`` is this tenant's 3rd-party agency URL (TH-AGENCY):
     no clock, no program picker, typed store, optionally out of totals."""
+    clean = (code or "").strip()
+    if clean.upper().startswith("PA-"):
+        from pilot.workspaces import resolve_assignment_by_submission_code
+
+        assignment = resolve_assignment_by_submission_code(clean)
+        return bool(assignment and assignment.tenant_id == getattr(tenant, "id", None))
     return _code_matches(code, getattr(tenant, "checkin_recap_code", None))
 
 
@@ -2468,6 +2478,13 @@ def is_recap_only_code(code: str, tenant) -> bool:
 def team_recap_source_label(code: str, tenant) -> str:
     """The "Submitted by …" stamp for recaps filed through ``code`` ("" when
     ``code`` isn't the tenant's client-team link)."""
+    clean = (code or "").strip()
+    if clean.upper().startswith("PA-"):
+        from pilot.workspaces import resolve_assignment_by_submission_code
+
+        assignment = resolve_assignment_by_submission_code(clean)
+        if assignment is not None:
+            return f"Submitted by {assignment.provider.name}"[:80]
     if not is_team_recap_code(code, tenant):
         return ""
     return (getattr(tenant, "checkin_team_label", "") or "").strip()[:80]

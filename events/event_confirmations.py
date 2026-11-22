@@ -714,7 +714,21 @@ def build_context(confirmation: EventConfirmation, stage: str) -> dict:
         "support_phone": SUPPORT_PHONE,
         "support_phone_href": SUPPORT_PHONE_HREF,
         "from_address": CONFIRMATION_REPLY_TO,
+        "release_url": _release_url_for_confirmation(confirmation),
     }
+
+
+def _release_url_for_confirmation(confirmation: EventConfirmation) -> str:
+    """Signed self-serve shift release URL on client.igniteproductions.co."""
+    if not getattr(confirmation, "pk", None):
+        return ""
+    try:
+        from jobboard.release import shift_release_url_for
+
+        return shift_release_url_for(confirmation=confirmation)
+    except Exception:  # noqa: BLE001 — email rendering must never fail on release link
+        logger.warning("shift_release_url_for failed confirmation=%s", confirmation.pk, exc_info=True)
+        return ""
 
 
 def build_subject(confirmation: EventConfirmation) -> str:

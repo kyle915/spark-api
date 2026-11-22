@@ -16,7 +16,7 @@ from django.test import Client
 from django.utils import timezone
 
 from ambassadors.checkin_web import get_or_create_checkin_ambassador
-from ambassadors.models import AmbassadorEvent
+from ambassadors.models import AmbassadorEvent, OpenShift
 from events import models as em
 from events.plan_results import auto_attach_on_approval, build_plan_results
 from events.tests.base import EventsGraphQLTestCase
@@ -28,6 +28,10 @@ from jobboard.mail import (
     JobBoardCancelledMailer,
 )
 from jobboard.models import JobBoard, JobBoardBooking, JobBoardGig
+from jobboard.release import (
+    JobBoardSelfReleaseBAMailer,
+    JobBoardShiftReleaseInternalMailer,
+)
 from jobboard.schema import (
     CancelJobBoardBookingInput,
     PostJobBoardPlanInput,
@@ -795,6 +799,249 @@ class TestJobBoard(EventsGraphQLTestCase):
 
         with pytest.raises(CommandError):
             call_command("setup_job_board", "--tenant", "other-brand", stdout=io.StringIO())
+
+    # ── calendar metadata + >36h self-serve shift release ──
+
+    def test_booked_response_includes_calendar_and_release_metadata(self, sent):
+        gig = self._gig("Wynwood Art Walk", days_out=7, count=2)
+
+        # Public listing never leaks street addresses before booking.
+        public_gig = self._board().json()["gigs"][0]
+        assert "address" not in public_gig
+        assert "250 NW 24th" not in json.dumps(public_gig)
+
+        res = self._apply([gig.uuid])
+        assert res.status_code == 200
+        [item] = res.json()["results"]
+        assert item["status"] == "booked"
+        shift = item["shift"]
+        assert shift["venue"] == "Wynwood Art Walk"
+        assert shift["address"] == "250 NW 24th St, Miami, FL 33127"
+        assert shift["startsAt"]
+        assert shift["endsAt"]
+        assert shift["timezone"] == "America/New_York"
+        assert shift["checkinCode"] == "TH-2HRV3D"
+        assert shift["trainingUrl"] == "https://client.igniteproductions.co/training/torch/ba-sampling-guide.pdf"
+        assert shift["releaseToken"]
+        assert shift["releaseUrl"].startswith(
+            f"https://client.igniteproductions.co/jobs/{self.board.token}?release="
+        )
+
+        # Booking email carries the signed self-serve release link on client.igniteproductions.co.
+        [booked_mail] = _of(sent, JobBoardBookedMailer)
+        assert shift["releaseUrl"] in booked_mail.render_template()
+
+        # Partial phone/email collision ("already") must NOT leak shift address to a stranger.
+        cache.clear()
+        collision = self._apply([gig.uuid], name="Stranger", phone="(305) 555-9999", email="jordan@gmail.com")
+        assert collision.status_code == 200
+        [collided] = collision.json()["results"]
+        assert collided["status"] == "already"
+        assert "shift" not in collided
+
+    def test_self_serve_shift_release_over_36h_reopens_slot_and_alerts_staffing(self, sent):
+        gig = self._gig("Wynwood Art Walk", days_out=5, count=1)
+        res = self._apply([gig.uuid])
+        assert res.status_code == 200
+        release_token = res.json()["results"][0]["shift"]["releaseToken"]
+        sent.clear()
+
+        # Gig is full (count=1, 1 booked -> full=True, spotsLeft=0).
+        [filled] = self._board().json()["gigs"]
+        assert filled["full"] is True
+        assert filled["spotsLeft"] == 0
+
+        inspect = Client().get(f"/api/public/jobs/release/{release_token}")
+        assert inspect.status_code == 200
+        info = inspect.json()
+        assert info["status"] == "can_release"
+        assert info["canSelfRelease"] is True
+        assert info["hoursUntilStart"] > 36
+        assert info["boardToken"] == self.board.token
+
+        with patch("jobboard.release.call_command") as mock_cmd:
+            post = Client().post(
+                f"/api/public/jobs/release/{release_token}",
+                data=json.dumps({"reason": "Came down with the flu"}),
+                content_type="application/json",
+            )
+        assert post.status_code == 200
+        out = post.json()
+        assert out["status"] == "released"
+        assert out["spotReopened"] is True
+        # Global push sweep must never block the synchronous HTTP release response.
+        mock_cmd.assert_not_called()
+
+        # Slot is reopened on the public board and OpenShift exists for off-request cron.
+        reopened = self._board().json()["gigs"]
+        assert len(reopened) == 1
+        assert reopened[0]["spotsLeft"] == 1
+        assert not AmbassadorEvent.objects.filter(event=gig).exists()
+        assert not AmbassadorJob.objects.filter(job__event=gig).exists()
+        booking = JobBoardBooking.objects.get(event=gig)
+        assert booking.cancelled_at is not None
+        assert booking.confirmation.cancelled_at is not None
+        assert booking.confirmation.send_reminders is False
+        os_row = OpenShift.objects.get(event=gig)
+        assert os_row.claimed_at is None
+        assert os_row.notified_at is None
+
+        # Targeted single-shift command flag processes just this OpenShift.
+        call_command("send_open_shift_alerts", "--open-shift-id", str(os_row.id))
+        os_row.refresh_from_db()
+        assert os_row.notified_at is not None
+
+        # Staffing + internal recipients alerted; client user never emailed; BA receives release confirmation.
+        [internal] = _of(sent, JobBoardShiftReleaseInternalMailer)
+        assert "staffing@igniteproductions.co" in internal.to_emails
+        for addr in TORCH_JOB_BOARD.internal_emails:
+            assert addr in internal.to_emails
+        assert self.brand_user.email not in internal.to_emails
+        assert "Came down with the flu" in internal.render_template()
+
+        [cancelled_mail] = _of(sent, JobBoardSelfReleaseBAMailer)
+        assert cancelled_mail.to_emails == ["jordan@gmail.com"]
+        assert "released" in cancelled_mail.render_template().lower()
+
+        # Re-inspecting reports already_released; another BA can now claim the reopened slot.
+        again = Client().get(f"/api/public/jobs/release/{release_token}")
+        assert again.status_code == 200
+        assert again.json()["status"] == "already_released"
+
+        cache.clear()
+        rebook = self._apply([gig.uuid], name="Maya Patel", phone="(305) 555-0188", email="maya@gmail.com")
+        assert rebook.status_code == 200
+        assert rebook.json()["results"][0]["status"] == "booked"
+
+        # Booking the reopened slot on the public job board consumes the OpenShift
+        # vacancy so mobile claim_open_shift cannot double-fill the same spot.
+        os_row.refresh_from_db()
+        assert os_row.claimed_at is not None
+
+    def test_self_serve_shift_release_within_36h_blocks_drop_and_escalates_to_staffing(self, sent):
+        gig = self._gig("Brickell Night Market", days_out=1, start=time(18, 0), end=time(22, 0), count=1)
+        res = self._apply([gig.uuid])
+        assert res.status_code == 200
+        release_token = res.json()["results"][0]["shift"]["releaseToken"]
+        sent.clear()
+
+        # Pin now to 20 hours before shift start so test never flakes on wall-clock hour.
+        near_now = gig.start_time - timedelta(hours=20)
+        with patch("jobboard.release.timezone.now", return_value=near_now):
+            inspect = Client().get(f"/api/public/jobs/release/{release_token}")
+            assert inspect.status_code == 200
+            info = inspect.json()
+            assert info["status"] == "urgent_window"
+            assert info["canSelfRelease"] is False
+            assert 19.9 <= info["hoursUntilStart"] <= 20.1
+
+            post = Client().post(
+                f"/api/public/jobs/release/{release_token}",
+                data=json.dumps({"reason": "Car broke down on I-95"}),
+                content_type="application/json",
+            )
+        assert post.status_code == 200
+        out = post.json()
+        assert out["status"] == "escalated"
+        assert out["spotReopened"] is False
+        assert out["supportPhone"]
+        assert out["contactEmail"] == "staffing@igniteproductions.co"
+
+        # Silent drop blocked: assignment and booking stay live.
+        assert AmbassadorEvent.objects.filter(event=gig, is_approved=True).count() == 1
+        booking = JobBoardBooking.objects.get(event=gig)
+        assert booking.cancelled_at is None
+        assert booking.confirmation.cancelled_at is None
+        [still_full] = self._board().json()["gigs"]
+        assert still_full["full"] is True
+        assert still_full["spotsLeft"] == 0
+
+        # Urgent ops escalation sent to staffing + internal list, never client.
+        [urgent] = _of(sent, JobBoardShiftReleaseInternalMailer)
+        assert urgent.subject.startswith("[URGENT <36h]")
+        assert "staffing@igniteproductions.co" in urgent.to_emails
+        assert self.brand_user.email not in urgent.to_emails
+        assert "Car broke down on I-95" in urgent.render_template()
+
+    def test_shift_release_rejects_tampered_token(self):
+        bad = Client().get("/api/public/jobs/release/not-a-valid-token")
+        assert bad.status_code == 404
+        assert bad.json()["error"] == "invalid_token"
+
+    def test_shift_release_token_stays_valid_beyond_90_days_until_shift(self, sent):
+        gig = self._gig("Summer Festival", days_out=150, count=1)
+        res = self._apply([gig.uuid])
+        assert res.status_code == 200
+        release_token = res.json()["results"][0]["shift"]["releaseToken"]
+
+        # 120 days after booking (30 days before the shift): still valid & self-releasable.
+        future_now = timezone.now() + timedelta(days=120)
+        with patch("jobboard.release.timezone.now", return_value=future_now):
+            inspect = Client().get(f"/api/public/jobs/release/{release_token}")
+            assert inspect.status_code == 200
+            assert inspect.json()["status"] == "can_release"
+
+        # 45 days after the shift has passed: expired cleanly.
+        way_after = gig.start_time + timedelta(days=45)
+        with patch("jobboard.release.timezone.now", return_value=way_after):
+            expired = Client().get(f"/api/public/jobs/release/{release_token}")
+            assert expired.status_code == 404
+            assert expired.json()["error"] == "invalid_token"
+
+    def test_standalone_event_confirmation_release_link_works_without_job_board(self, sent):
+        gig = self._gig("Austin Retail Demo", days_out=6, count=1, tenant=self.other, with_plan=False)
+        ambassador, _ = get_or_create_checkin_ambassador(
+            first_name="Taylor",
+            last_name="Brooks",
+            phone="(512) 555-0192",
+            email="taylor@gmail.com",
+        )
+        ae = AmbassadorEvent.objects.create(
+            event=gig,
+            ambassador=ambassador,
+            is_approved=True,
+            tenant=self.other,
+            created_by=self.sys,
+        )
+        conf = em.EventConfirmation.objects.create(
+            tenant=self.other,
+            event=gig,
+            ambassador_event=ae,
+            ba_email="taylor@gmail.com",
+            ba_name="Taylor Brooks",
+            event_type_label="Retail Sampling",
+            store_name="H-E-B Mueller",
+            address="1801 E 51st St, Austin, TX 78723",
+            starts_at=gig.start_time,
+            ends_at=gig.end_time,
+        )
+        from events.event_confirmations import EventConfirmationMailer
+        from urllib.parse import unquote
+
+        env = EventConfirmationMailer(conf, "booked").envelope()
+        html = env.render_template()
+        assert "https://client.igniteproductions.co/jobs/release/" in html
+        marker = "https://client.igniteproductions.co/jobs/release/"
+        encoded = html.split(marker, 1)[1].split('"', 1)[0]
+        raw_token = unquote(encoded)
+
+        inspect = Client().get(f"/api/public/jobs/release/{raw_token}")
+        assert inspect.status_code == 200
+        assert inspect.json()["status"] == "can_release"
+        assert inspect.json()["boardToken"] is None
+
+        with patch("jobboard.release.call_command"):
+            post = Client().post(
+                f"/api/public/jobs/release/{raw_token}",
+                data=json.dumps({"reason": "Family wedding out of state"}),
+                content_type="application/json",
+            )
+        assert post.status_code == 200
+        assert post.json()["status"] == "released"
+        assert not AmbassadorEvent.objects.filter(pk=ae.pk).exists()
+        conf.refresh_from_db()
+        assert conf.cancelled_at is not None
+        assert conf.send_reminders is False
 
 
 def test_walkup_stub_emails_are_placeholders():

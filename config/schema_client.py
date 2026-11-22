@@ -64,6 +64,7 @@ from sales_assist.schema import SalesAssistMutations, SalesAssistQueries
 from utils.utils import BlockIntrospectionForAnonymous
 from legal.graphql_extension import LegalAcceptanceGate
 from legal.schema import LegalMutations, LegalQueries
+from pilot.schema import PilotMutations, PilotQueries
 from utils.graphql.gcs_schema import GCSQuery
 from utils.abuse.graphql_extension import guardrail_extensions
 
@@ -114,6 +115,7 @@ QueryClients = merge_types(
         AiConnectionQueries,
         SalesAssistQueries,
         LegalQueries,
+        PilotQueries,
     ),
 )
 MutationClients = merge_types(
@@ -152,6 +154,7 @@ MutationClients = merge_types(
         AiConnectionMutations,
         SalesAssistMutations,
         LegalMutations,
+        PilotMutations,
     ),
 )
 

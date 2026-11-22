@@ -20,6 +20,7 @@ Routes (mounted under ``/api/public/`` in ``events/urls.py``):
     POST checkin/<code>/voice-draft    → proposals for every recap field
     POST checkin/<code>/voice-transcribe → audio → transcript + proposals
     POST checkin/<code>/tally-read     → numbers proposed from a tally photo
+    POST checkin/<code>/receipt-read   → brand spend + advisories from a receipt photo
     POST checkin/<code>/product-question → short answer from brand notes only
     POST checkin/<code>/recap          → {success}
     POST checkin/<code>/recap-draft    → {saved, filed: false}  (not a submit)
@@ -43,6 +44,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
 from ambassadors import checkin_web
+from ambassadors.checkin_receipt_ocr import RECEIPT_UNREADABLE, read_checkin_receipt
 from ambassadors.payable_mileage import NeedsPayableMileage
 from jobboard.checkin import (
     booked_event_for,
@@ -109,6 +111,11 @@ _ALLOWED_UPLOAD_TYPES = {
 # paid call, so it is held to a few per network and per ambassador shift.
 TALLY_READ_IP_LIMIT = 20
 TALLY_READ_SESSION_LIMIT = 6
+
+# Receipt OCR + brand spend proposal when a receipt photo lands in an expense
+# bucket. One shift may have a handful of receipts (multi-pack or Costco runs).
+RECEIPT_READ_IP_LIMIT = 30
+RECEIPT_READ_SESSION_LIMIT = 15
 
 # Signed-URL mints per IP. Feel Free-style batches can be ~100 shots; each may
 # retry 2–3 times on LTE. Keep headroom above PHOTO_CAP × PHOTO_PUT_ATTEMPTS.
@@ -203,6 +210,8 @@ def _rate_limited() -> JsonResponse:
 
 
 def _is_recap_only(code: str) -> bool:
+    if (code or "").strip().upper().startswith("PA-"):
+        return True
     kind, target = checkin_web.resolve_checkin_target(code)
     return kind == "tenant" and checkin_web.is_recap_only_code(code, target)
 
@@ -453,6 +462,8 @@ def public_checkin_context(request: HttpRequest, code: str) -> HttpResponse:
     except Exception:  # noqa: BLE001
         logger.exception("checkin context build failed code=%s", code)
         return _err("Couldn't load this check-in.", status=500, code="server")
+    if (code or "").strip().upper().startswith("PA-"):
+        payload = _stamp_recap_only(payload, code, event.tenant)
     return JsonResponse(payload)
 
 
@@ -1490,6 +1501,63 @@ def public_checkin_tally_read(request: HttpRequest, code: str) -> HttpResponse:
         )
     except Exception:  # noqa: BLE001 — advisory: the form works without it
         logger.exception("checkin tally read failed code=%s", code)
+        result = unreadable
+    return JsonResponse(result)
+
+
+# --------------------------------------------------------------------------
+# POST receipt-read  (proposes brand spend + mismatch/duplicate advisories)
+# --------------------------------------------------------------------------
+@csrf_exempt
+@require_http_methods(["POST"])
+def public_checkin_receipt_read(request: HttpRequest, code: str) -> HttpResponse:
+    """Brand spend proposal and pre-submit store/date/duplicate advisories
+    from a receipt photo dropped into an expense bucket.
+
+    Nothing is saved here and no failure ever blocks recap submission.
+    """
+    unreadable = {
+        "available": False,
+        "proposedSpend": None,
+        "receiptTotal": None,
+        "brandProductSubtotal": None,
+        "excludedNonBrandTotal": None,
+        "excludedNonBrandCount": 0,
+        "merchant": "",
+        "storeNumber": "",
+        "receiptDate": "",
+        "dedupeKey": "",
+        "advisories": [],
+        "message": RECEIPT_UNREADABLE,
+    }
+    ip = _client_ip(request)
+    if _over_limit("receipt-read-ip", ip, limit=RECEIPT_READ_IP_LIMIT, window=300):
+        return _rate_limited()
+    data = _body(request)
+    token = data.get("session") or ""
+    loaded, err = _load_session(code, token)
+    if err is not None:
+        return err
+    event, ambassador = loaded
+    who = f"{event.id}:{getattr(ambassador, 'id', '')}"
+    if _over_limit("receipt-read-session", who, limit=RECEIPT_READ_SESSION_LIMIT, window=600):
+        return _rate_limited()
+    try:
+        image = _image_bytes(data.get("imageBase64") or data.get("image") or "")
+        content_type = str(
+            data.get("contentType") or data.get("content_type") or "image/jpeg"
+        )
+        result = read_checkin_receipt(
+            image,
+            content_type=content_type,
+            event=event,
+            ambassador=ambassador,
+            client_sha256=str(data.get("sha256") or ""),
+            store_name=_str_field(data, "storeName"),
+            store_number=_str_field(data, "storeNumber"),
+        )
+    except Exception:  # noqa: BLE001 — advisory: never block submission
+        logger.exception("checkin receipt read failed code=%s", code)
         result = unreadable
     return JsonResponse(result)
 

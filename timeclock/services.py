@@ -9,15 +9,21 @@ from __future__ import annotations
 import logging
 import threading
 from dataclasses import dataclass
+from datetime import timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from django.core import signing
+from django.core.cache import cache
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
 from django.db import IntegrityError, close_old_connections, transaction
 from django.utils import timezone as dj_tz
 
-from ambassadors.checkin_web import _brand_payload
+from ambassadors.checkin_web import (
+    ClientClockTimeError,
+    _brand_payload,
+    parse_client_clock_time,
+)
 from timeclock.models import DEFAULT_TIMEZONE, ClockLink, ClockSession
 from timeclock.sheets import sync_session
 from utils import cloud_tasks
@@ -28,6 +34,7 @@ SESSION_SALT = "timeclock.session"
 # Long enough for an overnight or multi-day shift; past that the worker
 # clocks out by typing their email again.
 SESSION_MAX_AGE_SECONDS = 14 * 24 * 3600
+IDEMPOTENCY_TTL_SECONDS = 24 * 3600
 
 MAX_LEN = {"first_name": 80, "last_name": 80, "market": 120, "address": 300}
 
@@ -92,6 +99,24 @@ def _required_text(data: dict, key: str, field: str, label: str) -> str:
     return value
 
 
+def _clean_idempotency_key(data: dict) -> str:
+    raw = data.get("idempotencyKey") or data.get("idempotency_key") or ""
+    return str(raw).strip()[:80] if isinstance(raw, str) else ""
+
+
+def _parse_optional_client_time(data: dict, *keys: str):
+    raw = None
+    for key in keys:
+        candidate = data.get(key)
+        if candidate is not None and str(candidate).strip() != "":
+            raw = candidate
+            break
+    try:
+        return parse_client_clock_time(raw)
+    except ClientClockTimeError as exc:
+        raise ClockError(str(exc), code=exc.reason, status=400)
+
+
 def safe_timezone(name, fallback: str = DEFAULT_TIMEZONE) -> str:
     if isinstance(name, str) and 0 < len(name) <= 64:
         try:
@@ -139,7 +164,22 @@ def _already_in(session: ClockSession) -> ClockError:
     )
 
 
-def clock_in(link: ClockLink, data: dict, *, ip: str = "", user_agent: str = "") -> ClockSession:
+def _in_idemp_cache_key(link_id: int, email: str, idem: str) -> str:
+    return f"timeclock-in-idemp:{link_id}:{email}:{idem}"
+
+
+def _out_idemp_cache_key(link_id: int, idem: str) -> str:
+    return f"timeclock-out-idemp:{link_id}:{idem}"
+
+
+def clock_in_with_meta(
+    link: ClockLink,
+    data: dict,
+    *,
+    ip: str = "",
+    user_agent: str = "",
+) -> tuple[ClockSession, bool]:
+    """Create a ``ClockSession`` or return ``(existing, True)`` on an idempotent retry."""
     if not link.is_active:
         raise ClockError("This clock link is turned off.", code="inactive", status=410)
     first = _required_text(data, "firstName", "first_name", "first name")
@@ -148,9 +188,19 @@ def clock_in(link: ClockLink, data: dict, *, ip: str = "", user_agent: str = "")
     market = _required_text(data, "market", "market", "market")
     address = _required_text(data, "address", "address", "work address")
     fix = parse_gps(data)
+    idem = _clean_idempotency_key(data)
+    client_in_at = _parse_optional_client_time(
+        data, "clientClockedInAt", "clockedInAt", "clocked_in_at", "occurredAt"
+    )
+    effective_in_at = client_in_at or dj_tz.now()
 
     existing = open_session_for(link, email)
     if existing is not None:
+        if idem and cache.get(_in_idemp_cache_key(link.id, email, idem)) == str(existing.uuid):
+            return existing, True
+        if idem and client_in_at is not None and abs((existing.clock_in_at - client_in_at).total_seconds()) < 1:
+            cache.set(_in_idemp_cache_key(link.id, email, idem), str(existing.uuid), timeout=IDEMPOTENCY_TTL_SECONDS)
+            return existing, True
         raise _already_in(existing)
     try:
         with transaction.atomic():
@@ -162,7 +212,7 @@ def clock_in(link: ClockLink, data: dict, *, ip: str = "", user_agent: str = "")
                 market=market,
                 address=address,
                 timezone=safe_timezone(data.get("timezone"), link.timezone),
-                clock_in_at=dj_tz.now(),
+                clock_in_at=effective_in_at,
                 clock_in_lat=fix.lat,
                 clock_in_lng=fix.lng,
                 clock_in_accuracy_m=fix.accuracy_m,
@@ -174,15 +224,54 @@ def clock_in(link: ClockLink, data: dict, *, ip: str = "", user_agent: str = "")
         # Two taps raced past the check above; the partial unique index won.
         existing = open_session_for(link, email)
         if existing is not None:
+            if idem and client_in_at is not None and abs((existing.clock_in_at - client_in_at).total_seconds()) < 1:
+                cache.set(_in_idemp_cache_key(link.id, email, idem), str(existing.uuid), timeout=IDEMPOTENCY_TTL_SECONDS)
+                return existing, True
             raise _already_in(existing)
         raise
+    if idem:
+        cache.set(_in_idemp_cache_key(link.id, email, idem), str(session.uuid), timeout=IDEMPOTENCY_TTL_SECONDS)
     queue_sheet_sync(session)
+    return session, False
+
+
+def clock_in(link: ClockLink, data: dict, *, ip: str = "", user_agent: str = "") -> ClockSession:
+    session, _replayed = clock_in_with_meta(link, data, ip=ip, user_agent=user_agent)
     return session
 
 
-def clock_out(link: ClockLink, data: dict, *, session: ClockSession | None = None) -> ClockSession:
-    """Close the device's session, or the open session for the typed email."""
+def clock_out_with_meta(
+    link: ClockLink,
+    data: dict,
+    *,
+    session: ClockSession | None = None,
+) -> tuple[ClockSession, bool]:
+    """Close the device's session (or the open session for the typed email).
+
+    Returns ``(session, already_out)`` where ``already_out=True`` indicates an
+    idempotent replay of an offline-queued clock-out.
+    """
+    idem = _clean_idempotency_key(data)
+    client_out_at = _parse_optional_client_time(
+        data, "clientClockedOutAt", "clockedOutAt", "clocked_out_at", "occurredAt"
+    )
+
+    if idem:
+        cached_uuid = cache.get(_out_idemp_cache_key(link.id, idem))
+        if cached_uuid:
+            prev = ClockSession.objects.filter(
+                link=link, uuid=cached_uuid, clock_out_at__isnull=False
+            ).first()
+            if prev is not None:
+                return prev, True
+
     if session is None:
+        if not (isinstance(data.get("email"), str) and data.get("email", "").strip()):
+            raise ClockError(
+                "We lost track of your clock-in on this phone. Enter your email to clock out.",
+                code="no_session",
+                status=401,
+            )
         email = normalize_email(data.get("email"))
         session = open_session_for(link, email)
         if session is None:
@@ -192,11 +281,29 @@ def clock_out(link: ClockLink, data: dict, *, session: ClockSession | None = Non
                 status=404,
             )
     elif not session.is_open:
-        raise ClockError("You're already clocked out.", code="already_clocked_out", status=409,
-                         extra={"session": session_payload(session)})
+        if idem:
+            cache.set(_out_idemp_cache_key(link.id, idem), str(session.uuid), timeout=IDEMPOTENCY_TTL_SECONDS)
+            return session, True
+        raise ClockError(
+            "You're already clocked out.",
+            code="already_clocked_out",
+            status=409,
+            extra={"session": session_payload(session)},
+        )
+
+    effective_out_at = client_out_at or dj_tz.now()
+    if effective_out_at < session.clock_in_at - timedelta(minutes=2):
+        raise ClockError(
+            "Clock-out time cannot be before clock-in time.",
+            code="before_clock_in",
+            status=400,
+        )
+    if effective_out_at < session.clock_in_at:
+        effective_out_at = session.clock_in_at
+
     fix = parse_gps(data)
     updated = ClockSession.objects.filter(pk=session.pk, clock_out_at__isnull=True).update(
-        clock_out_at=dj_tz.now(),
+        clock_out_at=effective_out_at,
         clock_out_lat=fix.lat,
         clock_out_lng=fix.lng,
         clock_out_accuracy_m=fix.accuracy_m,
@@ -206,10 +313,24 @@ def clock_out(link: ClockLink, data: dict, *, session: ClockSession | None = Non
     )
     session.refresh_from_db()
     if not updated:
-        raise ClockError("You're already clocked out.", code="already_clocked_out", status=409,
-                         extra={"session": session_payload(session)})
+        if idem:
+            cache.set(_out_idemp_cache_key(link.id, idem), str(session.uuid), timeout=IDEMPOTENCY_TTL_SECONDS)
+            return session, True
+        raise ClockError(
+            "You're already clocked out.",
+            code="already_clocked_out",
+            status=409,
+            extra={"session": session_payload(session)},
+        )
+    if idem:
+        cache.set(_out_idemp_cache_key(link.id, idem), str(session.uuid), timeout=IDEMPOTENCY_TTL_SECONDS)
     queue_sheet_sync(session)
-    return session
+    return session, False
+
+
+def clock_out(link: ClockLink, data: dict, *, session: ClockSession | None = None) -> ClockSession:
+    closed, _replayed = clock_out_with_meta(link, data, session=session)
+    return closed
 
 
 def session_payload(session: ClockSession) -> dict:

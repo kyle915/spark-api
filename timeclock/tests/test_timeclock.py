@@ -14,6 +14,7 @@ from django.core.management import call_command
 from django.test import Client as DjangoClient
 from django.test import override_settings
 from django.urls import reverse
+from django.utils import timezone as dj_tz
 from googleapiclient.errors import HttpError
 
 from tenants.tests.base import BaseGraphQLTestCase
@@ -235,6 +236,86 @@ class TestPublicClock:
             services._dispatch(42)
         thread.assert_called_once()
         assert thread.call_args.kwargs["args"] == (42,)
+
+    def test_offline_queued_punches_preserve_client_timestamps_and_idempotency(self, fake, inline_sync):
+        in_at = dj_tz.now() - timedelta(hours=3, minutes=15)
+        out_at = dj_tz.now() - timedelta(hours=1, minutes=10)
+
+        first_in = self._post(
+            "timeclock.clock_in",
+            _in_body(clientClockedInAt=in_at.isoformat(), idempotencyKey="warehouse-in-1"),
+        )
+        assert first_in.status_code == 201, first_in.content
+        token = first_in.json()["sessionToken"]
+
+        # Duplicate reconnect flush with same idempotencyKey returns 200 + alreadyIn
+        replay_in = self._post(
+            "timeclock.clock_in",
+            _in_body(clientClockedInAt=in_at.isoformat(), idempotencyKey="warehouse-in-1"),
+        )
+        assert replay_in.status_code == 200
+        assert replay_in.json()["alreadyIn"] is True
+        assert replay_in.json()["sessionToken"]
+        assert ClockSession.objects.count() == 1
+
+        first_out = self._post(
+            "timeclock.clock_out",
+            {
+                "sessionToken": token,
+                "clientClockedOutAt": out_at.isoformat(),
+                "idempotencyKey": "warehouse-out-1",
+                "gpsStatus": "unavailable",
+            },
+        )
+        assert first_out.status_code == 200, first_out.content
+        assert first_out.json()["session"]["durationMinutes"] == 125
+
+        # Duplicate reconnect flush for clock-out is idempotent (200 + alreadyOut)
+        replay_out = self._post(
+            "timeclock.clock_out",
+            {
+                "sessionToken": token,
+                "clientClockedOutAt": out_at.isoformat(),
+                "idempotencyKey": "warehouse-out-1",
+            },
+        )
+        assert replay_out.status_code == 200
+        assert replay_out.json()["alreadyOut"] is True
+
+        s = ClockSession.objects.get()
+        assert abs((s.clock_in_at - in_at).total_seconds()) < 1
+        assert abs((s.clock_out_at - out_at).total_seconds()) < 1
+        row = dict(zip(sheets.HEADER, fake.grid(SHEET_ID, sheets.TAB)[1]))
+        assert row["Duration (h:mm)"] == "'2:05"
+
+        # Stale morning idempotencyKey must not block a fresh shift after clock-out
+        second_in = self._post(
+            "timeclock.clock_in",
+            _in_body(
+                clientClockedInAt=(dj_tz.now() - timedelta(minutes=20)).isoformat(),
+                idempotencyKey="warehouse-in-1",
+            ),
+        )
+        assert second_in.status_code == 201
+        assert ClockSession.objects.count() == 2
+
+    def test_rejects_stale_or_inverted_client_clock_timestamps(self, fake, inline_sync):
+        too_old = (dj_tz.now() - timedelta(hours=75)).isoformat()
+        res = self._post("timeclock.clock_in", _in_body(clientClockedInAt=too_old))
+        assert res.status_code == 400
+        assert res.json()["error"] == "too_old"
+
+        in_at = dj_tz.now() - timedelta(hours=1)
+        ok_in = self._post("timeclock.clock_in", _in_body(clientClockedInAt=in_at.isoformat()))
+        token = ok_in.json()["sessionToken"]
+
+        inverted_out = (in_at - timedelta(minutes=30)).isoformat()
+        bad_out = self._post(
+            "timeclock.clock_out",
+            {"sessionToken": token, "clientClockedOutAt": inverted_out},
+        )
+        assert bad_out.status_code == 400
+        assert bad_out.json()["error"] == "before_clock_in"
 
 
 @pytest.mark.django_db(transaction=True)

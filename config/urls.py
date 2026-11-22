@@ -93,6 +93,7 @@ urlpatterns = [
     # token resolves to one invoice (camelCase JSON) and the branded invoice
     # PDF. See `billing/views.py`.
     path("api/public/", include("billing.urls")),
+    path("api/public/", include("pilot.urls")),
     # Public, token-authenticated one-click shift-extension approval (no JWT).
     # The admin "Extension requested" email links here. See `ambassadors/views.py`.
     path("api/public/", include("ambassadors.urls")),
