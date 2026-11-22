@@ -869,9 +869,10 @@ class TestJobBoard(EventsGraphQLTestCase):
         out = post.json()
         assert out["status"] == "released"
         assert out["spotReopened"] is True
-        mock_cmd.assert_called_once_with("send_open_shift_alerts")
+        # Global push sweep must never block the synchronous HTTP release response.
+        mock_cmd.assert_not_called()
 
-        # Slot is reopened on the public board and OpenShift exists.
+        # Slot is reopened on the public board and OpenShift exists for off-request cron.
         reopened = self._board().json()["gigs"]
         assert len(reopened) == 1
         assert reopened[0]["spotsLeft"] == 1
@@ -881,7 +882,14 @@ class TestJobBoard(EventsGraphQLTestCase):
         assert booking.cancelled_at is not None
         assert booking.confirmation.cancelled_at is not None
         assert booking.confirmation.send_reminders is False
-        assert OpenShift.objects.filter(event=gig).exists()
+        os_row = OpenShift.objects.get(event=gig)
+        assert os_row.claimed_at is None
+        assert os_row.notified_at is None
+
+        # Targeted single-shift command flag processes just this OpenShift.
+        call_command("send_open_shift_alerts", "--open-shift-id", str(os_row.id))
+        os_row.refresh_from_db()
+        assert os_row.notified_at is not None
 
         # Staffing + internal recipients alerted; client user never emailed; BA receives release confirmation.
         [internal] = _of(sent, JobBoardShiftReleaseInternalMailer)
@@ -904,6 +912,11 @@ class TestJobBoard(EventsGraphQLTestCase):
         rebook = self._apply([gig.uuid], name="Maya Patel", phone="(305) 555-0188", email="maya@gmail.com")
         assert rebook.status_code == 200
         assert rebook.json()["results"][0]["status"] == "booked"
+
+        # Booking the reopened slot on the public job board consumes the OpenShift
+        # vacancy so mobile claim_open_shift cannot double-fill the same spot.
+        os_row.refresh_from_db()
+        assert os_row.claimed_at is not None
 
     def test_self_serve_shift_release_within_36h_blocks_drop_and_escalates_to_staffing(self, sent):
         gig = self._gig("Brickell Night Market", days_out=1, start=time(18, 0), end=time(22, 0), count=1)
@@ -954,6 +967,26 @@ class TestJobBoard(EventsGraphQLTestCase):
         bad = Client().get("/api/public/jobs/release/not-a-valid-token")
         assert bad.status_code == 404
         assert bad.json()["error"] == "invalid_token"
+
+    def test_shift_release_token_stays_valid_beyond_90_days_until_shift(self, sent):
+        gig = self._gig("Summer Festival", days_out=150, count=1)
+        res = self._apply([gig.uuid])
+        assert res.status_code == 200
+        release_token = res.json()["results"][0]["shift"]["releaseToken"]
+
+        # 120 days after booking (30 days before the shift): still valid & self-releasable.
+        future_now = timezone.now() + timedelta(days=120)
+        with patch("jobboard.release.timezone.now", return_value=future_now):
+            inspect = Client().get(f"/api/public/jobs/release/{release_token}")
+            assert inspect.status_code == 200
+            assert inspect.json()["status"] == "can_release"
+
+        # 45 days after the shift has passed: expired cleanly.
+        way_after = gig.start_time + timedelta(days=45)
+        with patch("jobboard.release.timezone.now", return_value=way_after):
+            expired = Client().get(f"/api/public/jobs/release/{release_token}")
+            assert expired.status_code == 404
+            assert expired.json()["error"] == "invalid_token"
 
     def test_standalone_event_confirmation_release_link_works_without_job_board(self, sent):
         gig = self._gig("Austin Retail Demo", days_out=6, count=1, tenant=self.other, with_plan=False)

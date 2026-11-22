@@ -48,11 +48,12 @@ from jobboard.gigs import STAFFING_EMAIL, date_label, list_gigs, time_label
 from jobboard.models import JobBoard, JobBoardBooking
 from jobs.models import AmbassadorJob
 from utils.mailer import Envelope, Mailer
+from utils.queues import Queues, rq_is_enabled
 
 logger = logging.getLogger(__name__)
 
 RELEASE_TOKEN_SALT = "jobboard.shift_release"
-RELEASE_TOKEN_MAX_AGE_SECONDS = 90 * 24 * 3600
+RELEASE_TOKEN_GRACE_AFTER_SHIFT = timedelta(days=30)
 SELF_RELEASE_MIN_HOURS = 36
 SELF_RELEASE_MIN_LEAD = timedelta(hours=SELF_RELEASE_MIN_HOURS)
 SPARK_ORANGE = "#ef5a2a"
@@ -179,7 +180,6 @@ def resolve_release_target(release_token: str) -> ReleaseTarget | None:
         data = signing.loads(
             raw,
             salt=RELEASE_TOKEN_SALT,
-            max_age=RELEASE_TOKEN_MAX_AGE_SECONDS,
         )
     except signing.BadSignature:
         return None
@@ -274,6 +274,9 @@ def resolve_release_target(release_token: str) -> ReleaseTarget | None:
         d_label = starts_at.strftime("%a, %b %-d")
         t_label = ""
         address = (event.address or "").strip() if event else ""
+
+    if timezone.now() > starts_at + RELEASE_TOKEN_GRACE_AFTER_SHIFT:
+        return None
 
     ba_name = (
         (booking.name if booking else "")
@@ -536,7 +539,16 @@ def _notify_admin_push(tenant, *, title: str, body: str, kind: str) -> None:
         logger.warning("shift release admin push failed", exc_info=True)
 
 
-def _after_self_release(target: ReleaseTarget, reason: str, hours_until: float) -> None:
+def _run_single_open_shift_alert(open_shift_id: int) -> None:
+    call_command("send_open_shift_alerts", "--open-shift-id", str(open_shift_id))
+
+
+def _after_self_release(
+    target: ReleaseTarget,
+    reason: str,
+    hours_until: float,
+    open_shift_id: int | None = None,
+) -> None:
     spots_summary = ""
     if target.event is not None:
         gigs = list_gigs(target.tenant, event_ids=[target.event.id])
@@ -568,11 +580,18 @@ def _after_self_release(target: ReleaseTarget, reason: str, hours_until: float) 
         kind="shift_dropped",
     )
 
-    if target.event is not None:
+    # Enqueue a single-shift alert job only when an async RQ worker is active;
+    # on Cloud Run (no Redis), leave notified_at=None so the dedicated
+    # /internal/cron/send-open-shift-alerts cron fans out pushes off-request.
+    if open_shift_id is not None and rq_is_enabled():
         try:
-            call_command("send_open_shift_alerts")
+            Queues().default.add(_run_single_open_shift_alert, open_shift_id)
         except Exception:  # noqa: BLE001
-            logger.exception("send_open_shift_alerts after self-release failed event=%s", target.event.id)
+            logger.warning(
+                "open-shift alert enqueue skipped (cron will pick up open_shift=%s)",
+                open_shift_id,
+                exc_info=True,
+            )
 
 
 def _dispatch_urgent_escalation(target: ReleaseTarget, reason: str, hours_until: float) -> None:
@@ -718,16 +737,18 @@ def execute_shift_release(
             target.confirmation.refresh_from_db()
 
         spot_reopened = False
+        open_shift_id: int | None = None
         if target.event is not None:
             spot_reopened = True
             released_user = None
             if target.booking and target.booking.ambassador and target.booking.ambassador.user_id:
                 released_user = target.booking.ambassador.user
             try:
-                OpenShift.objects.create(
+                os_row = OpenShift.objects.create(
                     event=target.event,
                     released_by=released_user,
                 )
+                open_shift_id = os_row.id
             except Exception:  # noqa: BLE001
                 logger.warning("OpenShift creation skipped on self-release", exc_info=True)
 
@@ -737,6 +758,7 @@ def execute_shift_release(
                 target,
                 clean_reason,
                 inspection["hoursUntilStart"],
+                open_shift_id,
             )
         )
         return {

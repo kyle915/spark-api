@@ -21,7 +21,7 @@ from django.db.models import Q
 from django.utils import timezone
 
 from ambassadors.checkin_web import get_or_create_checkin_ambassador
-from ambassadors.models import AmbassadorEvent, Attendance
+from ambassadors.models import AmbassadorEvent, Attendance, OpenShift
 from events.event_confirmations import training_url_for
 from events.models import (
     Event,
@@ -281,6 +281,20 @@ def _book_one(
             ae.is_approved = True
             ae.updated_by = actor
             ae.save(update_fields=["is_approved", "updated_by", "updated_at"])
+
+        # Consume one unclaimed OpenShift vacancy for this event (if any) under the
+        # Event select_for_update lock so the mobile Open Shifts board cannot fill
+        # the same reopened slot a second time.
+        open_slot = (
+            OpenShift.objects.select_for_update()
+            .filter(event=gig.event, claimed_at__isnull=True)
+            .order_by("id")
+            .first()
+        )
+        if open_slot is not None:
+            open_slot.claimed_by = actor
+            open_slot.claimed_at = now
+            open_slot.save(update_fields=["claimed_by", "claimed_at"])
 
         job, status, rate = _job_for(gig.event, tenant, gig.event.created_by)
         aj = (
