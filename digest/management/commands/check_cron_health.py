@@ -70,9 +70,12 @@ EXPECTED_MAX_HOURS: dict[str, float] = {
     # weekly (Monday)
     "audit-brand-group-sheet-config": 8 * 24,
     "send-client-weekly-digest": 8 * 24,
+    "send-weekly-buyer-digest": 8 * 24,
     "recap-data-health": 8 * 24,
     "send-executive-summary": 8 * 24,
     "weekly-mileage-report": 8 * 24,
+    # POS feed drops — frequent (hourly GHA); allow up to 3h drift
+    "process-pos-feed-drops": 3,
     # monthly (1st)
     "send-scheduled-client-reports": 33 * 24,
 }

@@ -484,3 +484,132 @@ def stripe_billing_webhook_view(request: HttpRequest) -> JsonResponse:
             status=400,
         )
 
+
+@csrf_exempt
+@require_http_methods(["GET", "POST"])
+def public_pos_feed_drop_view(request: HttpRequest, token: str) -> JsonResponse:
+    """Inbound automated POS CSV drop for a ``PosFeedConfig.ingest_token``.
+
+    POST JSON ``{csvText|csv_text, filename?, fromEmail?, messageId?}`` or
+    multipart form with a ``file`` / ``csv`` upload. Optionally processes
+    immediately (``process=true``) so brands don't wait for the hourly cron.
+    """
+    from pilot.ingest import enqueue_pos_feed_drop, process_pos_feed_drop
+    from pilot.models import PosFeedConfig
+
+    cfg = PosFeedConfig.objects.filter(ingest_token=token).first()
+    if cfg is None or not cfg.enabled:
+        return JsonResponse(
+            {
+                "error": "invalid_token",
+                "message": "This POS feed token is invalid or disabled.",
+            },
+            status=403,
+        )
+
+    if request.method == "GET":
+        return JsonResponse(
+            {
+                "ok": True,
+                "brandName": cfg.tenant.name,
+                "retailerBanner": cfg.retailer_banner,
+                "presetKey": cfg.preset_key,
+                "sourceKind": cfg.source_kind,
+                "enabled": cfg.enabled,
+            }
+        )
+
+    csv_text = ""
+    filename = "pos.csv"
+    from_email = ""
+    message_id = ""
+    process_now = False
+
+    content_type = (request.content_type or "").lower()
+    if "application/json" in content_type:
+        try:
+            payload = json.loads(request.body.decode("utf-8") or "{}")
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return JsonResponse(
+                {"error": "invalid_json", "message": "Body must be JSON."},
+                status=400,
+            )
+        if not isinstance(payload, dict):
+            return JsonResponse(
+                {"error": "invalid_json", "message": "Body must be a JSON object."},
+                status=400,
+            )
+        csv_text = str(
+            payload.get("csvText")
+            or payload.get("csv_text")
+            or payload.get("csv")
+            or ""
+        )
+        filename = str(payload.get("filename") or payload.get("fileName") or "pos.csv")
+        from_email = str(
+            payload.get("fromEmail") or payload.get("from_email") or ""
+        )
+        message_id = str(
+            payload.get("messageId") or payload.get("message_id") or ""
+        )
+        process_now = str(payload.get("process") or "").lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+    else:
+        uploaded = request.FILES.get("file") or request.FILES.get("csv")
+        if uploaded is not None:
+            filename = getattr(uploaded, "name", None) or "pos.csv"
+            csv_text = uploaded.read().decode("utf-8", errors="replace")
+        else:
+            csv_text = (
+                request.POST.get("csvText")
+                or request.POST.get("csv_text")
+                or request.POST.get("csv")
+                or ""
+            )
+            filename = request.POST.get("filename") or filename
+        from_email = request.POST.get("fromEmail") or request.POST.get("from_email") or ""
+        message_id = (
+            request.POST.get("messageId") or request.POST.get("message_id") or ""
+        )
+        process_now = str(
+            request.POST.get("process") or request.GET.get("process") or ""
+        ).lower() in {"1", "true", "yes", "on"}
+
+    try:
+        drop = enqueue_pos_feed_drop(
+            ingest_token=token,
+            csv_text=csv_text,
+            filename=filename,
+            from_email=from_email,
+            message_id=message_id,
+        )
+    except PermissionError as exc:
+        return JsonResponse({"error": "forbidden", "message": str(exc)}, status=403)
+    except ValueError as exc:
+        return JsonResponse({"error": "invalid_payload", "message": str(exc)}, status=400)
+
+    if process_now and drop.status == drop.STATUS_PENDING:
+        drop = process_pos_feed_drop(drop)
+
+    return JsonResponse(
+        {
+            "ok": True,
+            "dropUuid": str(drop.uuid),
+            "status": drop.status,
+            "filename": drop.filename,
+            "salesImportUuid": (
+                str(drop.sales_import.uuid) if drop.sales_import_id else None
+            ),
+            "errorMessage": drop.error_message or None,
+            "matchedRows": (
+                drop.sales_import.matched_rows if drop.sales_import_id else None
+            ),
+            "unmatchedRows": (
+                drop.sales_import.unmatched_rows if drop.sales_import_id else None
+            ),
+        }
+    )

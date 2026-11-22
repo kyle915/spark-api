@@ -1,0 +1,82 @@
+name: Weekly buyer digest
+
+# Fires `/internal/cron/send-weekly-buyer-digest` on Cloud Run once a WEEK
+# (Monday morning). Emails each opted-in workspace the buyer store report
+# with a CSV attachment (see pilot/management/commands/send_weekly_buyer_digest.py).
+#
+# SAFE — OPT-IN OFF by default (WorkspaceProfile.buyer_weekly_digest_enabled).
+#
+# NOTE: GitHub only fires `schedule:` from the DEFAULT branch (main), but the
+# cron ENDPOINT deploys from develop. So this workflow must live on BOTH
+# branches — same as client-weekly-digest.yml.
+#
+# Schedule: 15:00 UTC Monday = after client weekly digest (14:30) and after
+# typical weekend POS portal refreshes land Monday AM.
+
+on:
+  schedule:
+    - cron: "0 15 * * 1"
+  workflow_dispatch:
+    inputs:
+      tenant:
+        description: "Restrict to a single tenant id (optional)"
+        required: false
+        default: ""
+      force:
+        description: "Send even if the week is quiet"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      dry_run:
+        description: "Build + log recipients, but send no email (manual runs default to dry run)"
+        required: false
+        default: "true"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      only_email:
+        description: "Catch-up resend to ONE address already on the digest list (requires tenant)"
+        required: false
+        default: ""
+
+jobs:
+  fire-weekly-buyer-digest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire weekly buyer digest cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/send-weekly-buyer-digest
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          TENANT: ${{ github.event.inputs.tenant || '' }}
+          FORCE: ${{ github.event.inputs.force || 'false' }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+          ONLY_EMAIL: ${{ github.event.inputs.only_email || '' }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+
+          QS="dry_run=$DRY_RUN"
+          if [ "$FORCE" = "true" ]; then
+            QS="$QS&force=true"
+          fi
+          if [ -n "$TENANT" ]; then
+            QS="$QS&tenant=$TENANT"
+          fi
+
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            -X POST "$CRON_URL?$QS" \
+            --data-urlencode "only_email=$ONLY_EMAIL" \
+            -H "X-Cron-Secret: $CRON_SECRET")
+          echo "HTTP $STATUS"
+          cat /tmp/cron-response.json
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS — see body above."
+            exit 1
+          fi

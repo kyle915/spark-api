@@ -1,6 +1,7 @@
 from django.urls import path
 
 from pilot.views import (
+    public_pos_feed_drop_view,
     public_provider_submission_view,
     public_workspace_shared_link_view,
     stripe_billing_webhook_view,
@@ -21,5 +22,10 @@ urlpatterns = [
         "stripe-billing/webhook",
         stripe_billing_webhook_view,
         name="stripe-billing-webhook",
+    ),
+    path(
+        "pos-feed/<str:token>",
+        public_pos_feed_drop_view,
+        name="public-pos-feed-drop",
     ),
 ]
