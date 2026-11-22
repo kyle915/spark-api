@@ -149,3 +149,119 @@ class DemoBudgetTarget(models.Model):
             f"{self.tenant_id} {self.month} {self.scope_type}:{self.scope_key} "
             f"= {self.target_amount}"
         )
+
+class PhotoWallPin(models.Model):
+    """A brand-curated in-store demo photo pinned from the Live Photo Wall
+    for inclusion in shareable Buyer Pitch Decks.
+
+    Strictly tenant-scoped: ``custom_recap_file`` must belong to an approved,
+    non-archived, non-paperwork recap of ``tenant``.
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    tenant = models.ForeignKey(
+        "tenants.Tenant",
+        on_delete=models.CASCADE,
+        related_name="photo_wall_pins",
+    )
+    custom_recap_file = models.ForeignKey(
+        "recaps.CustomRecapFile",
+        on_delete=models.CASCADE,
+        related_name="photo_wall_pins",
+    )
+    pinned_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="photo_wall_pins_created",
+    )
+    note = models.CharField(max_length=240, blank=True, default="")
+    display_order = models.IntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["tenant", "custom_recap_file"],
+                name="photo_wall_pin_tenant_file_uniq",
+            )
+        ]
+        indexes = [
+            models.Index(
+                fields=["tenant", "display_order", "-created_at"],
+                name="photo_wall_pin_tenant_idx",
+            )
+        ]
+
+    def __str__(self) -> str:  # pragma: no cover - admin/debug only
+        return f"PhotoWallPin tenant={self.tenant_id} file={self.custom_recap_file_id}"
+
+
+class BuyerPitchDeck(models.Model):
+    """A 1-click shareable, revocable Buyer Pitch Deck (``/pitch/:token``).
+
+    Captures a buyer-safe snapshot of `/buyer-report` KPIs, sampling lift,
+    optional opted-in cost-per-unit-sold, top store wins, retailer breakdown,
+    and curated pinned demo photos for a single brand tenant. Public reads are
+    strictly read-only and scoped solely to this deck's tenant snapshot and
+    validated photo allowlist.
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    tenant = models.ForeignKey(
+        "tenants.Tenant",
+        on_delete=models.CASCADE,
+        related_name="buyer_pitch_decks",
+    )
+    token = models.CharField(max_length=64, unique=True, db_index=True)
+    title = models.CharField(max_length=180)
+    subtitle = models.CharField(max_length=280, blank=True, default="")
+    buyer_name = models.CharField(max_length=140, blank=True, default="")
+    intro_note = models.TextField(blank=True, default="")
+    period_start = models.DateField()
+    period_end = models.DateField()
+    retailer_filter = models.CharField(max_length=120, blank=True, default="")
+    market_filter = models.CharField(max_length=120, blank=True, default="")
+    include_costs = models.BooleanField(default=False)
+    passcode_hash = models.CharField(max_length=255, blank=True, default="")
+    expires_at = models.DateTimeField(null=True, blank=True)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    revoked_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="buyer_pitch_decks_revoked",
+    )
+    pinned_photo_ids = models.JSONField(default=list, blank=True)
+    snapshot_payload = models.JSONField(default=dict, blank=True)
+    view_count = models.PositiveIntegerField(default=0)
+    last_viewed_at = models.DateTimeField(null=True, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="buyer_pitch_decks_created",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(
+                fields=["tenant", "-created_at"],
+                name="buyer_pitch_deck_tenant_idx",
+            )
+        ]
+
+    @property
+    def has_passcode(self) -> bool:
+        return bool(self.passcode_hash)
+
+    def __str__(self) -> str:  # pragma: no cover - admin/debug only
+        return f"BuyerPitchDeck {self.uuid} ({self.tenant_id})"
