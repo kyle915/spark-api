@@ -2940,6 +2940,13 @@ class PilotMutations:
         accept_terms: bool = True,
         force_new_workspace: bool = False,
         invitation_token: str = "",
+        utm_source: str = "",
+        utm_medium: str = "",
+        utm_campaign: str = "",
+        utm_id: str = "",
+        utm_content: str = "",
+        utm_term: str = "",
+        landing_path: str = "/onboarding",
     ) -> OnboardingSessionPayload:
         def _run():
             try:
@@ -2955,6 +2962,14 @@ class PilotMutations:
                     or req.META.get("REMOTE_ADDR", "127.0.0.1")
                 )
                 ua = req.META.get("HTTP_USER_AGENT", "spark-self-serve")
+                marketing_attribution = {
+                    "utm_source": utm_source,
+                    "utm_medium": utm_medium,
+                    "utm_campaign": utm_campaign,
+                    "utm_id": utm_id,
+                    "utm_content": utm_content,
+                    "utm_term": utm_term,
+                }
                 res = start_or_resume_self_serve_onboarding(
                     authenticated_user=actor_user,
                     email=email,
@@ -2968,6 +2983,8 @@ class PilotMutations:
                     invitation_token=invitation_token,
                     client_ip=ip_addr,
                     user_agent=ua,
+                    marketing_attribution=marketing_attribution,
+                    landing_path=landing_path or "/onboarding",
                 )
                 return OnboardingSessionPayload(
                     ok=True,

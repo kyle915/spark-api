@@ -884,6 +884,10 @@ BRAND_INSIGHTS_AUTO_PUBLISH_RECOMMENDATIONS = env.bool(
 STANDALONE_SIGNUP_ENABLED = env.bool(
     "STANDALONE_SIGNUP_ENABLED", default=True
 )
+# Best-effort Close CRM lead create/link on self-serve /onboarding signup.
+STANDALONE_SIGNUP_CLOSE_SYNC_ENABLED = env.bool(
+    "STANDALONE_SIGNUP_CLOSE_SYNC_ENABLED", default=True
+)
 STANDALONE_BILLING_ENABLED = env.bool(
     "STANDALONE_BILLING_ENABLED", default=True
 )
