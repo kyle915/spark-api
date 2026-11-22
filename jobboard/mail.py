@@ -62,6 +62,12 @@ class JobBoardBookedMailer(EventConfirmationMailer):
         brand = _brand_label(booking) if booking else (c.tenant.name or "")
         context = build_context(c, self.stage)
         gig = _gig_for(booking) if booking else None
+        gig_notes = (gig.public_notes or "").strip() if gig else ""
+        store_brief = (context.get("brief") or "").strip()
+        if gig_notes and store_brief and store_brief not in gig_notes:
+            merged_brief = f"{gig_notes}\n\n{store_brief}"
+        else:
+            merged_brief = gig_notes or store_brief
         context.update(
             {
                 "intro_html": (
@@ -71,7 +77,7 @@ class JobBoardBookedMailer(EventConfirmationMailer):
                 ),
                 "bring_items": BRING_ITEMS,
                 "contact_email": STAFFING_EMAIL,
-                "brief": gig.public_notes if gig else "",
+                "brief": merged_brief,
                 "sampling_label": (
                     SAMPLING_LABELS.get(gig.plan.sampling_format or "", "") if gig else ""
                 ),

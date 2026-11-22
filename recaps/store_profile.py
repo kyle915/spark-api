@@ -60,6 +60,7 @@ VISIT_NO_RECAP = "no_approved_recap"
 
 @strawberry.type
 class StoreVisit:
+    event_id: strawberry.ID
     event_uuid: str
     request_uuid: str | None
     title: str
@@ -156,6 +157,8 @@ class StoreProfile:
     photos: list[StorePhoto]
     # Null for anyone who is not Ignite staff.
     staff: StoreStaffView | None
+    logistics_notes: str = ""
+    logistics_notes_updated_at: str | None = None
 
 
 @strawberry.type
@@ -487,6 +490,7 @@ def build_store_profile(
                 event["day"] or date.min,
                 pk,
                 StoreVisit(
+                    event_id=strawberry.ID(str(pk)),
                     event_uuid=event["uuid"],
                     request_uuid=event["request_uuid"],
                     title=event["name"] or header["name"] or "Visit",
@@ -557,6 +561,15 @@ def build_store_profile(
                 )
             )
 
+    from store_logistics.service import get_store_logistics_note
+
+    logistics_notes, logistics_notes_updated_at = get_store_logistics_note(
+        tenant_id,
+        store_key=key,
+        store_name=header["name"],
+        address=header["address"],
+    )
+
     return StoreProfile(
         store_key=key,
         name=header["name"],
@@ -581,6 +594,8 @@ def build_store_profile(
         comments=comments,
         photos=[StorePhoto(**p) for p in _photos(tenant_id, custom_ids)],
         staff=_staff_view(events, recaps) if staff else None,
+        logistics_notes=logistics_notes,
+        logistics_notes_updated_at=logistics_notes_updated_at,
     )
 
 

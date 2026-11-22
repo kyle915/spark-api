@@ -35,7 +35,9 @@ from events.activation_plans import ActivationPlanQueries, ActivationPlanMutatio
 from events.field_marketing import FieldMarketingMutations, FieldMarketingQueries
 from events.plan_results import PlanResultsMutations, PlanResultsQueries
 from events.field_marketing_recaps import FieldMarketingRecapQueries
+from events.wave_requests import WaveRequestMutations
 from hours_check.schema import HoursCheckMutations, HoursCheckQueries
+from store_logistics.schema import StoreLogisticsMutations, StoreLogisticsQueries
 
 
 @strawberry.type
@@ -69,6 +71,7 @@ class EventQueryClient(
     PayrollQueries,
     # Hours check before payroll (staff only), beside the timesheet.
     HoursCheckQueries,
+    StoreLogisticsQueries,
     CampaignPnlQueries,
     ActivationPlanQueries,
     FieldMarketingQueries,
@@ -147,6 +150,8 @@ class EventMutationsClient(
     EventMutations,
     PayrollMutations,
     HoursCheckMutations,
+    StoreLogisticsMutations,
+    WaveRequestMutations,
     AccountListMutations,
     # Staff only: accept / dismiss store-name suggestions, and read a pasted
     # email or sheet row into a draft request (creates nothing).

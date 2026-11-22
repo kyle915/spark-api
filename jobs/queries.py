@@ -2126,9 +2126,14 @@ class JobBriefingQueries:
             return None
 
         def _payload():
+            from store_logistics.service import enrich_job_briefing
+
+            title, body = enrich_job_briefing(
+                job, job.briefing_title or "", job.briefing_body or ""
+            )
             return types.JobBriefingPayload(
-                title=job.briefing_title or "",
-                body=job.briefing_body or "",
+                title=title,
+                body=body,
                 template_uuid=(
                     str(job.briefing_template.uuid)
                     if job.briefing_template_id else None
@@ -2174,9 +2179,14 @@ class JobBriefingQueries:
                 return None
             if allowed is not None and job.tenant_id not in allowed:
                 return None
+            from store_logistics.service import enrich_job_briefing
+
+            title, body = enrich_job_briefing(
+                job, job.briefing_title or "", job.briefing_body or ""
+            )
             return types.JobBriefingPayload(
-                title=job.briefing_title or "",
-                body=job.briefing_body or "",
+                title=title,
+                body=body,
                 template_uuid=(
                     str(job.briefing_template.uuid)
                     if job.briefing_template_id else None

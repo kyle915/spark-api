@@ -101,6 +101,7 @@ INSTALLED_APPS = [
     "consumer_mentions",
     "photo_library",
     "hours_check",
+    "store_logistics",
     # Anti-scraping guardrails: shared Postgres rate limiter, audit log,
     # usage rollups (app label "abuse"). See utils/abuse/__init__.py.
     "utils.abuse",
