@@ -298,13 +298,24 @@ class PitchDeckPhotoWallTests(TransactionTestCase):
         self.assertNotIn("kpis", locked)
         self.assertNotIn("photos", locked)
 
-        payload = unlocked_pitch_deck_payload(deck)
+        self.assertEqual(deck.pinned_photo_ids, [self.photo.id])
+        # Public reads remint interactive URLs from durable blob ids — patch
+        # the URL helper outside create so stale snapshot tokens are unused.
+        with patch(
+            "brand_insights.photo_wall._image_url",
+            return_value="https://example.com/photo-reminted.jpg",
+        ):
+            payload = unlocked_pitch_deck_payload(deck)
         self.assertEqual(payload["title"], "Sprouts Line Review")
         self.assertNotIn("totalSupportedCost", payload["kpis"])
         self.assertFalse(payload["kpis"]["includeCosts"])
         for row in payload["retailerBreakdown"]:
             self.assertNotIn("supportedCost", row)
         self.assertGreaterEqual(len(payload["photos"]), 1)
+        self.assertEqual(
+            payload["photos"][0]["url"],
+            "https://example.com/photo-reminted.jpg",
+        )
 
         http = HttpClient()
         locked_res = http.get(f"/api/public/pitch/{deck.token}/")
@@ -320,16 +331,21 @@ class PitchDeckPhotoWallTests(TransactionTestCase):
         )
         self.assertEqual(bad.status_code, 403)
 
-        ok = http.post(
-            f"/api/public/pitch/{deck.token}/",
-            data=json.dumps({"passcode": "open-sesame"}),
-            content_type="application/json",
-        )
+        with patch(
+            "brand_insights.photo_wall._image_url",
+            return_value="https://example.com/photo-reminted.jpg",
+        ):
+            ok = http.post(
+                f"/api/public/pitch/{deck.token}/",
+                data=json.dumps({"passcode": "open-sesame"}),
+                content_type="application/json",
+            )
         self.assertEqual(ok.status_code, 200)
         body = ok.json()
         self.assertTrue(body["ok"])
         self.assertFalse(body["locked"])
         self.assertNotIn("totalSupportedCost", body["kpis"])
+        self.assertGreaterEqual(len(body["photos"]), 1)
 
         revoke_buyer_pitch_deck(self.access_a, deck_uuid=str(deck.uuid))
         revoked = http.get(f"/api/public/pitch/{deck.token}/")
@@ -374,3 +390,141 @@ class PitchDeckPhotoWallTests(TransactionTestCase):
         self.assertTrue(payload["includeCosts"])
         self.assertEqual(payload["kpis"]["totalSupportedCost"], "100.00")
         self.assertIsNotNone(payload["kpis"]["costPerSample"])
+
+    def test_scoped_empty_report_excludes_tenant_wide_pos(self):
+        empty_report = {
+            **self._fake_report(),
+            "total_visits": 0,
+            "rows": [],
+        }
+        pos_with_other_store = {
+            "available": True,
+            "unavailable_message": None,
+            "retailer_banners": ["Other"],
+            "coverage": {
+                "matched_store_sku_weeks": 2,
+                "eligible_store_sku_weeks": 2,
+                "coverage_ratio": 1.0,
+            },
+            "totals": {},
+            "store_weeks": [
+                {
+                    "store_key": "other:999",
+                    "sku_cells": [
+                        {
+                            "status": "matched",
+                            "incremental_lift_units": "12.0",
+                            "baseline_units": "10.0",
+                        }
+                    ],
+                }
+            ],
+        }
+        with (
+            patch(
+                "brand_insights.pitch_decks.build_weekly_buyer_store_report",
+                return_value=empty_report,
+            ),
+            patch(
+                "brand_insights.pitch_decks.build_retailer_pos_measurement",
+                return_value=pos_with_other_store,
+            ),
+        ):
+            deck = create_buyer_pitch_deck(
+                self.access_a,
+                title="Empty Sprouts filter",
+                retailer_filter="Sprouts",
+            )
+        kpis = deck.snapshot_payload["kpis"]
+        self.assertIsNone(kpis["samplingLiftPct"])
+        self.assertIsNone(kpis["incrementalLiftUnits"])
+        self.assertIn("No stores", kpis["posCoverageLabel"])
+
+    def test_passcode_attempts_are_rate_limited(self):
+        with (
+            patch(
+                "brand_insights.pitch_decks.build_weekly_buyer_store_report",
+                return_value=self._fake_report(),
+            ),
+            patch(
+                "brand_insights.pitch_decks.build_retailer_pos_measurement",
+                return_value=self._fake_pos(),
+            ),
+        ):
+            deck = create_buyer_pitch_deck(
+                self.access_a,
+                title="Rate limit deck",
+                passcode="secret-code",
+            )
+        http = HttpClient()
+        with patch(
+            "brand_insights.pitch_views.hit",
+            return_value=type(
+                "R",
+                (),
+                {
+                    "allowed": False,
+                    "retry_after": 42,
+                    "count": 99,
+                    "limit": 20,
+                    "window_seconds": 900,
+                    "degraded": False,
+                    "key": "x",
+                },
+            )(),
+        ):
+            res = http.post(
+                f"/api/public/pitch/{deck.token}/",
+                data=json.dumps({"passcode": "wrong"}),
+                content_type="application/json",
+            )
+        self.assertEqual(res.status_code, 429)
+        self.assertEqual(res.json()["error"], "rate_limited")
+        self.assertEqual(res["Retry-After"], "42")
+
+    def test_public_payload_remints_photos_from_ids(self):
+        toggle_photo_wall_pin(self.access_a, photo_id=self.photo.id, pinned=True)
+        with (
+            patch(
+                "brand_insights.pitch_decks.build_weekly_buyer_store_report",
+                return_value=self._fake_report(),
+            ),
+            patch(
+                "brand_insights.pitch_decks.build_retailer_pos_measurement",
+                return_value=self._fake_pos(),
+            ),
+            patch(
+                "brand_insights.photo_wall._image_url",
+                return_value="https://example.com/stale-token.jpg",
+            ),
+        ):
+            deck = create_buyer_pitch_deck(
+                self.access_a,
+                title="Remint photos",
+            )
+        # Stale interactive URL left in the snapshot on purpose.
+        deck.snapshot_payload["photos"] = [
+            {
+                "id": str(self.photo.id),
+                "url": "https://example.com/expired-interactive-token.jpg",
+                "category": "Sampling photos",
+                "caption": "",
+                "store": "Sprouts",
+                "retailer": "Sprouts",
+                "market": "",
+                "state": "",
+                "eventDate": "",
+                "skus": [],
+            }
+        ]
+        deck.save(update_fields=["snapshot_payload"])
+        with patch(
+            "brand_insights.photo_wall._image_url",
+            return_value="https://example.com/fresh-interactive.jpg",
+        ):
+            payload = unlocked_pitch_deck_payload(deck)
+        self.assertEqual(len(payload["photos"]), 1)
+        self.assertEqual(
+            payload["photos"][0]["url"],
+            "https://example.com/fresh-interactive.jpg",
+        )

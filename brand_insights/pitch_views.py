@@ -9,6 +9,8 @@ Mounted under ``/api/public/``:
 Security:
 - Token is the capability. Revoked → 403, expired → 410, missing → 404.
 - Passcodes use Django ``check_password`` (constant-time).
+- Passcode verification is rate-limited per IP and per token before the
+  expensive hash check runs.
 - Cost fields are stripped unless the deck opted into ``include_costs``.
 - No ambassador, agency, or owner PII in the public payload.
 """
@@ -28,8 +30,15 @@ from brand_insights.pitch_decks import (
     unlocked_pitch_deck_payload,
     verify_passcode,
 )
+from utils.abuse.identity import client_ip
+from utils.abuse.limiter import hit
 
 logger = logging.getLogger(__name__)
+
+# Short passcodes (min 4) + circulated share tokens → tight attempt budgets.
+_PASSCODE_IP_LIMIT = 30  # / 15 min
+_PASSCODE_TOKEN_LIMIT = 20  # / 15 min
+_PASSCODE_WINDOW = 15 * 60
 
 
 def _json_error(code: str, message: str, status: int) -> JsonResponse:
@@ -64,6 +73,32 @@ def _read_passcode(request: HttpRequest) -> str:
     return ""
 
 
+def _passcode_throttled(request: HttpRequest, token: str) -> JsonResponse | None:
+    """Return a 429 response when IP or token attempt budgets are exhausted."""
+    ip = client_ip(request) or "unknown"
+    clean_token = (token or "").strip()[:64] or "missing"
+    ip_result = hit(
+        f"pitch:passcode:ip:{ip}",
+        _PASSCODE_IP_LIMIT,
+        _PASSCODE_WINDOW,
+    )
+    token_result = hit(
+        f"pitch:passcode:token:{clean_token}",
+        _PASSCODE_TOKEN_LIMIT,
+        _PASSCODE_WINDOW,
+    )
+    if ip_result.allowed and token_result.allowed:
+        return None
+    retry = max(ip_result.retry_after, token_result.retry_after, 1)
+    resp = _json_error(
+        "rate_limited",
+        "Too many passcode attempts. Wait a few minutes and try again.",
+        429,
+    )
+    resp["Retry-After"] = str(retry)
+    return resp
+
+
 @csrf_exempt
 @require_http_methods(["GET", "POST"])
 def public_pitch_deck_view(request: HttpRequest, token: str) -> JsonResponse:
@@ -92,6 +127,9 @@ def public_pitch_deck_view(request: HttpRequest, token: str) -> JsonResponse:
             supplied = _read_passcode(request)
             if not supplied:
                 return _json_ok(locked_pitch_deck_preview(deck), locked=True)
+            throttled = _passcode_throttled(request, token)
+            if throttled is not None:
+                return throttled
             if not verify_passcode(supplied, deck.passcode_hash):
                 return _json_error(
                     "passcode_required",

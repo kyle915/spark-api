@@ -108,6 +108,7 @@ def _build_deck_snapshot(
     period_end: date | None,
     retailer_filter: str,
     market_filter: str,
+    provider_uuid: str | None,
     include_costs: bool,
     photos: list[dict[str, Any]],
 ) -> tuple[date, date, dict[str, Any]]:
@@ -117,6 +118,7 @@ def _build_deck_snapshot(
         period_end=period_end,
         retailer_filter=retailer_filter or None,
         market_filter=market_filter or None,
+        provider_uuid=provider_uuid or None,
     )
     eff_start = date.fromisoformat(report["period_start"])
     eff_end = date.fromisoformat(report["period_end"])
@@ -127,17 +129,32 @@ def _build_deck_snapshot(
     )
 
     store_keys_in_report = {r["store_key"] for r in rows}
+    # When the deck is scoped (retailer / market / provider filters) and that
+    # scope yields zero stores, never fall through to tenant-wide POS lift.
+    scoped = bool(
+        (retailer_filter or "").strip()
+        or (market_filter or "").strip()
+        or (provider_uuid or "").strip()
+    )
 
     # Aggregate sampling lift strictly from eligible matched store-weeks in scope.
     total_lift = Decimal("0.00")
     total_baseline = Decimal("0.00")
     has_lift = False
     has_baseline = False
-    if pos_data["available"]:
+    matched_sku_weeks = 0
+    eligible_sku_weeks = 0
+    # Scoped + empty report → skip POS entirely (outer guard). Otherwise only
+    # aggregate store-weeks whose store_key is in the (filtered) report.
+    if pos_data["available"] and (store_keys_in_report or not scoped):
         for sw in pos_data["store_weeks"]:
             if store_keys_in_report and sw["store_key"] not in store_keys_in_report:
                 continue
-            for cell in sw.get("sku_cells", []):
+            cells = sw.get("sku_cells") or []
+            eligible_sku_weeks += len(cells)
+            for cell in cells:
+                if cell.get("status") in ("matched", "explicit_zero"):
+                    matched_sku_weeks += 1
                 if cell.get("incremental_lift_units") is not None:
                     total_lift += Decimal(str(cell["incremental_lift_units"]))
                     has_lift = True
@@ -261,16 +278,26 @@ def _build_deck_snapshot(
             win["costPerUnitSold"] = _safe_div_money(row_cost, denom)
         top_store_wins.append(win)
 
-    cov = pos_data.get("coverage") or {}
-    cov_ratio = cov.get("coverage_ratio")
-    pos_cov_label = (
-        f"{cov.get('matched_store_sku_weeks', 0)}/{cov.get('eligible_store_sku_weeks', 0)} matched"
-        if pos_data["available"]
-        else "POS feed not connected"
-    )
-    if pos_data["available"] and cov_ratio is not None:
-        pct_cov = int(round(float(cov_ratio) * 100))
-        pos_cov_label = f"{pct_cov}% store-SKU-week POS coverage"
+    if not pos_data["available"]:
+        pos_cov_label = "POS feed not connected"
+    elif scoped and not store_keys_in_report:
+        pos_cov_label = "No stores in this deck's filter scope"
+    elif eligible_sku_weeks > 0:
+        cov_ratio = matched_sku_weeks / eligible_sku_weeks
+        pos_cov_label = (
+            f"{int(round(cov_ratio * 100))}% store-SKU-week POS coverage "
+            f"({matched_sku_weeks}/{eligible_sku_weeks} matched in scope)"
+        )
+    else:
+        cov = pos_data.get("coverage") or {}
+        cov_ratio = cov.get("coverage_ratio")
+        pos_cov_label = (
+            f"{cov.get('matched_store_sku_weeks', 0)}/"
+            f"{cov.get('eligible_store_sku_weeks', 0)} matched"
+        )
+        if cov_ratio is not None:
+            pct_cov = int(round(float(cov_ratio) * 100))
+            pos_cov_label = f"{pct_cov}% store-SKU-week POS coverage"
 
     kpis: dict[str, Any] = {
         "totalVisits": total_visits,
@@ -298,6 +325,7 @@ def _build_deck_snapshot(
         "periodEnd": eff_end.isoformat(),
         "retailerFilter": retailer_filter,
         "marketFilter": market_filter,
+        "providerUuid": (provider_uuid or "").strip(),
         "kpis": kpis,
         "retailerBreakdown": retailer_breakdown,
         "topStoreWins": top_store_wins,
@@ -318,6 +346,7 @@ def create_buyer_pitch_deck(
     period_end: date | None = None,
     retailer_filter: str = "",
     market_filter: str = "",
+    provider_uuid: str | None = None,
     include_costs: bool = False,
     passcode: str | None = None,
     expires_in_days: int | None = None,
@@ -338,6 +367,7 @@ def create_buyer_pitch_deck(
     clean_intro = (intro_note or "").strip()[:1500]
     clean_retailer = (retailer_filter or "").strip()[:120]
     clean_market = (market_filter or "").strip()[:120]
+    clean_provider = (provider_uuid or "").strip() or None
 
     pass_hash = hash_passcode(passcode) if passcode and passcode.strip() else ""
 
@@ -361,6 +391,7 @@ def create_buyer_pitch_deck(
         period_end=period_end,
         retailer_filter=clean_retailer,
         market_filter=clean_market,
+        provider_uuid=clean_provider,
         include_costs=bool(include_costs),
         photos=photos,
     )
@@ -445,14 +476,36 @@ def revoke_buyer_pitch_deck(
     return deck
 
 
+def _fresh_deck_photos(deck: BuyerPitchDeck) -> list[dict[str, Any]]:
+    """Remint interactive media URLs from durable photo ids on every public
+    read. Snapshot photo URLs are never trusted for serving — they may hold
+    expired PRIVATE_MEDIA interactive tokens."""
+    ids = list(deck.pinned_photo_ids or [])
+    if not ids:
+        return []
+    try:
+        _validated, photos = resolve_deck_photos(
+            deck.tenant_id,
+            requested_photo_ids=ids,
+        )
+        return photos
+    except (PermissionError, ValueError):
+        # Fall back to non-URL snapshot metadata only if remint fails hard.
+        return [
+            {k: v for k, v in dict(p).items() if k != "url"}
+            for p in ((deck.snapshot_payload or {}).get("photos") or [])
+        ]
+
+
 def _sanitize_public_deck_payload(deck: BuyerPitchDeck) -> dict[str, Any]:
     """Serialize a read-only, buyer-safe payload strictly from this deck's
-    snapshot. Double-strips cost fields when ``deck.include_costs`` is False."""
+    snapshot. Double-strips cost fields when ``deck.include_costs`` is False.
+    Photo URLs are reminted from ``pinned_photo_ids`` on every read."""
     snap = dict(deck.snapshot_payload or {})
     kpis = dict(snap.get("kpis") or {})
     retailer_breakdown = [dict(r) for r in (snap.get("retailerBreakdown") or [])]
     top_store_wins = [dict(s) for s in (snap.get("topStoreWins") or [])]
-    photos = [dict(p) for p in (snap.get("photos") or [])]
+    photos = _fresh_deck_photos(deck)
 
     if not deck.include_costs:
         for cost_key in (
@@ -482,6 +535,7 @@ def _sanitize_public_deck_payload(deck: BuyerPitchDeck) -> dict[str, Any]:
         "periodEnd": deck.period_end.isoformat(),
         "retailerFilter": deck.retailer_filter,
         "marketFilter": deck.market_filter,
+        "providerUuid": snap.get("providerUuid") or "",
         "includeCosts": deck.include_costs,
         "requiresPasscode": deck.has_passcode,
         "expiresAt": deck.expires_at.isoformat() if deck.expires_at else None,
