@@ -2939,6 +2939,7 @@ class PilotMutations:
         business_timezone: str = "America/Chicago",
         accept_terms: bool = True,
         force_new_workspace: bool = False,
+        invitation_token: str = "",
     ) -> OnboardingSessionPayload:
         def _run():
             try:
@@ -2964,6 +2965,7 @@ class PilotMutations:
                     business_timezone=business_timezone,
                     accept_terms=accept_terms,
                     force_new_workspace=force_new_workspace,
+                    invitation_token=invitation_token,
                     client_ip=ip_addr,
                     user_agent=ua,
                 )

@@ -23,6 +23,7 @@ from urllib.parse import urlencode
 import httpx
 from django.conf import settings
 from django.db import IntegrityError, transaction
+from django.db.models import Max
 from django.utils import timezone
 
 from pilot.costs import quantize_money
@@ -56,6 +57,26 @@ PLAN_RANK = {
     WorkspaceProfile.PLAN_SCALE: 3,
     WorkspaceProfile.PLAN_MANAGED_SOW: 4,
 }
+
+SUBSCRIPTION_DOMAIN_EVENTS = frozenset(
+    {
+        "checkout.session.completed",
+        "customer.subscription.created",
+        "customer.subscription.updated",
+        "customer.subscription.deleted",
+    }
+)
+INVOICE_DOMAIN_EVENTS = frozenset(
+    {
+        "invoice.paid",
+        "invoice.payment_failed",
+    }
+)
+
+
+def _is_simulated_stripe_subscription_id(sub_id: str | None) -> bool:
+    val = (sub_id or "").strip()
+    return not val or val.startswith("sub_sim_") or val.startswith("sub_test_")
 
 
 def _active_stripe_mode() -> str:
@@ -278,6 +299,138 @@ class StripeBillingAdapter:
         body = resp.json()
         return {
             "portal_url": body["url"],
+            "provider_transport": "stripe_api",
+        }
+
+    def update_subscription_plan(
+        self,
+        *,
+        subscription_id: str,
+        target_plan_code: str,
+        price_id: str,
+        tenant: Tenant,
+        proration_behavior: str = "always_invoice",
+    ) -> dict[str, Any]:
+        clean_sub_id = (subscription_id or "").strip()
+        if _is_simulated_stripe_subscription_id(clean_sub_id) and not self.has_remote_credentials:
+            if self.mode == "live":
+                raise PermissionError(
+                    "STRIPE_SECRET_KEY is required for live Stripe subscription updates."
+                )
+            return {
+                "status": "active",
+                "cancel_at_period_end": False,
+                "provider_transport": "local_test_simulator",
+            }
+        if not self.has_remote_credentials:
+            raise PermissionError(
+                "STRIPE_SECRET_KEY is required to update an active remote Stripe subscription."
+            )
+
+        auth_headers = {"Authorization": f"Bearer {self.secret_key}"}
+        get_resp = httpx.get(
+            f"{self.api_base}/v1/subscriptions/{clean_sub_id}",
+            headers=auth_headers,
+            timeout=15.0,
+        )
+        get_resp.raise_for_status()
+        current_sub = get_resp.json()
+        items = ((current_sub.get("items") or {}).get("data")) or []
+        if not items or not items[0].get("id"):
+            raise ValueError(
+                "Stripe subscription has no updatable subscription item."
+            )
+
+        upd_resp = httpx.post(
+            f"{self.api_base}/v1/subscriptions/{clean_sub_id}",
+            data={
+                "items[0][id]": str(items[0]["id"]),
+                "items[0][price]": price_id,
+                "cancel_at_period_end": "false",
+                "proration_behavior": proration_behavior,
+                "payment_behavior": "error_if_incomplete",
+                "metadata[tenant_uuid]": str(tenant.uuid),
+                "metadata[target_plan_code]": target_plan_code,
+            },
+            headers=auth_headers,
+            timeout=15.0,
+        )
+        upd_resp.raise_for_status()
+        updated = upd_resp.json()
+        remote_status = str(updated.get("status") or "")
+        if remote_status not in {"active", "trialing"}:
+            raise ValueError(
+                f"Stripe subscription upgrade was not confirmed active (status={remote_status or 'unknown'})."
+            )
+        return {
+            "status": remote_status,
+            "cancel_at_period_end": bool(
+                updated.get("cancel_at_period_end", False)
+            ),
+            "current_period_start": updated.get("current_period_start"),
+            "current_period_end": updated.get("current_period_end"),
+            "provider_transport": "stripe_api",
+        }
+
+    def cancel_subscription(
+        self,
+        *,
+        subscription_id: str,
+        immediate: bool = False,
+    ) -> dict[str, Any]:
+        clean_sub_id = (subscription_id or "").strip()
+        if _is_simulated_stripe_subscription_id(clean_sub_id) and not self.has_remote_credentials:
+            if self.mode == "live":
+                raise PermissionError(
+                    "STRIPE_SECRET_KEY is required for live Stripe subscription cancellation."
+                )
+            return {
+                "status": "canceled" if immediate else "active",
+                "cancel_at_period_end": not immediate,
+                "provider_transport": "local_test_simulator",
+            }
+        if not self.has_remote_credentials:
+            raise PermissionError(
+                "STRIPE_SECRET_KEY is required to cancel an active remote Stripe subscription."
+            )
+
+        auth_headers = {"Authorization": f"Bearer {self.secret_key}"}
+        if immediate:
+            resp = httpx.delete(
+                f"{self.api_base}/v1/subscriptions/{clean_sub_id}",
+                headers=auth_headers,
+                timeout=15.0,
+            )
+            resp.raise_for_status()
+            body = resp.json()
+            remote_status = str(body.get("status") or "")
+            if remote_status not in {"canceled", "incomplete_expired"}:
+                raise ValueError(
+                    f"Stripe immediate cancellation did not confirm canceled status (got {remote_status or 'unknown'})."
+                )
+        else:
+            resp = httpx.post(
+                f"{self.api_base}/v1/subscriptions/{clean_sub_id}",
+                data={"cancel_at_period_end": "true"},
+                headers=auth_headers,
+                timeout=15.0,
+            )
+            resp.raise_for_status()
+            body = resp.json()
+            if (
+                not bool(body.get("cancel_at_period_end"))
+                and str(body.get("status") or "") != "canceled"
+            ):
+                raise ValueError(
+                    "Stripe did not confirm cancel_at_period_end on the subscription."
+                )
+
+        return {
+            "status": str(body.get("status") or "active"),
+            "cancel_at_period_end": bool(
+                body.get("cancel_at_period_end", not immediate)
+            ),
+            "current_period_end": body.get("current_period_end"),
             "provider_transport": "stripe_api",
         }
 
@@ -585,7 +738,24 @@ def change_subscription_plan(
         )
 
     now = timezone.now()
+    price_id = (
+        target_entry.stripe_price_id or f"price_{target_plan_code}_monthly_test"
+    )
     if profile.mode == WorkspaceProfile.MODE_MANAGED:
+        if (sub.stripe_subscription_id or "").strip():
+            adapter = StripeBillingAdapter()
+            if target_plan_code == WorkspaceProfile.PLAN_FREE:
+                adapter.cancel_subscription(
+                    subscription_id=sub.stripe_subscription_id,
+                    immediate=False,
+                )
+            else:
+                adapter.update_subscription_plan(
+                    subscription_id=sub.stripe_subscription_id,
+                    target_plan_code=target_plan_code,
+                    price_id=price_id,
+                    tenant=access.tenant,
+                )
         sub.plan_code = WorkspaceProfile.PLAN_MANAGED_SOW
         sub.status = BrandSubscription.STATUS_MANAGED_SOW
         sub.addon_plan_code = (
@@ -614,6 +784,21 @@ def change_subscription_plan(
     tgt_rank = PLAN_RANK.get(target_plan_code, 0)
 
     if tgt_rank > cur_rank:
+        if not (sub.stripe_subscription_id or "").strip():
+            raise PlanEntitlementError(
+                "Start Stripe Checkout to activate a paid subscription before upgrading plans.",
+                code="CHECKOUT_REQUIRED",
+                required_plan=target_plan_code,
+            )
+        stripe_res = StripeBillingAdapter().update_subscription_plan(
+            subscription_id=sub.stripe_subscription_id,
+            target_plan_code=target_plan_code,
+            price_id=price_id,
+            tenant=access.tenant,
+        )
+        p_start = _ts_to_dt(stripe_res.get("current_period_start"))
+        p_end = _ts_to_dt(stripe_res.get("current_period_end"))
+
         sub.plan_code = target_plan_code
         profile.plan_tier = target_plan_code
         if profile.mode == WorkspaceProfile.MODE_PILOT:
@@ -623,9 +808,13 @@ def change_subscription_plan(
         sub.pending_plan_code = ""
         sub.cancel_at_period_end = False
         sub.status = BrandSubscription.STATUS_ACTIVE
-        if sub.current_period_start is None:
+        if p_start is not None:
+            sub.current_period_start = p_start
+        elif sub.current_period_start is None:
             sub.current_period_start = now
-        if sub.current_period_end is None or sub.current_period_end <= now:
+        if p_end is not None:
+            sub.current_period_end = p_end
+        elif sub.current_period_end is None or sub.current_period_end <= now:
             sub.current_period_end = now + timedelta(days=30)
         sub.last_payment_status = BrandSubscription.PAY_SUCCEEDED
         sub.last_payment_error = ""
@@ -644,6 +833,18 @@ def change_subscription_plan(
         return sub
 
     if tgt_rank < cur_rank:
+        if (
+            target_plan_code == WorkspaceProfile.PLAN_FREE
+            and (sub.stripe_subscription_id or "").strip()
+        ):
+            return cancel_brand_subscription(
+                access,
+                immediate=not (
+                    sub.current_period_end is not None
+                    and sub.current_period_end > now
+                ),
+                reason="Downgraded to Free",
+            )
         if sub.current_period_end and sub.current_period_end > now:
             sub.pending_plan_code = target_plan_code
             sub.save(update_fields=["pending_plan_code", "updated_at"])
@@ -660,6 +861,14 @@ def change_subscription_plan(
                 ),
             )
         else:
+            if (sub.stripe_subscription_id or "").strip():
+                StripeBillingAdapter().update_subscription_plan(
+                    subscription_id=sub.stripe_subscription_id,
+                    target_plan_code=target_plan_code,
+                    price_id=price_id,
+                    tenant=access.tenant,
+                    proration_behavior="none",
+                )
             sub.plan_code = target_plan_code
             sub.pending_plan_code = ""
             sub.status = (
@@ -697,7 +906,18 @@ def cancel_brand_subscription(
     profile = ensure_workspace_profile(access.tenant)
     now = timezone.now()
 
+    period_end_cancel = bool(
+        not immediate
+        and sub.current_period_end is not None
+        and sub.current_period_end > now
+    )
+
     if profile.mode == WorkspaceProfile.MODE_MANAGED:
+        if (sub.stripe_subscription_id or "").strip():
+            StripeBillingAdapter().cancel_subscription(
+                subscription_id=sub.stripe_subscription_id,
+                immediate=immediate,
+            )
         # Managed SOW client cancelling a standalone software add-on retains SOW!
         sub.addon_plan_code = ""
         sub.cancel_at_period_end = False
@@ -723,12 +943,22 @@ def cancel_brand_subscription(
         )
         return sub
 
+    stripe_cancel_res: dict[str, Any] | None = None
+    if (sub.stripe_subscription_id or "").strip():
+        stripe_cancel_res = StripeBillingAdapter().cancel_subscription(
+            subscription_id=sub.stripe_subscription_id,
+            immediate=not period_end_cancel,
+        )
+
     sub.canceled_at = now
-    if (
-        not immediate
-        and sub.current_period_end is not None
-        and sub.current_period_end > now
-    ):
+    if period_end_cancel:
+        remote_period_end = (
+            _ts_to_dt(stripe_cancel_res.get("current_period_end"))
+            if stripe_cancel_res
+            else None
+        )
+        if remote_period_end is not None and remote_period_end > now:
+            sub.current_period_end = remote_period_end
         sub.cancel_at_period_end = True
         sub.status = BrandSubscription.STATUS_CANCEL_AT_PERIOD_END
         sub.pending_plan_code = WorkspaceProfile.PLAN_FREE
@@ -965,9 +1195,56 @@ def process_stripe_webhook(
     sub = BrandSubscription.objects.select_for_update().get(tenant=tenant)
     profile = ensure_workspace_profile(tenant)
 
-    # Out-of-order guard: never allow an older event timestamp to overwrite
-    # a newer applied subscription state!
-    if created_ts > 0 and sub.last_stripe_event_created > created_ts:
+    if (
+        event_type not in SUBSCRIPTION_DOMAIN_EVENTS
+        and event_type not in INVOICE_DOMAIN_EVENTS
+    ):
+        StripeWebhookEvent.objects.create(
+            stripe_event_id=event_id,
+            event_type=event_type,
+            stripe_created_ts=created_ts,
+            livemode=livemode,
+            tenant=tenant,
+            processing_status=StripeWebhookEvent.PROC_UNMATCHED,
+            note=f"Ignored unsupported Stripe event type {event_type}.",
+            payload=event,
+        )
+        return {
+            "ok": True,
+            "event_id": event_id,
+            "status": StripeWebhookEvent.PROC_UNMATCHED,
+        }
+
+    latest_sub_ts = max(
+        int(sub.last_stripe_event_created or 0),
+        int(
+            StripeWebhookEvent.objects.filter(
+                tenant=tenant,
+                processing_status=StripeWebhookEvent.PROC_PROCESSED,
+                event_type__in=SUBSCRIPTION_DOMAIN_EVENTS,
+            ).aggregate(m=Max("stripe_created_ts"))["m"]
+            or 0
+        ),
+    )
+    latest_invoice_ts = int(
+        StripeWebhookEvent.objects.filter(
+            tenant=tenant,
+            processing_status=StripeWebhookEvent.PROC_PROCESSED,
+            event_type__in=INVOICE_DOMAIN_EVENTS,
+        ).aggregate(m=Max("stripe_created_ts"))["m"]
+        or 0
+    )
+
+    # Per-domain out-of-order guard: subscription events compare against the
+    # subscription-domain watermark; invoice events compare against the
+    # invoice-domain watermark so a newer `invoice.paid` never discards an
+    # older `customer.subscription.updated` carrying plan/cancellation state.
+    domain_watermark = (
+        latest_sub_ts
+        if event_type in SUBSCRIPTION_DOMAIN_EVENTS
+        else latest_invoice_ts
+    )
+    if created_ts > 0 and domain_watermark > created_ts:
         StripeWebhookEvent.objects.create(
             stripe_event_id=event_id,
             event_type=event_type,
@@ -976,8 +1253,7 @@ def process_stripe_webhook(
             tenant=tenant,
             processing_status=StripeWebhookEvent.PROC_STALE,
             note=(
-                f"Ignored stale event ({created_ts} < "
-                f"{sub.last_stripe_event_created})."
+                f"Ignored stale {event_type} ({created_ts} < {domain_watermark})."
             ),
             payload=event,
         )
@@ -993,22 +1269,48 @@ def process_stripe_webhook(
 
     if event_type == "checkout.session.completed":
         session_id = str(data_obj.get("id") or "").strip()
-        checkout_rec = StripeCheckoutRecord.objects.filter(
-            tenant=tenant, stripe_session_id=session_id
-        ).first()
-        if checkout_rec is not None:
-            if not target_plan:
-                target_plan = checkout_rec.target_plan_code
-            checkout_rec.status = StripeCheckoutRecord.STATUS_COMPLETED
-            checkout_rec.completed_at = now
-            checkout_rec.save(update_fields=["status", "completed_at"])
-
-        resolved_plan = (
-            target_plan
-            if target_plan
-            in {WorkspaceProfile.PLAN_CORE, WorkspaceProfile.PLAN_PRO}
-            else WorkspaceProfile.PLAN_PRO
+        checkout_rec = (
+            StripeCheckoutRecord.objects.select_for_update()
+            .filter(
+                tenant=tenant,
+                stripe_session_id=session_id,
+                status=StripeCheckoutRecord.STATUS_OPEN,
+            )
+            .first()
         )
+        if (
+            checkout_rec is None
+            or checkout_rec.target_plan_code
+            not in {WorkspaceProfile.PLAN_CORE, WorkspaceProfile.PLAN_PRO}
+            or (
+                target_plan
+                and target_plan != checkout_rec.target_plan_code
+            )
+        ):
+            StripeWebhookEvent.objects.create(
+                stripe_event_id=event_id,
+                event_type=event_type,
+                stripe_created_ts=created_ts,
+                livemode=livemode,
+                tenant=tenant,
+                processing_status=StripeWebhookEvent.PROC_UNMATCHED,
+                note=(
+                    "Ignored checkout.session.completed without matching open "
+                    "Spark checkout record or verified target plan."
+                ),
+                payload=event,
+            )
+            return {
+                "ok": True,
+                "event_id": event_id,
+                "status": StripeWebhookEvent.PROC_UNMATCHED,
+            }
+
+        resolved_plan = checkout_rec.target_plan_code
+        checkout_rec.status = StripeCheckoutRecord.STATUS_COMPLETED
+        checkout_rec.completed_at = now
+        checkout_rec.save(update_fields=["status", "completed_at"])
+
         if data_obj.get("customer"):
             sub.stripe_customer_id = str(data_obj["customer"])
         if data_obj.get("subscription"):
@@ -1034,8 +1336,9 @@ def process_stripe_webhook(
         sub.cancel_at_period_end = False
         sub.current_period_start = period_start
         sub.current_period_end = period_end
-        sub.last_payment_status = BrandSubscription.PAY_SUCCEEDED
-        sub.last_payment_error = ""
+        if created_ts == 0 or created_ts >= latest_invoice_ts:
+            sub.last_payment_status = BrandSubscription.PAY_SUCCEEDED
+            sub.last_payment_error = ""
 
     elif event_type in {
         "customer.subscription.created",
@@ -1069,19 +1372,23 @@ def process_stripe_webhook(
         cancel_period_end = bool(data_obj.get("cancel_at_period_end", False))
         stripe_status = str(data_obj.get("status") or "active")
         sub.cancel_at_period_end = cancel_period_end
+        can_update_payment_fields = (
+            created_ts == 0 or created_ts >= latest_invoice_ts
+        )
 
         if profile.mode == WorkspaceProfile.MODE_MANAGED:
             sub.status = BrandSubscription.STATUS_MANAGED_SOW
-            if stripe_status == "past_due":
+            if stripe_status == "past_due" and can_update_payment_fields:
                 sub.last_payment_status = BrandSubscription.PAY_FAILED
                 sub.last_payment_error = "Add-on subscription renewal failed."
         else:
             if stripe_status == "past_due":
                 sub.status = BrandSubscription.STATUS_PAST_DUE
-                sub.last_payment_status = BrandSubscription.PAY_FAILED
-                sub.last_payment_error = (
-                    "Subscription renewal payment failed. Update payment method to avoid interruption."
-                )
+                if can_update_payment_fields:
+                    sub.last_payment_status = BrandSubscription.PAY_FAILED
+                    sub.last_payment_error = (
+                        "Subscription renewal payment failed. Update payment method to avoid interruption."
+                    )
             elif stripe_status in {"canceled", "unpaid"}:
                 sub.status = BrandSubscription.STATUS_CANCELED
                 sub.canceled_at = sub.canceled_at or now
@@ -1090,8 +1397,9 @@ def process_stripe_webhook(
                 sub.canceled_at = sub.canceled_at or now
             else:
                 sub.status = BrandSubscription.STATUS_ACTIVE
-                sub.last_payment_status = BrandSubscription.PAY_SUCCEEDED
-                sub.last_payment_error = ""
+                if can_update_payment_fields:
+                    sub.last_payment_status = BrandSubscription.PAY_SUCCEEDED
+                    sub.last_payment_error = ""
 
     elif event_type == "customer.subscription.deleted":
         sub.cancel_at_period_end = False
@@ -1112,15 +1420,22 @@ def process_stripe_webhook(
     elif event_type == "invoice.paid":
         if data_obj.get("id"):
             sub.stripe_latest_invoice_id = str(data_obj["id"])
+        can_update_sub_lifecycle = (
+            (created_ts == 0 or created_ts >= latest_sub_ts)
+            and sub.status != BrandSubscription.STATUS_CANCELED
+        )
         p_end = _ts_to_dt(data_obj.get("period_end"))
-        if p_end and (
-            sub.current_period_end is None or p_end > sub.current_period_end
+        if (
+            can_update_sub_lifecycle
+            and p_end
+            and (sub.current_period_end is None or p_end > sub.current_period_end)
         ):
             sub.current_period_end = p_end
         sub.last_payment_status = BrandSubscription.PAY_SUCCEEDED
         sub.last_payment_error = ""
         if (
-            profile.mode != WorkspaceProfile.MODE_MANAGED
+            can_update_sub_lifecycle
+            and profile.mode != WorkspaceProfile.MODE_MANAGED
             and not sub.cancel_at_period_end
         ):
             sub.status = BrandSubscription.STATUS_ACTIVE
@@ -1139,10 +1454,17 @@ def process_stripe_webhook(
         )
         sub.last_payment_status = BrandSubscription.PAY_FAILED
         sub.last_payment_error = err_msg[:500]
-        if profile.mode != WorkspaceProfile.MODE_MANAGED:
+        if (
+            (created_ts == 0 or created_ts >= latest_sub_ts)
+            and profile.mode != WorkspaceProfile.MODE_MANAGED
+            and sub.status != BrandSubscription.STATUS_CANCELED
+        ):
             sub.status = BrandSubscription.STATUS_PAST_DUE
 
-    if created_ts > sub.last_stripe_event_created:
+    if (
+        event_type in SUBSCRIPTION_DOMAIN_EVENTS
+        and created_ts > sub.last_stripe_event_created
+    ):
         sub.last_stripe_event_created = created_ts
     sub.save()
 

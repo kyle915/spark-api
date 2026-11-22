@@ -282,12 +282,28 @@ class Milestone2SubscriptionsTests(TransactionTestCase):
             1,
         )
 
+        # Unauthenticated attacker guessing an invited email without token MUST be rejected
+        with self.assertRaises(PermissionError):
+            start_or_resume_self_serve_onboarding(
+                email="rep@canyonspritz.test",
+                password="AttackerPassword123!",
+                first_name="Mallory",
+                last_name="Guess",
+                brand_name="Should Not Claim Invite",
+            )
+        self.assertFalse(
+            User.objects.filter(email="rep@canyonspritz.test").exists()
+        )
+        inv1.refresh_from_db()
+        self.assertEqual(inv1.status, WorkspaceInvitation.STATUS_PENDING)
+
         rep_signup = start_or_resume_self_serve_onboarding(
             email="rep@canyonspritz.test",
             password="Password123!",
             first_name="Jules",
             last_name="Field",
             brand_name="Should Not Create Duplicate Brand",
+            invitation_token=inv1.token,
         )
         self.assertTrue(rep_signup["joined_invitation"])
         self.assertEqual(rep_signup["tenant"].id, tenant.id)
@@ -1049,4 +1065,333 @@ class Milestone2SubscriptionsTests(TransactionTestCase):
             resolve_brand_entitlements(harbor).effective_plan_code, "pro"
         )
         self.assertTrue(resolve_brand_entitlements(cascade).is_managed_sow)
+
+    def test_codex_security_and_billing_regressions(self):
+        from unittest.mock import MagicMock, patch
+
+        # 1. Invitation email ownership verification via GraphQL (P1)
+        owner_res = start_or_resume_self_serve_onboarding(
+            email="owner@vaultbev.test",
+            password="Password123!",
+            brand_name="Vault Beverage",
+        )
+        vault_tenant = owner_res["tenant"]
+        vault_access = resolve_workspace_access(
+            owner_res["user"], tenant=vault_tenant
+        )
+        inv = onboarding_invite_contributor(
+            vault_access,
+            email="invited-agency@vaultbev.test",
+            workspace_role=WorkspaceMembership.ROLE_PROVIDER_MANAGER,
+            provider_name="Vault Field Ops",
+        )
+
+        # Unauthenticated GraphQL call without token or with wrong token cannot claim invite
+        no_tok_gql = _exec_gql(
+            """
+            mutation($email: String!, $pw: String!, $tok: String!) {
+              startSelfServeOnboarding(
+                email: $email
+                password: $pw
+                brandName: "Hijack Attempt"
+                acceptTerms: true
+                invitationToken: $tok
+              ) {
+                ok
+                error
+                joinedInvitation
+              }
+            }
+            """,
+            variables={
+                "email": "invited-agency@vaultbev.test",
+                "pw": "Password123!",
+                "tok": "wrong-token-value",
+            },
+        )
+        self.assertIsNone(no_tok_gql.errors)
+        self.assertFalse(no_tok_gql.data["startSelfServeOnboarding"]["ok"])
+        self.assertFalse(
+            User.objects.filter(email="invited-agency@vaultbev.test").exists()
+        )
+
+        # Valid invitation token proves ownership and activates membership
+        ok_tok_gql = _exec_gql(
+            """
+            mutation($email: String!, $pw: String!, $tok: String!) {
+              startSelfServeOnboarding(
+                email: $email
+                password: $pw
+                brandName: "Ignored Because Invite"
+                acceptTerms: true
+                invitationToken: $tok
+              ) {
+                ok
+                error
+                tenantUuid
+                joinedInvitation
+              }
+            }
+            """,
+            variables={
+                "email": "invited-agency@vaultbev.test",
+                "pw": "Password123!",
+                "tok": inv.token,
+            },
+        )
+        self.assertTrue(ok_tok_gql.data["startSelfServeOnboarding"]["ok"])
+        self.assertTrue(
+            ok_tok_gql.data["startSelfServeOnboarding"]["joinedInvitation"]
+        )
+        self.assertEqual(
+            ok_tok_gql.data["startSelfServeOnboarding"]["tenantUuid"],
+            str(vault_tenant.uuid),
+        )
+
+        # 2. Free workspace cannot bypass Stripe Checkout via change_subscription_plan (P1)
+        with self.assertRaises(PlanEntitlementError) as chk_req_err:
+            change_subscription_plan(
+                vault_access,
+                target_plan_code="pro",
+                explicit_terms_accepted=True,
+            )
+        self.assertEqual(chk_req_err.exception.code, "CHECKOUT_REQUIRED")
+
+        # Activate Core first via verified checkout
+        chk_core = create_subscription_checkout_session(
+            vault_access,
+            target_plan_code="core",
+            explicit_terms_accepted=True,
+            idempotency_key="vault-core-chk-1",
+        )
+        complete_test_mode_checkout(
+            vault_access, stripe_session_id=chk_core.stripe_session_id
+        )
+        sub = BrandSubscription.objects.get(tenant=vault_tenant)
+        sub.stripe_subscription_id = "sub_1RealRemoteCore999"
+        sub.stripe_customer_id = "cus_RealVault999"
+        sub.save(
+            update_fields=[
+                "stripe_subscription_id",
+                "stripe_customer_id",
+                "updated_at",
+            ]
+        )
+        self.assertEqual(
+            resolve_brand_entitlements(vault_tenant).effective_plan_code, "core"
+        )
+
+        # 3. Real Stripe subscription upgrade updates Stripe BEFORE local entitlements (P1)
+        with override_settings(
+            STRIPE_BILLING_MODE="test", STRIPE_SECRET_KEY="sk_test_mock_vault"
+        ):
+            mock_get_resp = MagicMock()
+            mock_get_resp.raise_for_status.return_value = None
+            mock_get_resp.json.return_value = {
+                "id": "sub_1RealRemoteCore999",
+                "items": {"data": [{"id": "si_CoreItem123"}]},
+            }
+            mock_fail_post = MagicMock()
+            mock_fail_post.raise_for_status.return_value = None
+            mock_fail_post.json.return_value = {
+                "id": "sub_1RealRemoteCore999",
+                "status": "incomplete",
+            }
+            with (
+                patch("pilot.subscriptions.httpx.get", return_value=mock_get_resp),
+                patch("pilot.subscriptions.httpx.post", return_value=mock_fail_post),
+            ):
+                with self.assertRaises(ValueError):
+                    change_subscription_plan(
+                        vault_access,
+                        target_plan_code="pro",
+                        explicit_terms_accepted=True,
+                    )
+
+            # Local plan MUST still be Core when Stripe did not confirm active Pro!
+            self.assertEqual(
+                resolve_brand_entitlements(vault_tenant).effective_plan_code,
+                "core",
+            )
+
+            now_epoch = int(time_module.time())
+            mock_ok_post = MagicMock()
+            mock_ok_post.raise_for_status.return_value = None
+            mock_ok_post.json.return_value = {
+                "id": "sub_1RealRemoteCore999",
+                "status": "active",
+                "cancel_at_period_end": False,
+                "current_period_start": now_epoch,
+                "current_period_end": now_epoch + 30 * 86400,
+            }
+            with (
+                patch(
+                    "pilot.subscriptions.httpx.get", return_value=mock_get_resp
+                ) as m_get,
+                patch(
+                    "pilot.subscriptions.httpx.post", return_value=mock_ok_post
+                ) as m_post,
+            ):
+                upgraded = change_subscription_plan(
+                    vault_access,
+                    target_plan_code="pro",
+                    explicit_terms_accepted=True,
+                )
+                self.assertEqual(upgraded.plan_code, "pro")
+                m_get.assert_called_once()
+                m_post.assert_called_once()
+                sent_data = m_post.call_args.kwargs["data"]
+                self.assertEqual(sent_data["items[0][id]"], "si_CoreItem123")
+                self.assertEqual(
+                    sent_data["metadata[target_plan_code]"], "pro"
+                )
+
+            # 4. Cancellation propagates to Stripe before updating local DB (P1)
+            mock_cancel_post = MagicMock()
+            mock_cancel_post.raise_for_status.return_value = None
+            mock_cancel_post.json.return_value = {
+                "id": "sub_1RealRemoteCore999",
+                "status": "active",
+                "cancel_at_period_end": True,
+                "current_period_end": now_epoch + 30 * 86400,
+            }
+            with patch(
+                "pilot.subscriptions.httpx.post", return_value=mock_cancel_post
+            ) as m_cancel:
+                canceled = cancel_brand_subscription(
+                    vault_access, immediate=False, reason="End of summer wave"
+                )
+                self.assertTrue(canceled.cancel_at_period_end)
+                m_cancel.assert_called_once()
+                self.assertEqual(
+                    m_cancel.call_args.kwargs["data"],
+                    {"cancel_at_period_end": "true"},
+                )
+
+        # 5. Reject checkout.session.completed without verified open Spark record (P1)
+        free_res = start_or_resume_self_serve_onboarding(
+            email="founder@unverifiedchk.test",
+            password="Password123!",
+            brand_name="Unverified Checkout Brand",
+        )
+        free_tenant = free_res["tenant"]
+        free_sub = ensure_brand_subscription(free_tenant)
+        free_sub.stripe_customer_id = "cus_KnownShared123"
+        free_sub.save(update_fields=["stripe_customer_id", "updated_at"])
+
+        ts_base = int(time_module.time())
+        unrelated_chk = json.dumps(
+            {
+                "id": "evt_unrelated_checkout_1",
+                "type": "checkout.session.completed",
+                "created": ts_base,
+                "livemode": False,
+                "data": {
+                    "object": {
+                        "id": "cs_test_not_from_spark",
+                        "customer": "cus_KnownShared123",
+                        "subscription": "sub_1ExternalOtherProduct",
+                        "metadata": {},
+                    }
+                },
+            }
+        ).encode("utf-8")
+        sig_unrelated = sign_stripe_webhook_payload(
+            unrelated_chk, timestamp=ts_base
+        )
+        out_unrelated = process_stripe_webhook(
+            unrelated_chk, sig_unrelated, now_ts=ts_base
+        )
+        self.assertEqual(
+            out_unrelated["status"], StripeWebhookEvent.PROC_UNMATCHED
+        )
+        self.assertEqual(
+            resolve_brand_entitlements(free_tenant).effective_plan_code,
+            WorkspaceProfile.PLAN_FREE,
+        )
+
+        # 6. Per-domain webhook ordering & unsupported event non-advancement (P2)
+        sub.refresh_from_db()
+        base_sub_wm = int(sub.last_stripe_event_created)
+
+        unsupported_body = json.dumps(
+            {
+                "id": "evt_unsupported_cust_upd",
+                "type": "customer.updated",
+                "created": base_sub_wm + 5000,
+                "livemode": False,
+                "data": {
+                    "object": {
+                        "id": "cus_RealVault999",
+                        "metadata": {"tenant_uuid": str(vault_tenant.uuid)},
+                    }
+                },
+            }
+        ).encode("utf-8")
+        process_stripe_webhook(
+            unsupported_body,
+            sign_stripe_webhook_payload(unsupported_body, timestamp=ts_base),
+            now_ts=ts_base,
+        )
+        sub.refresh_from_db()
+        self.assertEqual(int(sub.last_stripe_event_created), base_sub_wm)
+
+        # Newer invoice.paid arrives BEFORE slightly older customer.subscription.updated
+        inv_paid_ts = base_sub_wm + 200
+        sub_upd_ts = base_sub_wm + 150
+        inv_paid_body = json.dumps(
+            {
+                "id": "evt_domain_inv_paid_newer",
+                "type": "invoice.paid",
+                "created": inv_paid_ts,
+                "livemode": False,
+                "data": {
+                    "object": {
+                        "id": "in_vault_200",
+                        "customer": "cus_RealVault999",
+                        "subscription": "sub_1RealRemoteCore999",
+                        "metadata": {"tenant_uuid": str(vault_tenant.uuid)},
+                    }
+                },
+            }
+        ).encode("utf-8")
+        inv_out = process_stripe_webhook(
+            inv_paid_body,
+            sign_stripe_webhook_payload(inv_paid_body, timestamp=ts_base),
+            now_ts=ts_base,
+        )
+        self.assertEqual(inv_out["status"], StripeWebhookEvent.PROC_PROCESSED)
+
+        sub_upd_body = json.dumps(
+            {
+                "id": "evt_domain_sub_upd_slightly_older",
+                "type": "customer.subscription.updated",
+                "created": sub_upd_ts,
+                "livemode": False,
+                "data": {
+                    "object": {
+                        "id": "sub_1RealRemoteCore999",
+                        "customer": "cus_RealVault999",
+                        "status": "active",
+                        "cancel_at_period_end": False,
+                        "current_period_start": sub_upd_ts,
+                        "current_period_end": sub_upd_ts + 30 * 86400,
+                        "metadata": {
+                            "tenant_uuid": str(vault_tenant.uuid),
+                            "target_plan_code": "core",
+                        },
+                    }
+                },
+            }
+        ).encode("utf-8")
+        sub_out = process_stripe_webhook(
+            sub_upd_body,
+            sign_stripe_webhook_payload(sub_upd_body, timestamp=ts_base),
+            now_ts=ts_base,
+        )
+        self.assertEqual(sub_out["status"], StripeWebhookEvent.PROC_PROCESSED)
+        sub.refresh_from_db()
+        self.assertEqual(sub.plan_code, "core")
+        self.assertFalse(sub.cancel_at_period_end)
+        self.assertEqual(int(sub.last_stripe_event_created), sub_upd_ts)
 

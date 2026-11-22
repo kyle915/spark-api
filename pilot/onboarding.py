@@ -216,14 +216,15 @@ def start_or_resume_self_serve_onboarding(
     business_timezone: str = "America/Chicago",
     accept_terms: bool = True,
     force_new_workspace: bool = False,
+    invitation_token: str = "",
     client_ip: str = "127.0.0.1",
     user_agent: str = "spark-self-serve",
 ) -> dict[str, Any]:
     """Create or safely resume a standalone Free brand workspace without
     requiring a credit card or Ignite staff.
     - Existing account holders and managed brands resolve cleanly to their
-      existing membership (or pending invitation) without creating duplicate
-      brands, memberships, or invites.
+      existing membership (or pending invitation when email ownership is
+      verified) without creating duplicate brands, memberships, or invites.
     - Interrupted signups resume the same workspace and progress state."""
     if not getattr(settings, "STANDALONE_SIGNUP_ENABLED", True):
         raise PermissionError(
@@ -235,9 +236,19 @@ def start_or_resume_self_serve_onboarding(
         if authenticated_user and getattr(authenticated_user, "is_authenticated", False)
         else None
     )
+    clean_inv_token = (invitation_token or "").strip()
+    now = timezone.now()
+    can_auto_accept_pending_invitation = False
+    matched_token_inv: WorkspaceInvitation | None = None
 
     clean_email = (email or (user.email if user else "")).strip().lower()
-    if not user:
+    if user is not None:
+        can_auto_accept_pending_invitation = (
+            UserStatus.objects.filter(user=user, verified=True).exists()
+            or bool(getattr(user, "is_staff", False))
+            or bool(getattr(user, "is_superuser", False))
+        )
+    else:
         if not clean_email or "@" not in clean_email:
             raise ValueError("A valid work email address is required.")
         existing_user = User.objects.filter(email__iexact=clean_email).first()
@@ -254,11 +265,48 @@ def start_or_resume_self_serve_onboarding(
                     "Invalid password for existing Spark account. Sign in or reset your password."
                 )
             user = existing_user
+            can_auto_accept_pending_invitation = (
+                UserStatus.objects.filter(user=existing_user, verified=True).exists()
+                or bool(getattr(existing_user, "is_staff", False))
+                or bool(getattr(existing_user, "is_superuser", False))
+            )
         else:
+            if not accept_terms:
+                raise ValueError(
+                    "Please accept the Spark Terms of Service to create your workspace."
+                )
             if len(password or "") < 8:
                 raise ValueError(
                     "Choose a password of at least 8 characters to secure your workspace."
                 )
+            pending_candidates = list(
+                WorkspaceInvitation.objects.select_related("tenant", "provider")
+                .filter(
+                    email__iexact=clean_email,
+                    status=WorkspaceInvitation.STATUS_PENDING,
+                    expires_at__gt=now,
+                )
+                .order_by("-created_at")
+            )
+            if clean_inv_token:
+                matched_token_inv = next(
+                    (
+                        inv
+                        for inv in pending_candidates
+                        if secrets.compare_digest(inv.token, clean_inv_token)
+                    ),
+                    None,
+                )
+                if matched_token_inv is None:
+                    raise PermissionError(
+                        "Invalid or expired workspace invitation token for this email address."
+                    )
+                can_auto_accept_pending_invitation = True
+            elif pending_candidates:
+                raise PermissionError(
+                    "This email address has a pending workspace invitation. Open your invitation link or provide the invitation token to verify email ownership before joining."
+                )
+
             client_role = ensure_role_by_slug(Role.CLIENT_SLUG, "Client")
             username_base = clean_email
             user = User.objects.create_user(
@@ -282,18 +330,45 @@ def start_or_resume_self_serve_onboarding(
             ua=user_agent,
         )
 
-    # 1. Pending invitation check: if this user was invited to an existing
-    # workspace, join that workspace instead of creating a duplicate brand!
-    pending_inv = (
-        WorkspaceInvitation.objects.select_related("tenant", "provider")
-        .filter(
-            email__iexact=user.email,
-            status=WorkspaceInvitation.STATUS_PENDING,
-            expires_at__gt=timezone.now(),
+    # 1. Pending invitation check: accept ONLY when email ownership is verified
+    # (either via a matching invitation token or an already-verified existing user).
+    pending_inv: WorkspaceInvitation | None = None
+    if clean_inv_token:
+        if matched_token_inv is not None:
+            pending_inv = matched_token_inv
+        else:
+            pending_candidates = list(
+                WorkspaceInvitation.objects.select_related("tenant", "provider")
+                .filter(
+                    email__iexact=user.email,
+                    status=WorkspaceInvitation.STATUS_PENDING,
+                    expires_at__gt=now,
+                )
+                .order_by("-created_at")
+            )
+            pending_inv = next(
+                (
+                    inv
+                    for inv in pending_candidates
+                    if secrets.compare_digest(inv.token, clean_inv_token)
+                ),
+                None,
+            )
+            if pending_inv is None:
+                raise PermissionError(
+                    "Invalid or expired workspace invitation token for this email address."
+                )
+    elif can_auto_accept_pending_invitation and not force_new_workspace:
+        pending_inv = (
+            WorkspaceInvitation.objects.select_related("tenant", "provider")
+            .filter(
+                email__iexact=user.email,
+                status=WorkspaceInvitation.STATUS_PENDING,
+                expires_at__gt=now,
+            )
+            .order_by("-created_at")
+            .first()
         )
-        .order_by("-created_at")
-        .first()
-    )
     if pending_inv is not None and not force_new_workspace:
         scope = (
             f"provider:{pending_inv.provider_id}"
