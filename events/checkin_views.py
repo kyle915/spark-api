@@ -210,6 +210,8 @@ def _rate_limited() -> JsonResponse:
 
 
 def _is_recap_only(code: str) -> bool:
+    if (code or "").strip().upper().startswith("PA-"):
+        return True
     kind, target = checkin_web.resolve_checkin_target(code)
     return kind == "tenant" and checkin_web.is_recap_only_code(code, target)
 
@@ -460,6 +462,8 @@ def public_checkin_context(request: HttpRequest, code: str) -> HttpResponse:
     except Exception:  # noqa: BLE001
         logger.exception("checkin context build failed code=%s", code)
         return _err("Couldn't load this check-in.", status=500, code="server")
+    if (code or "").strip().upper().startswith("PA-"):
+        payload = _stamp_recap_only(payload, code, event.tenant)
     return JsonResponse(payload)
 
 

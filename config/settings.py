@@ -58,6 +58,8 @@ CORS_ALLOW_HEADERS = (
     "x-clock-session",
     # Selected brand for users on several tenants (utils/graphql/mixins.py).
     "x-spark-tenant",
+    # Selected workspace membership for multi-membership brand/agency users.
+    "x-spark-membership",
 )
 
 
@@ -122,6 +124,8 @@ INSTALLED_APPS = [
     "sales_assist",
     # Versioned Terms / Privacy / AUP acceptance + the GraphQL gate.
     "legal",
+    # Standalone Spark pilot & self-service workspace foundation.
+    "pilot",
 ]
 
 AUTH_USER_MODEL = "tenants.User"
