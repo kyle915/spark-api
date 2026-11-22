@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
-from django.db.models import Count, Prefetch
+from django.db.models import Count, Exists, OuterRef, Prefetch
 from django.utils import timezone
 from strawberry.relay import to_base64
 
@@ -584,7 +584,14 @@ def compute_smart_ba_matches(
 
     ba_ids = [int(ba.id) for ba in candidates]
 
-    # Tenant-scoped brand experience counts
+    # Tenant-scoped brand experience: past shifts the BA actually worked
+    # (approved + clock-in attendance). Future approved rows / no-shows
+    # must not inflate brand-certified scoring.
+    worked_clock_in = Attendance.objects.filter(
+        ambassador_id=OuterRef("ambassador_id"),
+        event_id=OuterRef("event_id"),
+        source__name__iexact="clock_in",
+    )
     brand_gigs_map: dict[int, int] = {
         int(row["ambassador_id"]): int(row["c"])
         for row in (
@@ -592,7 +599,10 @@ def compute_smart_ba_matches(
                 tenant_id=tenant_id,
                 ambassador_id__in=ba_ids,
                 is_approved=True,
+                event__start_time__lt=now,
             )
+            .annotate(_worked=Exists(worked_clock_in))
+            .filter(_worked=True)
             .values("ambassador_id")
             .annotate(c=Count("id"))
         )

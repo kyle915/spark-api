@@ -7,46 +7,53 @@ Detects:
    (default 120) before ``event.start_time``.
 
 For each flagged shift (idempotently per ``(event, ambassador_event, reason)``):
-- Creates a ``NoShowCascadeAlert`` record.
+- Atomically reserves a ``NoShowCascadeAlert`` row (``select_for_update`` on
+  the event) **before** notifying anyone.
 - Pulls top-ranked backup BAs from :func:`staffing.matching.compute_smart_ba_matches`.
-- Dispatches email + SMS alerts to backup BAs and ops contacts, cleanly failing
-  open with a structured ``delivery_audit`` entry whenever SMS (Quo/Twilio) or
-  email (Resend/SMTP) is not configured or unavailable.
+- Dispatches email (via ``utils.mailer.Mailer`` / Resend) + SMS alerts to
+  backup BAs and ops contacts, respecting Ambassador SMS opt-outs and Quo
+  conversation STOP checks, cleanly failing open with a structured
+  ``delivery_audit`` entry whenever SMS or email is not configured.
 """
 
 from __future__ import annotations
 
+import html as html_lib
 import logging
 from datetime import datetime, timedelta
 from typing import Any
 
 from django.conf import settings
-from django.core.mail import send_mail
+from django.db import transaction
 from django.utils import timezone
 
-from ambassadors.models import AmbassadorEvent, Attendance
-from ambassadors.shift_sms import normalize_us_phone, send_quo_sms, sms_configured
+from ambassadors.models import Ambassador, AmbassadorEvent, Attendance
+from ambassadors.shift_sms import (
+    _record_opt_out,
+    normalize_us_phone,
+    quo_says_opted_out,
+    send_quo_sms,
+    sms_configured,
+)
 from events.cancelled import active_event_q
 from events.models import Event
 from staffing.matching import compute_smart_ba_matches
 from staffing.models import NoShowCascadeAlert
+from utils.mailer import Envelope, Mailer
 
 logger = logging.getLogger(__name__)
 
 
 def _email_configured() -> bool:
-    """True when an active mail driver or Django locmem test backend is ready."""
+    """True when Resend/mailpit is ready, or Django locmem is active in tests."""
     backend = (getattr(settings, "EMAIL_BACKEND", "") or "").lower()
     if "locmem" in backend:
         return True
     driver = (getattr(settings, "MAIL_DRIVER", "") or "").lower()
     if driver == "resend" and bool((getattr(settings, "RESEND_API_KEY", "") or "").strip()):
         return True
-    email_host = (getattr(settings, "EMAIL_HOST", "") or "").strip().lower()
-    email_port = getattr(settings, "EMAIL_PORT", None)
-    if email_host and email_host not in {"localhost", "127.0.0.1"}:
-        return True
-    if email_host in {"localhost", "127.0.0.1"} and email_port not in (None, 1025):
+    if driver in {"mailpit", "smtp", ""}:
+        # Mailpit / local drivers are fine for non-prod; Resend is the prod path.
         return True
     return False
 
@@ -91,20 +98,36 @@ def _send_email_fail_open(
             "at": now_iso,
         }
     try:
-        from_email = getattr(settings, "DEFAULT_FROM_EMAIL", "Spark <noreply@igniteproductions.co>")
-        send_mail(
-            subject=subject,
-            message=body,
-            from_email=from_email,
-            recipient_list=[to_email],
-            fail_silently=False,
+        body_html = (
+            '<pre style="font-family:inherit;white-space:pre-wrap;margin:0">'
+            f"{html_lib.escape(body)}</pre>"
         )
+
+        class _CascadeMailer(Mailer):
+            def envelope(self) -> Envelope:
+                return Envelope(
+                    subject=subject,
+                    html=body_html,
+                    to_emails=[to_email],
+                )
+
+        # House Resend/mailpit driver — NOT django.core.mail (no SMTP on Cloud Run).
+        result = _CascadeMailer().send_now()
+        if result is False:
+            return {
+                "channel": "email",
+                "recipient": to_email,
+                "role": role,
+                "status": "failed",
+                "detail": "Mail driver did not accept the message",
+                "at": now_iso,
+            }
         return {
             "channel": "email",
             "recipient": to_email,
             "role": role,
-            "status": "sent",
-            "detail": "Dispatched",
+            "status": "sent" if result is not None else "skipped_no_recipients",
+            "detail": "Dispatched via MailDrivers",
             "at": now_iso,
         }
     except Exception as exc:  # noqa: BLE001 — fail open with audit log
@@ -127,6 +150,7 @@ def _send_sms_fail_open(
     role: str,
     now_iso: str,
     dry_run: bool,
+    ambassador: Ambassador | None = None,
 ) -> dict[str, Any]:
     normalized = normalize_us_phone(phone)
     recipient = normalized or recipient_label
@@ -137,6 +161,15 @@ def _send_sms_fail_open(
             "role": role,
             "status": "dry_run",
             "detail": "Dry run — SMS not sent",
+            "at": now_iso,
+        }
+    if ambassador is not None and getattr(ambassador, "sms_opt_out", False):
+        return {
+            "channel": "sms",
+            "recipient": recipient,
+            "role": role,
+            "status": "skipped_opt_out",
+            "detail": "Ambassador SMS opt-out on file",
             "at": now_iso,
         }
     if not normalized:
@@ -155,6 +188,33 @@ def _send_sms_fail_open(
             "role": role,
             "status": "skipped_not_configured",
             "detail": "SMS provider not configured (fail-open)",
+            "at": now_iso,
+        }
+    try:
+        stopped = quo_says_opted_out(normalized)
+    except Exception:  # noqa: BLE001 — hold the text; fail open with audit
+        logger.warning(
+            "noshow cascade: could not read Quo replies for %s",
+            recipient_label,
+            exc_info=True,
+        )
+        return {
+            "channel": "sms",
+            "recipient": normalized,
+            "role": role,
+            "status": "held_opt_out_unknown",
+            "detail": "Could not verify Quo conversation opt-out; SMS held",
+            "at": now_iso,
+        }
+    if stopped:
+        if ambassador is not None:
+            _record_opt_out(ambassador)
+        return {
+            "channel": "sms",
+            "recipient": normalized,
+            "role": role,
+            "status": "skipped_opt_out",
+            "detail": "Quo conversation shows STOP",
             "at": now_iso,
         }
     try:
@@ -179,6 +239,23 @@ def _send_sms_fail_open(
         }
 
 
+def _active_alert_qs(
+    *,
+    event_id: int,
+    trigger_reason: str,
+    ambassador_event: AmbassadorEvent | None,
+):
+    qs = NoShowCascadeAlert.objects.filter(
+        event_id=event_id,
+        trigger_reason=trigger_reason,
+    ).exclude(status=NoShowCascadeAlert.STATUS_DISMISSED)
+    if ambassador_event is not None:
+        qs = qs.filter(ambassador_event_id=ambassador_event.id)
+    else:
+        qs = qs.filter(ambassador_event__isnull=True)
+    return qs.order_by("-created_at")
+
+
 def trigger_noshow_cascade_for_event(
     *,
     event: Event,
@@ -197,28 +274,70 @@ def trigger_noshow_cascade_for_event(
     Idempotent by default: if an alert already exists for the same
     ``(event, ambassador_event, trigger_reason)`` (unless ``force=True``),
     returns ``(existing, False, ...)`` without re-dispatching.
+
+    Reservations are atomic: the event row is locked and an OPEN alert is
+    inserted **before** any SMS/email is sent.
     """
     now = now or timezone.now()
     now_iso = now.isoformat()
 
-    if not force:
-        existing_qs = NoShowCascadeAlert.objects.filter(
-            event_id=event.id,
-            trigger_reason=trigger_reason,
-        ).exclude(status=NoShowCascadeAlert.STATUS_DISMISSED)
-        if ambassador_event is not None:
-            existing_qs = existing_qs.filter(ambassador_event_id=ambassador_event.id)
-        existing = existing_qs.order_by("-created_at").first()
-        if existing is not None:
-            return (
-                existing,
-                False,
-                "Backup cascade alert already active for this shift.",
-            )
-
     minutes_past: int | None = None
     if getattr(event, "start_time", None) is not None:
         minutes_past = int(round((now - event.start_time).total_seconds() / 60.0))
+
+    if dry_run:
+        matches = compute_smart_ba_matches(
+            tenant_id=event.tenant_id,
+            event_id=event.id,
+            limit=max(1, min(int(backup_limit), 15)),
+            now=now,
+        )
+        ops_emails = _ops_alert_emails(event)
+        return (
+            None,
+            False,
+            f"Dry run: would notify {len(matches)} backup BA(s) and {len(ops_emails)} ops contact(s).",
+        )
+
+    reserved: NoShowCascadeAlert | None = None
+    created_new = False
+    with transaction.atomic():
+        # Serialize overlapping cron + manual triggers for this event.
+        Event.objects.select_for_update().filter(pk=event.id).first()
+        if not force:
+            existing = _active_alert_qs(
+                event_id=event.id,
+                trigger_reason=trigger_reason,
+                ambassador_event=ambassador_event,
+            ).first()
+            if existing is not None:
+                return (
+                    existing,
+                    False,
+                    "Backup cascade alert already active for this shift.",
+                )
+
+        reserved = NoShowCascadeAlert.objects.create(
+            tenant_id=event.tenant_id,
+            event=event,
+            ambassador_event=ambassador_event,
+            missing_ambassador=(
+                ambassador_event.ambassador if ambassador_event is not None else None
+            ),
+            triggered_by=(
+                triggered_by
+                if triggered_by and getattr(triggered_by, "is_authenticated", False)
+                else None
+            ),
+            trigger_reason=trigger_reason,
+            status=NoShowCascadeAlert.STATUS_OPEN,
+            minutes_past_start=minutes_past,
+            notified_backup_bas=[],
+            delivery_audit=[],
+            ops_notified_emails=[],
+            notes=(notes or "").strip()[:1000],
+        )
+        created_new = True
 
     matches = compute_smart_ba_matches(
         tenant_id=event.tenant_id,
@@ -226,6 +345,16 @@ def trigger_noshow_cascade_for_event(
         limit=max(1, min(int(backup_limit), 15)),
         now=now,
     )
+
+    ba_ids = [
+        int(m["ba_numeric_id"])
+        for m in matches
+        if m.get("ba_numeric_id") is not None
+    ]
+    ambassadors_by_id = {
+        int(ba.id): ba
+        for ba in Ambassador.objects.filter(id__in=ba_ids).select_related("user")
+    }
 
     backup_snapshots = [
         {
@@ -249,6 +378,7 @@ def trigger_noshow_cascade_for_event(
 
     delivery_audit: list[dict[str, Any]] = []
     for ba in matches:
+        amb = ambassadors_by_id.get(int(ba.get("ba_numeric_id") or 0))
         sms_text = (
             f"Spark Backup Alert: {brand_name} needs backup coverage at {venue}. "
             f"Match: {ba['summary_reason']}. Reply or open Spark if you can cover."
@@ -260,7 +390,8 @@ def trigger_noshow_cascade_for_event(
                 body=sms_text,
                 role="backup_ba",
                 now_iso=now_iso,
-                dry_run=dry_run,
+                dry_run=False,
+                ambassador=amb,
             )
         )
         if ba.get("email"):
@@ -276,7 +407,7 @@ def trigger_noshow_cascade_for_event(
                     ),
                     role="backup_ba",
                     now_iso=now_iso,
-                    dry_run=dry_run,
+                    dry_run=False,
                 )
             )
 
@@ -297,41 +428,29 @@ def trigger_noshow_cascade_for_event(
                 ),
                 role="ops",
                 now_iso=now_iso,
-                dry_run=dry_run,
+                dry_run=False,
             )
         )
 
-    if dry_run:
-        return (
-            None,
-            False,
-            f"Dry run: would notify {len(backup_snapshots)} backup BA(s) and {len(ops_emails)} ops contact(s).",
-        )
-
-    alert = NoShowCascadeAlert.objects.create(
-        tenant_id=event.tenant_id,
-        event=event,
-        ambassador_event=ambassador_event,
-        missing_ambassador=(
-            ambassador_event.ambassador if ambassador_event is not None else None
-        ),
-        triggered_by=(
-            triggered_by
-            if triggered_by and getattr(triggered_by, "is_authenticated", False)
-            else None
-        ),
-        trigger_reason=trigger_reason,
-        status=NoShowCascadeAlert.STATUS_DISPATCHED,
-        minutes_past_start=minutes_past,
-        notified_backup_bas=backup_snapshots,
-        delivery_audit=delivery_audit,
-        ops_notified_emails=ops_emails,
-        notes=(notes or "").strip()[:1000],
-        dispatched_at=now,
+    assert reserved is not None
+    reserved.notified_backup_bas = backup_snapshots
+    reserved.delivery_audit = delivery_audit
+    reserved.ops_notified_emails = ops_emails
+    reserved.status = NoShowCascadeAlert.STATUS_DISPATCHED
+    reserved.dispatched_at = now
+    reserved.save(
+        update_fields=[
+            "notified_backup_bas",
+            "delivery_audit",
+            "ops_notified_emails",
+            "status",
+            "dispatched_at",
+            "updated_at",
+        ]
     )
     return (
-        alert,
-        True,
+        reserved,
+        created_new,
         f"Backup cascade dispatched to {len(backup_snapshots)} backup BA(s).",
     )
 

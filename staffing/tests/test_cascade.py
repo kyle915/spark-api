@@ -69,6 +69,7 @@ class TestNoShowCascade(AmbassadorsGraphQLTestCase):
         fake_match = {
             "ba_id": "Ambassador:1",
             "ba_uuid": "00000000-0000-0000-0000-000000000099",
+            "ba_numeric_id": 999999,
             "name": "Backup BA",
             "score": 88,
             "reasons": ["12.0 units/hr", "97% reliable"],
@@ -111,8 +112,44 @@ class TestNoShowCascade(AmbassadorsGraphQLTestCase):
             )
         assert created is True
         assert alert is not None
+        assert alert.status == NoShowCascadeAlert.STATUS_DISPATCHED
         statuses = {entry["status"] for entry in alert.delivery_audit}
         assert "skipped_not_configured" in statuses
+
+    def test_sms_respects_opt_out_without_sending(self):
+        self.ba.sms_opt_out = True
+        self.ba.save(update_fields=["sms_opt_out"])
+        fake_match = {
+            "ba_id": f"Ambassador:{self.ba.id}",
+            "ba_uuid": str(self.ba.uuid),
+            "ba_numeric_id": int(self.ba.id),
+            "name": "Opted Out BA",
+            "score": 90,
+            "reasons": ["Brand certified"],
+            "summary_reason": "Brand certified",
+            "email": "",
+            "phone": "5555550100",
+        }
+        with (
+            patch("staffing.cascade.compute_smart_ba_matches", return_value=[fake_match]),
+            patch("staffing.cascade.sms_configured", return_value=True),
+            patch("staffing.cascade.send_quo_sms") as send_sms,
+            patch("staffing.cascade._ops_alert_emails", return_value=[]),
+            patch("staffing.cascade._email_configured", return_value=False),
+        ):
+            alert, created, _ = trigger_noshow_cascade_for_event(
+                event=self.event,
+                ambassador_event=self.ae,
+                trigger_reason=NoShowCascadeAlert.REASON_MANUAL,
+                now=self.now,
+            )
+        assert created is True
+        assert alert is not None
+        assert send_sms.call_count == 0
+        assert any(
+            e["channel"] == "sms" and e["status"] == "skipped_opt_out"
+            for e in alert.delivery_audit
+        )
 
     def test_evaluate_flags_missing_checkin(self):
         with patch(

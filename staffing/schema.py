@@ -29,6 +29,7 @@ from staffing.models import IgniteStaffingRequest, NoShowCascadeAlert
 from utils.graphql.inputs import SparkGraphQLInput
 from utils.graphql.mixins import SparkGraphQLMixin, resolve_id_to_int
 from utils.graphql.permissions import (
+    IsClientOrSparkAdmin,
     StrictIsAuthenticated,
     email_grants_ignite_admin,
     resolve_request_user_access,
@@ -309,7 +310,7 @@ class TriggerNoShowCascadeInput(SparkGraphQLInput):
 # ---------------------------------------------------------------------------
 @strawberry.type
 class IgniteStaffingQueries:
-    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    @strawberry.field(permission_classes=[IsClientOrSparkAdmin])
     async def smart_ba_matches(
         self,
         info: strawberry.Info,
@@ -318,6 +319,7 @@ class IgniteStaffingQueries:
         tenant_id: strawberry.ID | None = None,
         limit: int | None = 20,
     ) -> List[SmartBaMatch]:
+        """Ranked BA shortlist with contact fields — client / staff only."""
         access = _StaffingAccess()
         scope = await access.scope_tenant_id(info)
 
@@ -359,7 +361,7 @@ class IgniteStaffingQueries:
 
         return await sync_to_async(_build, thread_sensitive=True)()
 
-    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    @strawberry.field(permission_classes=[IsClientOrSparkAdmin])
     async def ignite_staffing_requests(
         self,
         info: strawberry.Info,
@@ -391,7 +393,7 @@ class IgniteStaffingQueries:
 
         return await sync_to_async(_load, thread_sensitive=True)()
 
-    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    @strawberry.field(permission_classes=[IsClientOrSparkAdmin])
     async def no_show_cascade_alerts(
         self,
         info: strawberry.Info,
@@ -429,7 +431,7 @@ class IgniteStaffingQueries:
 # ---------------------------------------------------------------------------
 @strawberry.type
 class IgniteStaffingMutations:
-    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    @strawberry.mutation(permission_classes=[IsClientOrSparkAdmin])
     async def request_ignite_staffing(
         self, info: strawberry.Info, input: RequestIgniteStaffingInput
     ) -> RequestIgniteStaffingResult:
@@ -601,9 +603,11 @@ class IgniteStaffingMutations:
             return alert, created, message
 
         alert, created, message = await sync_to_async(_run, thread_sensitive=True)()
+        # Existing-alert case still returns the alert (success=True, created=False).
+        # Missing/malformed event returns alert=None → success=False.
         return build_mutation_response(
             TriggerNoShowCascadeResult,
-            success=alert is not None or created is False,
+            success=alert is not None,
             message=message,
             input_obj=input,
             alert=_alert_type(alert) if alert is not None else None,
