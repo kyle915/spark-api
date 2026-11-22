@@ -611,3 +611,189 @@ class WorkspaceIsolationAndSecurityTests(TransactionTestCase):
         )
         self.assertIsNone(res_pnl.errors)
         self.assertEqual(res_pnl.data["campaignCost"]["rows"], [])
+
+    def test_invitation_token_cannot_be_replayed_after_acceptance_or_revocation(self):
+        from pilot.workspaces import (
+            accept_workspace_invitation,
+            invite_workspace_member,
+        )
+
+        admin_access = resolve_workspace_access(
+            self.brand_a_admin, tenant=self.brand_a
+        )
+        # Invite BEFORE the user account exists so invitation starts in PENDING status.
+        inv = invite_workspace_member(
+            admin_access,
+            email="replay-check@aurora.test",
+            workspace_role=WorkspaceMembership.ROLE_BRAND_REVIEWER,
+        )
+        self.assertEqual(inv.status, inv.STATUS_PENDING)
+        invitee = _make_user("replay-check@aurora.test")
+        mem = accept_workspace_invitation(user=invitee, token=inv.token)
+        self.assertEqual(mem.status, WorkspaceMembership.STATUS_ACTIVE)
+
+        # Replaying an already-accepted token is rejected immediately.
+        with self.assertRaises(PermissionError):
+            accept_workspace_invitation(user=invitee, token=inv.token)
+
+        # Even after revoking the membership, replaying the old invite token cannot restore access.
+        revoke_workspace_membership(
+            admin_access, membership_uuid=str(mem.uuid)
+        )
+        with self.assertRaises(PermissionError):
+            accept_workspace_invitation(user=invitee, token=inv.token)
+        mem.refresh_from_db()
+        self.assertEqual(mem.status, WorkspaceMembership.STATUS_REVOKED)
+
+    def test_brand_admin_cannot_overwrite_or_reactivate_shared_provider_org(self):
+        from pilot.workspaces import create_or_update_provider
+
+        access_b = resolve_workspace_access(
+            self.brand_b_admin, tenant=self.brand_b
+        )
+        # Brand B registers `fieldpulse-agency` with a hostile name/email;
+        # Brand A's shared ProviderOrganization identity must remain untouched.
+        reused = create_or_update_provider(
+            access_b,
+            name="Hijacked Agency Name",
+            contact_email="hijack@bad.test",
+            slug=self.agency_1.slug,
+        )
+        self.assertEqual(reused.id, self.agency_1.id)
+        self.agency_1.refresh_from_db()
+        self.assertEqual(self.agency_1.name, "FieldPulse Staffing")
+        self.assertNotEqual(self.agency_1.contact_email, "hijack@bad.test")
+
+        # Globally disabled provider cannot be reactivated by a brand workspace admin.
+        self.agency_2.is_active = False
+        self.agency_2.save(update_fields=["is_active"])
+        with self.assertRaises(PermissionError):
+            create_or_update_provider(
+                access_b,
+                name="Reactivate Attempt",
+                slug=self.agency_2.slug,
+            )
+        self.agency_2.refresh_from_db()
+        self.assertFalse(self.agency_2.is_active)
+
+    def test_visit_scoped_pa_checkin_code_without_legacy_event_stays_visit_bound(self):
+        from ambassadors import checkin_web
+
+        admin_access = resolve_workspace_access(
+            self.brand_a_admin, tenant=self.brand_a
+        )
+        # Confirm visit_a1 starts with no legacy Event (`event_id is None`).
+        self.assertIsNone(self.visit_a1.event_id)
+        assignment = assign_provider_work(
+            admin_access,
+            provider=self.agency_1,
+            scope_type=ProviderAssignment.SCOPE_VISIT,
+            canonical_visit=self.visit_a1,
+        )
+        kind, target = checkin_web.resolve_checkin_target(
+            assignment.submission_code
+        )
+        # Must bind to a materialized visit-scoped Event, NEVER fall back to "tenant"!
+        self.assertEqual(kind, "event")
+        self.visit_a1.refresh_from_db()
+        assignment.refresh_from_db()
+        self.assertIsNotNone(self.visit_a1.event_id)
+        self.assertEqual(target.id, self.visit_a1.event_id)
+        self.assertEqual(assignment.event_id, self.visit_a1.event_id)
+
+        from django.urls import reverse
+
+        # Public check-in context is bound to that exact event and stamped recapOnly.
+        resp = self.client.get(
+            reverse(
+                "events.public_checkin_context",
+                kwargs={"code": assignment.submission_code},
+            )
+        )
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertTrue(body.get("recapOnly"))
+        self.assertIn("FieldPulse Staffing", body.get("sourceLabel", ""))
+
+    def test_import_correction_moves_canonical_visit_and_clears_removed_cost_lines(self):
+        from decimal import Decimal
+
+        from events.models import Retailer
+        from pilot.finance import evaluate_finance_exceptions
+        from pilot.imports import (
+            brand_included_visits_queryset,
+            commit_provider_import,
+        )
+        from pilot.models import BrandCostLine
+
+        Retailer.objects.get_or_create(
+            tenant=self.brand_a,
+            name="FreshMart",
+            defaults={"created_by": self.ignite_admin},
+        )
+        admin_access = resolve_workspace_access(
+            self.brand_a_admin, tenant=self.brand_a
+        )
+        csv_initial = (
+            "shift_ref,shift_date,account_name,location_code,street,town,region,samples_out,shopper_count,bottles_sold,agency_invoice_amt,reimbursable_spend\n"
+            "EV-CORR-99,2026-10-13,FreshMart,10,100 Congress Ave,Austin,TX,80,65,15,240.00,52.50\n"
+        )
+        job_1 = commit_provider_import(
+            admin_access,
+            provider_uuid=str(self.agency_1.uuid),
+            csv_text=csv_initial,
+            preset_key="agency_promoworks",
+        )
+        self.assertEqual(job_1.created_count, 1)
+        row_1 = job_1.rows.first()
+        wrong_visit = row_1.canonical_visit
+        wrong_visit.refresh_from_db()
+        self.assertEqual(wrong_visit.cached_total_cost, Decimal("292.50"))
+        evaluate_finance_exceptions(self.brand_a, visit=wrong_visit)
+
+        # Provider re-imports EV-CORR-99 correcting BOTH the store/date AND clearing the erroneous reimbursable_spend!
+        csv_corrected = (
+            "shift_ref,shift_date,account_name,location_code,street,town,region,samples_out,shopper_count,bottles_sold,agency_invoice_amt,reimbursable_spend\n"
+            "EV-CORR-99,2026-10-14,FreshMart,22,200 Main St,Dallas,TX,95,78,21,240.00,\n"
+        )
+        job_2 = commit_provider_import(
+            admin_access,
+            provider_uuid=str(self.agency_1.uuid),
+            csv_text=csv_corrected,
+            preset_key="agency_promoworks",
+        )
+        self.assertEqual(job_2.updated_count, 1)
+        row_2 = job_2.rows.first()
+        corrected_visit = row_2.canonical_visit
+        self.assertNotEqual(corrected_visit.id, wrong_visit.id)
+        self.assertEqual(corrected_visit.visit_date, date(2026, 10, 14))
+        self.assertIn("22", corrected_visit.store_label)
+        self.assertEqual(corrected_visit.samples_distributed, 95)
+
+        # Cleared product_spend line is removed; demo_fee line moved to corrected_visit!
+        corrected_visit.refresh_from_db()
+        self.assertEqual(corrected_visit.cached_total_cost, Decimal("240.00"))
+        self.assertEqual(
+            BrandCostLine.objects.filter(canonical_visit=corrected_visit).count(),
+            1,
+        )
+        self.assertEqual(
+            BrandCostLine.objects.filter(canonical_visit=wrong_visit).count(),
+            0,
+        )
+
+        # Vacated wrong_visit is cancelled and excluded from brand reporting!
+        wrong_visit.refresh_from_db()
+        self.assertEqual(wrong_visit.status, CanonicalVisit.STATUS_CANCELLED)
+        self.assertTrue(wrong_visit.exclude_from_aggregates)
+        self.assertFalse(
+            brand_included_visits_queryset(self.brand_a)
+            .filter(id=wrong_visit.id)
+            .exists()
+        )
+        self.assertTrue(
+            brand_included_visits_queryset(self.brand_a)
+            .filter(id=corrected_visit.id)
+            .exists()
+        )
+

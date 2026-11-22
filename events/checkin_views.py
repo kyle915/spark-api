@@ -455,6 +455,8 @@ def public_checkin_context(request: HttpRequest, code: str) -> HttpResponse:
     except Exception:  # noqa: BLE001
         logger.exception("checkin context build failed code=%s", code)
         return _err("Couldn't load this check-in.", status=500, code="server")
+    if (code or "").strip().upper().startswith("PA-"):
+        payload = _stamp_recap_only(payload, code, event.tenant)
     return JsonResponse(payload)
 
 

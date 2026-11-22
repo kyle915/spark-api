@@ -87,8 +87,10 @@ def evaluate_finance_exceptions(
 ) -> list[FinanceException]:
     """Evaluate financial exceptions for `tenant` (or a single `visit`)
     idempotently without modifying recap approval status."""
-    visits_qs = CanonicalVisit.objects.select_related("primary_provider").filter(
-        tenant=tenant
+    visits_qs = (
+        CanonicalVisit.objects.select_related("primary_provider")
+        .filter(tenant=tenant)
+        .exclude(status=CanonicalVisit.STATUS_CANCELLED)
     )
     if visit is not None:
         visits_qs = visits_qs.filter(pk=visit.pk)
