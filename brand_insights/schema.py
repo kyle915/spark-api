@@ -21,6 +21,7 @@ import strawberry
 from asgiref.sync import sync_to_async
 
 from recaps.weekly_summary import _person, _staff_user
+from pilot.entitlements import resolve_brand_entitlements
 from utils.graphql.mixins import resolve_id_to_int
 from utils.graphql.permissions import StrictIsAuthenticated
 
@@ -237,6 +238,10 @@ class BrandInsightQueries:
                     return None
                 if not access.can_view_brand_consolidated:
                     return None
+                if not resolve_brand_entitlements(
+                    tenant_obj
+                ).allows_store_recommendations:
+                    return TenantStoreInsights(recommendations=[], alerts=[])
             else:
                 try:
                     access = resolve_workspace_access(

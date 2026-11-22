@@ -13,6 +13,7 @@ from django.db import transaction
 from django.db.models import Q
 
 from billing.models import InvoiceLineItem
+from pilot.entitlements import require_plan_feature
 from pilot.imports import brand_included_visits_queryset
 from pilot.models import (
     BrandCostLine,
@@ -386,6 +387,12 @@ def upsert_provider_agreement(
         raise PermissionError(
             "Only brand administrators or finance reviewers can edit agreements."
         )
+    require_plan_feature(
+        access.tenant,
+        "allows_brand_cost_tracking",
+        feature_label="Brand-paid demo cost tracking",
+        required_plan="pro",
+    )
     provider = ProviderOrganization.objects.filter(uuid=provider_uuid).first()
     if provider is None:
         raise ValueError("Provider organization not found.")
@@ -458,6 +465,12 @@ def upsert_brand_cost_line(
         raise PermissionError(
             "You do not have permission to edit brand demo costs."
         )
+    require_plan_feature(
+        access.tenant,
+        "allows_brand_cost_tracking",
+        feature_label="Brand-paid demo cost tracking",
+        required_plan="pro",
+    )
     visit = CanonicalVisit.objects.filter(
         tenant=access.tenant, uuid=visit_uuid
     ).first()
@@ -826,6 +839,12 @@ def build_brand_cost_rollups(
         raise PermissionError(
             "Outside providers cannot view consolidated brand cost rollups."
         )
+    require_plan_feature(
+        access.tenant,
+        "allows_brand_cost_tracking",
+        feature_label="Brand-paid demo cost tracking",
+        required_plan="pro",
+    )
     qs = brand_included_visits_queryset(access.tenant).select_related(
         "primary_provider", "event_type"
     )

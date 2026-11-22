@@ -9,7 +9,9 @@ from decimal import Decimal
 import strawberry
 from asgiref.sync import sync_to_async
 
+from django.conf import settings
 from events.models import Event, EventType, Product, Retailer
+from tenants.models import Tenant
 from pilot.actions import (
     build_weekly_buyer_store_report,
     complete_rebook_return_visit,
@@ -28,6 +30,11 @@ from pilot.costs import (
     quantize_money,
     upsert_brand_cost_line,
     upsert_provider_agreement,
+)
+from pilot.entitlements import (
+    PlanEntitlementError,
+    require_plan_feature,
+    resolve_brand_entitlements,
 )
 from pilot.finance import (
     assign_finance_exception_owner,
@@ -62,6 +69,16 @@ from pilot.models import (
     WorkspaceInvitation,
     WorkspaceMembership,
 )
+from pilot.onboarding import (
+    STARTER_PROGRAM_CATALOG,
+    approve_canonical_visit_recap,
+    get_onboarding_state,
+    onboarding_invite_contributor,
+    reverse_canonical_visit_completion,
+    schedule_standalone_visit,
+    select_onboarding_starter_program,
+    start_or_resume_self_serve_onboarding,
+)
 from pilot.permissions import (
     ResolvedWorkspaceAccess,
     resolve_tenant_from_request,
@@ -72,6 +89,17 @@ from pilot.pos import (
     import_retailer_pos_csv,
     record_crew_purchase_adjustment,
     resolve_pos_sales_row,
+)
+from pilot.subscriptions import (
+    approve_overage_or_volume_band,
+    cancel_brand_subscription,
+    change_subscription_plan,
+    complete_test_mode_checkout,
+    create_customer_portal_session,
+    create_subscription_checkout_session,
+    get_plans_and_billing_overview,
+    preview_subscription_change,
+    provision_pro_pilot,
 )
 from pilot.workspaces import (
     accept_workspace_invitation,
@@ -408,6 +436,9 @@ class BrandCostDashboard:
     group_by: str
     agreements: list[ProviderAgreementItem]
     rollups: list[BrandCostRollupRow]
+    plan_gated: bool = False
+    plan_upgrade_message: str | None = None
+    required_plan: str | None = None
 
 
 @strawberry.type
@@ -455,6 +486,9 @@ class OperationalFieldNoticeItem:
 class FinanceQueueView:
     exceptions: list[FinanceExceptionItem]
     operational_notices: list[OperationalFieldNoticeItem]
+    plan_gated: bool = False
+    plan_upgrade_message: str | None = None
+    required_plan: str | None = None
 
 
 @strawberry.type
@@ -542,6 +576,9 @@ class RetailerPosDashboard:
     imports: list[PosImportHistoryItem]
     unmatched_rows: list[UnmatchedPosRowItem]
     store_weeks: list[PosStoreWeekItem]
+    plan_gated: bool = False
+    plan_upgrade_message: str | None = None
+    required_plan: str | None = None
 
 
 @strawberry.type
@@ -609,6 +646,9 @@ class WeeklyBuyerReport:
     total_visits: int
     total_supported_cost: str
     rows: list[WeeklyBuyerStoreRow]
+    plan_gated: bool = False
+    plan_upgrade_message: str | None = None
+    required_plan: str | None = None
 
 
 @strawberry.type
@@ -617,6 +657,219 @@ class WeeklyBuyerReportExport:
     mime_type: str
     is_base64: bool
     content: str
+
+
+@strawberry.type
+class StarterProgramOption:
+    key: str
+    name: str
+    slug: str
+    description: str
+    template_name: str
+    default_sku_hint: str
+
+
+@strawberry.type
+class OnboardingStarterCatalogView:
+    signup_enabled: bool
+    starters: list[StarterProgramOption]
+
+
+@strawberry.type
+class OnboardingSessionPayload:
+    ok: bool
+    error: str | None = None
+    token: str | None = None
+    refresh_token: str | None = None
+    tenant_uuid: str | None = None
+    tenant_name: str | None = None
+    tenant_slug: str | None = None
+    membership_uuid: str | None = None
+    workspace_role: str | None = None
+    resumed_existing: bool = False
+    resolved_managed: bool = False
+    joined_invitation: bool = False
+
+
+@strawberry.type
+class OnboardingVisitItem:
+    uuid: str
+    store_label: str
+    visit_date: str
+    status: str
+    samples_distributed: int | None
+    consumers_sampled: int | None
+    rep_observed_units: int | None
+    completed_at: str | None
+    submission_count: int
+
+
+@strawberry.type
+class OnboardingStateView:
+    tenant_uuid: str
+    tenant_name: str
+    tenant_slug: str
+    workspace_mode: str
+    plan_code: str
+    plan_display_name: str
+    business_timezone: str
+    steps_completed: int
+    total_steps: int
+    step_workspace_created: bool
+    step_program_selected: bool
+    step_contributor_invited: bool
+    step_mobile_link_opened: bool
+    step_first_visit_completed: bool
+    starter_template_key: str
+    starter_program_name: str | None
+    starter_recap_template_name: str | None
+    submission_code: str | None
+    first_visit_uuid: str | None
+    first_visit_store_label: str | None
+    first_visit_status: str | None
+    first_shared_token: str | None
+    completed_visits_used: int
+    included_visits: int | None
+    recent_visits: list[OnboardingVisitItem]
+    starters: list[StarterProgramOption]
+
+
+@strawberry.type
+class PlanTierCardItem:
+    plan_code: str
+    display_name: str
+    tagline: str
+    monthly_price_usd: str
+    included_completed_visits: int | None
+    is_quote_only: bool
+    is_self_serve_selectable: bool
+    is_current: bool
+    max_active_programs: int | None
+    max_operating_providers: int | None
+    max_pos_retailers: int | None
+    allows_branded_forms: bool
+    allows_approvals_and_reminders: bool
+    allows_exports_and_weekly_reporting: bool
+    allows_store_recommendations: bool
+    allows_provider_csv_imports: bool
+    allows_brand_cost_tracking: bool
+    allows_finance_review_queue: bool
+    allows_retailer_pos_measurement: bool
+    allows_tracked_store_actions: bool
+
+
+@strawberry.type
+class CountedVisitMeterItem:
+    visit_uuid: str
+    store_label: str
+    visit_date: str
+    completion_local_date: str
+    provider_name: str | None
+    submission_count: int
+    co_brand_share_pct: str | None
+
+
+@strawberry.type
+class MonthlyVisitUsageView:
+    month_key: str
+    business_timezone: str
+    completed_visits_used: int
+    included_visits: int | None
+    effective_visit_cap: int | None
+    remaining_visits: int | None
+    at_or_over_cap: bool
+    overage_units: int
+    overage_agreement_approved: bool
+    can_book_new_visit: bool
+    in_progress_fieldwork_always_allowed: bool
+    historical_excluded_count: int
+    in_progress_or_pending_count: int
+    cancelled_or_reversed_count: int
+    co_branded_visit_count: int
+    next_upgrade_plan: str | None
+    counted_visits: list[CountedVisitMeterItem]
+
+
+@strawberry.type
+class SubscriptionChangePreview:
+    current_plan_code: str
+    target_plan_code: str
+    target_display_name: str
+    is_quote_only: bool
+    can_self_serve_confirm: bool
+    monthly_price_usd: str
+    charge_today_usd: str
+    included_visits: int
+    change_kind: str
+    effective_date_label: str
+    paid_through_date: str | None
+    disclosure: str
+
+
+@strawberry.type
+class OpenCheckoutItem:
+    stripe_session_id: str
+    target_plan_code: str
+    quoted_monthly_price_usd: str
+    checkout_url: str
+    status: str
+    effective_summary: str
+
+
+@strawberry.type
+class PlansAndBillingView:
+    billing_enabled: bool
+    stripe_mode: str
+    stripe_configured_remotely: bool
+    tenant_uuid: str
+    tenant_name: str
+    workspace_mode: str
+    business_timezone: str
+    can_manage_billing: bool
+    is_ignite_admin: bool
+    configured_plan_code: str
+    effective_plan_code: str
+    plan_display_name: str
+    subscription_status: str
+    pending_plan_code: str | None
+    addon_plan_code: str | None
+    monthly_price_usd: str
+    is_managed_sow: bool
+    is_pilot: bool
+    pilot_fee_usd: str | None
+    pilot_starts_at: str | None
+    pilot_ends_at: str | None
+    current_period_start: str | None
+    current_period_end: str | None
+    paid_through_at: str | None
+    cancel_at_period_end: bool
+    has_payment_failure: bool
+    payment_failure_message: str
+    recurring_billing_accepted: bool
+    viewer_and_contributor_seats_free: bool
+    billing_separation_notice: str
+    usage: MonthlyVisitUsageView
+    available_plans: list[PlanTierCardItem]
+    open_checkouts: list[OpenCheckoutItem]
+
+
+@strawberry.type
+class CheckoutSessionOutcome:
+    ok: bool
+    error: str | None = None
+    stripe_session_id: str | None = None
+    checkout_url: str | None = None
+    mode: str | None = None
+    already_completed: bool = False
+    disclosure: str | None = None
+
+
+@strawberry.type
+class PortalSessionOutcome:
+    ok: bool
+    error: str | None = None
+    portal_url: str | None = None
+    mode: str | None = None
 
 
 def _serialize_action(act: StoreRecommendationAction) -> StoreActionItem:
@@ -1136,13 +1389,23 @@ class PilotQueries:
     ) -> BrandCostDashboard:
         def _run():
             access = _access_for_info(info)
-            rollups = build_brand_cost_rollups(
-                access,
-                group_by=group_by,
-                period_start=_opt_date(period_start),
-                period_end=_opt_date(period_end),
-                provider_uuid=provider_uuid,
-            )
+            try:
+                rollups = build_brand_cost_rollups(
+                    access,
+                    group_by=group_by,
+                    period_start=_opt_date(period_start),
+                    period_end=_opt_date(period_end),
+                    provider_uuid=provider_uuid,
+                )
+            except PlanEntitlementError as exc:
+                return BrandCostDashboard(
+                    group_by=group_by,
+                    agreements=[],
+                    rollups=[],
+                    plan_gated=True,
+                    plan_upgrade_message=str(exc),
+                    required_plan=exc.required_plan,
+                )
             agreements = [
                 ProviderAgreementItem(
                     uuid=str(ag.uuid),
@@ -1198,16 +1461,25 @@ class PilotQueries:
                 raise PermissionError(
                     "Outside providers cannot view the finance review queue."
                 )
-            evaluate_finance_exceptions(access.tenant)
-            excs = list_finance_exceptions(
-                access,
-                exception_type=exception_type,
-                status=status,
-                provider_uuid=provider_uuid,
-                store_key=store_key,
-                period_start=_opt_date(period_start),
-                period_end=_opt_date(period_end),
-            )
+            try:
+                evaluate_finance_exceptions(access.tenant)
+                excs = list_finance_exceptions(
+                    access,
+                    exception_type=exception_type,
+                    status=status,
+                    provider_uuid=provider_uuid,
+                    store_key=store_key,
+                    period_start=_opt_date(period_start),
+                    period_end=_opt_date(period_end),
+                )
+            except PlanEntitlementError as exc:
+                return FinanceQueueView(
+                    exceptions=[],
+                    operational_notices=[],
+                    plan_gated=True,
+                    plan_upgrade_message=str(exc),
+                    required_plan=exc.required_plan,
+                )
             notices = list_operational_field_notices(access)
             return FinanceQueueView(
                 exceptions=[
@@ -1290,13 +1562,42 @@ class PilotQueries:
     ) -> RetailerPosDashboard:
         def _run():
             access = _access_for_info(info)
-            data = build_retailer_pos_measurement(
-                access,
-                period_start=_opt_date(period_start),
-                period_end=_opt_date(period_end),
-                store_key=store_key,
-                contribution_per_unit=_opt_dec(contribution_per_unit),
-            )
+            try:
+                data = build_retailer_pos_measurement(
+                    access,
+                    period_start=_opt_date(period_start),
+                    period_end=_opt_date(period_end),
+                    store_key=store_key,
+                    contribution_per_unit=_opt_dec(contribution_per_unit),
+                )
+            except PlanEntitlementError as exc:
+                return RetailerPosDashboard(
+                    available=False,
+                    unavailable_message=str(exc),
+                    retailer_banners=[],
+                    matched_store_sku_weeks=0,
+                    eligible_store_sku_weeks=0,
+                    coverage_ratio=None,
+                    unmatched_row_count=0,
+                    missing_rows=[],
+                    rep_observed_units=0,
+                    register_units=None,
+                    crew_purchased_units=0,
+                    adjusted_register_units=None,
+                    observed_vs_baseline_diff=None,
+                    incremental_lift_units=None,
+                    incremental_contribution=None,
+                    eligible_brand_cost=None,
+                    roi=None,
+                    lift_withheld_reason=str(exc),
+                    roi_withheld_reason=str(exc),
+                    imports=[],
+                    unmatched_rows=[],
+                    store_weeks=[],
+                    plan_gated=True,
+                    plan_upgrade_message=str(exc),
+                    required_plan=exc.required_plan,
+                )
             imports = [
                 PosImportHistoryItem(
                     uuid=str(imp.uuid),
@@ -1426,6 +1727,21 @@ class PilotQueries:
     ) -> WeeklyBuyerReport:
         def _run():
             access = _access_for_info(info)
+            ent = resolve_brand_entitlements(access.tenant)
+            if not ent.allows_exports_and_weekly_reporting:
+                return WeeklyBuyerReport(
+                    period_start=period_start or "",
+                    period_end=period_end or "",
+                    pos_available=False,
+                    total_visits=0,
+                    total_supported_cost="0.00",
+                    rows=[],
+                    plan_gated=True,
+                    plan_upgrade_message=(
+                        "Weekly buyer reporting and exports require the Core plan ($299/mo) or higher."
+                    ),
+                    required_plan="core",
+                )
             rep = build_weekly_buyer_store_report(
                 access,
                 period_start=_opt_date(period_start),
@@ -1458,6 +1774,12 @@ class PilotQueries:
     ) -> WeeklyBuyerReportExport:
         def _run():
             access = _access_for_info(info)
+            require_plan_feature(
+                access.tenant,
+                "allows_exports_and_weekly_reporting",
+                feature_label="Exports and weekly buyer reporting",
+                required_plan="core",
+            )
             rep = build_weekly_buyer_store_report(
                 access,
                 period_start=_opt_date(period_start),
@@ -1480,6 +1802,192 @@ class PilotQueries:
                 is_base64=False,
                 content=export_weekly_buyer_report_csv(rep),
             )
+
+        return await sync_to_async(_run, thread_sensitive=True)()
+
+    @strawberry.field(permission_classes=[])
+    async def self_serve_starter_catalog(
+        self, info: strawberry.Info
+    ) -> OnboardingStarterCatalogView:
+        return OnboardingStarterCatalogView(
+            signup_enabled=bool(
+                getattr(settings, "STANDALONE_SIGNUP_ENABLED", True)
+            ),
+            starters=[
+                StarterProgramOption(
+                    key=s["key"],
+                    name=s["program_name"],
+                    slug=s["program_slug"],
+                    description=s["summary"],
+                    template_name=s["template_name"],
+                    default_sku_hint=s["default_sku_name"],
+                )
+                for s in STARTER_PROGRAM_CATALOG
+            ],
+        )
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def onboarding_state(
+        self, info: strawberry.Info
+    ) -> OnboardingStateView:
+        def _run():
+            access = _access_for_info(info)
+            st = get_onboarding_state(access)
+            profile = ensure_workspace_profile(access.tenant)
+            recent_visits = [
+                OnboardingVisitItem(
+                    uuid=str(v.uuid),
+                    store_label=v.store_label or v.address or "Visit",
+                    visit_date=v.visit_date.isoformat(),
+                    status=v.status,
+                    samples_distributed=v.samples_distributed,
+                    consumers_sampled=v.consumers_sampled,
+                    rep_observed_units=v.rep_observed_units,
+                    completed_at=(
+                        v.completed_at.isoformat() if v.completed_at else None
+                    ),
+                    submission_count=v.submissions.count(),
+                )
+                for v in CanonicalVisit.objects.filter(
+                    tenant=access.tenant
+                ).order_by("-created_at")[:10]
+            ]
+            return OnboardingStateView(
+                tenant_uuid=st["tenant_uuid"],
+                tenant_name=st["tenant_name"],
+                tenant_slug=access.tenant.slug or "",
+                workspace_mode=st["workspace_mode"],
+                plan_code=st["plan_code"],
+                plan_display_name=st["plan_display_name"],
+                business_timezone=profile.business_timezone,
+                steps_completed=st["steps_completed"],
+                total_steps=st["total_steps"],
+                step_workspace_created=st["step_workspace_created"],
+                step_program_selected=st["step_program_selected"],
+                step_contributor_invited=st["step_contributor_invited"],
+                step_mobile_link_opened=st["step_mobile_link_opened"],
+                step_first_visit_completed=st["step_first_visit_completed"],
+                starter_template_key=st["starter_template_key"],
+                starter_program_name=st["starter_program_name"],
+                starter_recap_template_name=st["starter_recap_template_name"],
+                submission_code=st["submission_code"],
+                first_visit_uuid=st["first_visit_uuid"],
+                first_visit_store_label=st["first_visit_store_label"],
+                first_visit_status=st["first_visit_status"],
+                first_shared_token=st["first_shared_token"],
+                completed_visits_used=st["completed_visits_used"],
+                included_visits=st["included_visits"],
+                recent_visits=recent_visits,
+                starters=[
+                    StarterProgramOption(
+                        key=s["key"],
+                        name=s["program_name"],
+                        slug=s["program_slug"],
+                        description=s["summary"],
+                        template_name=s["template_name"],
+                        default_sku_hint=s["default_sku_name"],
+                    )
+                    for s in STARTER_PROGRAM_CATALOG
+                ],
+            )
+
+        return await sync_to_async(_run, thread_sensitive=True)()
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def plans_and_billing_overview(
+        self, info: strawberry.Info
+    ) -> PlansAndBillingView:
+        def _run():
+            access = _access_for_info(info)
+            ov = get_plans_and_billing_overview(access)
+            usage = ov["usage"]
+            return PlansAndBillingView(
+                billing_enabled=bool(
+                    getattr(settings, "STANDALONE_BILLING_ENABLED", True)
+                ),
+                stripe_mode=ov["stripe_mode"],
+                stripe_configured_remotely=ov["stripe_configured_remotely"],
+                tenant_uuid=ov["tenant_uuid"],
+                tenant_name=ov["tenant_name"],
+                workspace_mode=ov["workspace_mode"],
+                business_timezone=usage["business_timezone"],
+                can_manage_billing=access.is_brand_admin,
+                is_ignite_admin=access.is_ignite_admin,
+                configured_plan_code=ov["configured_plan_code"],
+                effective_plan_code=ov["effective_plan_code"],
+                plan_display_name=ov["plan_display_name"],
+                subscription_status=ov["subscription_status"],
+                pending_plan_code=ov["pending_plan_code"],
+                addon_plan_code=ov["addon_plan_code"],
+                monthly_price_usd=ov["monthly_price_usd"],
+                is_managed_sow=ov["is_managed_sow"],
+                is_pilot=ov["is_pilot"],
+                pilot_fee_usd=ov["pilot_fee_usd"],
+                pilot_starts_at=ov["pilot_starts_at"],
+                pilot_ends_at=ov["pilot_ends_at"],
+                current_period_start=ov["current_period_start"],
+                current_period_end=ov["current_period_end"],
+                paid_through_at=ov["paid_through_at"],
+                cancel_at_period_end=ov["cancel_at_period_end"],
+                has_payment_failure=ov["has_payment_failure"],
+                payment_failure_message=ov["payment_failure_message"],
+                recurring_billing_accepted=ov["recurring_billing_accepted"],
+                viewer_and_contributor_seats_free=ov[
+                    "viewer_and_contributor_seats_free"
+                ],
+                billing_separation_notice=ov["billing_separation_notice"],
+                usage=MonthlyVisitUsageView(
+                    month_key=usage["month_key"],
+                    business_timezone=usage["business_timezone"],
+                    completed_visits_used=usage["completed_visits_used"],
+                    included_visits=usage["included_visits"],
+                    effective_visit_cap=usage["effective_visit_cap"],
+                    remaining_visits=usage["remaining_visits"],
+                    at_or_over_cap=usage["at_or_over_cap"],
+                    overage_units=usage["overage_units"],
+                    overage_agreement_approved=usage[
+                        "overage_agreement_approved"
+                    ],
+                    can_book_new_visit=usage["can_book_new_visit"],
+                    in_progress_fieldwork_always_allowed=usage[
+                        "in_progress_fieldwork_always_allowed"
+                    ],
+                    historical_excluded_count=usage[
+                        "historical_excluded_count"
+                    ],
+                    in_progress_or_pending_count=usage[
+                        "in_progress_or_pending_count"
+                    ],
+                    cancelled_or_reversed_count=usage[
+                        "cancelled_or_reversed_count"
+                    ],
+                    co_branded_visit_count=usage["co_branded_visit_count"],
+                    next_upgrade_plan=usage["next_upgrade_plan"],
+                    counted_visits=[
+                        CountedVisitMeterItem(**cv)
+                        for cv in usage["counted_visits"]
+                    ],
+                ),
+                available_plans=[
+                    PlanTierCardItem(**p) for p in ov["plans"]
+                ],
+                open_checkouts=[
+                    OpenCheckoutItem(**c) for c in ov["open_checkouts"]
+                ],
+            )
+
+        return await sync_to_async(_run, thread_sensitive=True)()
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def preview_subscription_plan_change(
+        self, info: strawberry.Info, target_plan_code: str
+    ) -> SubscriptionChangePreview:
+        def _run():
+            access = _access_for_info(info)
+            p = preview_subscription_change(
+                access, target_plan_code=target_plan_code
+            )
+            return SubscriptionChangePreview(**p)
 
         return await sync_to_async(_run, thread_sensitive=True)()
 
@@ -2414,6 +2922,407 @@ class PilotMutations:
                 access = _access_for_info(info)
                 link = revoke_workspace_shared_link(access, token=token)
                 return PilotMutationOutcome(ok=True, target_uuid=link.token)
+            except Exception as exc:  # noqa: BLE001
+                return PilotMutationOutcome(ok=False, error=str(exc))
+
+        return await sync_to_async(_run, thread_sensitive=True)()
+
+    @strawberry.mutation(permission_classes=[])
+    async def start_self_serve_onboarding(
+        self,
+        info: strawberry.Info,
+        email: str = "",
+        password: str = "",
+        first_name: str = "",
+        last_name: str = "",
+        brand_name: str = "",
+        business_timezone: str = "America/Chicago",
+        accept_terms: bool = True,
+        force_new_workspace: bool = False,
+    ) -> OnboardingSessionPayload:
+        def _run():
+            try:
+                req = info.context.request
+                actor_user = (
+                    req.user
+                    if getattr(req, "user", None) is not None
+                    and req.user.is_authenticated
+                    else None
+                )
+                ip_addr = (
+                    req.META.get("HTTP_X_FORWARDED_FOR", "").split(",")[0].strip()
+                    or req.META.get("REMOTE_ADDR", "127.0.0.1")
+                )
+                ua = req.META.get("HTTP_USER_AGENT", "spark-self-serve")
+                res = start_or_resume_self_serve_onboarding(
+                    authenticated_user=actor_user,
+                    email=email,
+                    password=password,
+                    first_name=first_name,
+                    last_name=last_name,
+                    brand_name=brand_name,
+                    business_timezone=business_timezone,
+                    accept_terms=accept_terms,
+                    force_new_workspace=force_new_workspace,
+                    client_ip=ip_addr,
+                    user_agent=ua,
+                )
+                return OnboardingSessionPayload(
+                    ok=True,
+                    token=res["token"],
+                    refresh_token=res["refresh_token"],
+                    tenant_uuid=str(res["tenant"].uuid),
+                    tenant_name=res["tenant"].name,
+                    tenant_slug=res["tenant"].slug,
+                    membership_uuid=(
+                        str(res["membership"].uuid)
+                        if res["membership"] is not None
+                        else None
+                    ),
+                    workspace_role=(
+                        res["membership"].workspace_role
+                        if res["membership"] is not None
+                        else "brand_admin"
+                    ),
+                    resumed_existing=res["resumed_existing"],
+                    resolved_managed=res["resolved_managed"],
+                    joined_invitation=res["joined_invitation"],
+                )
+            except Exception as exc:  # noqa: BLE001
+                return OnboardingSessionPayload(ok=False, error=str(exc))
+
+        return await sync_to_async(_run, thread_sensitive=True)()
+
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def select_onboarding_starter_program(
+        self,
+        info: strawberry.Info,
+        starter_key: str,
+        custom_program_name: str = "",
+        starter_sku_name: str = "",
+    ) -> PilotMutationOutcome:
+        def _run():
+            try:
+                access = _access_for_info(info)
+                progress = select_onboarding_starter_program(
+                    access,
+                    starter_key=starter_key,
+                    custom_program_name=custom_program_name,
+                    starter_sku_name=starter_sku_name,
+                )
+                return PilotMutationOutcome(
+                    ok=True,
+                    target_uuid=(
+                        progress.starter_assignment.submission_code
+                        if progress.starter_assignment
+                        else ""
+                    ),
+                    status=(
+                        progress.starter_event_type.name
+                        if progress.starter_event_type
+                        else ""
+                    ),
+                )
+            except Exception as exc:  # noqa: BLE001
+                return PilotMutationOutcome(ok=False, error=str(exc))
+
+        return await sync_to_async(_run, thread_sensitive=True)()
+
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def onboarding_invite_contributor(
+        self,
+        info: strawberry.Info,
+        email: str,
+        workspace_role: str = "field_contributor",
+        provider_name: str = "",
+    ) -> PilotMutationOutcome:
+        def _run():
+            try:
+                access = _access_for_info(info)
+                inv = onboarding_invite_contributor(
+                    access,
+                    email=email,
+                    workspace_role=workspace_role,
+                    provider_name=provider_name,
+                )
+                return PilotMutationOutcome(
+                    ok=True,
+                    target_uuid=inv.token,
+                    status=inv.workspace_role,
+                )
+            except Exception as exc:  # noqa: BLE001
+                return PilotMutationOutcome(ok=False, error=str(exc))
+
+        return await sync_to_async(_run, thread_sensitive=True)()
+
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def schedule_standalone_visit(
+        self,
+        info: strawberry.Info,
+        store_name: str,
+        visit_date: str,
+        address: str = "",
+        city: str = "",
+        state_code: str = "",
+        provider_uuid: str | None = None,
+        event_type_id: int | None = None,
+        notes: str = "",
+    ) -> PilotMutationOutcome:
+        def _run():
+            try:
+                access = _access_for_info(info)
+                visit, assignment = schedule_standalone_visit(
+                    access,
+                    store_name=store_name,
+                    visit_date=date.fromisoformat(visit_date),
+                    address=address,
+                    city=city,
+                    state_code=state_code,
+                    provider_uuid=provider_uuid,
+                    event_type_id=event_type_id,
+                    notes=notes,
+                )
+                return PilotMutationOutcome(
+                    ok=True,
+                    target_uuid=str(visit.uuid),
+                    status=assignment.submission_code,
+                )
+            except Exception as exc:  # noqa: BLE001
+                return PilotMutationOutcome(ok=False, error=str(exc))
+
+        return await sync_to_async(_run, thread_sensitive=True)()
+
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def approve_canonical_visit_recap(
+        self, info: strawberry.Info, visit_uuid: str
+    ) -> PilotMutationOutcome:
+        def _run():
+            try:
+                access = _access_for_info(info)
+                visit, shared_link = approve_canonical_visit_recap(
+                    access, visit_uuid=visit_uuid
+                )
+                return PilotMutationOutcome(
+                    ok=True,
+                    target_uuid=shared_link.token,
+                    status=visit.status,
+                )
+            except Exception as exc:  # noqa: BLE001
+                return PilotMutationOutcome(ok=False, error=str(exc))
+
+        return await sync_to_async(_run, thread_sensitive=True)()
+
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def reverse_canonical_visit(
+        self,
+        info: strawberry.Info,
+        visit_uuid: str,
+        new_status: str = "cancelled",
+        reason: str = "",
+    ) -> PilotMutationOutcome:
+        def _run():
+            try:
+                access = _access_for_info(info)
+                visit = reverse_canonical_visit_completion(
+                    access,
+                    visit_uuid=visit_uuid,
+                    new_status=new_status,
+                    reason=reason,
+                )
+                return PilotMutationOutcome(
+                    ok=True,
+                    target_uuid=str(visit.uuid),
+                    status=visit.status,
+                )
+            except Exception as exc:  # noqa: BLE001
+                return PilotMutationOutcome(ok=False, error=str(exc))
+
+        return await sync_to_async(_run, thread_sensitive=True)()
+
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def create_subscription_checkout(
+        self,
+        info: strawberry.Info,
+        target_plan_code: str,
+        explicit_terms_accepted: bool,
+        idempotency_key: str | None = None,
+        success_url: str | None = None,
+        cancel_url: str | None = None,
+    ) -> CheckoutSessionOutcome:
+        def _run():
+            try:
+                access = _access_for_info(info)
+                record = create_subscription_checkout_session(
+                    access,
+                    target_plan_code=target_plan_code,
+                    explicit_terms_accepted=explicit_terms_accepted,
+                    idempotency_key=idempotency_key,
+                    success_url=success_url,
+                    cancel_url=cancel_url,
+                )
+                return CheckoutSessionOutcome(
+                    ok=True,
+                    stripe_session_id=record.stripe_session_id,
+                    checkout_url=record.checkout_url,
+                    mode=record.mode,
+                    already_completed=(
+                        record.status == record.STATUS_COMPLETED
+                    ),
+                    disclosure=record.effective_summary,
+                )
+            except Exception as exc:  # noqa: BLE001
+                return CheckoutSessionOutcome(ok=False, error=str(exc))
+
+        return await sync_to_async(_run, thread_sensitive=True)()
+
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def complete_test_subscription_checkout(
+        self, info: strawberry.Info, stripe_session_id: str
+    ) -> PilotMutationOutcome:
+        def _run():
+            try:
+                access = _access_for_info(info)
+                res = complete_test_mode_checkout(
+                    access, stripe_session_id=stripe_session_id
+                )
+                return PilotMutationOutcome(
+                    ok=True,
+                    target_uuid=stripe_session_id,
+                    status=res.get("status") or "processed",
+                )
+            except Exception as exc:  # noqa: BLE001
+                return PilotMutationOutcome(ok=False, error=str(exc))
+
+        return await sync_to_async(_run, thread_sensitive=True)()
+
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def create_subscription_portal_session(
+        self, info: strawberry.Info, return_url: str | None = None
+    ) -> PortalSessionOutcome:
+        def _run():
+            try:
+                access = _access_for_info(info)
+                res = create_customer_portal_session(
+                    access, return_url=return_url
+                )
+                return PortalSessionOutcome(
+                    ok=True,
+                    portal_url=res["portal_url"],
+                    mode=res.get("mode", "test"),
+                )
+            except Exception as exc:  # noqa: BLE001
+                return PortalSessionOutcome(ok=False, error=str(exc))
+
+        return await sync_to_async(_run, thread_sensitive=True)()
+
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def change_subscription_plan(
+        self,
+        info: strawberry.Info,
+        target_plan_code: str,
+        explicit_terms_accepted: bool = False,
+    ) -> PilotMutationOutcome:
+        def _run():
+            try:
+                access = _access_for_info(info)
+                sub = change_subscription_plan(
+                    access,
+                    target_plan_code=target_plan_code,
+                    explicit_terms_accepted=explicit_terms_accepted,
+                )
+                return PilotMutationOutcome(
+                    ok=True,
+                    target_uuid=sub.plan_code,
+                    status=sub.status,
+                )
+            except Exception as exc:  # noqa: BLE001
+                return PilotMutationOutcome(ok=False, error=str(exc))
+
+        return await sync_to_async(_run, thread_sensitive=True)()
+
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def cancel_subscription(
+        self,
+        info: strawberry.Info,
+        immediate: bool = False,
+        reason: str = "",
+    ) -> PilotMutationOutcome:
+        def _run():
+            try:
+                access = _access_for_info(info)
+                sub = cancel_brand_subscription(
+                    access, immediate=immediate, reason=reason
+                )
+                return PilotMutationOutcome(
+                    ok=True,
+                    target_uuid=(
+                        sub.current_period_end.date().isoformat()
+                        if sub.current_period_end
+                        else ""
+                    ),
+                    status=sub.status,
+                )
+            except Exception as exc:  # noqa: BLE001
+                return PilotMutationOutcome(ok=False, error=str(exc))
+
+        return await sync_to_async(_run, thread_sensitive=True)()
+
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def approve_volume_band_or_overage(
+        self,
+        info: strawberry.Info,
+        agreed_volume_band_visits: int | None = None,
+        overage_agreement_approved: bool = False,
+        overage_unit_price_usd: str | None = None,
+    ) -> PilotMutationOutcome:
+        def _run():
+            try:
+                access = _access_for_info(info)
+                sub = approve_overage_or_volume_band(
+                    access,
+                    agreed_volume_band_visits=agreed_volume_band_visits,
+                    overage_agreement_approved=overage_agreement_approved,
+                    overage_unit_price_usd=_opt_dec(overage_unit_price_usd),
+                )
+                return PilotMutationOutcome(
+                    ok=True,
+                    target_uuid=str(sub.uuid),
+                    status=sub.plan_code,
+                )
+            except Exception as exc:  # noqa: BLE001
+                return PilotMutationOutcome(ok=False, error=str(exc))
+
+        return await sync_to_async(_run, thread_sensitive=True)()
+
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def provision_pro_pilot_workspace(
+        self,
+        info: strawberry.Info,
+        tenant_uuid: str,
+        pilot_fee_usd: str = "1500.00",
+        duration_days: int = 60,
+        included_visits_monthly: int = 100,
+    ) -> PilotMutationOutcome:
+        def _run():
+            try:
+                access = _access_for_info(info)
+                target_tenant = Tenant.objects.filter(
+                    uuid=tenant_uuid
+                ).first()
+                if target_tenant is None:
+                    raise ValueError("Target brand workspace not found.")
+                sub = provision_pro_pilot(
+                    actor=access.user,
+                    tenant=target_tenant,
+                    pilot_fee_usd=quantize_money(pilot_fee_usd),
+                    duration_days=duration_days,
+                    included_visits_monthly=included_visits_monthly,
+                )
+                return PilotMutationOutcome(
+                    ok=True,
+                    target_uuid=str(sub.uuid),
+                    status=sub.status,
+                )
             except Exception as exc:  # noqa: BLE001
                 return PilotMutationOutcome(ok=False, error=str(exc))
 

@@ -62,6 +62,9 @@ ALLOWED_ROOT_FIELDS = frozenset(
         "verifyToken",
         "verifyAccount",
         "revokeToken",
+        # standalone self-service workspace onboarding
+        "startSelfServeOnboarding",
+        "selfServeStarterCatalog",
     }
 )
 
