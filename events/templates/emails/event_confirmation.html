@@ -116,7 +116,13 @@ the email body (and into the plain-text alternative, where it's very visible).
           <a href="tel:{{ support_phone_href }}" style="color: #666666;">{{ support_phone }}</a>.
         </p>
       {% endif %}
-      {% if contact_email %}
+      {% if release_url %}
+        <p style="margin: 0 0 22px 0; color: #666666; font-size: 15px;">
+          Can't make this shift?
+          <a href="{{ release_url }}" style="color: #202036; font-weight: 600; text-decoration: underline;">Let us know right away</a>{% if contact_email %} or email <a href="mailto:{{ contact_email }}" style="color: #666666;">{{ contact_email }}</a>{% endif %}
+          so we can cover your spot.
+        </p>
+      {% elif contact_email %}
         <p style="margin: 0 0 22px 0; color: #666666; font-size: 15px;">
           Can't make it anymore? Email
           <a href="mailto:{{ contact_email }}" style="color: #666666;">{{ contact_email }}</a>
