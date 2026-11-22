@@ -372,6 +372,7 @@ class CanonicalVisit(models.Model):
     co_brand_share_pct = models.DecimalField(
         max_digits=6, decimal_places=2, null=True, blank=True
     )
+    counts_toward_allowance = models.BooleanField(default=True)
 
     samples_distributed = models.IntegerField(null=True, blank=True)
     consumers_sampled = models.IntegerField(null=True, blank=True)
@@ -1881,4 +1882,372 @@ class WorkspaceSharedLink(models.Model):
     expires_at = models.DateTimeField()
     revoked_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
+
+
+# ---------------------------------------------------------------------------
+# Milestone 2 — Self-Service Onboarding, Plan Entitlements & Software Billing
+# ---------------------------------------------------------------------------
+
+
+class PlanCatalogEntry(models.Model):
+    """Centralized software plan catalog so Ignite can test price, included
+    completed-visit bands, effective dates, and feature entitlements without
+    touching agency service invoices or BA payouts."""
+
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    plan_code = models.CharField(max_length=24, unique=True, db_index=True)
+    display_name = models.CharField(max_length=80)
+    tagline = models.CharField(max_length=240, blank=True, default="")
+    currency = models.CharField(max_length=8, default="USD")
+    monthly_price_usd = models.DecimalField(
+        max_digits=10, decimal_places=2, default=Decimal("0.00")
+    )
+    included_completed_visits = models.PositiveIntegerField(
+        null=True, blank=True
+    )
+    is_quote_only = models.BooleanField(default=False)
+    is_self_serve_selectable = models.BooleanField(default=True)
+    stripe_price_id = models.CharField(max_length=120, blank=True, default="")
+
+    max_active_programs = models.PositiveIntegerField(null=True, blank=True)
+    max_operating_providers = models.PositiveIntegerField(null=True, blank=True)
+    max_pos_retailers = models.PositiveIntegerField(null=True, blank=True)
+
+    allows_branded_forms = models.BooleanField(default=False)
+    allows_approvals_and_reminders = models.BooleanField(default=False)
+    allows_exports_and_weekly_reporting = models.BooleanField(default=False)
+    allows_store_recommendations = models.BooleanField(default=False)
+    allows_provider_csv_imports = models.BooleanField(default=False)
+    allows_brand_cost_tracking = models.BooleanField(default=False)
+    allows_finance_review_queue = models.BooleanField(default=False)
+    allows_retailer_pos_measurement = models.BooleanField(default=False)
+    allows_tracked_store_actions = models.BooleanField(default=False)
+
+    effective_from = models.DateField(null=True, blank=True)
+    effective_to = models.DateField(null=True, blank=True)
+    sort_order = models.PositiveSmallIntegerField(default=10)
+    is_active = models.BooleanField(default=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["sort_order", "id"]
+
+    def __str__(self) -> str:
+        return f"{self.display_name} ({self.plan_code})"
+
+
+class BrandSubscription(models.Model):
+    """Per-brand software subscription & contract/pilot entitlement record.
+    Kept strictly separate from billing.Invoice (agency service invoices),
+    receipts.ConsumerReceipt (shopper rebates), and jobs.AmbassadorJob."""
+
+    STATUS_FREE_ACTIVE = "free_active"
+    STATUS_PILOT_ACTIVE = "pilot_active"
+    STATUS_PILOT_EXPIRED = "pilot_expired"
+    STATUS_CHECKOUT_PENDING = "checkout_pending"
+    STATUS_ACTIVE = "active"
+    STATUS_PAST_DUE = "past_due"
+    STATUS_CANCEL_AT_PERIOD_END = "cancel_at_period_end"
+    STATUS_CANCELED = "canceled"
+    STATUS_MANAGED_SOW = "managed_sow"
+    STATUS_CHOICES = [
+        (STATUS_FREE_ACTIVE, "Free Active"),
+        (STATUS_PILOT_ACTIVE, "Paid Pilot Active"),
+        (STATUS_PILOT_EXPIRED, "Pilot Ended"),
+        (STATUS_CHECKOUT_PENDING, "Checkout Pending"),
+        (STATUS_ACTIVE, "Active Subscription"),
+        (STATUS_PAST_DUE, "Past Due — Payment Failed"),
+        (STATUS_CANCEL_AT_PERIOD_END, "Cancels at Period End"),
+        (STATUS_CANCELED, "Canceled"),
+        (STATUS_MANAGED_SOW, "Managed Service SOW"),
+    ]
+
+    PAY_NONE = "none"
+    PAY_SUCCEEDED = "succeeded"
+    PAY_FAILED = "failed"
+    PAY_REQUIRES_ACTION = "requires_action"
+    PAY_STATUS_CHOICES = [
+        (PAY_NONE, "No Charge Yet"),
+        (PAY_SUCCEEDED, "Succeeded"),
+        (PAY_FAILED, "Payment Failed"),
+        (PAY_REQUIRES_ACTION, "Requires Action"),
+    ]
+
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    tenant = models.OneToOneField(
+        "tenants.Tenant",
+        on_delete=models.CASCADE,
+        related_name="brand_subscription",
+    )
+    plan_code = models.CharField(
+        max_length=24,
+        choices=WorkspaceProfile.PLAN_CHOICES,
+        default=WorkspaceProfile.PLAN_MANAGED_SOW,
+        db_index=True,
+    )
+    pending_plan_code = models.CharField(max_length=24, blank=True, default="")
+    addon_plan_code = models.CharField(max_length=24, blank=True, default="")
+    status = models.CharField(
+        max_length=28,
+        choices=STATUS_CHOICES,
+        default=STATUS_MANAGED_SOW,
+        db_index=True,
+    )
+
+    # Manually provisioned $1,500, 60-day Pro pilot support
+    is_pilot = models.BooleanField(default=False)
+    pilot_fee_usd = models.DecimalField(
+        max_digits=10, decimal_places=2, null=True, blank=True
+    )
+    pilot_starts_at = models.DateTimeField(null=True, blank=True)
+    pilot_ends_at = models.DateTimeField(null=True, blank=True)
+
+    # Explicit buyer acceptance before recurring charges begin
+    recurring_billing_accepted_at = models.DateTimeField(null=True, blank=True)
+    recurring_billing_accepted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="accepted_brand_subscriptions",
+    )
+
+    # Contract & volume-band overrides
+    custom_monthly_price_usd = models.DecimalField(
+        max_digits=10, decimal_places=2, null=True, blank=True
+    )
+    custom_included_visits_monthly = models.PositiveIntegerField(
+        null=True, blank=True
+    )
+    agreed_volume_band_visits = models.PositiveIntegerField(
+        null=True, blank=True
+    )
+    overage_agreement_approved = models.BooleanField(default=False)
+    overage_unit_price_usd = models.DecimalField(
+        max_digits=10, decimal_places=2, null=True, blank=True
+    )
+    overage_approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="approved_overage_subscriptions",
+    )
+    overage_approved_at = models.DateTimeField(null=True, blank=True)
+    custom_max_providers = models.PositiveIntegerField(null=True, blank=True)
+    custom_max_pos_retailers = models.PositiveIntegerField(
+        null=True, blank=True
+    )
+    contract_notes = models.TextField(blank=True, default="")
+
+    # Stripe Billing state (test mode by default)
+    stripe_mode = models.CharField(max_length=12, default="test")
+    stripe_customer_id = models.CharField(
+        max_length=120, blank=True, default="", db_index=True
+    )
+    stripe_subscription_id = models.CharField(
+        max_length=120, blank=True, default="", db_index=True
+    )
+    stripe_latest_invoice_id = models.CharField(
+        max_length=120, blank=True, default=""
+    )
+    current_period_start = models.DateTimeField(null=True, blank=True)
+    current_period_end = models.DateTimeField(null=True, blank=True)
+    cancel_at_period_end = models.BooleanField(default=False)
+    canceled_at = models.DateTimeField(null=True, blank=True)
+    last_payment_status = models.CharField(
+        max_length=24, choices=PAY_STATUS_CHOICES, default=PAY_NONE
+    )
+    last_payment_error = models.CharField(
+        max_length=500, blank=True, default=""
+    )
+    # Monotonic watermark of newest applied Stripe event timestamp so delayed /
+    # out-of-order webhooks never overwrite newer state.
+    last_stripe_event_created = models.BigIntegerField(default=0)
+
+    billing_owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="owned_brand_subscriptions",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
+class StripeCheckoutRecord(models.Model):
+    """Hosted Stripe Checkout session + explicit pre-confirmation charge/date
+    disclosure record."""
+
+    STATUS_OPEN = "open"
+    STATUS_COMPLETED = "completed"
+    STATUS_EXPIRED = "expired"
+    STATUS_CHOICES = [
+        (STATUS_OPEN, "Open"),
+        (STATUS_COMPLETED, "Completed"),
+        (STATUS_EXPIRED, "Expired"),
+    ]
+
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    tenant = models.ForeignKey(
+        "tenants.Tenant",
+        on_delete=models.CASCADE,
+        related_name="stripe_checkout_records",
+    )
+    initiated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="stripe_checkout_records",
+    )
+    target_plan_code = models.CharField(max_length=24)
+    quoted_monthly_price_usd = models.DecimalField(
+        max_digits=10, decimal_places=2
+    )
+    quoted_included_visits = models.PositiveIntegerField()
+    effective_summary = models.CharField(max_length=400, blank=True, default="")
+    idempotency_key = models.CharField(max_length=140, db_index=True)
+    stripe_session_id = models.CharField(
+        max_length=140, unique=True, db_index=True
+    )
+    checkout_url = models.CharField(max_length=600)
+    mode = models.CharField(max_length=12, default="test")
+    status = models.CharField(
+        max_length=16, choices=STATUS_CHOICES, default=STATUS_OPEN
+    )
+    explicit_terms_accepted = models.BooleanField(default=False)
+    accepted_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["tenant", "idempotency_key"],
+                name="pilot_stripe_checkout_ten_idem_uniq",
+            )
+        ]
+
+
+class StripeWebhookEvent(models.Model):
+    """Idempotent ledger of verified Stripe Billing webhook deliveries."""
+
+    PROC_PROCESSED = "processed"
+    PROC_DUPLICATE = "ignored_duplicate"
+    PROC_STALE = "ignored_stale_out_of_order"
+    PROC_UNMATCHED = "ignored_unmatched"
+    PROC_FAILED = "failed"
+    PROC_CHOICES = [
+        (PROC_PROCESSED, "Processed"),
+        (PROC_DUPLICATE, "Ignored Duplicate"),
+        (PROC_STALE, "Ignored Out-of-Order"),
+        (PROC_UNMATCHED, "Ignored Unmatched"),
+        (PROC_FAILED, "Failed"),
+    ]
+
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    stripe_event_id = models.CharField(
+        max_length=140, unique=True, db_index=True
+    )
+    event_type = models.CharField(max_length=100, db_index=True)
+    stripe_created_ts = models.BigIntegerField(default=0)
+    livemode = models.BooleanField(default=False)
+    tenant = models.ForeignKey(
+        "tenants.Tenant",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="stripe_webhook_events",
+    )
+    processing_status = models.CharField(
+        max_length=32, choices=PROC_CHOICES, default=PROC_PROCESSED
+    )
+    note = models.CharField(max_length=300, blank=True, default="")
+    payload = models.JSONField(default=dict)
+    processed_at = models.DateTimeField(auto_now_add=True, editable=False)
+
+    class Meta:
+        ordering = ["-processed_at", "-id"]
+
+
+class BrandOnboardingProgress(models.Model):
+    """Idempotent progress state for Feature 7 ('Use Spark with my team')
+    self-service brand onboarding."""
+
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    tenant = models.OneToOneField(
+        "tenants.Tenant",
+        on_delete=models.CASCADE,
+        related_name="onboarding_progress",
+    )
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="owned_brand_onboardings",
+    )
+    starter_template_key = models.CharField(
+        max_length=48, blank=True, default=""
+    )
+    starter_event_type = models.ForeignKey(
+        "events.EventType",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    starter_recap_template = models.ForeignKey(
+        "recaps.CustomRecapTemplate",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    default_provider = models.ForeignKey(
+        ProviderOrganization,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    starter_assignment = models.ForeignKey(
+        ProviderAssignment,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    first_visit = models.ForeignKey(
+        CanonicalVisit,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    first_shared_link = models.ForeignKey(
+        WorkspaceSharedLink,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+
+    step_workspace_created = models.BooleanField(default=True)
+    step_program_selected = models.BooleanField(default=False)
+    step_contributor_invited = models.BooleanField(default=False)
+    step_mobile_link_opened = models.BooleanField(default=False)
+    step_first_visit_completed = models.BooleanField(default=False)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
 

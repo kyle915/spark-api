@@ -21,7 +21,7 @@ jobs:
     name: pytest (${{ matrix.shard }}/6)
     # Product suite lives on develop. main's pytest is stale; skip it on
     # PRs that target main so workflow-only / cherry-pick PRs stay green.
-    if: github.event_name == 'push' || github.base_ref == 'develop'
+    if: github.event_name == 'push' || github.base_ref == 'develop' || startsWith(github.base_ref, 'cursor/')
     runs-on: ubuntu-latest
     # The whole suite took 50-65 minutes in one job, which made every ship
     # wait an hour. It is split by test file into six jobs that run at the

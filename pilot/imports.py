@@ -25,6 +25,10 @@ from events.retailer_aliases import (
     resolve_store_name,
     split_store_number,
 )
+from pilot.entitlements import (
+    require_plan_feature,
+    require_provider_feed_capacity,
+)
 from pilot.models import (
     BrandCostLine,
     CanonicalVisit,
@@ -1579,6 +1583,16 @@ def commit_provider_import(
     if not access.can_import_for_provider(provider.id):
         raise PermissionError(
             "You do not have permission to import files for this provider."
+        )
+    if not is_historical:
+        require_plan_feature(
+            access.tenant,
+            "allows_provider_csv_imports",
+            feature_label="Ongoing provider CSV imports",
+            required_plan="core",
+        )
+        require_provider_feed_capacity(
+            access.tenant, candidate_provider=provider
         )
 
     mapping_obj: ProviderImportMapping | None = None

@@ -24,6 +24,7 @@ from events.retailer_aliases import (
     split_store_number,
 )
 from pilot.costs import compute_visit_cost_summary, quantize_money
+from pilot.entitlements import require_plan_feature, require_pos_retailer_capacity
 from pilot.imports import (
     brand_included_visits_queryset,
     build_product_lookup,
@@ -231,6 +232,9 @@ def import_retailer_pos_csv(
     clean_banner = (retailer_banner or "").strip()
     if not clean_banner:
         raise ValueError("Retailer banner name is required.")
+    require_pos_retailer_capacity(
+        access.tenant, retailer_banner=clean_banner
+    )
     if feed_completeness not in {
         RetailerSalesImport.COMPLETENESS_COMPLETE,
         RetailerSalesImport.COMPLETENESS_PARTIAL,
@@ -643,6 +647,12 @@ def build_retailer_pos_measurement(
         raise PermissionError(
             "Outside providers cannot view retailer POS sales measurement."
         )
+    require_plan_feature(
+        access.tenant,
+        "allows_retailer_pos_measurement",
+        feature_label="Retailer POS sales lift and ROI measurement",
+        required_plan="core",
+    )
 
     active_imports = list(
         RetailerSalesImport.objects.filter(

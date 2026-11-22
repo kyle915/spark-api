@@ -14,6 +14,10 @@ from django.utils.text import slugify
 
 from brand_insights.facts import store_identity
 from events.models import Event, EventType, Request
+from pilot.entitlements import (
+    require_new_visit_capacity,
+    require_provider_feed_capacity,
+)
 from pilot.models import (
     CanonicalVisit,
     ProviderAssignment,
@@ -140,6 +144,9 @@ def create_or_update_provider(
 
     base_slug = slugify(slug or clean_name)[:70] or "provider"
     provider = ProviderOrganization.objects.filter(slug=base_slug).first()
+    require_provider_feed_capacity(
+        access.tenant, candidate_provider=provider
+    )
     if provider is None:
         candidate = base_slug
         idx = 2
@@ -925,6 +932,21 @@ def assign_provider_work(
     ):
         raise ValueError(
             "Visit assignments require a target visit, event, or request."
+        )
+
+    require_provider_feed_capacity(
+        access.tenant, candidate_provider=provider
+    )
+    if (
+        scope_type == ProviderAssignment.SCOPE_VISIT
+        and canonical_visit is not None
+        and canonical_visit.status == CanonicalVisit.STATUS_SCHEDULED
+        and not ProviderAssignment.objects.filter(
+            tenant=access.tenant, canonical_visit=canonical_visit
+        ).exists()
+    ):
+        require_new_visit_capacity(
+            access.tenant, is_ignite_admin=access.is_ignite_admin
         )
 
     ProviderSourceInclusionRule.objects.get_or_create(

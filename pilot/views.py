@@ -18,6 +18,7 @@ from events.models import Product
 from pilot.costs import quantize_money, recompute_visit_cost_summary
 from pilot.models import (
     BrandCostLine,
+    BrandOnboardingProgress,
     CanonicalVisit,
     CostEvidenceLink,
     ProviderAssignment,
@@ -26,6 +27,7 @@ from pilot.models import (
     WorkspaceMembership,
     WorkspaceSharedLink,
 )
+from pilot.subscriptions import process_stripe_webhook
 from pilot.workspaces import resolve_assignment_by_submission_code
 
 
@@ -48,6 +50,9 @@ def public_provider_submission_view(
     provider = assignment.provider
 
     if request.method == "GET":
+        BrandOnboardingProgress.objects.filter(
+            tenant=tenant, step_mobile_link_opened=False
+        ).update(step_mobile_link_opened=True, updated_at=timezone.now())
         products = [
             {"id": p.id, "name": p.name}
             for p in Product.objects.filter(tenant=tenant).order_by("name")
@@ -361,6 +366,18 @@ def public_provider_submission_view(
     if expense_lines:
         recompute_visit_cost_summary(visit)
 
+    progress = BrandOnboardingProgress.objects.filter(tenant=tenant).first()
+    if progress is not None:
+        update_fields = ["updated_at"]
+        if not progress.step_mobile_link_opened:
+            progress.step_mobile_link_opened = True
+            update_fields.append("step_mobile_link_opened")
+        if progress.first_visit_id is None:
+            progress.first_visit = visit
+            update_fields.append("first_visit")
+        if len(update_fields) > 1:
+            progress.save(update_fields=update_fields)
+
     return JsonResponse(
         {
             "ok": True,
@@ -444,3 +461,26 @@ def public_workspace_shared_link_view(
             "reportParams": link.report_params,
         }
     )
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def stripe_billing_webhook_view(request: HttpRequest) -> JsonResponse:
+    """Signed Stripe Billing webhook endpoint (`/api/public/stripe-billing/webhook`).
+    Verifies HMAC signature + timestamp tolerance, enforces test-vs-live safety,
+    deduplicates replayed event IDs, and ignores stale out-of-order deliveries."""
+    sig_header = request.META.get("HTTP_STRIPE_SIGNATURE", "")
+    try:
+        outcome = process_stripe_webhook(request.body, sig_header)
+        return JsonResponse(outcome, status=200)
+    except PermissionError as exc:
+        return JsonResponse(
+            {"ok": False, "error": "billing_mode_violation", "message": str(exc)},
+            status=403,
+        )
+    except ValueError as exc:
+        return JsonResponse(
+            {"ok": False, "error": "invalid_webhook", "message": str(exc)},
+            status=400,
+        )
+

@@ -29,6 +29,10 @@ from events.models import (
 )
 from events.retailer_aliases import chain_key as make_chain_key
 from pilot.costs import compute_visit_cost_summary, quantize_money
+from pilot.entitlements import (
+    require_new_visit_capacity,
+    require_plan_feature,
+)
 from pilot.imports import brand_included_visits_queryset
 from pilot.models import (
     CanonicalVisit,
@@ -239,6 +243,12 @@ def create_store_recommendation_action(
         raise PermissionError(
             "Only brand administrators or reviewers can create store actions."
         )
+    require_plan_feature(
+        access.tenant,
+        "allows_tracked_store_actions",
+        feature_label="Tracked store actions (Rebook, Hold, Restock)",
+        required_plan="pro",
+    )
 
     parsed_id = parse_brand_insight_id(finding_id)
     if parsed_id is None:
@@ -309,6 +319,11 @@ def create_store_recommendation_action(
     ).first()
     if existing is not None:
         return existing
+
+    if action_type == StoreRecommendationAction.ACTION_REBOOK:
+        require_new_visit_capacity(
+            access.tenant, is_ignite_admin=access.is_ignite_admin
+        )
 
     provider = (
         ProviderOrganization.objects.filter(uuid=provider_uuid).first()

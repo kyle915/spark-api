@@ -3,6 +3,7 @@ from django.urls import path
 from pilot.views import (
     public_provider_submission_view,
     public_workspace_shared_link_view,
+    stripe_billing_webhook_view,
 )
 
 urlpatterns = [
@@ -15,5 +16,10 @@ urlpatterns = [
         "workspace-share/<str:token>",
         public_workspace_shared_link_view,
         name="public-workspace-share",
+    ),
+    path(
+        "stripe-billing/webhook",
+        stripe_billing_webhook_view,
+        name="stripe-billing-webhook",
     ),
 ]

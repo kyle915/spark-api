@@ -877,6 +877,44 @@ MCP_ENABLED = env.bool("MCP_ENABLED", default=False)
 BRAND_INSIGHTS_AUTO_PUBLISH_RECOMMENDATIONS = env.bool(
     "BRAND_INSIGHTS_AUTO_PUBLISH_RECOMMENDATIONS", default=True
 )
+
+# ─── Standalone Spark Milestone 2 release & Stripe Billing controls ──
+# Public signup and recurring billing sit behind separate release flags so
+# Ignite can validate paid pilot renewals before opening general checkout.
+STANDALONE_SIGNUP_ENABLED = env.bool(
+    "STANDALONE_SIGNUP_ENABLED", default=True
+)
+STANDALONE_BILLING_ENABLED = env.bool(
+    "STANDALONE_BILLING_ENABLED", default=True
+)
+# Keep self-serve billing strictly in Ignite Admin internal test mode (hidden
+# from non-staff client workspaces) until explicitly launched.
+CLIENT_BILLING_LAUNCHED = env.bool(
+    "CLIENT_BILLING_LAUNCHED", default=False
+)
+# "test" or "live". Live billing is refused while DEBUG is True unless
+# STRIPE_ALLOW_LIVE_IN_DEBUG is explicitly set.
+STRIPE_BILLING_MODE = env("STRIPE_BILLING_MODE", default="test")
+STRIPE_ALLOW_LIVE_IN_DEBUG = env.bool(
+    "STRIPE_ALLOW_LIVE_IN_DEBUG", default=False
+)
+STRIPE_SECRET_KEY = env("STRIPE_SECRET_KEY", default="")
+STRIPE_PUBLISHABLE_KEY = env("STRIPE_PUBLISHABLE_KEY", default="")
+STRIPE_WEBHOOK_SECRET = env("STRIPE_WEBHOOK_SECRET", default="")
+STRIPE_API_BASE_URL = env(
+    "STRIPE_API_BASE_URL", default="https://api.stripe.com"
+)
+STRIPE_PRICE_ID_CORE = env(
+    "STRIPE_PRICE_ID_CORE", default="price_spark_core_monthly_test"
+)
+STRIPE_PRICE_ID_PRO = env(
+    "STRIPE_PRICE_ID_PRO", default="price_spark_pro_monthly_test"
+)
+STRIPE_PRICE_ID_SCALE = env("STRIPE_PRICE_ID_SCALE", default="")
+# Keep outbound customer billing/onboarding emails disabled in development.
+STANDALONE_SUPPRESS_OUTBOUND_EMAIL = env.bool(
+    "STANDALONE_SUPPRESS_OUTBOUND_EMAIL", default=DEBUG
+)
 # Rollout allowlist of tenant ids ("17,18"); "all" → every brand; empty →
 # no brand (spark_mcp.conf), so turning MCP_ENABLED on alone exposes nothing.
 MCP_ALLOWED_TENANT_IDS = env.list("MCP_ALLOWED_TENANT_IDS", default=[])

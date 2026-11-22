@@ -20,6 +20,7 @@ from events import types
 from events import models
 from events import inputs
 from events.ba_count import BaCountError, normalize_ba_count
+from pilot.entitlements import PlanEntitlementError, require_new_visit_capacity
 from utils.graphql.inputs import SparkGraphQLInput
 from utils.graphql.permissions import StrictIsAuthenticated
 from utils.graphql.relay import ensure_relay_mutation
@@ -4176,6 +4177,28 @@ class RequestMutations:
         try:
             service = RequestWithDependenciesMutationService.with_input(input)
             await service.set_user_and_tenant(info)
+            if getattr(service, "tenant_id", None) is not None:
+
+                def _enforce_visit_cap(tid: int, is_admin_caller: bool) -> None:
+                    tenant_obj = Tenant.objects.filter(id=tid).first()
+                    if tenant_obj is not None:
+                        require_new_visit_capacity(
+                            tenant_obj, is_ignite_admin=is_admin_caller
+                        )
+
+                try:
+                    await sync_to_async(_enforce_visit_cap)(
+                        int(service.tenant_id),
+                        bool(getattr(service, "is_spark_schema", False)),
+                    )
+                except PlanEntitlementError as exc:
+                    raise GraphQLError(
+                        str(exc),
+                        extensions={
+                            "code": exc.code,
+                            "requiredPlan": exc.required_plan,
+                        },
+                    ) from exc
             request: models.Request = await service.save()
             request_with_relations: models.Request = await sync_to_async(
                 models.Request.objects.select_related(

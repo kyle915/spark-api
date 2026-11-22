@@ -20,6 +20,7 @@ from pilot.costs import (
     quantize_money,
     recompute_visit_cost_summary,
 )
+from pilot.entitlements import require_plan_feature
 from pilot.models import (
     BrandCostLine,
     CanonicalVisit,
@@ -588,6 +589,12 @@ def list_finance_exceptions(
         raise PermissionError(
             "Outside providers cannot view the brand finance exception queue."
         )
+    require_plan_feature(
+        access.tenant,
+        "allows_finance_review_queue",
+        feature_label="Finance review queue",
+        required_plan="pro",
+    )
     qs = FinanceException.objects.select_related(
         "canonical_visit", "cost_line", "provider", "owner", "resolved_by"
     ).prefetch_related("audits", "audits__actor").filter(tenant=access.tenant)
@@ -655,6 +662,12 @@ def assign_finance_exception_owner(
         raise PermissionError(
             "Only brand administrators or finance reviewers can assign finance exceptions."
         )
+    require_plan_feature(
+        access.tenant,
+        "allows_finance_review_queue",
+        feature_label="Finance review queue",
+        required_plan="pro",
+    )
     exc = FinanceException.objects.filter(
         tenant=access.tenant, uuid=exception_uuid
     ).first()
@@ -705,6 +718,12 @@ def attach_proof_to_finance_exception(
         raise PermissionError(
             "Only brand administrators or finance reviewers can attach finance proof."
         )
+    require_plan_feature(
+        access.tenant,
+        "allows_finance_review_queue",
+        feature_label="Finance review queue",
+        required_plan="pro",
+    )
     exc = (
         FinanceException.objects.select_related("cost_line", "canonical_visit")
         .filter(tenant=access.tenant, uuid=exception_uuid)
@@ -756,6 +775,12 @@ def fix_finance_exception_match(
         raise PermissionError(
             "Only brand administrators or finance reviewers can match finance items."
         )
+    require_plan_feature(
+        access.tenant,
+        "allows_finance_review_queue",
+        feature_label="Finance review queue",
+        required_plan="pro",
+    )
     exc = FinanceException.objects.filter(
         tenant=access.tenant, uuid=exception_uuid
     ).first()
@@ -852,6 +877,12 @@ def request_finance_clarification(
         raise PermissionError(
             "Only brand administrators or finance reviewers can request clarification."
         )
+    require_plan_feature(
+        access.tenant,
+        "allows_finance_review_queue",
+        feature_label="Finance review queue",
+        required_plan="pro",
+    )
     clean_note = (note or "").strip()
     if not clean_note:
         raise ValueError("Clarification note is required.")
@@ -892,6 +923,12 @@ def resolve_finance_exception(
         raise PermissionError(
             "Only brand administrators or finance reviewers can resolve finance exceptions."
         )
+    require_plan_feature(
+        access.tenant,
+        "allows_finance_review_queue",
+        feature_label="Finance review queue",
+        required_plan="pro",
+    )
     if resolution_status not in {
         FinanceException.STATUS_RESOLVED,
         FinanceException.STATUS_EXCEPTION_GRANTED,
