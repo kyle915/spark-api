@@ -36,6 +36,12 @@ def _row_id(raw) -> int | None:
 
 
 @strawberry.type
+class InsightEligibleStore:
+    store_key: str
+    store_label: str
+
+
+@strawberry.type
 class StoreInsight:
     """One finding as a brand sees it. No person is named anywhere in it."""
 
@@ -47,6 +53,17 @@ class StoreInsight:
     period_start: str
     period_end: str
     is_draft: bool
+    scope_key: str = ""
+    visit_count: int | None = None
+    comparison_period: str = ""
+    supported_cost: str | None = None
+    adjusted_pos_units: int | None = None
+    eligible_stores: list[InsightEligibleStore] = strawberry.field(default_factory=list)
+    current_action_uuid: str | None = None
+    current_action_type: str | None = None
+    current_action_status: str | None = None
+    current_action_owner: str | None = None
+    current_action_provider: str | None = None
 
 
 @strawberry.type
@@ -98,7 +115,36 @@ class BrandInsightBatchResult:
     count: int
 
 
-def _brand_item(row) -> StoreInsight:
+def _brand_item(row, *, access=None, latest_actions=None) -> StoreInsight:
+    from pilot.actions import (
+        build_store_evidence_for_insight,
+        eligible_stores_for_insight,
+    )
+
+    elig = eligible_stores_for_insight(row)
+    facts = row.facts or {}
+    v_count = facts.get("visits") or facts.get("recaps")
+    comp_period = f"{row.period_start.isoformat()} to {row.period_end.isoformat()}"
+    supp_cost: str | None = None
+    adj_pos: int | None = None
+    if access is not None and row.scope_key.startswith("store:"):
+        sk = row.scope_key[len("store:") :]
+        ev = build_store_evidence_for_insight(access, row, sk)
+        if v_count is None:
+            v_count = ev.get("visit_count")
+        supp_cost = ev.get("supported_brand_cost")
+        adj_pos = ev.get("adjusted_register_units")
+
+    act = None
+    if latest_actions:
+        if row.scope_key.startswith("store:"):
+            act = latest_actions.get(row.scope_key[len("store:") :])
+        else:
+            for es in elig:
+                if es["store_key"] in latest_actions:
+                    act = latest_actions[es["store_key"]]
+                    break
+
     return StoreInsight(
         id=strawberry.ID(f"{_ID_PREFIX}{row.id}"),
         kind=row.kind,
@@ -108,6 +154,28 @@ def _brand_item(row) -> StoreInsight:
         period_start=row.period_start.isoformat(),
         period_end=row.period_end.isoformat(),
         is_draft=row.status != "published",
+        scope_key=row.scope_key,
+        visit_count=int(v_count) if isinstance(v_count, (int, float)) else None,
+        comparison_period=comp_period,
+        supported_cost=supp_cost,
+        adjusted_pos_units=adj_pos,
+        eligible_stores=[
+            InsightEligibleStore(
+                store_key=s["store_key"], store_label=s["store_label"]
+            )
+            for s in elig
+        ],
+        current_action_uuid=str(act.uuid) if act else None,
+        current_action_type=act.action_type if act else None,
+        current_action_status=act.status if act else None,
+        current_action_owner=(
+            act.owner.email
+            if act and act.owner
+            else (act.provider.name if act and act.provider else None)
+        ),
+        current_action_provider=(
+            act.provider.name if act and act.provider else None
+        ),
     )
 
 
@@ -150,11 +218,51 @@ class BrandInsightQueries:
 
         def _build():
             from brand_insights.service import brand_view
+            from pilot.models import StoreRecommendationAction
+            from pilot.permissions import resolve_workspace_access
+            from tenants.models import Tenant
+
+            tenant_obj = Tenant.objects.filter(id=target).first()
+            if tenant_obj is None:
+                return None
+            access = None
+            if not staff:
+                try:
+                    access = resolve_workspace_access(
+                        info.context.request.user,
+                        tenant=tenant_obj,
+                        request=info.context.request,
+                    )
+                except PermissionError:
+                    return None
+                if not access.can_view_brand_consolidated:
+                    return None
+            else:
+                try:
+                    access = resolve_workspace_access(
+                        info.context.request.user,
+                        tenant=tenant_obj,
+                        request=info.context.request,
+                    )
+                except PermissionError:
+                    access = None
+
+            latest_actions: dict[str, StoreRecommendationAction] = {}
+            for a in StoreRecommendationAction.objects.select_related(
+                "owner", "provider"
+            ).filter(tenant_id=target).order_by("-created_at", "-id"):
+                latest_actions.setdefault(a.store_key, a)
 
             view = brand_view(target, include_drafts=staff)
             return TenantStoreInsights(
-                recommendations=[_brand_item(r) for r in view["recommendations"]],
-                alerts=[_brand_item(r) for r in view["alerts"]],
+                recommendations=[
+                    _brand_item(r, access=access, latest_actions=latest_actions)
+                    for r in view["recommendations"]
+                ],
+                alerts=[
+                    _brand_item(r, access=access, latest_actions=latest_actions)
+                    for r in view["alerts"]
+                ],
             )
 
         try:

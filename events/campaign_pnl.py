@@ -125,8 +125,14 @@ class CampaignPnlQueries:
             tenant_ids = {t for t in tid_qs if t is not None}
             if resolved_tid is not None:
                 tenant_ids &= {resolved_tid}
+            # Internal BA labor pay is strictly Ignite ops-only; never expose
+            # ambassador hourly pay as brand cost to client or agency roles.
             if not is_admin:
-                tenant_ids &= set(allowed or set())
+                return CampaignCostReport(
+                    start_date=start.isoformat(),
+                    end_date=end.isoformat(),
+                    rows=[],
+                )
             if not tenant_ids:
                 return CampaignCostReport(
                     start_date=start.isoformat(), end_date=end.isoformat(), rows=[]

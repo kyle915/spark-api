@@ -203,6 +203,8 @@ def _rate_limited() -> JsonResponse:
 
 
 def _is_recap_only(code: str) -> bool:
+    if (code or "").strip().upper().startswith("PA-"):
+        return True
     kind, target = checkin_web.resolve_checkin_target(code)
     return kind == "tenant" and checkin_web.is_recap_only_code(code, target)
 
