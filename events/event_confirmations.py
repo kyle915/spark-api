@@ -661,6 +661,25 @@ def build_context(confirmation: EventConfirmation, stage: str) -> dict:
             tenant, confirmation_event_type(confirmation, tenant)
         )
 
+    store_brief = ""
+    try:
+        from store_logistics.service import get_store_logistics_note
+
+        for t in tenants:
+            tid = getattr(t, "id", None)
+            if not tid:
+                continue
+            notes, _ = get_store_logistics_note(
+                int(tid),
+                store_name=(confirmation.store_name or "").strip(),
+                address=address,
+            )
+            if (notes or "").strip():
+                store_brief = f"Store logistics: {notes.strip()}"
+                break
+    except Exception:
+        store_brief = ""
+
     return {
         "eyebrow": eyebrow,
         "ba_first_name": (confirmation.ba_name or "").strip().split(" ")[0],
@@ -671,6 +690,7 @@ def build_context(confirmation: EventConfirmation, stage: str) -> dict:
         "address": address,
         "time_label": time_label,
         "products_label": ", ".join(products),
+        "brief": store_brief,
         "map_url": (
             "https://www.google.com/maps/search/?api=1&query="
             + quote_plus(address)

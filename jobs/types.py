@@ -271,6 +271,12 @@ class Job(Node):
         def _build():
             title = getattr(self, "briefing_title", None) or ""
             body = getattr(self, "briefing_body", None) or ""
+            try:
+                from store_logistics.service import enrich_job_briefing
+
+                title, body = enrich_job_briefing(self, title, body)
+            except Exception:
+                pass
             tpl_uuid = None
             tpl_id = getattr(self, "briefing_template_id", None)
             if tpl_id:

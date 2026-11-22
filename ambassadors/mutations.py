@@ -1,4 +1,5 @@
 import logging
+import uuid as uuid_mod
 
 import strawberry
 from strawberry import relay
@@ -7,6 +8,7 @@ from asgiref.sync import sync_to_async
 from django.db.models import Model, Avg, Count
 from graphql import GraphQLError
 
+from jobs.job_scope import JobScope
 from jobs.models import (
     AmbassadorJob as AmbassadorJobModel,
     Job,
@@ -15,6 +17,7 @@ from jobs.models import (
 from jobs.types import AmbassadorJob as AmbassadorJobType
 
 from events.models import Event
+from recaps.store_places import tenant_places
 from utils.graphql.permissions import (
     StrictIsAuthenticated,
     IsClientOrSparkAdmin,
@@ -677,51 +680,98 @@ class AmbassadorMutations:
         shared `_ensure_approved_booking` helper (idempotent — already-booked
         BAs are a no-op), so it's always safe to click.
         """
-        from asgiref.sync import sync_to_async
-
+        # Circular dependency: jobs.mutations imports ambassadors.models.
         from jobs.mutations import _ensure_approved_booking
 
         user = info.context.request.user
+        allowed_tenants = await JobScope().accessible_tenant_ids(info)
 
         def _find_crew():
-            from ambassadors.models import AmbassadorEvent
-            from events.models import Event
-
+            raw_id = str(input.event_id or "").strip()
+            event = None
             try:
-                eid = resolve_id_to_int(input.event_id)
+                eid = resolve_id_to_int(raw_id)
                 event = Event.objects.select_related("request").get(id=eid)
             except (Event.DoesNotExist, ValueError, TypeError, GraphQLError):
+                try:
+                    parsed_uuid = uuid_mod.UUID(raw_id)
+                    event = Event.objects.select_related("request").get(
+                        uuid=parsed_uuid
+                    )
+                except (Event.DoesNotExist, ValueError, TypeError):
+                    return None, None, "Event not found."
+
+            if (
+                allowed_tenants is not None
+                and event.tenant_id not in allowed_tenants
+            ):
                 return None, None, "Event not found."
 
-            # Venue key: retailer FK first, else the request's retailer name.
+            # First try physical store grouping (Account Map / Store Profile)
+            # so two shifts at the same street address match even when typed
+            # retailer strings differ slightly.
+            places = tenant_places(event.tenant_id)
+            store_key = places.for_event_ids([event.id]).get(event.id)
+            if store_key:
+                all_tenant_events = Event.objects.filter(
+                    tenant_id=event.tenant_id
+                ).exclude(id=event.id)
+                if event.date:
+                    all_tenant_events = all_tenant_events.filter(
+                        date__lt=event.date
+                    )
+                same_store_ids = [
+                    pk
+                    for pk, key in places.for_events(all_tenant_events).items()
+                    if key == store_key
+                ]
+                if same_store_ids:
+                    for prev in (
+                        Event.objects.filter(id__in=same_store_ids)
+                        .order_by("-date", "-id")[:25]
+                    ):
+                        amb_ids = list(
+                            AmbassadorEvent.objects.filter(
+                                event_id=prev.id,
+                                is_approved=True,
+                                ambassador__isnull=False,
+                            ).values_list("ambassador_id", flat=True)
+                        )
+                        if amb_ids:
+                            return event, amb_ids, None
+
+            # Venue key fallback: retailer FK first, else the request's retailer name.
             retailer_id = event.retailer_id
             req_retailer = (
                 getattr(event.request, "retailer_name", None)
                 if event.request_id
                 else None
             )
-            if not retailer_id and not req_retailer:
+            if not retailer_id and not req_retailer and not store_key:
                 return event, [], "no_venue"
 
-            prior = Event.objects.filter(tenant_id=event.tenant_id).exclude(
-                id=event.id
-            )
-            if event.date:
-                prior = prior.filter(date__lt=event.date)
-            if retailer_id:
-                prior = prior.filter(retailer_id=retailer_id)
-            else:
-                prior = prior.filter(request__retailer_name=req_retailer)
-
-            # Walk most-recent-first until we find one with an approved crew.
-            for prev in prior.order_by("-date", "-id")[:25]:
-                amb_ids = list(
-                    AmbassadorEvent.objects.filter(
-                        event_id=prev.id, is_approved=True, ambassador__isnull=False
-                    ).values_list("ambassador_id", flat=True)
+            if retailer_id or req_retailer:
+                prior = Event.objects.filter(tenant_id=event.tenant_id).exclude(
+                    id=event.id
                 )
-                if amb_ids:
-                    return event, amb_ids, None
+                if event.date:
+                    prior = prior.filter(date__lt=event.date)
+                if retailer_id:
+                    prior = prior.filter(retailer_id=retailer_id)
+                else:
+                    prior = prior.filter(request__retailer_name=req_retailer)
+
+                # Walk most-recent-first until we find one with an approved crew.
+                for prev in prior.order_by("-date", "-id")[:25]:
+                    amb_ids = list(
+                        AmbassadorEvent.objects.filter(
+                            event_id=prev.id,
+                            is_approved=True,
+                            ambassador__isnull=False,
+                        ).values_list("ambassador_id", flat=True)
+                    )
+                    if amb_ids:
+                        return event, amb_ids, None
             return event, [], "no_prior"
 
         event, amb_ids, err = await sync_to_async(_find_crew)()
