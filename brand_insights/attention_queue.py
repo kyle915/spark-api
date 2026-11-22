@@ -188,8 +188,12 @@ def _unstaffed_items(
     now = timezone.now()
     until = now + timedelta(hours=UNSTAFFED_HOURS)
 
+    # Only an approved assignment counts as staffed (pending join requests
+    # should still surface as needing attention).
     staffed = Exists(
-        AmbassadorEvent.objects.filter(event_id=OuterRef("pk"))
+        AmbassadorEvent.objects.filter(
+            event_id=OuterRef("pk"), is_approved=True
+        )
     )
     qs = (
         Event.objects.filter(access.allowed_events_q())
