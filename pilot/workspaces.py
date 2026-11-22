@@ -31,9 +31,16 @@ from pilot.permissions import (
     is_ignite_staff_user,
     log_workspace_audit,
 )
-from tenants.models import Role, Tenant, TenantedUser, User
+from tenants.models import ARCHIVED_NAME_PREFIX, Role, Tenant, TenantedUser, User
 
 _CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
+
+
+def _is_archived_tenant(tenant: Tenant) -> bool:
+    return bool(
+        tenant.name
+        and tenant.name.strip().upper().startswith(ARCHIVED_NAME_PREFIX)
+    )
 
 
 def _mint_submission_code() -> str:
@@ -585,6 +592,7 @@ def list_user_workspace_contexts(user: User) -> list[dict[str, Any]]:
     if not user or not getattr(user, "is_authenticated", False):
         return []
 
+    is_staff = is_ignite_staff_user(user)
     active_ctx = (
         UserActiveWorkspaceContext.objects.select_related("membership", "tenant")
         .filter(user=user)
@@ -603,6 +611,8 @@ def list_user_workspace_contexts(user: User) -> list[dict[str, Any]]:
     )
     for m in memberships:
         if m.provider and not m.provider.is_active:
+            continue
+        if _is_archived_tenant(m.tenant) and m.tenant_id != active_tenant_id:
             continue
         seen_brand_tenants.add(m.tenant_id)
         is_current = (
@@ -643,8 +653,48 @@ def list_user_workspace_contexts(user: User) -> list[dict[str, Any]]:
             }
         )
 
-    # Include legacy TenantedUser brand contexts that don't yet have a
-    # WorkspaceMembership row (and haven't been revoked).
+    if is_staff:
+        # Ignite platform admins can switch across every active (non-archived)
+        # tenant in the sidebar TenantPicker; mirror that exact active set here
+        # so the topbar workspace switcher stays 100% synchronized.
+        staff_tenants = list(
+            Tenant.active()
+            .exclude(id__in=seen_brand_tenants)
+            .order_by("name", "id")
+        )
+        if active_tenant_id and active_tenant_id not in seen_brand_tenants:
+            active_archived = (
+                Tenant.objects.filter(id=active_tenant_id)
+                .exclude(id__in={t.id for t in staff_tenants})
+                .first()
+            )
+            if active_archived is not None:
+                staff_tenants.append(active_archived)
+        for tenant in staff_tenants:
+            contexts.append(
+                {
+                    "membership_uuid": None,
+                    "tenant_uuid": str(tenant.uuid),
+                    "tenant_name": tenant.name,
+                    "tenant_slug": tenant.slug or "",
+                    "workspace_role": WorkspaceMembership.ROLE_BRAND_ADMIN,
+                    "provider_uuid": None,
+                    "provider_name": None,
+                    "can_approve_recaps": True,
+                    "can_approve_finance": True,
+                    "can_approve_spend": True,
+                    "display_label": f"{tenant.name} · Managed Workspace",
+                    "is_current": bool(
+                        active_membership_id is None
+                        and active_tenant_id == tenant.id
+                    ),
+                }
+            )
+        contexts.sort(key=lambda item: ((item["tenant_name"] or "").casefold(), item["display_label"].casefold()))
+        return contexts
+
+    # Non-staff: strictly restricted to the caller's own active TenantedUser
+    # brand memberships that haven't been revoked (and aren't archived unless active).
     revoked_tenant_ids = set(
         WorkspaceMembership.objects.filter(
             user=user, status=WorkspaceMembership.STATUS_REVOKED
@@ -657,21 +707,19 @@ def list_user_workspace_contexts(user: User) -> list[dict[str, Any]]:
         .order_by("tenant__name")
     )
     for tu in legacy_tus:
+        if _is_archived_tenant(tu.tenant) and tu.tenant_id != active_tenant_id:
+            continue
         contexts.append(
             {
                 "membership_uuid": None,
                 "tenant_uuid": str(tu.tenant.uuid),
                 "tenant_name": tu.tenant.name,
                 "tenant_slug": tu.tenant.slug or "",
-                "workspace_role": (
-                    WorkspaceMembership.ROLE_BRAND_ADMIN
-                    if is_ignite_staff_user(user)
-                    else WorkspaceMembership.ROLE_BRAND_REVIEWER
-                ),
+                "workspace_role": WorkspaceMembership.ROLE_BRAND_REVIEWER,
                 "provider_uuid": None,
                 "provider_name": None,
                 "can_approve_recaps": True,
-                "can_approve_finance": is_ignite_staff_user(user),
+                "can_approve_finance": False,
                 "can_approve_spend": True,
                 "display_label": f"{tu.tenant.name} · Managed Workspace",
                 "is_current": bool(

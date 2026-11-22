@@ -5,10 +5,7 @@ from graphql import GraphQLError
 from django.contrib.auth import get_user_model
 from asgiref.sync import sync_to_async
 from gqlauth.user import relay as mutations
-from gqlauth.user.queries import UserQueries
-from strawberry_django.permissions import IsAuthenticated
 from django.db.models import Q
-from asgiref.sync import sync_to_async
 from utils.gcs import extract_blob_name_from_url, public_url
 from utils.graphql.permissions import (
     StrictIsAuthenticated,
@@ -39,7 +36,6 @@ from .preferences import MyPreferencesQueries, MyPreferencesMutations
 from .forms import TenantFormsQueries, TenantFormsMutations
 from .launch_graphql import TenantLaunchMutations, TenantLaunchQueries
 from .support import SupportTicketMutations, SupportTicketQueries
-from .dashboard.schema import DashboardQueries
 from utils.graphql.relay import (
     CountableConnection,
     connection_from_queryset_async,
@@ -445,6 +441,55 @@ class SystemHealthQueries:
         )
 
 
+async def _scoped_tenants_queryset(
+    user,
+    *,
+    user_uuid: strawberry.ID | None = None,
+    filters: TenantFiltersInput | None = None,
+):
+    role_slug, is_staff, is_super, email = await resolve_request_user_access(user)
+    caller_uuid = str(getattr(user, "uuid", "") or "").strip().lower()
+    requested_uuid = str(user_uuid).strip().lower() if user_uuid else ""
+
+    if _is_admin_access(role_slug, is_staff, is_super, email):
+        queryset = Tenant.active()
+        if requested_uuid and requested_uuid != caller_uuid:
+            queryset = queryset.filter(
+                tenanted_users__is_active=True,
+                tenanted_users__user__uuid=user_uuid,
+            )
+    else:
+        if requested_uuid and requested_uuid != caller_uuid:
+            queryset = Tenant.objects.none()
+        else:
+            queryset = Tenant.active().filter(
+                tenanted_users__is_active=True,
+                tenanted_users__user=user,
+            )
+
+    if filters:
+        if filters.name:
+            queryset = queryset.filter(name__icontains=filters.name)
+        if filters.request_url_name:
+            queryset = queryset.filter(
+                request_url_name__icontains=filters.request_url_name
+            )
+
+    return queryset.distinct().select_related(
+        "checkin_event_type"
+    ).prefetch_related("checkin_event_types")
+
+
+async def _scoped_single_tenant_queryset(user):
+    role_slug, is_staff, is_super, email = await resolve_request_user_access(user)
+    if _is_admin_access(role_slug, is_staff, is_super, email):
+        return Tenant.objects.all()
+    return Tenant.objects.filter(
+        tenanted_users__is_active=True,
+        tenanted_users__user=user,
+    )
+
+
 # Spark Schema
 @strawberry.type()
 class QuerySpark(
@@ -523,12 +568,15 @@ class QuerySpark(
         if not id and not uuid:
             raise GraphQLError("Provide id or uuid to fetch a tenant.")
 
+        queryset = await _scoped_single_tenant_queryset(
+            info.context.request.user
+        )
         try:
             if id:
                 resolved_id = resolve_id_to_int(id)
-                tenant = await Tenant.objects.aget(pk=resolved_id)
+                tenant = await queryset.aget(pk=resolved_id)
             else:
-                tenant = await Tenant.objects.aget(uuid=uuid)
+                tenant = await queryset.aget(uuid=uuid)
         except Tenant.DoesNotExist as exc:
             raise GraphQLError("Tenant not found.") from exc
         except (TypeError, ValueError, GraphQLError) as exc:
@@ -638,22 +686,11 @@ class QuerySpark(
         last: int | None = None,
         before: str | None = None,
     ) -> CountableConnection[TenantType]:
-        queryset = Tenant.active()
-        if user_uuid:
-            queryset = queryset.filter(
-                tenanted_users__is_active=True,
-                tenanted_users__user__uuid=user_uuid,
-            )
-        if filters:
-            if filters.name:
-                queryset = queryset.filter(name__icontains=filters.name)
-            if filters.request_url_name:
-                queryset = queryset.filter(
-                    request_url_name__icontains=filters.request_url_name
-                )
-        queryset = queryset.distinct().select_related(
-            "checkin_event_type"
-        ).prefetch_related("checkin_event_types")
+        queryset = await _scoped_tenants_queryset(
+            info.context.request.user,
+            user_uuid=user_uuid,
+            filters=filters,
+        )
 
         try:
             return await connection_from_queryset_async(
@@ -812,10 +849,8 @@ class QueryClients(
         if not id and not uuid:
             raise GraphQLError("Provide id or uuid to fetch a tenant.")
 
-        user = info.context.request.user
-        queryset = Tenant.objects.filter(
-            tenanted_users__is_active=True,
-            tenanted_users__user=user,
+        queryset = await _scoped_single_tenant_queryset(
+            info.context.request.user
         )
 
         try:
@@ -934,46 +969,11 @@ class QueryClients(
         last: int | None = None,
         before: str | None = None,
     ) -> CountableConnection[TenantType]:
-        user = info.context.request.user
-
-        # Admins see EVERY tenant regardless of TenantedUser membership;
-        # everyone else is scoped to the tenants they belong to. "Admin" is
-        # resolved authoritatively (DB-backed) and matches the data-layer gate
-        # the recap/ambassador/report resolvers use — staff, superuser, the
-        # spark-admin role, OR an @igniteproductions.co email. Gating only on
-        # is_staff/is_superuser (the old check) left Ignite-team members and
-        # spark-admins who manage every client — but lack the staff flag —
-        # seeing "No companies associated with this account" in the switcher
-        # even though the data layer already let them act in any tenant. The
-        # JWT request.user's role FK / flags are unreliable in async context,
-        # so resolve from the DB row (same pattern as the sibling resolvers).
-        role_slug, is_staff, is_super, email = await resolve_request_user_access(
-            user
+        queryset = await _scoped_tenants_queryset(
+            info.context.request.user,
+            user_uuid=user_uuid,
+            filters=filters,
         )
-        if _is_admin_access(role_slug, is_staff, is_super, email):
-            queryset = Tenant.active()
-        else:
-            filter_dict = {
-                "tenanted_users__is_active": True,
-            }
-            if user_uuid:
-                filter_dict["tenanted_users__user__uuid"] = user_uuid
-            else:
-                filter_dict["tenanted_users__user"] = user
-
-            queryset = Tenant.active().filter(**filter_dict)
-
-        if filters:
-            if filters.name:
-                queryset = queryset.filter(name__icontains=filters.name)
-            if filters.request_url_name:
-                queryset = queryset.filter(
-                    request_url_name__icontains=filters.request_url_name
-                )
-
-        queryset = queryset.distinct().select_related(
-            "checkin_event_type"
-        ).prefetch_related("checkin_event_types")
         try:
             return await connection_from_queryset_async(
                 queryset,
@@ -1050,24 +1050,11 @@ class QueryMobile(TenantThemingQuery):
         last: int | None = None,
         before: str | None = None,
     ) -> CountableConnection[TenantType]:
-        queryset = Tenant.active()
-        if user_uuid:
-            queryset = queryset.filter(
-                tenanted_users__is_active=True,
-                tenanted_users__user__uuid=user_uuid,
-            )
-
-        if filters:
-            if filters.name:
-                queryset = queryset.filter(name__icontains=filters.name)
-            if filters.request_url_name:
-                queryset = queryset.filter(
-                    request_url_name__icontains=filters.request_url_name
-                )
-
-        queryset = queryset.distinct().select_related(
-            "checkin_event_type"
-        ).prefetch_related("checkin_event_types")
+        queryset = await _scoped_tenants_queryset(
+            info.context.request.user,
+            user_uuid=user_uuid,
+            filters=filters,
+        )
         try:
             return await connection_from_queryset_async(
                 queryset,
