@@ -23,10 +23,11 @@ recap submission.
 
 from __future__ import annotations
 
-import concurrent.futures
 import hashlib
 import logging
 import re
+import threading
+import time
 from datetime import date, datetime
 from datetime import timezone as dt_timezone
 from decimal import Decimal, InvalidOperation
@@ -82,6 +83,8 @@ RECEIPT_UNREADABLE = "Could not read that receipt. Enter the spend amount by han
 MODEL_DEADLINE_SECONDS = 7.5
 _MODEL_REQUEST_TIMEOUT = 6.5
 _MODEL_MAX_TOKENS = 1200
+_MIN_REMAINING_SECONDS = 0.05
+_MAX_INFLIGHT_READS = 8
 
 MAX_IMAGE_BYTES = 4_000_000
 RESULT_CACHE_SECONDS = 15 * 60
@@ -89,9 +92,9 @@ RESULT_CACHE_SECONDS = 15 * 60
 _CENT = Decimal("0.01")
 _ZERO = Decimal("0.00")
 
-_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
-    max_workers=4, thread_name_prefix="checkin-receipt-ocr"
-)
+# Non-blocking admission cap: sheds load immediately instead of queueing behind
+# slow upstream calls if all slots are busy during an outage.
+_INFLIGHT_SEMAPHORE = threading.BoundedSemaphore(_MAX_INFLIGHT_READS)
 
 _TICKET_RE = re.compile(
     r"(?:ticket|trans(?:action)?|rcpt|receipt|check|order|ref)\s*(?:no\.?|num(?:ber)?|id|#|:)?\s*#?\s*([0-9A-Za-z-]{3,24})",
@@ -268,14 +271,27 @@ def _reading_from_ocr_fallback(ocr: OcrResult, tokens: set[str]) -> dict | None:
     }
 
 
+def _run_ocr_with_timeout(image_bytes: bytes, *, timeout: float) -> OcrResult:
+    try:
+        return run_ocr(image_bytes, timeout=timeout)
+    except TypeError:
+        return run_ocr(image_bytes)
+
+
 def _ask_vision_or_ocr(
     image_bytes: bytes,
     *,
     content_type: str,
     brand_hint: str,
     tokens: set[str],
+    deadline: float,
 ) -> dict | None:
-    """Try structured vision reader first; fall back to ``receipts.ocr.run_ocr``."""
+    """Try structured vision reader first; fall back to ``receipts.ocr.run_ocr``
+    only while time remains inside ``deadline``."""
+    remaining = deadline - time.monotonic()
+    if remaining <= _MIN_REMAINING_SECONDS:
+        return None
+
     user_prompt = RECEIPT_USER_V3
     if brand_hint:
         user_prompt += "\nThe brand and its products: " + brand_hint[:600]
@@ -289,7 +305,8 @@ def _ask_vision_or_ocr(
             schema=_RECEIPT_SCHEMA_V3,
             max_tokens=_MODEL_MAX_TOKENS,
             small=bool(getattr(settings, "RECEIPT_READER_USE_SMALL_MODEL", False)),
-            timeout=_MODEL_REQUEST_TIMEOUT,
+            timeout=min(_MODEL_REQUEST_TIMEOUT, remaining),
+            deadline=deadline,
         )
     except AiUnavailable:
         parsed = None
@@ -315,7 +332,10 @@ def _ask_vision_or_ocr(
         ):
             return merged
 
-    ocr = run_ocr(image_bytes)
+    remaining = deadline - time.monotonic()
+    if remaining <= _MIN_REMAINING_SECONDS:
+        return None
+    ocr = _run_ocr_with_timeout(image_bytes, timeout=remaining)
     return _reading_from_ocr_fallback(ocr, tokens)
 
 
@@ -351,19 +371,42 @@ def _extract_reading(
     if isinstance(cached, dict):
         return cached
 
-    prepared = downscale_image_bytes(image_bytes, max_dim=READ_MAX_DIM) or image_bytes
-    future = _EXECUTOR.submit(
-        _ask_vision_or_ocr,
-        prepared,
-        content_type="image/jpeg" if prepared is not image_bytes else content_type,
-        brand_hint=hint,
-        tokens=tokens,
-    )
-    try:
-        reading = future.result(timeout=MODEL_DEADLINE_SECONDS)
-    except Exception:  # noqa: BLE001 — deadline or runtime error degrades cleanly
-        future.cancel()
+    if not _INFLIGHT_SEMAPHORE.acquire(blocking=False):
         return None
+
+    prepared = downscale_image_bytes(image_bytes, max_dim=READ_MAX_DIM) or image_bytes
+    effective_ct = "image/jpeg" if prepared is not image_bytes else content_type
+    deadline = time.monotonic() + MODEL_DEADLINE_SECONDS
+    box: dict[str, dict | None] = {"reading": None}
+    done = threading.Event()
+
+    def _worker() -> None:
+        try:
+            box["reading"] = _ask_vision_or_ocr(
+                prepared,
+                content_type=effective_ct,
+                brand_hint=hint,
+                tokens=tokens,
+                deadline=deadline,
+            )
+        except Exception:  # noqa: BLE001 — deadline or runtime error degrades cleanly
+            box["reading"] = None
+        finally:
+            done.set()
+            _INFLIGHT_SEMAPHORE.release()
+
+    try:
+        worker = threading.Thread(
+            target=_worker, name="checkin-receipt-ocr", daemon=True
+        )
+        worker.start()
+    except Exception:  # noqa: BLE001
+        _INFLIGHT_SEMAPHORE.release()
+        return None
+
+    if not done.wait(timeout=max(0.01, deadline - time.monotonic())):
+        return None
+    reading = box["reading"]
     if isinstance(reading, dict):
         try:
             cache.set(key, reading, timeout=RESULT_CACHE_SECONDS)
@@ -408,28 +451,28 @@ def propose_brand_spend(reading: dict) -> dict:
 
     receipt_total = total.quantize(_CENT)
     brand_product: Decimal = summary["product"]
-    non_brand_lines = [
+    # Net signed non-brand total from summarize_receipt includes negative
+    # coupons/discounts/refunds on non-brand items (e.g. $5 item + -$2 coupon = $3).
+    net_other: Decimal = summary["other"].quantize(_CENT)
+    positive_non_brand_lines = [
         item
         for item in line_items
         if isinstance(item, dict)
         and not item.get("isBrand")
         and _d(item.get("amount")) > _ZERO
     ]
-    positive_other = sum(
-        (_d(item.get("amount")) for item in non_brand_lines), _ZERO
-    ).quantize(_CENT)
 
     # Exclude non-brand items when the receipt itemizes BOTH brand product(s)
-    # and non-brand item(s), so supply-only receipts (ice/cups) or unitemized
-    # store codes still propose the receipt total rather than $0.00.
-    if brand_product > _ZERO and _ZERO < positive_other < receipt_total:
-        proposed = (receipt_total - positive_other).quantize(_CENT)
+    # and a positive net non-brand amount, so supply-only receipts (ice/cups)
+    # or unitemized store codes still propose the receipt total rather than $0.00.
+    if brand_product > _ZERO and _ZERO < net_other < receipt_total:
+        proposed = (receipt_total - net_other).quantize(_CENT)
         return {
             "proposed_spend": proposed if proposed > _ZERO else None,
             "receipt_total": receipt_total,
             "brand_product": brand_product,
-            "excluded_non_brand_total": positive_other,
-            "excluded_non_brand_count": len(non_brand_lines),
+            "excluded_non_brand_total": net_other,
+            "excluded_non_brand_count": max(1, len(positive_non_brand_lines)),
         }
 
     return {

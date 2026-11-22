@@ -139,6 +139,44 @@ def test_propose_brand_spend_excludes_non_brand_items_on_mixed_receipt():
     assert out["excluded_non_brand_count"] == 1
 
 
+def test_propose_brand_spend_nets_negative_non_brand_discounts_and_refunds():
+    # $5.00 non-brand item with a -$2.00 coupon nets to $3.00 excluded, not $5.00.
+    discounted = propose_brand_spend(
+        {
+            "status": "read",
+            "total": Decimal("44.50"),
+            "fees": Decimal("0.00"),
+            "tax": Decimal("1.50"),
+            "line_items": [
+                {"name": "Brew Dr Peach", "amount": "40.00", "isBrand": True},
+                {"name": "Snack Pack", "amount": "5.00", "isBrand": False},
+                {"name": "Snack Coupon", "amount": "-2.00", "isBrand": False},
+            ],
+        }
+    )
+    assert discounted["proposed_spend"] == Decimal("41.50")
+    assert discounted["excluded_non_brand_total"] == Decimal("3.00")
+    assert discounted["excluded_non_brand_count"] == 1
+
+    # Fully refunded non-brand item ($5.00 - $5.00 = $0.00) subtracts nothing.
+    refunded = propose_brand_spend(
+        {
+            "status": "read",
+            "total": Decimal("41.50"),
+            "fees": Decimal("0.00"),
+            "tax": Decimal("1.50"),
+            "line_items": [
+                {"name": "Brew Dr Peach", "amount": "40.00", "isBrand": True},
+                {"name": "Snack Pack", "amount": "5.00", "isBrand": False},
+                {"name": "Snack Refund", "amount": "-5.00", "isBrand": False},
+            ],
+        }
+    )
+    assert refunded["proposed_spend"] == Decimal("41.50")
+    assert refunded["excluded_non_brand_total"] == Decimal("0.00")
+    assert refunded["excluded_non_brand_count"] == 0
+
+
 def test_propose_brand_spend_keeps_total_when_supply_only_or_all_brand():
     supply_only = propose_brand_spend(
         {
@@ -527,25 +565,40 @@ class TestCheckinReceiptOcr(AmbassadorsGraphQLTestCase):
         body = self._post(image_b64=base64.b64encode(raw).decode("ascii")).json()
         assert body["advisories"] == []
 
-    def test_slow_upstream_times_out_cleanly_without_blocking(self, monkeypatch):
+    def test_slow_upstream_times_out_cleanly_and_skips_fallback_after_deadline(
+        self, monkeypatch, settings
+    ):
+        # Use a non-fallback configured model to ensure neither the OpenAI
+        # model-fallback retry nor Google Vision run_ocr starts once the
+        # outer deadline has expired.
+        settings.OPENAI_MODEL = "gpt-5.4"
         monkeypatch.setattr(checkin_receipt_ocr, "MODEL_DEADLINE_SECONDS", 0.25)
+        openai_calls: list[float] = []
+        ocr_calls: list[float] = []
 
-        def slow(*_a, **_k):
-            time.sleep(1.2)
-            return _completion(_vision_receipt())
+        def slow(*_a, **kwargs):
+            openai_calls.append(float(kwargs.get("timeout") or 0))
+            time.sleep(0.35)
+            raise RuntimeError("upstream timed out")
+
+        def tracked_ocr(_b, *, timeout=25):
+            ocr_calls.append(float(timeout))
+            return OcrResult(ok=False, reason="skip")
 
         monkeypatch.setattr("utils.ai_text._post_json", slow)
-        monkeypatch.setattr(
-            checkin_receipt_ocr,
-            "run_ocr",
-            lambda _b: OcrResult(ok=False, reason="skip"),
-        )
+        monkeypatch.setattr(checkin_receipt_ocr, "run_ocr", tracked_ocr)
         started = time.monotonic()
         res = self._post()
 
         assert time.monotonic() - started < 1.0
         assert res.status_code == 200
         assert res.json()["available"] is False
+        # Wait briefly so the daemon worker finishes its sleep and verify it
+        # did NOT start a second OpenAI fallback attempt or a Vision OCR call.
+        time.sleep(0.2)
+        assert len(openai_calls) == 1
+        assert openai_calls[0] <= 0.25
+        assert ocr_calls == []
 
     def test_requires_valid_session_and_enforces_rate_limits(self, monkeypatch):
         self._mock_vision(monkeypatch, _vision_receipt())
