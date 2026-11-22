@@ -82,6 +82,11 @@ urlpatterns = [
         name="events.public_checkin_photo_check",
     ),
     path(
+        "checkin/<str:code>/shelf-coach",
+        checkin_views.public_checkin_shelf_coach,
+        name="events.public_checkin_shelf_coach",
+    ),
+    path(
         "checkin/<str:code>/voice-draft",
         checkin_views.public_checkin_voice_draft,
         name="events.public_checkin_voice_draft",

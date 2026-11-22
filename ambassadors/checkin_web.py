@@ -2320,6 +2320,17 @@ def build_public_context(event, ambassador=None) -> dict:
         # Time-sheet-only brand: the page is a clock and nothing else.
         "timesheetOnly": is_timesheet_only(tenant),
     }
+    # Store Prep Kit: logistics + last shelf + SKUs + training for BA shift cards.
+    # Soft-fail so an older front or a logistics miss never blanks the check-in.
+    if not payload["timesheetOnly"]:
+        try:
+            from recaps.store_prep_kit import build_store_prep_kit, prep_kit_is_empty
+
+            kit = build_store_prep_kit(event)
+            if not prep_kit_is_empty(kit):
+                payload["storePrepKit"] = kit
+        except Exception:  # noqa: BLE001
+            logger.exception("storePrepKit failed event=%s", getattr(event, "id", None))
     if payload["timesheetOnly"]:
         strip_for_timesheet_only(payload)
     if ambassador is not None and not payload["timesheetOnly"]:
@@ -4047,6 +4058,7 @@ def strip_for_timesheet_only(payload: dict) -> dict:
             payload[key] = [] if key == "photoBuckets" else None
     payload.pop("productQa", None)
     payload.pop("storeIdentity", None)
+    payload.pop("storePrepKit", None)
     # A time clock keys the event on where the phone is (GPS → address), so
     # it never asks for a roaming market.
     payload["locationMode"] = "address"
