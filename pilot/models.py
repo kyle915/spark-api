@@ -83,6 +83,23 @@ class WorkspaceProfile(models.Model):
         max_digits=10, decimal_places=2, null=True, blank=True
     )
     authorized_pos_retailer = models.CharField(max_length=150, blank=True, default="")
+    # Weekly buyer store-report digest (distinct from Tenant.client_weekly_digest).
+    buyer_weekly_digest_enabled = models.BooleanField(
+        default=False,
+        help_text=(
+            "When ON, this brand receives the Monday weekly buyer store-report "
+            "email (CSV attached). OFF by default — opt-in only."
+        ),
+    )
+    buyer_digest_recipient_emails = models.TextField(
+        blank=True,
+        default="",
+        help_text=(
+            "Optional override recipients for the weekly buyer digest "
+            "(comma/newline separated). When blank, brand_admin + "
+            "finance_reviewer membership emails are used."
+        ),
+    )
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -1883,8 +1900,6 @@ class WorkspaceSharedLink(models.Model):
     revoked_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
 
-
-# ---------------------------------------------------------------------------
 # Milestone 2 — Self-Service Onboarding, Plan Entitlements & Software Billing
 # ---------------------------------------------------------------------------
 
@@ -2253,4 +2268,128 @@ class BrandOnboardingProgress(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
     updated_at = models.DateTimeField(auto_now=True)
 
+
+
+
+class PosFeedConfig(models.Model):
+    """Per-banner automated POS feed configuration (email-drop / scheduled pull).
+
+    Brands mint an ingest token and forward weekly portal CSVs to
+    ``POST /api/public/pos-feed/<token>`` (or a future sync+ mailbox). Cron
+    processes pending ``PosFeedDrop`` rows through ``import_retailer_pos_csv``.
+    """
+
+    SOURCE_EMAIL_DROP = "email_drop"
+    SOURCE_MANUAL_UPLOAD = "manual_upload"
+    SOURCE_SFTP = "sftp"
+    SOURCE_CHOICES = [
+        (SOURCE_EMAIL_DROP, "Email / Webhook Drop"),
+        (SOURCE_MANUAL_UPLOAD, "Manual Upload Assist"),
+        (SOURCE_SFTP, "Scheduled SFTP / Connector"),
+    ]
+
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    tenant = models.ForeignKey(
+        "tenants.Tenant",
+        on_delete=models.CASCADE,
+        related_name="pos_feed_configs",
+    )
+    retailer_banner = models.CharField(max_length=150, db_index=True)
+    preset_key = models.CharField(max_length=64, blank=True, default="")
+    source_kind = models.CharField(
+        max_length=24, choices=SOURCE_CHOICES, default=SOURCE_EMAIL_DROP
+    )
+    ingest_token = models.CharField(max_length=64, unique=True, db_index=True)
+    enabled = models.BooleanField(default=True, db_index=True)
+    default_feed_completeness = models.CharField(
+        max_length=16,
+        default=RetailerSalesImport.COMPLETENESS_COMPLETE,
+    )
+    notes = models.TextField(blank=True, default="")
+    last_ingested_at = models.DateTimeField(null=True, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="pos_feed_configs_created",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["retailer_banner", "id"]
+        indexes = [
+            models.Index(
+                fields=["tenant", "enabled"],
+                name="pilot_posfeed_ten_en_idx",
+            )
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["tenant", "retailer_banner", "preset_key"],
+                name="pilot_posfeed_tenant_banner_preset_uniq",
+            )
+        ]
+
+    def __str__(self) -> str:
+        return f"PosFeed({self.tenant_id}, {self.retailer_banner}, {self.preset_key})"
+
+
+class PosFeedDrop(models.Model):
+    """Inbound POS CSV payload awaiting (or finished) automated import."""
+
+    STATUS_PENDING = "pending"
+    STATUS_PROCESSING = "processing"
+    STATUS_PROCESSED = "processed"
+    STATUS_FAILED = "failed"
+    STATUS_SKIPPED = "skipped"
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "Pending"),
+        (STATUS_PROCESSING, "Processing"),
+        (STATUS_PROCESSED, "Processed"),
+        (STATUS_FAILED, "Failed"),
+        (STATUS_SKIPPED, "Skipped"),
+    ]
+
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    tenant = models.ForeignKey(
+        "tenants.Tenant",
+        on_delete=models.CASCADE,
+        related_name="pos_feed_drops",
+    )
+    feed_config = models.ForeignKey(
+        PosFeedConfig,
+        on_delete=models.CASCADE,
+        related_name="drops",
+    )
+    status = models.CharField(
+        max_length=16, choices=STATUS_CHOICES, default=STATUS_PENDING, db_index=True
+    )
+    filename = models.CharField(max_length=255, blank=True, default="pos.csv")
+    csv_text = models.TextField()
+    file_sha256 = models.CharField(max_length=64, blank=True, default="", db_index=True)
+    source_from_email = models.EmailField(blank=True, default="")
+    source_message_id = models.CharField(max_length=255, blank=True, default="")
+    error_message = models.TextField(blank=True, default="")
+    sales_import = models.ForeignKey(
+        RetailerSalesImport,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="feed_drops",
+    )
+    received_at = models.DateTimeField(auto_now_add=True, editable=False)
+    processed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-received_at", "-id"]
+        indexes = [
+            models.Index(
+                fields=["tenant", "status", "received_at"],
+                name="pilot_posdrop_ten_st_rec_idx",
+            )
+        ]
 

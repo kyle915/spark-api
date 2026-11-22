@@ -37,11 +37,63 @@ from pilot.models import (
     ProductAlias,
     RetailerSalesImport,
     RetailerSalesRow,
+    WorkspaceMembership,
     WorkspaceProfile,
 )
 from pilot.permissions import ResolvedWorkspaceAccess, log_workspace_audit
+from pilot.pos_presets import (
+    POS_PRESET_DEFAULT_BANNERS,
+    resolve_pos_column_map,
+)
 
 RETAILER_UNAVAILABLE_MESSAGE = "Retailer sales unavailable"
+
+
+def system_workspace_access(tenant, *, actor=None) -> ResolvedWorkspaceAccess:
+    """Elevated brand access for automated POS ingest / cron jobs.
+
+    Prefers an explicit actor, then an active brand_admin membership, then any
+    active staff user. Raises if no actor can be resolved.
+    """
+    from django.contrib.auth import get_user_model
+
+    user = actor
+    if user is None:
+        mem = (
+            WorkspaceMembership.objects.select_related("user")
+            .filter(
+                tenant=tenant,
+                status=WorkspaceMembership.STATUS_ACTIVE,
+                workspace_role=WorkspaceMembership.ROLE_BRAND_ADMIN,
+            )
+            .order_by("id")
+            .first()
+        )
+        if mem is not None:
+            user = mem.user
+        else:
+            User = get_user_model()
+            user = (
+                User.objects.filter(is_staff=True, is_active=True)
+                .order_by("id")
+                .first()
+            )
+    if user is None:
+        raise PermissionError(
+            "No brand admin or staff actor available for automated POS import."
+        )
+    return ResolvedWorkspaceAccess(
+        user=user,
+        tenant=tenant,
+        membership=None,
+        workspace_role=WorkspaceMembership.ROLE_BRAND_ADMIN,
+        provider=None,
+        is_ignite_admin=True,
+        is_legacy_managed_member=False,
+        can_approve_recaps=True,
+        can_approve_finance=True,
+        can_approve_spend=True,
+    )
 
 _POS_SYNONYMS: dict[str, tuple[str, ...]] = {
     "retailer": ("retailer", "retailer_banner", "banner", "chain"),
@@ -219,6 +271,7 @@ def import_retailer_pos_csv(
     csv_text: str,
     filename: str = "pos.csv",
     column_map: dict[str, str] | None = None,
+    preset_key: str | None = None,
     feed_completeness: str = RetailerSalesImport.COMPLETENESS_COMPLETE,
     period_start_override: date | None = None,
     period_end_override: date | None = None,
@@ -229,7 +282,15 @@ def import_retailer_pos_csv(
         raise PermissionError(
             "You do not have permission to import retailer POS sales data."
         )
+    clean_preset = (preset_key or "").strip() or None
+    if clean_preset:
+        from pilot.pos_presets import POS_PRESETS
+
+        if clean_preset not in POS_PRESETS:
+            raise ValueError(f"Unknown POS preset_key: {clean_preset}")
     clean_banner = (retailer_banner or "").strip()
+    if not clean_banner and clean_preset:
+        clean_banner = POS_PRESET_DEFAULT_BANNERS.get(clean_preset, "").strip()
     if not clean_banner:
         raise ValueError("Retailer banner name is required.")
     require_pos_retailer_capacity(
@@ -248,7 +309,8 @@ def import_retailer_pos_csv(
     if not headers:
         raise ValueError("POS CSV has no header row.")
 
-    resolved_map = _infer_pos_map(headers, explicit_map=column_map)
+    effective_map = resolve_pos_column_map(clean_preset, column_map)
+    resolved_map = _infer_pos_map(headers, explicit_map=effective_map)
     raw_rows = [
         {
             str(k): (str(v).strip() if v is not None else "")
@@ -422,7 +484,11 @@ def import_retailer_pos_csv(
         feed_completeness=feed_completeness,
         filename=(filename or "pos.csv")[:255],
         file_sha256=file_hash,
-        mapping_snapshot=resolved_map,
+        mapping_snapshot={
+            "columns": resolved_map,
+            "preset_key": clean_preset or "",
+            "source": "automated" if clean_preset else "manual",
+        },
         total_rows=len(parsed_rows),
         matched_rows=matched_c,
         unmatched_rows=unmatched_c,
