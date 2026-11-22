@@ -323,22 +323,6 @@ def create_pending_jobs_for_request(request: Request) -> int:
             try:
                 if Job.objects.filter(event_id=ev.id).exists():
                     continue
-                seed_title = None
-                seed_body = None
-                try:
-                    from store_logistics.service import (
-                        format_briefing_with_logistics,
-                        get_store_logistics_for_event,
-                    )
-
-                    store_notes = get_store_logistics_for_event(ev)
-                    if store_notes:
-                        seed_title, seed_body = format_briefing_with_logistics(
-                            "", "", store_notes
-                        )
-                except Exception:
-                    seed_title = None
-                    seed_body = None
                 new_job = Job.objects.create(
                     tenant_id=request.tenant_id,
                     event_id=ev.id,
@@ -348,8 +332,6 @@ def create_pending_jobs_for_request(request: Request) -> int:
                     end_date=ev.end_time,
                     job_title=default_title,
                     rate=default_rate,
-                    briefing_title=seed_title,
-                    briefing_body=seed_body,
                     lifecycle_status=lifecycle_status,
                     posted_at=posted_at,
                     favorites_only=True,

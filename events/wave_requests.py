@@ -172,8 +172,84 @@ def _resolve_event_type_id(
                 return et.id
     if tenant_event_types:
         return tenant_event_types[0].id
-    fallback = models.EventType.objects.order_by("-is_default", "id").first()
-    return fallback.id if fallback else None
+    return None
+
+
+def _resolve_us_iana_tz(
+    state_code: str | None,
+    latitude: float | None,
+    longitude: float | None,
+) -> str | None:
+    """Resolve an IANA timezone for a US store, honoring GPS coordinates in
+    states that span multiple timezones (e.g. FL Panhandle, East TN, West TX,
+    Northern ID, Western KY/KS/NE/SD/ND, NW/SW IN, Upper MI, Malheur OR)."""
+    clean_state = (state_code or "").strip().upper()
+    has_lng = longitude is not None
+
+    if clean_state == "AZ":
+        return "America/Phoenix"
+    if clean_state == "HI":
+        return "Pacific/Honolulu"
+    if clean_state == "AK":
+        if has_lng and longitude <= -169.5:
+            return "America/Adak"
+        return "America/Anchorage"
+
+    if clean_state == "FL" and has_lng:
+        return "America/Chicago" if longitude < -85.0 else "America/New_York"
+    if clean_state == "TN" and has_lng:
+        return "America/New_York" if longitude >= -85.6 else "America/Chicago"
+    if clean_state == "KY" and has_lng:
+        return "America/Chicago" if longitude < -86.0 else "America/New_York"
+    if clean_state == "IN" and has_lng:
+        if latitude is not None:
+            if (latitude >= 41.0 and longitude < -86.8) or (
+                latitude < 38.5 and longitude < -87.1
+            ):
+                return "America/Chicago"
+        elif longitude < -87.0:
+            return "America/Chicago"
+        return "America/Indiana/Indianapolis"
+    if clean_state == "MI" and has_lng:
+        if (latitude is None or latitude >= 45.1) and longitude < -87.5:
+            return "America/Chicago"
+        return "America/Detroit"
+    if clean_state == "TX" and has_lng:
+        return "America/Denver" if longitude <= -104.85 else "America/Chicago"
+    if clean_state == "KS" and has_lng:
+        return "America/Denver" if longitude <= -101.5 else "America/Chicago"
+    if clean_state == "NE" and has_lng:
+        return "America/Denver" if longitude <= -100.8 else "America/Chicago"
+    if clean_state == "SD" and has_lng:
+        return "America/Denver" if longitude <= -100.3 else "America/Chicago"
+    if clean_state == "ND" and has_lng:
+        if longitude <= -101.5 and (latitude is None or latitude < 47.5):
+            return "America/Denver"
+        return "America/Chicago"
+    if clean_state == "ID" and latitude is not None:
+        return "America/Los_Angeles" if latitude >= 45.55 else "America/Boise"
+    if clean_state == "OR" and has_lng:
+        if longitude >= -117.5 and (latitude is None or latitude >= 43.2):
+            return "America/Boise"
+        return "America/Los_Angeles"
+
+    if clean_state in _US_STATE_IANA_TZ:
+        return _US_STATE_IANA_TZ[clean_state]
+
+    if has_lng:
+        if longitude <= -150.0:
+            return "Pacific/Honolulu"
+        if longitude <= -130.0:
+            return "America/Anchorage"
+        if longitude <= -114.5:
+            return "America/Los_Angeles"
+        if longitude <= -102.0:
+            return "America/Denver"
+        if longitude <= -85.5:
+            return "America/Chicago"
+        return "America/New_York"
+
+    return None
 
 
 def _infer_tz_for_date(
@@ -183,6 +259,7 @@ def _infer_tz_for_date(
     explicit_tz_id: int | None,
     explicit_tz_code: str | None,
     state_code: str | None,
+    latitude: float | None = None,
     longitude: float | None,
     event_date: datetime.date,
     default_tz_id: int | None,
@@ -199,19 +276,7 @@ def _infer_tz_for_date(
             raise ValueError(f"Unknown timezone_code '{explicit_tz_code}'.")
         return tz
 
-    iana_name: str | None = None
-    clean_state = (state_code or "").strip().upper()
-    if clean_state in _US_STATE_IANA_TZ:
-        iana_name = _US_STATE_IANA_TZ[clean_state]
-    elif longitude is not None:
-        if longitude <= -114.5:
-            iana_name = "America/Los_Angeles"
-        elif longitude <= -102.0:
-            iana_name = "America/Denver"
-        elif longitude <= -85.5:
-            iana_name = "America/Chicago"
-        else:
-            iana_name = "America/New_York"
+    iana_name = _resolve_us_iana_tz(state_code, latitude, longitude)
 
     if iana_name:
         probe = datetime.datetime(
@@ -396,6 +461,7 @@ def create_requests_from_wave(
                     explicit_tz_id=int(item_tz_id) if item_tz_id is not None else None,
                     explicit_tz_code=_optional_str(raw.get("timezone_code")),
                     state_code=resolved_state_code,
+                    latitude=latitude,
                     longitude=longitude,
                     event_date=event_date,
                     default_tz_id=default_timezone_id,

@@ -22,7 +22,7 @@ class StoreLogisticsNote(models.Model):
         related_name="store_logistics_notes",
     )
     place_key = models.CharField(max_length=128)
-    store_key_hint = models.CharField(max_length=64, blank=True, default="", db_index=True)
+    store_key_hint = models.CharField(max_length=128, blank=True, default="", db_index=True)
     store_name = models.CharField(max_length=255, blank=True, default="")
     address = models.TextField(blank=True, default="")
     notes = models.TextField(blank=True, default="")

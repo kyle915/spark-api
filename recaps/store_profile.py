@@ -445,7 +445,50 @@ def build_store_profile(
 
     key = valid_key(raw_key)
     if key is None:
-        return None
+        from store_logistics.service import (
+            get_store_logistics_note,
+            resolve_non_request_store,
+        )
+
+        non_req = resolve_non_request_store(tenant_id, str(raw_key or ""))
+        if non_req is None:
+            return None
+        logistics_notes, logistics_notes_updated_at = get_store_logistics_note(
+            tenant_id,
+            store_key=non_req["key"],
+            store_name=non_req["name"],
+            address=non_req["address"],
+            coordinates=non_req["coordinates"],
+        )
+        return StoreProfile(
+            store_key=non_req["key"],
+            name=non_req["name"],
+            address=non_req["address"],
+            city=non_req["city"],
+            state=non_req["state"],
+            summary="",
+            summary_source="none",
+            totals=StoreTotals(
+                visits=0,
+                upcoming=0,
+                approved_recaps=0,
+                consumers=0,
+                units_sold=0,
+                conversion=None,
+                average_consumers=None,
+                average_units_sold=None,
+                first_visit=None,
+                last_visit=None,
+            ),
+            visits=[],
+            visit_total=0,
+            products=[],
+            comments=[],
+            photos=[],
+            staff=StoreStaff(in_review=0, missing_recap=0) if staff else None,
+            logistics_notes=logistics_notes,
+            logistics_notes_updated_at=logistics_notes_updated_at,
+        )
     places = tenant_places(tenant_id)
     if not places.has(key):
         return None

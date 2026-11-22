@@ -22,7 +22,7 @@ class Migration(migrations.Migration):
                 ('id', models.BigAutoField(primary_key=True, serialize=False)),
                 ('uuid', models.UUIDField(default=uuid6.uuid7, editable=False, unique=True)),
                 ('place_key', models.CharField(max_length=128)),
-                ('store_key_hint', models.CharField(blank=True, db_index=True, default='', max_length=64)),
+                ('store_key_hint', models.CharField(blank=True, db_index=True, default='', max_length=128)),
                 ('store_name', models.CharField(blank=True, default='', max_length=255)),
                 ('address', models.TextField(blank=True, default='')),
                 ('notes', models.TextField(blank=True, default='')),

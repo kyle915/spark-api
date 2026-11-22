@@ -161,6 +161,12 @@ class TestWaveRequestsAndStoreLogistics(EventsGraphQLTestCase):
         self.tz_edt, _ = em.TimeZone.objects.get_or_create(
             code="EDT", defaults={"name": "Eastern Daylight Time", "offset": -4}
         )
+        self.tz_cdt, _ = em.TimeZone.objects.get_or_create(
+            code="CDT", defaults={"name": "Central Daylight Time", "offset": -5}
+        )
+        self.tz_mdt, _ = em.TimeZone.objects.get_or_create(
+            code="MDT", defaults={"name": "Mountain Daylight Time", "offset": -6}
+        )
 
         self.state_ca, _ = em.State.objects.get_or_create(
             code="CA", defaults={"name": "California", "created_by": self.admin}
@@ -354,7 +360,8 @@ class TestWaveRequestsAndStoreLogistics(EventsGraphQLTestCase):
 
             ca_event = em.Event.objects.get(request=ca_req)
             ca_job = Job.objects.get(event=ca_event)
-            assert "Maria at Customer Service" in (ca_job.briefing_body or "")
+            # Dynamic store logistics notes must NOT be baked into persisted Job columns
+            assert (ca_job.briefing_body or "") == ""
             return str(ca_event.uuid)
 
         ca_event_uuid = await sync_to_async(_verify_created)()
@@ -375,7 +382,8 @@ class TestWaveRequestsAndStoreLogistics(EventsGraphQLTestCase):
         rep_payload = repeat.data["createRequestsWave"]
         assert (rep_payload["successCount"], rep_payload["skippedCount"]) == (0, 2)
 
-        # 4. Querying jobBriefingForEvent surfaces store logistics notes
+        # 4. Querying jobBriefingForEvent surfaces store logistics notes dynamically,
+        # and editing or clearing the store note leaves zero stale text behind.
         brief = await self._execute_mutation(
             JOB_BRIEFING_QUERY,
             {"eventUuid": ca_event_uuid},
@@ -383,6 +391,26 @@ class TestWaveRequestsAndStoreLogistics(EventsGraphQLTestCase):
         )
         assert brief.errors is None, brief.errors
         assert "Maria at Customer Service" in brief.data["jobBriefingForEvent"]["body"]
+
+        def _update_note(new_text: str):
+            StoreLogisticsNote.objects.filter(tenant=self.tenant).update(notes=new_text)
+
+        await sync_to_async(_update_note)("Enter via north loading bay; ring bell twice.")
+        brief_edited = await self._execute_mutation(
+            JOB_BRIEFING_QUERY,
+            {"eventUuid": ca_event_uuid},
+            user=self.client_user,
+        )
+        assert "north loading bay" in brief_edited.data["jobBriefingForEvent"]["body"]
+        assert "Maria at Customer Service" not in brief_edited.data["jobBriefingForEvent"]["body"]
+
+        await sync_to_async(_update_note)("")
+        brief_cleared = await self._execute_mutation(
+            JOB_BRIEFING_QUERY,
+            {"eventUuid": ca_event_uuid},
+            user=self.client_user,
+        )
+        assert brief_cleared.data["jobBriefingForEvent"]["body"] == ""
 
     @pytest.mark.asyncio
     async def test_wave_rollback_on_error_and_cross_tenant_rejection(self):
@@ -701,3 +729,159 @@ class TestWaveRequestsAndStoreLogistics(EventsGraphQLTestCase):
                 is_approved=True,
             ).exists
         )()
+
+    @pytest.mark.asyncio
+    async def test_split_state_timezones_list_dedupe_keys_and_tenant_event_type_isolation(self):
+        # 1. AccountListEntry with lat/lng saved via both list:<uuid> and list:<dedupe_key> (64-char sha256)
+        def _seed_unvisited_entry():
+            return em.AccountListEntry.objects.create(
+                tenant=self.tenant,
+                name="Publix Pensacola",
+                address="2180 W Nine Mile Rd",
+                city="Pensacola",
+                state="FL",
+                zip="32534",
+                lat=30.5331,
+                lng=-87.3112,
+                position_status=em.AccountListEntry.POSITION_PROVIDED,
+                address_hash=address_hash("2180 W Nine Mile Rd, Pensacola, FL 32534"),
+                dedupe_key="a" * 64,
+                notes="CSV note",
+            )
+
+        entry = await sync_to_async(_seed_unvisited_entry)()
+
+        # Save via list:<dedupe_key> (emitted by sample_next.py)
+        dedupe_store_key = f"list:{entry.dedupe_key}"
+        saved_dedupe = await self._execute_mutation(
+            SAVE_LOGISTICS_MUTATION,
+            {
+                "input": {
+                    "tenantId": str(self.tenant.id),
+                    "storeKey": dedupe_store_key,
+                    "notes": "Ask for grocery manager on aisle 1.",
+                }
+            },
+            user=self.client_user,
+        )
+        assert saved_dedupe.errors is None, saved_dedupe.errors
+        assert saved_dedupe.data["saveStoreLogisticsNotes"]["success"] is True
+
+        # Save via list:<uuid> (emitted by accountStores.ts)
+        uuid_store_key = f"list:{entry.uuid}"
+        saved_uuid = await self._execute_mutation(
+            SAVE_LOGISTICS_MUTATION,
+            {
+                "input": {
+                    "tenantId": str(self.tenant.id),
+                    "storeKey": uuid_store_key,
+                    "notes": "Updated via UUID key: check in at customer service.",
+                }
+            },
+            user=self.client_user,
+        )
+        assert saved_uuid.errors is None, saved_uuid.errors
+        assert saved_uuid.data["saveStoreLogisticsNotes"]["success"] is True
+
+        # storeProfile works on unvisited list:<dedupe_key> and reflects the saved note
+        prof_list = await self._execute_mutation(
+            STORE_PROFILE_QUERY,
+            {"tenantId": str(self.tenant.id), "storeKey": dedupe_store_key},
+            user=self.client_user,
+        )
+        assert prof_list.errors is None, prof_list.errors
+        assert (
+            prof_list.data["storeProfile"]["logisticsNotes"]
+            == "Updated via UUID key: check in at customer service."
+        )
+
+        # 2. Split-timezone states resolve via coordinates (Pensacola FL -> CDT, Knoxville TN -> EDT, El Paso TX -> MDT)
+        split_wave = await self._execute_mutation(
+            WAVE_MUTATION,
+            {
+                "input": {
+                    "tenantId": str(self.tenant.id),
+                    "requestTypeId": str(self.req_type.id),
+                    "items": [
+                        {
+                            "storeName": "Publix Pensacola",
+                            "address": "2180 W Nine Mile Rd, Pensacola, FL 32534",
+                            "city": "Pensacola",
+                            "state": "FL",
+                            "latitude": 30.5331,
+                            "longitude": -87.3112,
+                            "date": "2026-07-18",
+                            "startTime": "12:00",
+                            "endTime": "16:00",
+                        },
+                        {
+                            "storeName": "Food City Knoxville",
+                            "address": "1950 Western Ave, Knoxville, TN 37921",
+                            "city": "Knoxville",
+                            "state": "TN",
+                            "latitude": 35.9658,
+                            "longitude": -83.9496,
+                            "date": "2026-07-18",
+                            "startTime": "12:00",
+                            "endTime": "16:00",
+                        },
+                        {
+                            "storeName": "Albertsons El Paso",
+                            "address": "3100 N Mesa St, El Paso, TX 79902",
+                            "city": "El Paso",
+                            "state": "TX",
+                            "latitude": 31.7802,
+                            "longitude": -106.5034,
+                            "date": "2026-07-18",
+                            "startTime": "12:00",
+                            "endTime": "16:00",
+                        },
+                    ],
+                }
+            },
+            user=self.client_user,
+        )
+        assert split_wave.errors is None, split_wave.errors
+        assert split_wave.data["createRequestsWave"]["successCount"] == 3
+
+        def _check_split_timezones():
+            by_name = {
+                r.retailer_name: r.timezone.code
+                for r in em.Request.objects.filter(tenant=self.tenant).select_related("timezone")
+            }
+            assert by_name["Publix Pensacola"] == "CDT"
+            assert by_name["Food City Knoxville"] == "EDT"
+            assert by_name["Albertsons El Paso"] == "MDT"
+
+        await sync_to_async(_check_split_timezones)()
+
+        # 3. Tenant with zero EventTypes (`self.other`) leaves Event.event_type_id=None
+        # instead of borrowing `self.tenant`'s EventType
+        other_wave = await self._execute_mutation(
+            WAVE_MUTATION,
+            {
+                "input": {
+                    "tenantId": str(self.other.id),
+                    "requestTypeId": str(self.other_req_type.id),
+                    "items": [
+                        {
+                            "storeName": "Other Brand Store",
+                            "address": "500 Congress Ave, Austin, TX 78701",
+                            "state": "TX",
+                            "date": "2026-07-19",
+                            "startTime": "11:00",
+                            "endTime": "15:00",
+                        }
+                    ],
+                }
+            },
+            user=self.other_client,
+        )
+        assert other_wave.errors is None, other_wave.errors
+        assert other_wave.data["createRequestsWave"]["successCount"] == 1
+
+        def _check_other_event_type():
+            ev = em.Event.objects.get(tenant=self.other)
+            assert ev.event_type_id is None
+
+        await sync_to_async(_check_other_event_type)()
