@@ -2426,14 +2426,9 @@ def resolve_checkin_target(code: str):
     if not clean:
         return None, None
     if clean.upper().startswith("PA-"):
-        from pilot.workspaces import resolve_assignment_by_submission_code
+        from pilot.workspaces import resolve_checkin_target_for_assignment
 
-        assignment = resolve_assignment_by_submission_code(clean)
-        if assignment is None:
-            return None, None
-        if assignment.scope_type == "visit" and assignment.event is not None:
-            return "event", assignment.event
-        return "tenant", assignment.tenant
+        return resolve_checkin_target_for_assignment(clean)
     tenant = Tenant.objects.filter(checkin_code__iexact=clean).first()
     if tenant is not None:
         return "tenant", tenant

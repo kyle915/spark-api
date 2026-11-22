@@ -155,11 +155,33 @@ def create_or_update_provider(
             created_by=access.user,
         )
     else:
-        provider.name = clean_name
-        if contact_email:
-            provider.contact_email = contact_email.strip()
-        provider.is_active = True
-        provider.save(update_fields=["name", "contact_email", "is_active", "updated_at"])
+        # ProviderOrganization rows are shared across brand workspaces. A brand
+        # administrator may link an existing active provider to their workspace
+        # without mutating its shared identity or reactivating a globally
+        # disabled provider.
+        if not provider.is_active and not access.is_ignite_admin:
+            raise PermissionError(
+                "This provider organization is inactive and cannot be modified by a brand workspace."
+            )
+        shared_with_other_tenants = (
+            ProviderSourceInclusionRule.objects.filter(provider=provider)
+            .exclude(tenant=access.tenant)
+            .exists()
+            or WorkspaceMembership.objects.filter(provider=provider)
+            .exclude(tenant=access.tenant)
+            .exists()
+            or ProviderAssignment.objects.filter(provider=provider)
+            .exclude(tenant=access.tenant)
+            .exists()
+        )
+        if access.is_ignite_admin and not shared_with_other_tenants:
+            provider.name = clean_name
+            if contact_email:
+                provider.contact_email = contact_email.strip()
+            provider.is_active = True
+            provider.save(
+                update_fields=["name", "contact_email", "is_active", "updated_at"]
+            )
 
     ProviderSourceInclusionRule.objects.get_or_create(
         tenant=access.tenant,
@@ -374,6 +396,10 @@ def accept_workspace_invitation(
         raise ValueError("Invitation token is invalid.")
     if invitation.status == WorkspaceInvitation.STATUS_REVOKED:
         raise PermissionError("This workspace invitation was revoked.")
+    if invitation.status == WorkspaceInvitation.STATUS_ACCEPTED:
+        raise PermissionError("This workspace invitation has already been accepted.")
+    if invitation.status != WorkspaceInvitation.STATUS_PENDING:
+        raise PermissionError("This workspace invitation is no longer pending.")
     if invitation.expires_at < timezone.now():
         invitation.status = WorkspaceInvitation.STATUS_EXPIRED
         invitation.save(update_fields=["status", "updated_at"])
@@ -1004,6 +1030,100 @@ def revoke_provider_assignment(
         summary=f"Revoked assignment {assignment.submission_code} from {assignment.provider.name}.",
     )
     return assignment
+
+
+def ensure_event_for_canonical_visit(
+    visit: CanonicalVisit,
+    *,
+    event_type: EventType | None = None,
+    actor: User | None = None,
+) -> Event:
+    """Materialize and attach a visit-scoped `events.Event` when a
+    `CanonicalVisit` has no legacy `Event` yet so `/checkin/PA-*` codes on
+    visit-scoped assignments stay locked to that single visit."""
+    if visit.event_id is not None and visit.event is not None:
+        return visit.event
+
+    from datetime import datetime, time
+    from datetime import timezone as dt_timezone
+
+    resolved_actor = (
+        actor
+        or getattr(visit.tenant, "created_by", None)
+        or WorkspaceMembership.objects.filter(
+            tenant=visit.tenant, status=WorkspaceMembership.STATUS_ACTIVE
+        )
+        .select_related("user")
+        .first()
+    )
+    if isinstance(resolved_actor, WorkspaceMembership):
+        resolved_actor = resolved_actor.user
+    if resolved_actor is None:
+        resolved_actor = User.objects.order_by("id").first()
+    if resolved_actor is None:
+        raise ValueError("Cannot materialize Event without a creator user.")
+
+    day_dt = visit.start_time or datetime.combine(
+        visit.visit_date, time(12, 0), tzinfo=dt_timezone.utc
+    )
+    resolved_type = event_type or visit.event_type
+    title = (
+        visit.store_label
+        or visit.address
+        or f"Assigned Visit {visit.visit_date.isoformat()}"
+    )[:255]
+    event = Event.objects.create(
+        tenant=visit.tenant,
+        request=visit.request,
+        retailer=visit.retailer,
+        event_type=resolved_type,
+        name=title,
+        address=visit.address or "",
+        date=day_dt,
+        start_time=visit.start_time,
+        end_time=visit.end_time,
+        track_mileage=bool(getattr(visit.tenant, "default_track_mileage", False)),
+        mileage_rate=getattr(visit.tenant, "default_mileage_rate", None),
+        created_by=resolved_actor,
+        updated_by=resolved_actor,
+    )
+    visit.event = event
+    if resolved_type and visit.event_type_id is None:
+        visit.event_type = resolved_type
+        visit.save(update_fields=["event", "event_type", "updated_at"])
+    else:
+        visit.save(update_fields=["event", "updated_at"])
+    return event
+
+
+def resolve_checkin_target_for_assignment(
+    code: str | None,
+) -> tuple[str | None, Any]:
+    """Resolve a `PA-XXXXXX` code for `/checkin/<code>`.
+    Visit-scoped assignments bind strictly to their assigned visit's `Event`
+    (materializing one on `canonical_visit` when needed) and NEVER fall back
+    to tenant-wide arbitrary store/date selection."""
+    assignment = resolve_assignment_by_submission_code(code)
+    if assignment is None:
+        return None, None
+    if (
+        assignment.scope_type == ProviderAssignment.SCOPE_VISIT
+        or assignment.canonical_visit_id is not None
+    ):
+        if assignment.event is not None:
+            return "event", assignment.event
+        if assignment.canonical_visit is not None:
+            event = ensure_event_for_canonical_visit(
+                assignment.canonical_visit,
+                event_type=assignment.event_type,
+                actor=assignment.created_by,
+            )
+            if assignment.event_id != event.id:
+                assignment.event = event
+                assignment.save(update_fields=["event", "updated_at"])
+            return "event", event
+        return None, None
+    return "tenant", assignment.tenant
 
 
 def resolve_assignment_by_submission_code(

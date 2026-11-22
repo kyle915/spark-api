@@ -57,16 +57,38 @@ def public_provider_submission_view(
             {"id": p.id, "name": p.name}
             for p in Product.objects.filter(tenant=tenant).order_by("name")
         ]
+        visit_obj = (
+            {
+                "uuid": str(assignment.canonical_visit.uuid),
+                "store_label": assignment.canonical_visit.store_label,
+                "address": assignment.canonical_visit.address,
+                "city": assignment.canonical_visit.city,
+                "state_code": assignment.canonical_visit.state_code,
+                "visit_date": assignment.canonical_visit.visit_date.isoformat(),
+            }
+            if assignment.canonical_visit
+            else None
+        )
         return JsonResponse(
             {
                 "ok": True,
                 "submissionCode": assignment.submission_code,
+                "submission_code": assignment.submission_code,
                 "brandName": tenant.name,
+                "brand_name": tenant.name,
                 "providerName": provider.name,
+                "provider_name": provider.name,
                 "scopeType": assignment.scope_type,
+                "scope_type": assignment.scope_type,
                 "eventTypeId": assignment.event_type_id,
                 "programName": (
                     assignment.event_type.name if assignment.event_type else None
+                ),
+                "program_name": (
+                    assignment.event_type.name if assignment.event_type else None
+                ),
+                "due_date": (
+                    assignment.due_date.isoformat() if assignment.due_date else None
                 ),
                 "visitUuid": (
                     str(assignment.canonical_visit.uuid)
@@ -83,19 +105,35 @@ def public_provider_submission_view(
                     if assignment.canonical_visit
                     else None
                 ),
+                "visit": visit_obj,
                 "allowMultiplePhotos": True,
                 "allowMultipleReceipts": True,
                 "products": products,
             }
         )
 
-    try:
-        payload = json.loads(request.body.decode("utf-8") or "{}")
-    except (ValueError, UnicodeDecodeError):
-        return JsonResponse(
-            {"error": "invalid_json", "message": "Invalid JSON body."},
-            status=400,
-        )
+    content_type = (request.content_type or "").lower()
+    if content_type.startswith("multipart/form-data"):
+        raw_payload = request.POST.get("payload") or "{}"
+        try:
+            payload = json.loads(raw_payload)
+        except ValueError:
+            return JsonResponse(
+                {"error": "invalid_json", "message": "Invalid multipart payload JSON."},
+                status=400,
+            )
+        uploaded_photos = [f.name for f in request.FILES.getlist("photos")]
+        uploaded_receipts = [f.name for f in request.FILES.getlist("receipts")]
+    else:
+        try:
+            payload = json.loads(request.body.decode("utf-8") or "{}")
+        except (ValueError, UnicodeDecodeError):
+            return JsonResponse(
+                {"error": "invalid_json", "message": "Invalid JSON body."},
+                status=400,
+            )
+        uploaded_photos = []
+        uploaded_receipts = []
 
     # Strictly enforce assignment scope — never allow submitting to another
     # program or visit!
@@ -155,16 +193,27 @@ def public_provider_submission_view(
                 },
                 status=403,
             )
-        raw_date = (payload.get("visitDate") or "").strip()
+        raw_date = (
+            payload.get("visitDate") or payload.get("visit_date") or ""
+        ).strip()
         visit_date = (
             date.fromisoformat(raw_date)
             if raw_date
             else timezone.now().date()
         )
-        store_name = (payload.get("storeName") or "").strip()
+        store_name = (
+            payload.get("storeName")
+            or payload.get("store_banner")
+            or ""
+        ).strip()
+        store_num = (payload.get("store_number") or "").strip()
+        if store_name and store_num and f"#{store_num}" not in store_name:
+            store_name = f"{store_name} #{store_num}"
         address = (payload.get("address") or "").strip()
         city = (payload.get("city") or "").strip()
-        state_code = (payload.get("stateCode") or "").strip().upper()
+        state_code = (
+            payload.get("stateCode") or payload.get("state") or ""
+        ).strip().upper()
         if not store_name and not address:
             return JsonResponse(
                 {
@@ -176,6 +225,7 @@ def public_provider_submission_view(
         s_key, s_label, c_key, c_label = store_identity(
             store_name, address, city, state_code
         )
+        shift_label = (payload.get("shift_key") or "default").strip() or "default"
         visit = CanonicalVisit.objects.create(
             tenant=tenant,
             primary_provider=provider,
@@ -184,24 +234,41 @@ def public_provider_submission_view(
             store_label=s_label,
             chain_key=c_key,
             chain_label=c_label,
+            store_number=store_num,
             address=address,
             city=city,
             state_code=state_code,
             market=city or state_code,
             visit_date=visit_date,
-            shift_key=f"mobile:{assignment.submission_code}:{timezone.now().strftime('%H%M%S')}",
+            shift_key=f"mobile:{assignment.submission_code}:{shift_label}:{timezone.now().strftime('%H%M%S')}",
             status=CanonicalVisit.STATUS_NEEDS_REVIEW,
         )
 
-    photos = payload.get("photos") if isinstance(payload.get("photos"), list) else []
+    photos = (
+        payload.get("photos")
+        if isinstance(payload.get("photos"), list)
+        else uploaded_photos
+    )
     receipts = (
         payload.get("receipts")
         if isinstance(payload.get("receipts"), list)
-        else []
+        else uploaded_receipts
     )
-    samples = payload.get("samplesDistributed")
-    consumers = payload.get("consumersSampled")
-    observed_units = payload.get("repObservedUnits")
+    samples = (
+        payload.get("samplesDistributed")
+        if payload.get("samplesDistributed") is not None
+        else payload.get("samples_distributed")
+    )
+    consumers = (
+        payload.get("consumersSampled")
+        if payload.get("consumersSampled") is not None
+        else payload.get("consumers_sampled")
+    )
+    observed_units = (
+        payload.get("repObservedUnits")
+        if payload.get("repObservedUnits") is not None
+        else payload.get("rep_observed_units")
+    )
     notes = (payload.get("notes") or "").strip()
 
     rule = ProviderSourceInclusionRule.objects.filter(
@@ -243,15 +310,42 @@ def public_provider_submission_view(
         ]
     )
 
+    expense_lines = (
+        payload.get("expense_lines")
+        if isinstance(payload.get("expense_lines"), list)
+        else []
+    )
     if payload.get("productSpend") is not None:
-        spend_amt = quantize_money(Decimal(str(payload["productSpend"])))
+        expense_lines = [
+            {
+                "category": "product",
+                "amount": payload["productSpend"],
+                "description": f"{provider.name} mobile field product spend",
+                "is_itemized": bool(payload.get("receiptsItemized", True)),
+            },
+            *expense_lines,
+        ]
+
+    for exp in expense_lines:
+        if not isinstance(exp, dict) or exp.get("amount") is None:
+            continue
+        spend_amt = quantize_money(Decimal(str(exp["amount"])))
+        cat_raw = (exp.get("category") or "product").strip().lower()
+        cat = (
+            BrandCostLine.CAT_SUPPLIES
+            if cat_raw in {"supplies", "supply_kit"}
+            else BrandCostLine.CAT_PRODUCT
+        )
         line = BrandCostLine.objects.create(
             tenant=tenant,
             canonical_visit=visit,
             provider=provider,
-            category=BrandCostLine.CAT_PRODUCT,
+            category=cat,
             source_type=BrandCostLine.SOURCE_EXPENSE_RECEIPT,
-            description=f"{provider.name} mobile field product spend",
+            description=(
+                exp.get("description")
+                or f"{provider.name} mobile field {cat_raw} spend"
+            )[:255],
             amount=spend_amt,
             is_confirmed_zero=spend_amt == Decimal("0.00"),
             settlement_status=BrandCostLine.SETTLEMENT_ESTIMATED,
@@ -267,8 +361,9 @@ def public_provider_submission_view(
                 proof_url=str(rec_url)[:500],
                 label=f"Mobile receipt #{idx}",
                 verified_amount=spend_amt if len(receipts) == 1 else None,
-                is_itemized=bool(payload.get("receiptsItemized", True)),
+                is_itemized=bool(exp.get("is_itemized", True)),
             )
+    if expense_lines:
         recompute_visit_cost_summary(visit)
 
     progress = BrandOnboardingProgress.objects.filter(tenant=tenant).first()
@@ -290,7 +385,9 @@ def public_provider_submission_view(
         {
             "ok": True,
             "visitUuid": str(visit.uuid),
+            "visit_uuid": str(visit.uuid),
             "submissionUuid": str(sub.uuid),
+            "submission_uuid": str(sub.uuid),
             "status": visit.status,
             "photoCount": len(photos),
             "receiptCount": len(receipts),

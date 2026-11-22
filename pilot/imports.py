@@ -521,6 +521,8 @@ def find_matching_canonical_visit(
        - Otherwise attach onto the matching CanonicalVisit so two providers (or
          a scheduled visit + provider upload) reconcile onto ONE canonical visit!
     """
+    existing_sub: VisitSubmissionSource | None = None
+    clean_shift = (shift_key or "").strip().lower()
     if provider_event_id:
         existing_sub = (
             VisitSubmissionSource.objects.select_related("canonical_visit")
@@ -532,9 +534,28 @@ def find_matching_canonical_visit(
             .first()
         )
         if existing_sub is not None:
-            return existing_sub.canonical_visit, existing_sub
+            old_visit = existing_sub.canonical_visit
+            old_shift = (old_visit.shift_key or "").strip().lower()
+            norm_new_shift = clean_shift or "default"
+            norm_old_shift = old_shift or "default"
+            if norm_old_shift.startswith("event:"):
+                shift_same = norm_new_shift == "default"
+            else:
+                shift_same = norm_new_shift == norm_old_shift
 
-    candidates = list(
+            same_identity = (
+                old_visit.status != CanonicalVisit.STATUS_CANCELLED
+                and old_visit.visit_date == visit_date
+                and old_visit.store_key == store_key
+                and shift_same
+                and not _windows_disjoint(
+                    start_dt, end_dt, old_visit.start_time, old_visit.end_time
+                )
+            )
+            if same_identity:
+                return old_visit, existing_sub
+
+    candidates_qs = (
         CanonicalVisit.objects.prefetch_related("submissions")
         .filter(
             tenant=tenant,
@@ -542,9 +563,10 @@ def find_matching_canonical_visit(
             store_key=store_key,
         )
         .exclude(status=CanonicalVisit.STATUS_CANCELLED)
-        .order_by("start_time", "id")
     )
-    clean_shift = (shift_key or "").strip().lower()
+    if existing_sub is not None:
+        candidates_qs = candidates_qs.exclude(pk=existing_sub.canonical_visit_id)
+    candidates = list(candidates_qs.order_by("start_time", "id"))
 
     for candidate in candidates:
         cand_shift = (candidate.shift_key or "").strip().lower()
@@ -572,7 +594,12 @@ def find_matching_canonical_visit(
         # ONLY when the candidate already has a submission from this provider
         # with another provider_event_id!
         same_provider_sub = next(
-            (s for s in candidate.submissions.all() if s.provider_id == provider.id),
+            (
+                s
+                for s in candidate.submissions.all()
+                if s.provider_id == provider.id
+                and (existing_sub is None or s.id != existing_sub.id)
+            ),
             None,
         )
         if (
@@ -583,9 +610,9 @@ def find_matching_canonical_visit(
         ):
             continue
 
-        return candidate, same_provider_sub
+        return candidate, existing_sub if existing_sub is not None else same_provider_sub
 
-    return None, None
+    return None, existing_sub
 
 
 def recompute_canonical_visit_metrics(visit: CanonicalVisit) -> CanonicalVisit:
@@ -1305,6 +1332,10 @@ def _apply_normalized_row_to_db(
     ).first()
     provider_excluded = bool(rule and not rule.include_in_combined_reporting)
 
+    old_visit = (
+        existing_sub.canonical_visit if existing_sub is not None else None
+    )
+
     if existing_visit is None:
         visit = CanonicalVisit.objects.create(
             tenant=tenant,
@@ -1348,7 +1379,10 @@ def _apply_normalized_row_to_db(
 
     fp = _row_fingerprint(normalized)
     if existing_sub is not None:
-        if existing_sub.row_fingerprint == fp:
+        if (
+            existing_sub.row_fingerprint == fp
+            and existing_sub.canonical_visit_id == visit.id
+        ):
             recompute_canonical_visit_metrics(visit)
             return (
                 ProviderImportRow.STATUS_UNCHANGED,
@@ -1358,6 +1392,7 @@ def _apply_normalized_row_to_db(
             )
         prev_entry = {
             "version": existing_sub.version,
+            "canonical_visit_uuid": str(existing_sub.canonical_visit.uuid),
             "samples_distributed": existing_sub.samples_distributed,
             "consumers_sampled": existing_sub.consumers_sampled,
             "rep_observed_units": existing_sub.rep_observed_units,
@@ -1368,6 +1403,7 @@ def _apply_normalized_row_to_db(
         }
         history = list(existing_sub.previous_versions or [])
         history.append(prev_entry)
+        existing_sub.canonical_visit = visit
         existing_sub.version += 1
         existing_sub.row_fingerprint = fp
         existing_sub.samples_distributed = normalized.get("samples_distributed")
@@ -1404,16 +1440,22 @@ def _apply_normalized_row_to_db(
         outcome = ProviderImportRow.STATUS_CREATED
         msg = "Imported provider submission onto canonical visit."
 
-    # Record optional provider-reported cost lines without duplicating on update.
+    from pilot.costs import recompute_visit_cost_summary
+    from pilot.finance import evaluate_finance_exceptions
+    from pilot.models import FinanceException
+
+    # Record optional provider-reported cost lines, moving them if the visit
+    # changed and removing stale lines when a correction clears an amount.
+    demo_fee_ref = f"import-sub:{sub.id}:demo_fee"
     if normalized.get("demo_fee") is not None:
         fee_amt = Decimal(str(normalized["demo_fee"]))
         BrandCostLine.objects.update_or_create(
             tenant=tenant,
-            canonical_visit=visit,
             provider=provider,
             category=BrandCostLine.CAT_DEMO_FEE,
-            source_reference=f"import-sub:{sub.id}:demo_fee",
+            source_reference=demo_fee_ref,
             defaults={
+                "canonical_visit": visit,
                 "source_type": BrandCostLine.SOURCE_INVOICE_LINE,
                 "description": f"{provider.name} reported demo fee",
                 "amount": fee_amt,
@@ -1425,16 +1467,22 @@ def _apply_normalized_row_to_db(
                 ),
             },
         )
+    else:
+        BrandCostLine.objects.filter(
+            tenant=tenant,
+            source_reference=demo_fee_ref,
+        ).delete()
 
+    product_ref = f"import-sub:{sub.id}:product"
     if normalized.get("product_spend") is not None:
         prod_amt = Decimal(str(normalized["product_spend"]))
         BrandCostLine.objects.update_or_create(
             tenant=tenant,
-            canonical_visit=visit,
             provider=provider,
             category=BrandCostLine.CAT_PRODUCT,
-            source_reference=f"import-sub:{sub.id}:product",
+            source_reference=product_ref,
             defaults={
+                "canonical_visit": visit,
                 "source_type": BrandCostLine.SOURCE_EXPENSE_RECEIPT,
                 "description": f"{provider.name} reported product spend",
                 "amount": prod_amt,
@@ -1450,8 +1498,68 @@ def _apply_normalized_row_to_db(
                 ),
             },
         )
+    else:
+        BrandCostLine.objects.filter(
+            tenant=tenant,
+            source_reference=product_ref,
+        ).delete()
 
     recompute_canonical_visit_metrics(visit)
+    recompute_visit_cost_summary(visit)
+    if FinanceException.objects.filter(
+        tenant=tenant, canonical_visit=visit
+    ).exists():
+        evaluate_finance_exceptions(tenant, visit=visit)
+
+    if old_visit is not None and old_visit.id != visit.id:
+        remaining_subs = VisitSubmissionSource.objects.filter(
+            canonical_visit=old_visit
+        ).exclude(recap_status=VisitSubmissionSource.RECAP_EXCLUDED)
+        if remaining_subs.exists():
+            recompute_canonical_visit_metrics(old_visit)
+        else:
+            old_visit.samples_distributed = None
+            old_visit.consumers_sampled = None
+            old_visit.rep_observed_units = None
+            old_visit.total_engagements = None
+            from pilot.models import ProviderAssignment, StoreRecommendationAction
+
+            has_other_refs = (
+                old_visit.event_id is not None
+                or old_visit.request_id is not None
+                or BrandCostLine.objects.filter(canonical_visit=old_visit).exists()
+                or ProviderAssignment.objects.filter(
+                    canonical_visit=old_visit
+                ).exists()
+                or StoreRecommendationAction.objects.filter(
+                    outcome_visit=old_visit
+                ).exists()
+            )
+            if has_other_refs:
+                if old_visit.event_id is not None:
+                    old_visit.status = CanonicalVisit.STATUS_SCHEDULED
+                    old_visit.completed_at = None
+            else:
+                old_visit.status = CanonicalVisit.STATUS_CANCELLED
+                old_visit.exclude_from_aggregates = True
+            old_visit.save(
+                update_fields=[
+                    "samples_distributed",
+                    "consumers_sampled",
+                    "rep_observed_units",
+                    "total_engagements",
+                    "status",
+                    "completed_at",
+                    "exclude_from_aggregates",
+                    "updated_at",
+                ]
+            )
+        recompute_visit_cost_summary(old_visit)
+        if FinanceException.objects.filter(
+            tenant=tenant, canonical_visit=old_visit
+        ).exists():
+            evaluate_finance_exceptions(tenant, visit=old_visit)
+
     return outcome, visit, sub, msg
 
 
