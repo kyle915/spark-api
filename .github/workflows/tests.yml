@@ -70,7 +70,7 @@ jobs:
         # pytest.ini lists under testpaths. Round-robin keeps the big apps
         # (recaps, events, ambassadors) spread across all six jobs.
         run: |
-          git ls-files tenants/tests events/tests jobs/tests ambassadors/tests recaps/tests chats/tests pilot/tests brand_insights/tests \
+          git ls-files tenants/tests events/tests jobs/tests ambassadors/tests recaps/tests chats/tests pilot/tests brand_insights/tests staffing/tests \
             | grep -E '(^|/)(test_[^/]*|[^/]*_tests|tests)\.py$' \
             | sort \
             | awk -v n=6 -v k=${{ matrix.shard }} 'NR % n == k % n' > shard-files.txt
