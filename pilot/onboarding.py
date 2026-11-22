@@ -5,6 +5,7 @@ self-service visit approval + shareable recap without Ignite staff."""
 
 from __future__ import annotations
 
+import logging
 import secrets
 from typing import Any
 
@@ -55,7 +56,13 @@ from recaps.models import (
     FileRecapCategory,
     RecapSection,
 )
+from sales_assist.marketing_lead import (
+    sanitize_utm,
+    sync_self_serve_signup_to_close,
+)
 from tenants.models import Role, Tenant, TenantedUser, User
+
+logger = logging.getLogger(__name__)
 
 
 STARTER_PROGRAM_CATALOG: tuple[dict[str, Any], ...] = (
@@ -219,13 +226,16 @@ def start_or_resume_self_serve_onboarding(
     invitation_token: str = "",
     client_ip: str = "127.0.0.1",
     user_agent: str = "spark-self-serve",
+    marketing_attribution: dict[str, Any] | None = None,
+    landing_path: str = "/onboarding",
 ) -> dict[str, Any]:
     """Create or safely resume a standalone Free brand workspace without
     requiring a credit card or Ignite staff.
     - Existing account holders and managed brands resolve cleanly to their
       existing membership (or pending invitation when email ownership is
       verified) without creating duplicate brands, memberships, or invites.
-    - Interrupted signups resume the same workspace and progress state."""
+    - Interrupted signups resume the same workspace and progress state.
+    - New workspaces best-effort sync a Close CRM lead with UTM attribution."""
     if not getattr(settings, "STANDALONE_SIGNUP_ENABLED", True):
         raise PermissionError(
             "Self-service workspace signup is currently gated by release control."
@@ -543,10 +553,12 @@ def start_or_resume_self_serve_onboarding(
         user=user,
         defaults={"tenant": tenant, "membership": membership},
     )
-    BrandOnboardingProgress.objects.create(
+    clean_attribution = sanitize_utm(marketing_attribution)
+    progress = BrandOnboardingProgress.objects.create(
         tenant=tenant,
         owner=user,
         step_workspace_created=True,
+        marketing_attribution=clean_attribution,
     )
     log_workspace_audit(
         tenant=tenant,
@@ -557,6 +569,64 @@ def start_or_resume_self_serve_onboarding(
         target_id=str(tenant.uuid),
         summary=f"Created self-service Free workspace for {tenant.name} ({profile.business_timezone}).",
     )
+    # Defer Close I/O until after commit so signup never stalls on CRM and we
+    # never write a Close lead for a rolled-back workspace.
+    tenant_id = tenant.id
+    progress_id = progress.id
+    user_id = user.id
+    sync_brand = clean_brand
+    sync_email = clean_email
+    sync_first = first_name
+    sync_last = last_name
+    sync_utm = dict(clean_attribution)
+    sync_landing = landing_path or "/onboarding"
+
+    def _sync_close_after_commit() -> None:
+        try:
+            committed_tenant = Tenant.objects.filter(id=tenant_id).first()
+            committed_user = User.objects.filter(id=user_id).first()
+            committed_progress = BrandOnboardingProgress.objects.filter(
+                id=progress_id
+            ).first()
+            if (
+                committed_tenant is None
+                or committed_user is None
+                or committed_progress is None
+            ):
+                return
+            sync = sync_self_serve_signup_to_close(
+                tenant=committed_tenant,
+                user=committed_user,
+                brand_name=sync_brand,
+                email=sync_email,
+                first_name=sync_first,
+                last_name=sync_last,
+                utm=sync_utm,
+                landing_path=sync_landing,
+            )
+            if sync.get("close_lead_id"):
+                BrandOnboardingProgress.objects.filter(id=progress_id).update(
+                    close_lead_id=sync["close_lead_id"]
+                )
+                log_workspace_audit(
+                    tenant=committed_tenant,
+                    actor=committed_user,
+                    category="onboarding",
+                    action="close_lead_synced",
+                    target_type="CloseLead",
+                    target_id=sync["close_lead_id"],
+                    summary=(
+                        f"Synced self-serve signup to Close lead {sync['close_lead_id']} "
+                        f"({sync.get('reason') or 'ok'})."
+                    ),
+                )
+        except Exception:  # noqa: BLE001 — never surface Close failures to signup
+            logger.exception(
+                "Post-commit Close marketing sync failed for tenant_id=%s",
+                tenant_id,
+            )
+
+    transaction.on_commit(_sync_close_after_commit)
     jwt_tok, ref_tok = _issue_auth_tokens(user)
     return {
         "user": user,

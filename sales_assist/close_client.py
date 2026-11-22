@@ -1,4 +1,5 @@
-"""A deliberately narrow Close CRM client: read leads, write NOTES and DRAFT emails.
+"""A deliberately narrow Close CRM client: read leads, create leads, write NOTES
+and DRAFT emails.
 
 Close uses HTTP Basic auth with the API key as the username
 (https://developer.close.com/). The key comes only from
@@ -7,13 +8,14 @@ Close uses HTTP Basic auth with the API key as the username
 What this client can do to Close, and nothing else:
 
 * ``GET`` leads, notes and opportunities;
+* ``POST /lead/`` — create a lead (marketing self-serve onboarding only);
 * ``POST /activity/note/`` — a note on a lead;
 * ``POST /activity/email/`` with ``status: "draft"`` — a draft a rep opens,
   edits and sends from Close themselves.
 
 There is no method that updates or deletes anything, and :meth:`_request`
-refuses every method other than GET and POST, any POST outside the two paths
-above, and any email whose status is not ``draft`` — so a bug elsewhere
+refuses every method other than GET and POST, any POST outside the allowed
+paths above, and any email whose status is not ``draft`` — so a bug elsewhere
 cannot turn into a sent email (in Close, an email is sent by setting its
 status to ``outbox``/``scheduled``, or by creating it that way).
 """
@@ -32,7 +34,7 @@ CLOSE_API_BASE = "https://api.close.com/api/v1"
 TIMEOUT_SECONDS = 30
 MAX_429_RETRIES = 3
 
-_WRITE_PATHS = ("/activity/note/", "/activity/email/")
+_WRITE_PATHS = ("/lead/", "/activity/note/", "/activity/email/")
 LEAD_FIELDS = "id,display_name,name,url,description,status_id,status_label,date_created,contacts,custom"
 
 
@@ -60,6 +62,15 @@ def _assert_safe(method: str, path: str, payload: dict | None) -> None:
         raise UnsafeCloseWrite(f"{method} is not allowed")
     if path not in _WRITE_PATHS:
         raise UnsafeCloseWrite(f"POST {path} is not allowed")
+    if path == "/lead/":
+        body = payload or {}
+        if not (body.get("name") or "").strip():
+            raise UnsafeCloseWrite("lead create requires a name")
+        # Refuse opportunity / task / sequence side-effects on create.
+        for key in ("opportunities", "tasks", "integrations"):
+            if key in body:
+                raise UnsafeCloseWrite(f"{key} is not allowed on lead create")
+        return
     if path == "/activity/email/":
         status = (payload or {}).get("status")
         if status != "draft":
@@ -156,7 +167,25 @@ class CloseClient:
         )
         return list(data.get("data") or [])
 
-    # ── writes (note + DRAFT email only) ────────────────────────────────
+    # ── writes (lead create + note + DRAFT email only) ──────────────────
+
+    def create_lead(
+        self,
+        *,
+        name: str,
+        description: str = "",
+        url: str = "",
+        contacts: list[dict] | None = None,
+    ) -> dict:
+        """Create a Close lead. Used by self-serve marketing onboarding only."""
+        payload: dict = {"name": (name or "").strip()}
+        if description:
+            payload["description"] = description
+        if url:
+            payload["url"] = url
+        if contacts:
+            payload["contacts"] = list(contacts)
+        return self._request("POST", "/lead/", json=payload)
 
     def create_note(self, lead_id: str, text: str) -> dict:
         return self._request("POST", "/activity/note/", json={"lead_id": lead_id, "note": text})
