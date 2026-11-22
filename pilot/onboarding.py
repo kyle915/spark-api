@@ -5,6 +5,7 @@ self-service visit approval + shareable recap without Ignite staff."""
 
 from __future__ import annotations
 
+import logging
 import secrets
 from typing import Any
 
@@ -60,6 +61,8 @@ from sales_assist.marketing_lead import (
     sync_self_serve_signup_to_close,
 )
 from tenants.models import Role, Tenant, TenantedUser, User
+
+logger = logging.getLogger(__name__)
 
 
 STARTER_PROGRAM_CATALOG: tuple[dict[str, Any], ...] = (
@@ -566,35 +569,64 @@ def start_or_resume_self_serve_onboarding(
         target_id=str(tenant.uuid),
         summary=f"Created self-service Free workspace for {tenant.name} ({profile.business_timezone}).",
     )
-    # Best-effort Close lead sync — never raise into the signup path.
-    try:
-        sync = sync_self_serve_signup_to_close(
-            tenant=tenant,
-            user=user,
-            brand_name=clean_brand,
-            email=clean_email,
-            first_name=first_name,
-            last_name=last_name,
-            utm=clean_attribution,
-            landing_path=landing_path or "/onboarding",
-        )
-        if sync.get("close_lead_id"):
-            progress.close_lead_id = sync["close_lead_id"]
-            progress.save(update_fields=["close_lead_id", "updated_at"])
-            log_workspace_audit(
-                tenant=tenant,
-                actor=user,
-                category="onboarding",
-                action="close_lead_synced",
-                target_type="CloseLead",
-                target_id=sync["close_lead_id"],
-                summary=(
-                    f"Synced self-serve signup to Close lead {sync['close_lead_id']} "
-                    f"({sync.get('reason') or 'ok'})."
-                ),
+    # Defer Close I/O until after commit so signup never stalls on CRM and we
+    # never write a Close lead for a rolled-back workspace.
+    tenant_id = tenant.id
+    progress_id = progress.id
+    user_id = user.id
+    sync_brand = clean_brand
+    sync_email = clean_email
+    sync_first = first_name
+    sync_last = last_name
+    sync_utm = dict(clean_attribution)
+    sync_landing = landing_path or "/onboarding"
+
+    def _sync_close_after_commit() -> None:
+        try:
+            committed_tenant = Tenant.objects.filter(id=tenant_id).first()
+            committed_user = User.objects.filter(id=user_id).first()
+            committed_progress = BrandOnboardingProgress.objects.filter(
+                id=progress_id
+            ).first()
+            if (
+                committed_tenant is None
+                or committed_user is None
+                or committed_progress is None
+            ):
+                return
+            sync = sync_self_serve_signup_to_close(
+                tenant=committed_tenant,
+                user=committed_user,
+                brand_name=sync_brand,
+                email=sync_email,
+                first_name=sync_first,
+                last_name=sync_last,
+                utm=sync_utm,
+                landing_path=sync_landing,
             )
-    except Exception:  # noqa: BLE001
-        pass
+            if sync.get("close_lead_id"):
+                BrandOnboardingProgress.objects.filter(id=progress_id).update(
+                    close_lead_id=sync["close_lead_id"]
+                )
+                log_workspace_audit(
+                    tenant=committed_tenant,
+                    actor=committed_user,
+                    category="onboarding",
+                    action="close_lead_synced",
+                    target_type="CloseLead",
+                    target_id=sync["close_lead_id"],
+                    summary=(
+                        f"Synced self-serve signup to Close lead {sync['close_lead_id']} "
+                        f"({sync.get('reason') or 'ok'})."
+                    ),
+                )
+        except Exception:  # noqa: BLE001 — never surface Close failures to signup
+            logger.exception(
+                "Post-commit Close marketing sync failed for tenant_id=%s",
+                tenant_id,
+            )
+
+    transaction.on_commit(_sync_close_after_commit)
     jwt_tok, ref_tok = _issue_auth_tokens(user)
     return {
         "user": user,
