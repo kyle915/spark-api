@@ -8,19 +8,26 @@ staff/admins only — ambassadors and client contacts.
 
 from __future__ import annotations
 
+from collections import Counter, OrderedDict
+from dataclasses import dataclass
 from datetime import date, datetime
+import threading
+import time
 import uuid as uuid_mod
 
 import strawberry
+from strawberry.relay import to_base64
 from asgiref.sync import sync_to_async
-from django.db.models import Q, Value
+from django.db.models import Count, Max, Q, Value
 from django.db.models.functions import Coalesce, Concat
 
 from ambassadors.models import Ambassador
-from events.models import Client, Event, Request, Retailer
+from events.account_stores import _group_requests
+from events.market import parse_address_geo
+from events.models import Client, Event, Request, Retailer, RetailerAlias
 from events.queries import RequestQueriesService
+from events.retailer_aliases import accepted_alias_map, resolve_store_name
 from recaps.models import CustomRecap, Recap
-from recaps.store_places import store_header, tenant_places
 from tenants.models import Tenant
 from utils.graphql.mixins import SELECTED_TENANT_HEADER, resolve_id_to_int
 from utils.graphql.permissions import (
@@ -32,7 +39,8 @@ from utils.graphql.permissions import (
 DEFAULT_LIMIT = 6
 MAX_LIMIT = 12
 MAX_QUERY_LEN = 120
-_STORE_SCAN_CAP = 200
+_STORE_CACHE_MAX_TENANTS = 64
+_STORE_CACHE_TTL_SECONDS = 60.0
 
 
 @strawberry.type
@@ -83,8 +91,11 @@ class JumpClientHit:
     uuid: str
     name: str
     email: str | None
+    tenant_id: strawberry.ID | None
     tenant_uuid: str | None
     tenant_name: str | None
+    slug: str | None
+    checkin_code: str | None
 
 
 @strawberry.type
@@ -95,6 +106,28 @@ class JumpSearchResult:
     recaps: list[JumpRecapHit]
     ambassadors: list[JumpAmbassadorHit]
     clients: list[JumpClientHit]
+
+
+@dataclass(frozen=True)
+class _CachedTenantStore:
+    store_key: str
+    name: str
+    address: str | None
+    city: str | None
+    state: str | None
+    search_blob: str
+
+
+_STORE_CACHE_LOCK = threading.Lock()
+_TENANT_STORE_CACHE: OrderedDict[
+    int, tuple[tuple[object, ...], float, tuple[_CachedTenantStore, ...]]
+] = OrderedDict()
+
+
+def clear_jump_store_cache() -> None:
+    """Clear the in-process Jump store directory cache (used by tests)."""
+    with _STORE_CACHE_LOCK:
+        _TENANT_STORE_CACHE.clear()
 
 
 def _empty_result() -> JumpSearchResult:
@@ -261,6 +294,162 @@ def _search_events(
     ]
 
 
+def _tenant_store_watermark(tenant_id: int) -> tuple[object, ...]:
+    req_agg = Request.objects.filter(
+        tenant_id=tenant_id, deleted_at__isnull=True
+    ).aggregate(
+        cnt=Count("id"),
+        max_id=Max("id"),
+        max_upd=Max("updated_at"),
+    )
+    alias_agg = RetailerAlias.objects.filter(
+        tenant_id=tenant_id, status=RetailerAlias.STATUS_ACCEPTED
+    ).aggregate(
+        cnt=Count("id"),
+        max_upd=Max("updated_at"),
+    )
+    return (
+        int(req_agg["cnt"] or 0),
+        int(req_agg["max_id"] or 0),
+        req_agg["max_upd"],
+        int(alias_agg["cnt"] or 0),
+        alias_agg["max_upd"],
+    )
+
+
+def _build_tenant_store_directory(tenant_id: int) -> tuple[_CachedTenantStore, ...]:
+    """Build one tenant's Account Map store directory in a single DB pass."""
+    rows = list(
+        Request.objects.filter(tenant_id=tenant_id, deleted_at__isnull=True)
+        .order_by("pk")
+        .values_list(
+            "pk",
+            "tenant_id",
+            "retailer_id",
+            "address",
+            "coordinates",
+            "retailer__name",
+            "retailer_name",
+            "name",
+            "state__code",
+            "date",
+        )
+    )
+    if not rows:
+        return ()
+
+    index = _group_requests(
+        (pk, t_id, r_id, addr, coords)
+        for pk, t_id, r_id, addr, coords, *_rest in rows
+    )
+    aliases = accepted_alias_map(tenant_id)
+
+    per_store_names: dict[str, Counter[str]] = {}
+    per_store_address: dict[str, str] = {}
+    per_store_city: dict[str, str] = {}
+    per_store_state: dict[str, str] = {}
+    per_store_terms: dict[str, set[str]] = {}
+    per_store_latest: dict[str, tuple[str, int]] = {}
+
+    for (
+        pk,
+        _t_id,
+        _r_id,
+        addr,
+        _coords,
+        ret_name,
+        typed_ret,
+        req_name,
+        state_code,
+        req_date,
+    ) in rows:
+        pk_int = int(pk)
+        s_key = index.store_for_request(pk_int)
+        names_counter = per_store_names.setdefault(s_key, Counter())
+        terms = per_store_terms.setdefault(s_key, set())
+
+        label = _first_nonempty(ret_name, typed_ret, req_name)
+        if label:
+            resolved_label = resolve_store_name(label, aliases)
+            names_counter[resolved_label] += 1
+            terms.add(resolved_label.casefold())
+        for raw_piece in (ret_name, typed_ret, req_name, addr):
+            cleaned_piece = (raw_piece or "").strip()
+            if cleaned_piece:
+                terms.add(cleaned_piece.casefold())
+
+        if not per_store_address.get(s_key) and (addr or "").strip():
+            clean_addr = addr.strip()
+            per_store_address[s_key] = clean_addr
+            geo = parse_address_geo(clean_addr)
+            city = (geo.city or "").strip()
+            state = (state_code or geo.state_code or "").strip().upper()
+            if city:
+                per_store_city[s_key] = city
+                terms.add(city.casefold())
+            if state:
+                per_store_state[s_key] = state
+                terms.add(state.casefold())
+        elif not per_store_state.get(s_key) and state_code:
+            state = state_code.strip().upper()
+            per_store_state[s_key] = state
+            terms.add(state.casefold())
+
+        sort_candidate = (_iso_day(req_date) or "", pk_int)
+        prev_latest = per_store_latest.get(s_key)
+        if prev_latest is None or sort_candidate > prev_latest:
+            per_store_latest[s_key] = sort_candidate
+
+    ranked_entries: list[tuple[tuple[str, int], _CachedTenantStore]] = []
+    for s_key, names_counter in per_store_names.items():
+        if not names_counter:
+            continue
+        canonical_name = names_counter.most_common(1)[0][0]
+        if not canonical_name:
+            continue
+        ranked_entries.append(
+            (
+                per_store_latest.get(s_key, ("", 0)),
+                _CachedTenantStore(
+                    store_key=s_key,
+                    name=canonical_name,
+                    address=per_store_address.get(s_key) or None,
+                    city=per_store_city.get(s_key) or None,
+                    state=per_store_state.get(s_key) or None,
+                    search_blob="\n".join(per_store_terms.get(s_key, ())),
+                ),
+            )
+        )
+
+    ranked_entries.sort(key=lambda item: item[0], reverse=True)
+    return tuple(entry for _sort_key, entry in ranked_entries)
+
+
+def _get_tenant_store_directory(tenant_id: int) -> tuple[_CachedTenantStore, ...]:
+    watermark = _tenant_store_watermark(tenant_id)
+    if watermark[0] == 0:
+        return ()
+
+    now_mono = time.monotonic()
+    with _STORE_CACHE_LOCK:
+        cached = _TENANT_STORE_CACHE.get(tenant_id)
+        if (
+            cached is not None
+            and cached[0] == watermark
+            and (now_mono - cached[1]) < _STORE_CACHE_TTL_SECONDS
+        ):
+            _TENANT_STORE_CACHE.move_to_end(tenant_id)
+            return cached[2]
+
+    directory = _build_tenant_store_directory(tenant_id)
+    with _STORE_CACHE_LOCK:
+        _TENANT_STORE_CACHE[tenant_id] = (watermark, now_mono, directory)
+        _TENANT_STORE_CACHE.move_to_end(tenant_id)
+        while len(_TENANT_STORE_CACHE) > _STORE_CACHE_MAX_TENANTS:
+            _TENANT_STORE_CACHE.popitem(last=False)
+    return directory
+
+
 def _search_stores(
     term: str,
     tenant_id: int | None,
@@ -268,46 +457,26 @@ def _search_stores(
 ) -> list[JumpStoreHit]:
     hits: list[JumpStoreHit] = []
     seen_signatures: set[tuple[str, str]] = set()
+    needle = term.casefold()
 
     if tenant_id is not None:
-        matched_pks = list(
-            Request.objects.filter(tenant_id=tenant_id, deleted_at__isnull=True)
-            .filter(
-                Q(retailer__name__icontains=term)
-                | Q(retailer_name__icontains=term)
-                | Q(name__icontains=term)
-                | Q(address__icontains=term)
-            )
-            .order_by("-date", "-id")
-            .values_list("pk", flat=True)[:_STORE_SCAN_CAP]
-        )
-        if matched_pks:
-            places = tenant_places(tenant_id)
-            seen_keys: set[str] = set()
-            for pk in matched_pks:
-                s_key = places.index.store_for_request(int(pk))
-                if not s_key or s_key in seen_keys:
-                    continue
-                seen_keys.add(s_key)
-                hdr = store_header(tenant_id, places, s_key)
-                store_name = (hdr.get("name") or "").strip()
-                if not store_name:
-                    continue
-                addr = (hdr.get("address") or "").strip()
-                sig = (store_name.casefold(), addr.casefold())
-                seen_signatures.add(sig)
-                hits.append(
-                    JumpStoreHit(
-                        key=s_key,
-                        store_key=s_key,
-                        name=store_name,
-                        address=addr or None,
-                        city=(hdr.get("city") or "").strip() or None,
-                        state=(hdr.get("state") or "").strip() or None,
-                    )
+        for store in _get_tenant_store_directory(tenant_id):
+            if needle not in store.search_blob:
+                continue
+            sig = (store.name.casefold(), (store.address or "").casefold())
+            seen_signatures.add(sig)
+            hits.append(
+                JumpStoreHit(
+                    key=store.store_key,
+                    store_key=store.store_key,
+                    name=store.name,
+                    address=store.address,
+                    city=store.city,
+                    state=store.state,
                 )
-                if len(hits) >= limit:
-                    return hits
+            )
+            if len(hits) >= limit:
+                return hits
 
     if len(hits) < limit:
         ret_qs = Retailer.objects.all()
@@ -468,6 +637,18 @@ def _search_ambassadors(term: str, limit: int) -> list[JumpAmbassadorHit]:
     return out
 
 
+_CLIENT_VALUE_FIELDS = (
+    "uuid",
+    "name",
+    "email",
+    "tenant_id",
+    "tenant__uuid",
+    "tenant__name",
+    "tenant__slug",
+    "tenant__checkin_code",
+)
+
+
 def _search_clients(
     term: str,
     tenant_id: int | None,
@@ -477,41 +658,43 @@ def _search_clients(
         Q(name__icontains=term)
         | Q(email__icontains=term)
         | Q(tenant__name__icontains=term)
+        | Q(tenant__slug__icontains=term)
     ).order_by("name", "id")
     if tenant_id is not None:
         # Prioritize active-tenant matches first, then global matches.
         local_rows = list(
-            qs.filter(tenant_id=tenant_id).values_list(
-                "uuid", "name", "email", "tenant__uuid", "tenant__name"
-            )[:limit]
+            qs.filter(tenant_id=tenant_id).values_list(*_CLIENT_VALUE_FIELDS)[:limit]
         )
         remaining = limit - len(local_rows)
         other_rows = (
             list(
-                qs.exclude(tenant_id=tenant_id).values_list(
-                    "uuid", "name", "email", "tenant__uuid", "tenant__name"
-                )[:remaining]
+                qs.exclude(tenant_id=tenant_id).values_list(*_CLIENT_VALUE_FIELDS)[
+                    :remaining
+                ]
             )
             if remaining > 0
             else []
         )
         rows = local_rows + other_rows
     else:
-        rows = list(
-            qs.values_list(
-                "uuid", "name", "email", "tenant__uuid", "tenant__name"
-            )[:limit]
-        )
+        rows = list(qs.values_list(*_CLIENT_VALUE_FIELDS)[:limit])
 
     return [
         JumpClientHit(
             uuid=str(c_uuid),
             name=(c_name or "").strip() or (c_email or "").strip() or "Client",
             email=(c_email or "").strip() or None,
+            tenant_id=(
+                strawberry.ID(to_base64("Tenant", int(t_pk)))
+                if t_pk is not None
+                else None
+            ),
             tenant_uuid=str(t_uuid) if t_uuid else None,
             tenant_name=(t_name or "").strip() or None,
+            slug=(t_slug or "").strip() or None,
+            checkin_code=(t_checkin or "").strip() or None,
         )
-        for c_uuid, c_name, c_email, t_uuid, t_name in rows
+        for c_uuid, c_name, c_email, t_pk, t_uuid, t_name, t_slug, t_checkin in rows
     ]
 
 

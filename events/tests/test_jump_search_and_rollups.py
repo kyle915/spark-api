@@ -2,16 +2,20 @@
 (``tenantRequestsRollup``)."""
 
 from datetime import timedelta
+from unittest.mock import patch
 
 import pytest
+from asgiref.sync import sync_to_async
 from django.utils import timezone
 
 from ambassadors.models import Ambassador
 from config.schema_client import schema_clients
+from events import jump_search
 from events import models as em
 from events.tests.base import EventsGraphQLTestCase
 from recaps import models as rm
 from tenants.models import TenantedUser
+from utils.graphql.mixins import resolve_id_to_int
 
 JUMP_Q = """
 query JumpSearch($q: String!, $tenantId: ID, $first: Int) {
@@ -53,8 +57,11 @@ query JumpSearch($q: String!, $tenantId: ID, $first: Int) {
       uuid
       name
       email
+      tenantId
       tenantUuid
       tenantName
+      slug
+      checkinCode
     }
   }
 }
@@ -90,12 +97,17 @@ query Rollup($tenantId: ID, $startDate: Date, $endDate: Date, $dateField: String
 class TestJumpSearchAndRequestRollups(EventsGraphQLTestCase):
     @pytest.fixture(autouse=True)
     def setup(self, db):
+        jump_search.clear_jump_store_cache()
         self.roles = self.setup_default_roles()
         self.schema = schema_clients
         self.endpoint_path = "/api/v1/graphql/clients"
         self.sys = self.get_system_user()
 
-        self.tenant = self.create_tenant(name="Sprouts Brand")
+        self.tenant = self.create_tenant(
+            name="Sprouts Brand",
+            slug="sprouts-brand",
+            checkin_code="SP-TEST12",
+        )
         self.other_tenant = self.create_tenant(name="Rival Brand")
 
         self.admin = self.create_user(
@@ -264,7 +276,7 @@ class TestJumpSearchAndRequestRollups(EventsGraphQLTestCase):
         )
 
     @pytest.mark.asyncio
-    async def test_admin_jump_search_returns_all_six_buckets_and_store_key(self):
+    async def test_admin_jump_search_returns_all_six_buckets_and_client_link_fields(self):
         res = await self._execute_mutation(
             JUMP_Q,
             {"q": "Sprouts", "tenantId": str(self.tenant.id), "first": 6},
@@ -291,7 +303,62 @@ class TestJumpSearchAndRequestRollups(EventsGraphQLTestCase):
         assert str(self.recap_draft.uuid) in recap_uuids
 
         assert any(a["uuid"] == str(self.ambassador.uuid) for a in payload["ambassadors"])
-        assert any(c["uuid"] == str(self.client_contact.uuid) for c in payload["clients"])
+        matched_client = next(
+            (c for c in payload["clients"] if c["uuid"] == str(self.client_contact.uuid)),
+            None,
+        )
+        assert matched_client is not None
+        assert resolve_id_to_int(matched_client["tenantId"]) == self.tenant.id
+        assert matched_client["tenantUuid"] == str(self.tenant.uuid)
+        assert matched_client["slug"] == "sprouts-brand"
+        assert matched_client["checkinCode"] == "SP-TEST12"
+
+    @pytest.mark.asyncio
+    async def test_store_directory_cached_across_keystrokes_and_invalidated_on_write(self):
+        jump_search.clear_jump_store_cache()
+        real_build = jump_search._build_tenant_store_directory
+        with patch.object(
+            jump_search,
+            "_build_tenant_store_directory",
+            wraps=real_build,
+        ) as spy:
+            for term in ("Sp", "Spr", "Sprout"):
+                res = await self._execute_mutation(
+                    JUMP_Q,
+                    {"q": term, "tenantId": str(self.tenant.id), "first": 6},
+                    user=self.admin,
+                )
+                assert res.errors is None, res.errors
+                assert any(
+                    s["storeKey"] == f"s{self.req1.pk}"
+                    for s in res.data["jumpSearch"]["stores"]
+                )
+            assert spy.call_count == 1
+
+            # Creating a new request at a new address bumps the watermark and rebuilds once.
+            new_req = await sync_to_async(em.Request.objects.create)(
+                name="Sprouts Burnet Road Demo",
+                address="6920 Burnet Rd, Austin, TX 78757",
+                retailer_name="Sprouts Burnet Rd",
+                request_type=self.retail_type,
+                tenant=self.tenant,
+                created_by=self.sys,
+                status=self.approved_status,
+                location=self.location,
+                state=self.state,
+                date=self.tomorrow,
+            )
+            res_after = await self._execute_mutation(
+                JUMP_Q,
+                {"q": "Burnet", "tenantId": str(self.tenant.id), "first": 6},
+                user=self.admin,
+            )
+            assert res_after.errors is None, res_after.errors
+            assert spy.call_count == 2
+            assert any(
+                s["storeKey"] == f"s{new_req.pk}"
+                for s in res_after.data["jumpSearch"]["stores"]
+            )
 
     @pytest.mark.asyncio
     async def test_client_jump_search_pins_tenant_hides_draft_recaps_and_ba_pii(self):
