@@ -12,6 +12,10 @@ Marketing pages (ignite-webflow-assets / spark-by-ignite) send brands to
 This is intentionally different from fuzzy ``suggest-links``: the brand just
 created their own Spark workspace, so the link is authored by the signup, not
 guessed from a name match. Failures never block onboarding.
+
+Callers must invoke this **after** the signup transaction commits (e.g.
+``transaction.on_commit``) so Close I/O cannot stall or roll back the DB write
+and cannot leave orphaned CRM state when signup fails.
 """
 
 from __future__ import annotations
@@ -28,7 +32,6 @@ from sales_assist.close_client import (
     CloseNotConfigured,
     UnsafeCloseWrite,
     close_configured,
-    first_contact_email,
 )
 from sales_assist.models import CloseLink
 
@@ -44,6 +47,10 @@ UTM_KEYS = (
 )
 
 NOTE_MARKER = "SPARK SELF-SERVE ONBOARDING"
+
+
+class CloseLookupError(Exception):
+    """Close search/get failed; callers must not treat this as 'no match'."""
 
 
 def sanitize_utm(raw: dict[str, Any] | None) -> dict[str, str]:
@@ -101,7 +108,23 @@ def _build_note(
     return "\n".join(lines)
 
 
+def lead_contact_emails(lead: dict) -> set[str]:
+    """Every email on every contact on a Close lead (lowercased)."""
+    emails: set[str] = set()
+    for contact in lead.get("contacts") or []:
+        for item in contact.get("emails") or []:
+            email = (item.get("email") or "").strip().lower()
+            if email:
+                emails.add(email)
+    return emails
+
+
 def _find_existing_lead(close: CloseClient, *, brand_name: str, email: str) -> dict | None:
+    """Return a matching lead, ``None`` if none found.
+
+    Raises :class:`CloseLookupError` when Close search/get fails so callers do
+    not create a duplicate lead after a transient API error.
+    """
     queries = []
     if email:
         queries.append(email)
@@ -111,8 +134,8 @@ def _find_existing_lead(close: CloseClient, *, brand_name: str, email: str) -> d
     for q in queries:
         try:
             hits = close.search_leads(q, limit=5)
-        except CloseError:
-            continue
+        except CloseError as exc:
+            raise CloseLookupError(f"Close search failed for {q!r}: {exc}") from exc
         for hit in hits:
             lid = hit.get("id") or ""
             if not lid or lid in seen:
@@ -120,13 +143,12 @@ def _find_existing_lead(close: CloseClient, *, brand_name: str, email: str) -> d
             seen.add(lid)
             try:
                 full = close.get_lead(lid)
-            except CloseError:
-                full = hit
+            except CloseError as exc:
+                raise CloseLookupError(f"Close get_lead failed for {lid}: {exc}") from exc
             name = (full.get("display_name") or full.get("name") or "").strip()
             if brand_name and name.casefold() == brand_name.casefold():
                 return full
-            contact_email, _, _ = first_contact_email(full)
-            if email and contact_email.casefold() == email.casefold():
+            if email and email.casefold() in lead_contact_emails(full):
                 return full
     return None
 
@@ -186,6 +208,16 @@ def sync_self_serve_signup_to_close(
 
     try:
         existing = _find_existing_lead(close, brand_name=brand, email=contact_email)
+    except CloseLookupError as exc:
+        logger.warning(
+            "Close marketing lead lookup failed for tenant %s (aborting create): %s",
+            getattr(tenant, "id", "?"),
+            exc,
+        )
+        result["reason"] = f"lookup-failed: {exc}"[:280]
+        return result
+
+    try:
         if existing and existing.get("id"):
             lead_id = existing["id"]
             close.create_note(lead_id, note)
