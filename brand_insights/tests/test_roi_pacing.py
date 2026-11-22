@@ -1,0 +1,350 @@
+"""Demo budget pacing, ROI leaderboard, and today's attention queue."""
+
+from __future__ import annotations
+
+import asyncio
+from datetime import date, timedelta
+from decimal import Decimal
+
+from django.test import RequestFactory, TransactionTestCase
+from django.utils import timezone
+from gqlauth.core.middlewares import USER_OR_ERROR_KEY
+from gqlauth.models import UserStatus
+
+from brand_insights.attention_queue import build_today_attention_queue
+from brand_insights.roi_pacing import (
+    compute_budget_pacing,
+    compute_roi_leaderboard,
+    parse_month,
+    upsert_budget_target,
+)
+from config.schema_client import schema_clients
+from events.models import Event, EventType
+from pilot.models import (
+    BrandCostLine,
+    CanonicalVisit,
+    FinanceException,
+    StoreRecommendationAction,
+    WorkspaceMembership,
+)
+from pilot.permissions import resolve_workspace_access
+from pilot.workspaces import upsert_workspace_membership
+from tenants.models import Role, Tenant, User
+from tenants.tests.base import ensure_role
+
+
+def _make_user(email: str, role_slug: str = Role.CLIENT_SLUG) -> User:
+    role = ensure_role(role_slug.replace("-", " ").title(), slug=role_slug)
+    user = User.objects.create_user(
+        email=email,
+        username=email,
+        password="test-password-123",
+        first_name=email.split("@")[0].title(),
+        last_name="Tester",
+        role=role,
+    )
+    UserStatus.objects.update_or_create(user=user, defaults={"verified": True})
+    return user
+
+
+def _gql(query: str, *, user: User, tenant: Tenant, variables: dict | None = None):
+    rf = RequestFactory()
+    wsgi_req = rf.post(
+        "/api/v615204/graphql/clients",
+        HTTP_X_SPARK_TENANT=str(tenant.uuid),
+    )
+    wsgi_req.user = user
+    mock_uoe = type("MockUserOrError", (), {"user": user, "errors": None})()
+
+    class _MockRequest:
+        def __init__(self):
+            self.wsgi_request = wsgi_req
+            self.user = user
+            self.META = wsgi_req.META
+            self.headers = wsgi_req.headers
+            self.scope = {
+                "type": "http",
+                "method": "POST",
+                "path": "/api/v615204/graphql/clients",
+                USER_OR_ERROR_KEY: mock_uoe,
+            }
+            setattr(self, USER_OR_ERROR_KEY, mock_uoe)
+
+    class _Ctx:
+        def __init__(self, r):
+            self.request = r
+
+        def __getitem__(self, key):
+            if key == "request":
+                return self.request
+            raise KeyError(key)
+
+    return asyncio.run(
+        schema_clients.execute(
+            query,
+            variable_values=variables or {},
+            context_value=_Ctx(_MockRequest()),
+        )
+    )
+
+
+PACING_Q = """
+query ($month: String, $groupBy: String) {
+  demoBudgetPacingAndLeaderboard(month: $month, groupBy: $groupBy) {
+    month
+    targetAmount
+    spentAmount
+    committedAmount
+    projectedAmount
+    paceStatus
+    paceNote
+    canEditBudget
+    visitCount
+    leaderboard { groupKey groupLabel visitCount demoDollars units unitsPerDollar note }
+    targets { uuid scopeType targetAmount }
+  }
+}
+"""
+
+UPSERT = """
+mutation ($amount: String!, $month: String) {
+  upsertDemoBudgetTarget(targetAmount: $amount, month: $month) {
+    ok reason target { uuid targetAmount scopeType }
+  }
+}
+"""
+
+ATTENTION_Q = """
+query {
+  todayAttentionQueue {
+    totalCount
+    buckets { key label count items { title actionUrl severity refId } }
+  }
+}
+"""
+
+
+class RoiPacingTests(TransactionTestCase):
+    def setUp(self):
+        self.admin = _make_user("ops@ignite.test", Role.SPARK_ADMIN_SLUG)
+        self.brand = Tenant.objects.create(
+            name="Pace Brand", slug="pace-brand", created_by=self.admin
+        )
+        self.other = Tenant.objects.create(
+            name="Other Brand", slug="other-brand", created_by=self.admin
+        )
+        self.brand_admin = _make_user("maya@pace.test")
+        staff = resolve_workspace_access(self.admin, tenant=self.brand)
+        self.mem = upsert_workspace_membership(
+            staff,
+            target_user=self.brand_admin,
+            workspace_role=WorkspaceMembership.ROLE_BRAND_ADMIN,
+        )
+        self.today = date(2026, 11, 15)
+        self.month = date(2026, 11, 1)
+        self.et = EventType.objects.create(
+            tenant=self.brand, name="Retail", created_by=self.admin
+        )
+        self.visit_a = CanonicalVisit.objects.create(
+            tenant=self.brand,
+            visit_date=date(2026, 11, 5),
+            store_key="tw:101",
+            store_label="Total Wine 101",
+            chain_key="total-wine",
+            chain_label="Total Wine",
+            market="LA",
+            state_code="CA",
+            status=CanonicalVisit.STATUS_COMPLETED,
+            rep_observed_units=40,
+            cached_supported_cost=Decimal("200.00"),
+            cached_total_cost=Decimal("200.00"),
+            cached_cost_incomplete=False,
+            event_type=self.et,
+        )
+        self.visit_b = CanonicalVisit.objects.create(
+            tenant=self.brand,
+            visit_date=date(2026, 11, 8),
+            store_key="bev:22",
+            store_label="BevMo 22",
+            chain_key="bevmo",
+            chain_label="BevMo",
+            market="SD",
+            state_code="CA",
+            status=CanonicalVisit.STATUS_COMPLETED,
+            rep_observed_units=10,
+            cached_supported_cost=Decimal("100.00"),
+            cached_total_cost=Decimal("100.00"),
+            cached_cost_incomplete=False,
+            event_type=self.et,
+        )
+        BrandCostLine.objects.create(
+            tenant=self.brand,
+            canonical_visit=self.visit_a,
+            category=BrandCostLine.CAT_DEMO_FEE,
+            amount=Decimal("200.00"),
+            settlement_status=BrandCostLine.SETTLEMENT_INVOICED,
+            evidence_status=BrandCostLine.EVIDENCE_SUPPORTED,
+        )
+        BrandCostLine.objects.create(
+            tenant=self.brand,
+            canonical_visit=self.visit_b,
+            category=BrandCostLine.CAT_DEMO_FEE,
+            amount=Decimal("100.00"),
+            settlement_status=BrandCostLine.SETTLEMENT_INVOICED,
+            evidence_status=BrandCostLine.EVIDENCE_SUPPORTED,
+        )
+        # Other-tenant visit must never leak.
+        CanonicalVisit.objects.create(
+            tenant=self.other,
+            visit_date=date(2026, 11, 5),
+            store_key="x:1",
+            status=CanonicalVisit.STATUS_COMPLETED,
+            rep_observed_units=999,
+            cached_supported_cost=Decimal("999.00"),
+            cached_total_cost=Decimal("999.00"),
+            cached_cost_incomplete=False,
+        )
+
+    def _access(self, user=None):
+        return resolve_workspace_access(
+            user or self.brand_admin, tenant=self.brand
+        )
+
+    def test_parse_month(self):
+        assert parse_month("2026-11") == date(2026, 11, 1)
+        assert parse_month("2026-11-15") == date(2026, 11, 1)
+
+    def test_pacing_under_booked_when_behind_target(self):
+        upsert_budget_target(
+            self._access(),
+            month=self.month,
+            target_amount=Decimal("10000.00"),
+        )
+        pacing = compute_budget_pacing(
+            self._access(), month=self.month, today=self.today
+        )
+        assert pacing.spent_amount == Decimal("300.00")
+        assert pacing.target_amount == Decimal("10000.00")
+        assert pacing.pace_status == "under_booked"
+        assert pacing.can_edit_budget is True
+
+    def test_leaderboard_ranks_by_units_per_dollar(self):
+        rows = compute_roi_leaderboard(
+            self._access(),
+            month=self.month,
+            group_by="retailer",
+            today=self.today,
+        )
+        assert len(rows) == 2
+        assert rows[0].group_key == "total-wine"
+        assert rows[0].units_per_dollar == Decimal("0.20")  # 40/200
+        assert rows[1].group_key == "bevmo"
+        assert all("999" not in (r.group_key + r.group_label) for r in rows)
+
+    def test_graphql_pacing_and_upsert_isolation(self):
+        res = _gql(
+            UPSERT,
+            user=self.brand_admin,
+            tenant=self.brand,
+            variables={"amount": "5000.00", "month": "2026-11"},
+        )
+        assert res.errors is None
+        assert res.data["upsertDemoBudgetTarget"]["ok"] is True
+
+        res2 = _gql(
+            PACING_Q,
+            user=self.brand_admin,
+            tenant=self.brand,
+            variables={"month": "2026-11", "groupBy": "retailer"},
+        )
+        assert res2.errors is None
+        data = res2.data["demoBudgetPacingAndLeaderboard"]
+        assert data["targetAmount"] == "5000.00"
+        assert data["spentAmount"] == "300.00"
+        assert data["canEditBudget"] is True
+        assert len(data["leaderboard"]) == 2
+
+        # Other brand admin cannot see Pace Brand targets via their tenant header.
+        other_admin = _make_user("other@brand.test")
+        staff_o = resolve_workspace_access(self.admin, tenant=self.other)
+        upsert_workspace_membership(
+            staff_o,
+            target_user=other_admin,
+            workspace_role=WorkspaceMembership.ROLE_BRAND_ADMIN,
+        )
+        res3 = _gql(
+            PACING_Q,
+            user=other_admin,
+            tenant=self.other,
+            variables={"month": "2026-11"},
+        )
+        assert res3.errors is None
+        other_data = res3.data["demoBudgetPacingAndLeaderboard"]
+        # Own-tenant spend only — Pace Brand's $300 / Total Wine must not leak.
+        assert other_data["spentAmount"] == "999.00"
+        assert other_data["targets"] == []
+        assert all(
+            "total-wine" not in (row["groupKey"] or "")
+            for row in other_data["leaderboard"]
+        )
+
+
+class AttentionQueueTests(TransactionTestCase):
+    def setUp(self):
+        self.admin = _make_user("ops2@ignite.test", Role.SPARK_ADMIN_SLUG)
+        self.brand = Tenant.objects.create(
+            name="Attention Brand", slug="attention-brand", created_by=self.admin
+        )
+        self.brand_admin = _make_user("ops@attention.test")
+        staff = resolve_workspace_access(self.admin, tenant=self.brand)
+        upsert_workspace_membership(
+            staff,
+            target_user=self.brand_admin,
+            workspace_role=WorkspaceMembership.ROLE_BRAND_ADMIN,
+        )
+        self.et = EventType.objects.create(
+            tenant=self.brand, name="Retail", created_by=self.admin
+        )
+        now = timezone.now()
+        self.event = Event.objects.create(
+            tenant=self.brand,
+            name="Unstaffed Demo",
+            event_type=self.et,
+            start_time=now + timedelta(hours=12),
+            end_time=now + timedelta(hours=16),
+            created_by=self.admin,
+        )
+        StoreRecommendationAction.objects.create(
+            tenant=self.brand,
+            finding_id_snapshot="f1",
+            finding_code="top_store",
+            finding_scope_key="store:tw:1",
+            store_key="tw:1",
+            store_label="Total Wine 1",
+            action_type=StoreRecommendationAction.ACTION_REBOOK,
+            idempotency_key="rebook-tw-1",
+            status=StoreRecommendationAction.STATUS_ASSIGNED,
+        )
+        FinanceException.objects.create(
+            tenant=self.brand,
+            exception_type=FinanceException.TYPE_MISSING_PROOF,
+            severity=FinanceException.SEV_HIGH,
+            explanation="Receipt photo unreadable",
+            dedupe_key="missing-proof-1",
+        )
+
+    def test_attention_buckets_and_graphql(self):
+        access = resolve_workspace_access(self.brand_admin, tenant=self.brand)
+        queue = build_today_attention_queue(access)
+        keys = {b.key: b for b in queue.buckets}
+        assert keys["receipt_checks"].count >= 1
+        assert keys["unstaffed"].count >= 1
+        assert keys["rebooks"].count >= 1
+
+        res = _gql(ATTENTION_Q, user=self.brand_admin, tenant=self.brand)
+        assert res.errors is None
+        data = res.data["todayAttentionQueue"]
+        assert data["totalCount"] >= 3
+        by_key = {b["key"]: b for b in data["buckets"]}
+        assert by_key["rebooks"]["items"][0]["actionUrl"] == "/buyer-report"
+        assert by_key["receipt_checks"]["items"][0]["actionUrl"] == "/finance-queue"

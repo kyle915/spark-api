@@ -388,3 +388,356 @@ class BrandInsightMutations:
         if counts is None:
             return BrandInsightBatchResult(ok=False, reason="Pick a brand.", count=0)
         return BrandInsightBatchResult(ok=True, reason=None, count=counts["written"])
+
+
+# ── Demo budget pacing / ROI leaderboard / Today's Attention ────────────
+
+
+@strawberry.type
+class DemoBudgetTargetItem:
+    uuid: str
+    scope_type: str
+    scope_key: str
+    scope_label: str
+    target_amount: str
+    notes: str
+
+
+@strawberry.type
+class RoiLeaderboardRow:
+    group_key: str
+    group_label: str
+    visit_count: int
+    demo_dollars: str
+    units: int | None
+    sales_dollars: str | None
+    units_per_dollar: str | None
+    revenue_per_dollar: str | None
+    note: str
+
+
+@strawberry.type
+class DemoBudgetPacingAndLeaderboard:
+    month: str
+    month_end: str
+    target_amount: str | None
+    spent_amount: str
+    committed_amount: str
+    projected_amount: str
+    elapsed_days: int
+    days_in_month: int
+    elapsed_pct: str
+    expected_spend_to_date: str | None
+    pace_status: str
+    pace_note: str
+    visit_count: int
+    incomplete_cost_visits: int
+    can_edit_budget: bool
+    targets: list[DemoBudgetTargetItem]
+    leaderboard: list[RoiLeaderboardRow]
+    group_by: str
+    sort_by: str
+
+
+@strawberry.type
+class TodayAttentionItem:
+    bucket: str
+    title: str
+    subtitle: str
+    severity: str
+    action_url: str
+    action_label: str
+    ref_id: str
+
+
+@strawberry.type
+class TodayAttentionBucket:
+    key: str
+    label: str
+    count: int
+    items: list[TodayAttentionItem]
+
+
+@strawberry.type
+class TodayAttentionQueue:
+    total_count: int
+    buckets: list[TodayAttentionBucket]
+
+
+@strawberry.type
+class DemoBudgetTargetResult:
+    ok: bool
+    reason: str | None
+    target: DemoBudgetTargetItem | None
+
+
+def _access_or_none(info: strawberry.Info, tenant_id: strawberry.ID | None):
+    from pilot.schema import _access_for_info
+
+    try:
+        return _access_for_info(info, tenant_id)
+    except PermissionError:
+        return None
+    except Exception:  # noqa: BLE001
+        logger.exception("workspace access failed")
+        return None
+
+
+def _target_item(t) -> DemoBudgetTargetItem:
+    return DemoBudgetTargetItem(
+        uuid=t.uuid,
+        scope_type=t.scope_type,
+        scope_key=t.scope_key,
+        scope_label=t.scope_label,
+        target_amount=str(t.target_amount),
+        notes=t.notes,
+    )
+
+
+def _pacing_payload(access, *, month_raw: str | None, group_by: str, sort_by: str):
+    from brand_insights.roi_pacing import (
+        compute_budget_pacing,
+        compute_roi_leaderboard,
+        parse_month,
+    )
+
+    month = parse_month(month_raw)
+    gb = group_by if group_by in {"retailer", "market", "sku"} else "retailer"
+    sb = (
+        sort_by
+        if sort_by in {"units_per_dollar", "revenue_per_dollar"}
+        else "units_per_dollar"
+    )
+    pacing = compute_budget_pacing(access, month=month)
+    board = compute_roi_leaderboard(
+        access, month=month, group_by=gb, sort_by=sb  # type: ignore[arg-type]
+    )
+    return DemoBudgetPacingAndLeaderboard(
+        month=pacing.month.isoformat(),
+        month_end=pacing.month_end.isoformat(),
+        target_amount=(
+            str(pacing.target_amount) if pacing.target_amount is not None else None
+        ),
+        spent_amount=str(pacing.spent_amount),
+        committed_amount=str(pacing.committed_amount),
+        projected_amount=str(pacing.projected_amount),
+        elapsed_days=pacing.elapsed_days,
+        days_in_month=pacing.days_in_month,
+        elapsed_pct=str(pacing.elapsed_pct),
+        expected_spend_to_date=(
+            str(pacing.expected_spend_to_date)
+            if pacing.expected_spend_to_date is not None
+            else None
+        ),
+        pace_status=pacing.pace_status,
+        pace_note=pacing.pace_note,
+        visit_count=pacing.visit_count,
+        incomplete_cost_visits=pacing.incomplete_cost_visits,
+        can_edit_budget=pacing.can_edit_budget,
+        targets=[_target_item(t) for t in pacing.targets],
+        leaderboard=[
+            RoiLeaderboardRow(
+                group_key=r.group_key,
+                group_label=r.group_label,
+                visit_count=r.visit_count,
+                demo_dollars=str(r.demo_dollars),
+                units=r.units,
+                sales_dollars=(
+                    str(r.sales_dollars) if r.sales_dollars is not None else None
+                ),
+                units_per_dollar=(
+                    str(r.units_per_dollar) if r.units_per_dollar is not None else None
+                ),
+                revenue_per_dollar=(
+                    str(r.revenue_per_dollar)
+                    if r.revenue_per_dollar is not None
+                    else None
+                ),
+                note=r.note,
+            )
+            for r in board
+        ],
+        group_by=gb,
+        sort_by=sb,
+    )
+
+
+@strawberry.type
+class BrandInsightPacingQueries:
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def demo_budget_pacing_and_leaderboard(
+        self,
+        info: strawberry.Info,
+        month: str | None = None,
+        group_by: str = "retailer",
+        sort_by: str = "units_per_dollar",
+        tenant_id: strawberry.ID | None = None,
+    ) -> DemoBudgetPacingAndLeaderboard | None:
+        """Monthly demo budget pacing bar + ROI leaderboard for the active
+        workspace. Null when the caller has no access."""
+
+        def _build():
+            access = _access_or_none(info, tenant_id)
+            if access is None:
+                return None
+            if not (
+                access.can_view_brand_consolidated
+                or access.is_ignite_admin
+                or access.can_edit_finance
+            ):
+                # Provider-scoped members still see their own visits' pacing.
+                if not access.is_provider_scoped:
+                    return None
+            return _pacing_payload(
+                access, month_raw=month, group_by=group_by, sort_by=sort_by
+            )
+
+        try:
+            return await sync_to_async(_build, thread_sensitive=True)()
+        except Exception:  # noqa: BLE001
+            logger.exception("demoBudgetPacingAndLeaderboard failed")
+            return None
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def today_attention_queue(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID | None = None,
+    ) -> TodayAttentionQueue | None:
+        """Composite dashboard strip: receipts, missing recaps, unstaffed
+        shifts, and rebook recommendations."""
+        from brand_insights.attention_queue import build_today_attention_queue
+
+        def _build():
+            access = _access_or_none(info, tenant_id)
+            if access is None:
+                return None
+            queue = build_today_attention_queue(access)
+            return TodayAttentionQueue(
+                total_count=queue.total_count,
+                buckets=[
+                    TodayAttentionBucket(
+                        key=b.key,
+                        label=b.label,
+                        count=b.count,
+                        items=[
+                            TodayAttentionItem(
+                                bucket=i.bucket,
+                                title=i.title,
+                                subtitle=i.subtitle,
+                                severity=i.severity,
+                                action_url=i.action_url,
+                                action_label=i.action_label,
+                                ref_id=i.ref_id,
+                            )
+                            for i in b.items
+                        ],
+                    )
+                    for b in queue.buckets
+                ],
+            )
+
+        try:
+            return await sync_to_async(_build, thread_sensitive=True)()
+        except Exception:  # noqa: BLE001
+            logger.exception("todayAttentionQueue failed")
+            return None
+
+
+@strawberry.type
+class BrandInsightPacingMutations:
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def upsert_demo_budget_target(
+        self,
+        info: strawberry.Info,
+        target_amount: str,
+        month: str | None = None,
+        scope_type: str = "workspace",
+        scope_key: str = "",
+        scope_label: str = "",
+        notes: str = "",
+        tenant_id: strawberry.ID | None = None,
+    ) -> DemoBudgetTargetResult:
+        """Create or update a monthly demo budget target. Brand ops / finance /
+        admin only."""
+        from decimal import Decimal, InvalidOperation
+
+        from brand_insights.roi_pacing import parse_month, upsert_budget_target
+
+        def _save():
+            access = _access_or_none(info, tenant_id)
+            if access is None:
+                return DemoBudgetTargetResult(
+                    ok=False, reason="Not available.", target=None
+                )
+            try:
+                amount = Decimal(str(target_amount).strip())
+            except (InvalidOperation, ValueError):
+                return DemoBudgetTargetResult(
+                    ok=False, reason="Enter a valid dollar amount.", target=None
+                )
+            try:
+                target = upsert_budget_target(
+                    access,
+                    month=parse_month(month),
+                    target_amount=amount,
+                    scope_type=scope_type or "workspace",
+                    scope_key=scope_key or "",
+                    scope_label=scope_label or "",
+                    notes=notes or "",
+                )
+            except PermissionError:
+                return DemoBudgetTargetResult(
+                    ok=False, reason="Not allowed to edit budget.", target=None
+                )
+            except ValueError as exc:
+                return DemoBudgetTargetResult(
+                    ok=False, reason=str(exc), target=None
+                )
+            return DemoBudgetTargetResult(
+                ok=True, reason=None, target=_target_item(target)
+            )
+
+        try:
+            return await sync_to_async(_save, thread_sensitive=True)()
+        except Exception:  # noqa: BLE001
+            logger.exception("upsertDemoBudgetTarget failed")
+            return DemoBudgetTargetResult(
+                ok=False, reason="Could not save budget target.", target=None
+            )
+
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def delete_demo_budget_target(
+        self,
+        info: strawberry.Info,
+        uuid: str,
+        tenant_id: strawberry.ID | None = None,
+    ) -> DemoBudgetTargetResult:
+        """Remove one demo budget target row."""
+        from brand_insights.roi_pacing import delete_budget_target
+
+        def _save():
+            access = _access_or_none(info, tenant_id)
+            if access is None:
+                return DemoBudgetTargetResult(
+                    ok=False, reason="Not available.", target=None
+                )
+            try:
+                ok = delete_budget_target(access, uuid=str(uuid).strip())
+            except PermissionError:
+                return DemoBudgetTargetResult(
+                    ok=False, reason="Not allowed to edit budget.", target=None
+                )
+            if not ok:
+                return DemoBudgetTargetResult(
+                    ok=False, reason="Not found.", target=None
+                )
+            return DemoBudgetTargetResult(ok=True, reason=None, target=None)
+
+        try:
+            return await sync_to_async(_save, thread_sensitive=True)()
+        except Exception:  # noqa: BLE001
+            logger.exception("deleteDemoBudgetTarget failed")
+            return DemoBudgetTargetResult(
+                ok=False, reason="Could not delete budget target.", target=None
+            )

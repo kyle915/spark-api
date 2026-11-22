@@ -8,8 +8,11 @@ A brand user sees a row only once Ignite staff have published it.
 
 from __future__ import annotations
 
+from decimal import Decimal
+
 from django.conf import settings
 from django.db import models
+from uuid6 import uuid7
 
 
 class BrandInsight(models.Model):
@@ -84,3 +87,65 @@ class BrandInsight(models.Model):
 
     def __str__(self) -> str:  # pragma: no cover - admin/debug only
         return f"{self.kind} {self.code} {self.scope_key} ({self.status})"
+
+
+class DemoBudgetTarget(models.Model):
+    """Monthly demo budget target for a brand workspace (optional retailer /
+    market breakdown). Used by the ROI pacing bar on ``/roi-pacing``."""
+
+    SCOPE_WORKSPACE = "workspace"
+    SCOPE_RETAILER = "retailer"
+    SCOPE_MARKET = "market"
+    SCOPE_CHOICES = [
+        (SCOPE_WORKSPACE, "Workspace"),
+        (SCOPE_RETAILER, "Retailer"),
+        (SCOPE_MARKET, "Market"),
+    ]
+
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    tenant = models.ForeignKey(
+        "tenants.Tenant",
+        on_delete=models.CASCADE,
+        related_name="demo_budget_targets",
+    )
+    # Always stored as the 1st of the calendar month.
+    month = models.DateField(db_index=True)
+    scope_type = models.CharField(
+        max_length=16, choices=SCOPE_CHOICES, default=SCOPE_WORKSPACE
+    )
+    scope_key = models.CharField(max_length=200, blank=True, default="")
+    scope_label = models.CharField(max_length=200, blank=True, default="")
+    target_amount = models.DecimalField(
+        max_digits=12, decimal_places=2, default=Decimal("0.00")
+    )
+    notes = models.TextField(blank=True, default="")
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="demo_budget_targets_updated",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["tenant", "month", "scope_type", "scope_key"],
+                name="brand_demo_budget_target_uniq",
+            )
+        ]
+        indexes = [
+            models.Index(
+                fields=["tenant", "month"],
+                name="brand_demo_budget_month_idx",
+            )
+        ]
+
+    def __str__(self) -> str:  # pragma: no cover - admin/debug only
+        return (
+            f"{self.tenant_id} {self.month} {self.scope_type}:{self.scope_key} "
+            f"= {self.target_amount}"
+        )
