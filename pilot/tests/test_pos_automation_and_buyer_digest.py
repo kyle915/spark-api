@@ -183,7 +183,9 @@ class PosAutomationAndBuyerDigestTests(TestCase):
             recipients, ["buyer@demo.spark", "finance@demo.spark"]
         )
 
-        with patch("pilot.envelopes.BuyerWeeklyDigestMailer.send_now") as send_mock:
+        with patch(
+            "pilot.envelopes.BuyerWeeklyDigestMailer.send_now", return_value=True
+        ) as send_mock:
             result = send_buyer_digest_for_tenant(
                 self.tenant,
                 dry_run=True,
@@ -204,9 +206,83 @@ class PosAutomationAndBuyerDigestTests(TestCase):
             self.assertEqual(result_live["status"], "sent")
             send_mock.assert_called_once()
 
+        with patch(
+            "pilot.envelopes.BuyerWeeklyDigestMailer.send_now", return_value=False
+        ):
+            failed = send_buyer_digest_for_tenant(
+                self.tenant,
+                dry_run=False,
+                force=True,
+                period_start=date(2026, 10, 12),
+                period_end=date(2026, 10, 18),
+            )
+            self.assertEqual(failed["status"], "failed_send")
+
+        with patch(
+            "pilot.envelopes.BuyerWeeklyDigestMailer.send_now", return_value=None
+        ):
+            skipped = send_buyer_digest_for_tenant(
+                self.tenant,
+                dry_run=False,
+                force=True,
+                period_start=date(2026, 10, 12),
+                period_end=date(2026, 10, 18),
+            )
+            self.assertEqual(skipped["status"], "skipped_not_sent")
+
     def test_buyer_digest_skipped_when_opted_out(self):
         result = send_buyer_digest_for_tenant(self.tenant, force=True)
         self.assertEqual(result["status"], "skipped_opt_out")
+
+    def test_process_claim_prevents_double_import(self):
+        cfg = upsert_pos_feed_config(
+            self.access,
+            retailer_banner="FreshMart",
+            preset_key="unfi_clearview",
+        )
+        csv_text = (
+            "Banner,Customer Number,Customer Name,City,State,UPC,"
+            "Week Ending,Units,Dollars,Baseline Units\n"
+            "FreshMart,102,FreshMart #102,Austin,TX,Yuzu Citrus 12oz,"
+            "2026-10-18,55,160.00,30\n"
+        )
+        drop = enqueue_pos_feed_drop(
+            ingest_token=cfg.ingest_token,
+            csv_text=csv_text,
+            filename="race.csv",
+        )
+        # Simulate the hourly cron already claiming the row while a
+        # process=true webhook still holds a stale pending instance.
+        PosFeedDrop.objects.filter(pk=drop.pk).update(
+            status=PosFeedDrop.STATUS_PROCESSING
+        )
+        raced = process_pos_feed_drop(drop)
+        self.assertEqual(raced.status, PosFeedDrop.STATUS_PROCESSING)
+        self.assertEqual(
+            RetailerSalesImport.objects.filter(tenant=self.tenant).count(), 0
+        )
+
+        # Fresh pending claim + import still works once; a stale pending
+        # view of the same row must not create a second active import.
+        drop2 = enqueue_pos_feed_drop(
+            ingest_token=cfg.ingest_token,
+            csv_text=csv_text.replace("55,", "66,"),
+            filename="race2.csv",
+        )
+        first = process_pos_feed_drop(drop2)
+        stale = PosFeedDrop.objects.get(pk=drop2.pk)
+        stale.status = PosFeedDrop.STATUS_PENDING
+        stale.sales_import = None
+        second = process_pos_feed_drop(stale)
+        self.assertEqual(first.status, PosFeedDrop.STATUS_PROCESSED)
+        self.assertEqual(second.status, PosFeedDrop.STATUS_PROCESSED)
+        self.assertEqual(first.sales_import_id, second.sales_import_id)
+        self.assertEqual(
+            RetailerSalesImport.objects.filter(
+                tenant=self.tenant, is_active_version=True
+            ).count(),
+            1,
+        )
 
     def test_process_failed_drop_records_error(self):
         cfg = upsert_pos_feed_config(

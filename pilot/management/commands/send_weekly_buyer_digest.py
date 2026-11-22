@@ -125,6 +125,15 @@ class Command(BaseCommand):
                         f"rows={result.get('row_count')} "
                         f"visits={result.get('total_visits', '?')}."
                     )
+                elif status == "failed_send":
+                    failed += 1
+                    self.stdout.write(
+                        self.style.ERROR(
+                            f"  - {tenant.name} (id={tenant.id}): FAIL — "
+                            f"mail provider rejected digest "
+                            f"(recipients={result.get('recipients')})."
+                        )
+                    )
                 else:
                     skipped += 1
                     self.stdout.write(

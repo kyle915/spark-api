@@ -164,6 +164,7 @@ def enqueue_pos_feed_drop(
             file_sha256=digest,
             status__in={
                 PosFeedDrop.STATUS_PENDING,
+                PosFeedDrop.STATUS_PROCESSING,
                 PosFeedDrop.STATUS_PROCESSED,
             },
         )
@@ -185,10 +186,45 @@ def enqueue_pos_feed_drop(
     )
 
 
+def _claim_pos_feed_drop(drop: PosFeedDrop) -> PosFeedDrop | None:
+    """Atomically transition pending → processing. Returns None if lost race."""
+    claimed = (
+        PosFeedDrop.objects.filter(
+            pk=drop.pk, status=PosFeedDrop.STATUS_PENDING
+        ).update(status=PosFeedDrop.STATUS_PROCESSING)
+    )
+    if claimed != 1:
+        return None
+    drop.refresh_from_db()
+    return drop
+
+
 def process_pos_feed_drop(drop: PosFeedDrop) -> PosFeedDrop:
-    """Run ``import_retailer_pos_csv`` for one pending drop."""
+    """Run ``import_retailer_pos_csv`` for one pending drop.
+
+    Atomically claims the row (pending → processing) before import so a
+    concurrent ``process=true`` webhook and the hourly cron cannot both
+    create active ``RetailerSalesImport`` versions for the same drop.
+    """
     if drop.status == PosFeedDrop.STATUS_PROCESSED and drop.sales_import_id:
         return drop
+    if drop.status in {
+        PosFeedDrop.STATUS_FAILED,
+        PosFeedDrop.STATUS_SKIPPED,
+        PosFeedDrop.STATUS_PROCESSING,
+    }:
+        # Another worker owns processing, or this drop already finished.
+        # Re-read so callers see the latest committed state.
+        if drop.status == PosFeedDrop.STATUS_PROCESSING:
+            drop.refresh_from_db()
+        return drop
+
+    claimed = _claim_pos_feed_drop(drop)
+    if claimed is None:
+        drop.refresh_from_db()
+        return drop
+    drop = claimed
+
     cfg = drop.feed_config
     if not cfg.enabled:
         drop.status = PosFeedDrop.STATUS_SKIPPED

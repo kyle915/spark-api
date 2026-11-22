@@ -184,7 +184,17 @@ def send_buyer_digest_for_tenant(
         csv_filename=filename,
     )
     # send_now avoids RQ/Redis dependency on Cloud Run cron paths.
-    mailer.send_now()
+    # Mailer returns False on provider rejection, None when nothing was sent
+    # (empty/suppressed recipients). Only True means a successful dispatch.
+    sent = mailer.send_now()
+    if sent is not True:
+        return {
+            "status": "failed_send" if sent is False else "skipped_not_sent",
+            "recipients": recipients,
+            "row_count": payload["row_count"],
+            "period_start": str(eff_start),
+            "period_end": str(eff_end),
+        }
     return {
         "status": "sent",
         "recipients": recipients,

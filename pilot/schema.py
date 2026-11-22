@@ -1218,8 +1218,13 @@ class PilotQueries:
                 buyer_weekly_digest_enabled=bool(
                     profile.buyer_weekly_digest_enabled
                 ),
+                # Recipient override may include external buyer/finance
+                # addresses — withhold from provider-scoped members (same
+                # gate as setBuyerWeeklyDigest / member list).
                 buyer_digest_recipient_emails=(
-                    profile.buyer_digest_recipient_emails or ""
+                    (profile.buyer_digest_recipient_emails or "")
+                    if access.can_manage_pos
+                    else ""
                 ),
                 viewer_role=access.workspace_role,
                 viewer_provider_uuid=(
