@@ -123,6 +123,8 @@ INSTALLED_APPS = [
     # clients, anonymized proposals for new leads). Never sends. See
     # docs/sales-assist.md.
     "sales_assist",
+    # Ignite staffing overflow handoffs + smart BA matching / no-show cascade.
+    "staffing",
     # Versioned Terms / Privacy / AUP acceptance + the GraphQL gate.
     "legal",
     # Standalone Spark pilot & self-service workspace foundation.

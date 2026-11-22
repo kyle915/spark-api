@@ -23,6 +23,7 @@ AMBASSADOR_LIST_FIELDS = frozenset({
     "ambassadorNotes", "ambassadorNote", "ambassadorSkills", "ambassadorSkill",
     "ambassadorGroups", "ambassadorGroup", "invitedGroupsByJob",
     "ambassadorsBookedOnDate", "staffingSearch", "staffingSuggestions", "eventStaffing",
+    "smartBaMatches", "igniteStaffingRequests", "noShowCascadeAlerts",
     "favoriteAmbassadors", "jobApplications", "jobApplicants", "chatRecipientAmbassadors",
     "companyToAmbassadorReviews", "ambassadorToAmbassadorReviews", "attendances",
     "eventLocationTrail", "sentInvitations", "talentSearch",
