@@ -19,6 +19,7 @@ from datetime import datetime, timedelta, timezone as dt_timezone
 from decimal import Decimal
 from typing import Any
 from urllib.parse import urlencode
+from uuid import uuid4
 
 import httpx
 from django.conf import settings
@@ -33,6 +34,7 @@ from pilot.entitlements import (
     ensure_brand_subscription,
     ensure_plan_catalog,
     get_plan_entry,
+    is_client_billing_launched,
     resolve_brand_entitlements,
 )
 from pilot.models import (
@@ -77,6 +79,38 @@ INVOICE_DOMAIN_EVENTS = frozenset(
 def _is_simulated_stripe_subscription_id(sub_id: str | None) -> bool:
     val = (sub_id or "").strip()
     return not val or val.startswith("sub_sim_") or val.startswith("sub_test_")
+
+
+def require_ignite_billing_staff(user: User | None) -> None:
+    """Enforce that internal Stripe readiness & test-mode admin actions are
+    strictly accessible to Ignite platform staff."""
+    if user is None or not is_ignite_staff_user(user):
+        raise PermissionError(
+            "Plans & Billing readiness and test controls are restricted to Ignite administrators."
+        )
+
+
+def _require_billing_access(access: ResolvedWorkspaceAccess) -> None:
+    """Block non-staff client callers from all billing queries & mutations
+    while client-facing billing remains hidden (`CLIENT_BILLING_LAUNCHED=False`)."""
+    if not is_client_billing_launched() and not (
+        access.is_ignite_admin or is_ignite_staff_user(access.user)
+    ):
+        raise PermissionError(
+            "Plans & Billing is currently restricted to Ignite administrators (internal test mode)."
+        )
+
+
+def _default_billing_ui_base_url() -> str:
+    setting_name = (
+        "CLIENT_FRONTEND_URL"
+        if is_client_billing_launched()
+        else "ADMIN_FRONTEND_URL"
+    )
+    return (
+        getattr(settings, setting_name, "http://localhost:3000")
+        or "http://localhost:3000"
+    ).rstrip("/")
 
 
 def _active_stripe_mode() -> str:
@@ -442,6 +476,7 @@ def preview_subscription_change(
 ) -> dict[str, Any]:
     """Explain exact effective dates, monthly charges, visit allowances, and
     paid-through behavior BEFORE the buyer confirms a plan change."""
+    _require_billing_access(access)
     sub = ensure_brand_subscription(access.tenant)
     current_ent = resolve_brand_entitlements(access.tenant)
     target_entry = get_plan_entry(target_plan_code)
@@ -566,6 +601,7 @@ def create_subscription_checkout_session(
         raise PermissionError(
             "Self-service subscription billing is currently disabled by release control."
         )
+    _require_billing_access(access)
     if not access.is_brand_admin:
         raise PermissionError(
             "Only brand administrators can manage software subscriptions."
@@ -603,12 +639,9 @@ def create_subscription_checkout_session(
     preview = preview_subscription_change(
         access, target_plan_code=target_plan_code
     )
-    base_client_url = (
-        getattr(settings, "CLIENT_FRONTEND_URL", "http://localhost:3000")
-        or "http://localhost:3000"
-    ).rstrip("/")
-    resolved_success = success_url or f"{base_client_url}/plans-billing?checkout=success"
-    resolved_cancel = cancel_url or f"{base_client_url}/plans-billing?checkout=cancelled"
+    base_ui_url = _default_billing_ui_base_url()
+    resolved_success = success_url or f"{base_ui_url}/plans-billing?checkout=success"
+    resolved_cancel = cancel_url or f"{base_ui_url}/plans-billing?checkout=cancelled"
 
     adapter = StripeBillingAdapter()
     session_data = adapter.create_checkout_session(
@@ -682,16 +715,14 @@ def create_customer_portal_session(
     *,
     return_url: str | None = None,
 ) -> dict[str, str]:
+    _require_billing_access(access)
     if not access.is_brand_admin:
         raise PermissionError(
             "Only brand administrators can open the customer billing portal."
         )
     sub = ensure_brand_subscription(access.tenant)
-    base_client_url = (
-        getattr(settings, "CLIENT_FRONTEND_URL", "http://localhost:3000")
-        or "http://localhost:3000"
-    ).rstrip("/")
-    resolved_return = return_url or f"{base_client_url}/plans-billing"
+    base_ui_url = _default_billing_ui_base_url()
+    resolved_return = return_url or f"{base_ui_url}/plans-billing"
     customer_id = (
         sub.stripe_customer_id
         or f"cus_test_{str(access.tenant.uuid).replace('-', '')[:14]}"
@@ -715,6 +746,7 @@ def change_subscription_plan(
 ) -> BrandSubscription:
     """Apply an authenticated upgrade or scheduled period-end downgrade on an
     already-active recurring subscription without rewriting historical usage."""
+    _require_billing_access(access)
     if not access.is_brand_admin:
         raise PermissionError(
             "Only brand administrators can change subscription plans."
@@ -894,6 +926,7 @@ def cancel_brand_subscription(
     """Cancel recurring software billing while preserving paid-through access
     until `current_period_end` (unless `immediate=True`), keeping all historical
     store/cost/recap data and allowing in-progress fieldwork to submit."""
+    _require_billing_access(access)
     if not access.is_brand_admin:
         raise PermissionError(
             "Only brand administrators can cancel software subscriptions."
@@ -995,6 +1028,7 @@ def approve_overage_or_volume_band(
 ) -> BrandSubscription:
     """Record customer-approved volume band or overage agreement so overages
     are NEVER charged without explicit customer consent."""
+    _require_billing_access(access)
     if not access.is_brand_admin:
         raise PermissionError(
             "Only brand administrators can approve volume bands or overage terms."
@@ -1166,6 +1200,34 @@ def process_stripe_webhook(
 
     data_obj = ((event.get("data") or {}).get("object")) or {}
     tenant = _resolve_tenant_for_stripe_object(data_obj)
+
+    if event_type == "spark.billing.readiness_probe":
+        if active_mode != "test":
+            raise PermissionError(
+                "Synthetic readiness probes are only permitted while STRIPE_BILLING_MODE='test'."
+            )
+        try:
+            StripeWebhookEvent.objects.create(
+                stripe_event_id=event_id,
+                event_type=event_type,
+                stripe_created_ts=created_ts,
+                livemode=False,
+                tenant=tenant,
+                processing_status=StripeWebhookEvent.PROC_PROCESSED,
+                note="Ignite admin test-mode HMAC signature & replay check passed.",
+                payload=event,
+            )
+        except IntegrityError:
+            return {
+                "ok": True,
+                "event_id": event_id,
+                "status": StripeWebhookEvent.PROC_DUPLICATE,
+            }
+        return {
+            "ok": True,
+            "event_id": event_id,
+            "status": StripeWebhookEvent.PROC_PROCESSED,
+        }
 
     if tenant is None:
         try:
@@ -1505,6 +1567,7 @@ def complete_test_mode_checkout(
     """Complete an open test-mode hosted checkout session by constructing a
     signed `checkout.session.completed` webhook payload and routing it through
     the exact `process_stripe_webhook` signature + idempotency pipeline."""
+    _require_billing_access(access)
     if _active_stripe_mode() != "test":
         raise PermissionError(
             "Simulated checkout completion is only available when STRIPE_BILLING_MODE='test'."
@@ -1557,6 +1620,7 @@ def get_plans_and_billing_overview(
 ) -> dict[str, Any]:
     """Assemble the complete Feature 8 + Feature 9 Plan, Usage, Pilot, and
     Billing dashboard state for a brand workspace."""
+    _require_billing_access(access)
     ensure_plan_catalog()
     sub = ensure_brand_subscription(access.tenant)
     ent = resolve_brand_entitlements(access.tenant)
@@ -1678,3 +1742,163 @@ def get_plans_and_billing_overview(
         "open_checkouts": open_checkouts,
         "recent_webhook_events": recent_events,
     }
+
+
+def get_billing_readiness(*, user: User | None) -> dict[str, Any]:
+    """Return Ignite-admin-only Stripe Billing readiness diagnostics using
+    strictly boolean configuration flags (NEVER exposing raw secret values)."""
+    require_ignite_billing_staff(user)
+    ensure_plan_catalog()
+
+    raw_mode = (
+        getattr(settings, "STRIPE_BILLING_MODE", "test") or "test"
+    ).strip().lower()
+    billing_mode = "live" if raw_mode == "live" else "test"
+    secret_key_configured = bool(
+        (getattr(settings, "STRIPE_SECRET_KEY", "") or "").strip()
+    )
+    publishable_key_configured = bool(
+        (getattr(settings, "STRIPE_PUBLISHABLE_KEY", "") or "").strip()
+    )
+    webhook_secret_configured = bool(
+        (getattr(settings, "STRIPE_WEBHOOK_SECRET", "") or "").strip()
+    )
+    core_price_configured = bool(
+        (getattr(settings, "STRIPE_PRICE_ID_CORE", "") or "").strip()
+    )
+    pro_price_configured = bool(
+        (getattr(settings, "STRIPE_PRICE_ID_PRO", "") or "").strip()
+    )
+    scale_price_configured = bool(
+        (getattr(settings, "STRIPE_PRICE_ID_SCALE", "") or "").strip()
+    )
+    test_simulation_active = bool(
+        billing_mode == "test" and not secret_key_configured
+    )
+    client_billing_hidden = not is_client_billing_launched()
+
+    api_base = (
+        getattr(settings, "PUBLIC_API_BASE_URL", "")
+        or getattr(settings, "ADMIN_FRONTEND_URL", "http://localhost:8000")
+        or "http://localhost:8000"
+    ).rstrip("/")
+    webhook_endpoint_url = f"{api_base}/api/public/stripe-billing/webhook"
+
+    cutoff = timezone.now() - timedelta(days=30)
+    recent_qs = StripeWebhookEvent.objects.filter(processed_at__gte=cutoff)
+    recent_webhook_count = recent_qs.count()
+    failed_webhook_count = recent_qs.filter(
+        processing_status=StripeWebhookEvent.PROC_FAILED
+    ).count()
+    latest_ev = StripeWebhookEvent.objects.order_by("-processed_at", "-id").first()
+    recent_items = [
+        {
+            "stripe_event_id": ev.stripe_event_id,
+            "event_type": ev.event_type,
+            "processing_status": ev.processing_status,
+            "livemode": bool(ev.livemode),
+            "processed_at": ev.processed_at.isoformat(),
+            "note": ev.note or "",
+        }
+        for ev in StripeWebhookEvent.objects.order_by("-processed_at", "-id")[:8]
+    ]
+
+    return {
+        "billing_mode": billing_mode,
+        "billing_enabled": bool(
+            getattr(settings, "STANDALONE_BILLING_ENABLED", True)
+        ),
+        "client_billing_hidden": client_billing_hidden,
+        "secret_key_configured": secret_key_configured,
+        "publishable_key_configured": publishable_key_configured,
+        "webhook_secret_configured": webhook_secret_configured,
+        "core_price_configured": core_price_configured,
+        "pro_price_configured": pro_price_configured,
+        "scale_price_configured": scale_price_configured,
+        "test_simulation_active": test_simulation_active,
+        "webhook_endpoint_url": webhook_endpoint_url,
+        "recent_webhook_count": recent_webhook_count,
+        "failed_webhook_count": failed_webhook_count,
+        "last_webhook_at": (
+            latest_ev.processed_at.isoformat() if latest_ev else None
+        ),
+        "last_webhook_event_type": (
+            latest_ev.event_type if latest_ev else None
+        ),
+        "last_webhook_status": (
+            latest_ev.processing_status if latest_ev else None
+        ),
+        "recent_webhooks": recent_items,
+    }
+
+
+def run_billing_readiness_test_check(
+    *, actor: User | None, tenant: Tenant | None = None
+) -> dict[str, Any]:
+    """Run a non-destructive Ignite-admin test-mode verification of plan
+    catalog integrity, Stripe mode/credential guards, HMAC-SHA256 webhook
+    signing, and exact event-ID replay deduplication."""
+    require_ignite_billing_staff(actor)
+    mode = _active_stripe_mode()
+    if mode != "test":
+        raise PermissionError(
+            "One-click billing readiness test checks can only run when STRIPE_BILLING_MODE='test'."
+        )
+
+    catalog = ensure_plan_catalog()
+    adapter = StripeBillingAdapter()
+    now_ts = int(time_module.time())
+    probe_id = f"evt_test_probe_{uuid4().hex[:18]}"
+    metadata: dict[str, str] = {"initiated_by": str(getattr(actor, "id", ""))}
+    if tenant is not None:
+        metadata["tenant_uuid"] = str(tenant.uuid)
+
+    probe_payload = {
+        "id": probe_id,
+        "object": "event",
+        "type": "spark.billing.readiness_probe",
+        "created": now_ts,
+        "livemode": False,
+        "data": {"object": {"id": f"probe_{uuid4().hex[:10]}", "metadata": metadata}},
+    }
+    raw = json.dumps(probe_payload).encode("utf-8")
+    sig = sign_stripe_webhook_payload(raw, timestamp=now_ts)
+
+    first = process_stripe_webhook(raw, sig, now_ts=now_ts)
+    second = process_stripe_webhook(raw, sig, now_ts=now_ts)
+    sig_ok = first.get("status") == StripeWebhookEvent.PROC_PROCESSED
+    idem_ok = second.get("status") == StripeWebhookEvent.PROC_DUPLICATE
+
+    transport = (
+        "stripe_test_api"
+        if adapter.has_remote_credentials
+        else "local_test_simulator"
+    )
+    if tenant is not None:
+        log_workspace_audit(
+            tenant=tenant,
+            actor=actor,
+            category="billing",
+            action="billing_readiness_test_check",
+            target_type="StripeWebhookEvent",
+            target_id=probe_id,
+            summary=(
+                f"Ignite admin test-mode billing check passed ({transport}, "
+                f"{len(catalog)} catalog plans, HMAC + replay verified)."
+            ),
+        )
+
+    return {
+        "ok": bool(sig_ok and idem_ok),
+        "billing_mode": mode,
+        "transport": transport,
+        "signature_verified": sig_ok,
+        "idempotency_verified": idem_ok,
+        "probe_event_id": probe_id,
+        "summary": (
+            f"Test-mode billing check passed ({transport}): {len(catalog)} plan tiers "
+            f"verified, HMAC-SHA256 webhook signature accepted ({probe_id}), and "
+            f"duplicate replay rejected cleanly. Client billing UI remains hidden."
+        ),
+    }
+

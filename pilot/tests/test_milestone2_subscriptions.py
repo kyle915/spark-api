@@ -128,12 +128,13 @@ def _exec_gql(query: str, *, user=None, variables: dict | None = None, headers: 
 
 class Milestone2SubscriptionsTests(TransactionTestCase):
     def setUp(self):
-        self.client_role, _ = Role.objects.get_or_create(
-            slug=Role.CLIENT_SLUG, defaults={"name": "Client"}
-        )
-        self.admin_role, _ = Role.objects.get_or_create(
-            slug=Role.SPARK_ADMIN_SLUG, defaults={"name": "Spark Admin"}
-        )
+        # 0001_initial seeds Ambassador/Spark Admin with explicit PKs and
+        # null slugs without advancing the serial — use ensure_role so the
+        # alphabetically-first test does not collide on tenants_role_pkey.
+        from tenants.tests.base import ensure_role
+
+        self.client_role = ensure_role("Client", slug=Role.CLIENT_SLUG)
+        self.admin_role = ensure_role("Spark Admin", slug=Role.SPARK_ADMIN_SLUG)
         self.ignite_admin = User.objects.create_user(
             username="ignite-ops@demo.spark",
             email="ignite-ops@demo.spark",
@@ -400,6 +401,7 @@ class Milestone2SubscriptionsTests(TransactionTestCase):
         self.assertTrue(st["step_first_visit_completed"])
         self.assertEqual(st["first_shared_token"], shared_link.token)
 
+    @override_settings(CLIENT_BILLING_LAUNCHED=True)
     def test_feature8_monthly_metering_timezone_cutoffs_caps_and_reversals(self):
         signup = start_or_resume_self_serve_onboarding(
             email="ops@westcoastfizz.test",
@@ -624,6 +626,7 @@ class Milestone2SubscriptionsTests(TransactionTestCase):
         self.assertTrue(gql_free.data["brandCostDashboard"]["planGated"])
         self.assertEqual(gql_free.data["brandCostDashboard"]["requiredPlan"], "pro")
 
+    @override_settings(CLIENT_BILLING_LAUNCHED=True)
     def test_scenario5_free_through_paid_webhooks_pilot_and_managed_sow(self):
         """Acceptance Scenario 5 ('Free through paid') + $1,500 60-day Pro pilot +
         managed SOW account + strict invoice/rebate/payout separation."""
@@ -1025,7 +1028,9 @@ class Milestone2SubscriptionsTests(TransactionTestCase):
         self.assertEqual(sow_ent.addon_plan_code, "pro")
         self.assertIsNone(sow_ent.included_completed_visits)
 
-    @override_settings(DEBUG=True, STRIPE_BILLING_MODE="live")
+    @override_settings(
+        DEBUG=True, STRIPE_BILLING_MODE="live", CLIENT_BILLING_LAUNCHED=True
+    )
     def test_live_stripe_mode_refused_in_debug(self):
         signup = start_or_resume_self_serve_onboarding(
             email="safety@debugguard.test",
@@ -1066,6 +1071,7 @@ class Milestone2SubscriptionsTests(TransactionTestCase):
         )
         self.assertTrue(resolve_brand_entitlements(cascade).is_managed_sow)
 
+    @override_settings(CLIENT_BILLING_LAUNCHED=True)
     def test_codex_security_and_billing_regressions(self):
         from unittest.mock import MagicMock, patch
 
@@ -1394,4 +1400,276 @@ class Milestone2SubscriptionsTests(TransactionTestCase):
         self.assertEqual(sub.plan_code, "core")
         self.assertFalse(sub.cancel_at_period_end)
         self.assertEqual(int(sub.last_stripe_event_created), sub_upd_ts)
+
+    def test_admin_only_billing_gating_and_readiness_check_default_mode(self):
+        """By default (`CLIENT_BILLING_LAUNCHED=False`), all billing/subscription
+        queries & mutations are strictly Ignite-admin-only, client product
+        workflows are never blocked by unlaunched plan upsells, and Ignite admins
+        have a boolean-only readiness + test-mode check card."""
+        from django.conf import settings as dj_settings
+
+        self.assertFalse(dj_settings.CLIENT_BILLING_LAUNCHED)
+        self.assertEqual(dj_settings.STRIPE_BILLING_MODE, "test")
+
+        signup = start_or_resume_self_serve_onboarding(
+            email="clientowner@oaklandcraft.test",
+            password="Password123!",
+            first_name="Maya",
+            last_name="Chen",
+            brand_name="Oakland Craft Sodas",
+            business_timezone="America/Los_Angeles",
+        )
+        tenant = signup["tenant"]
+        client_owner = signup["user"]
+        client_access = resolve_workspace_access(client_owner, tenant=tenant)
+        select_onboarding_starter_program(
+            client_access, starter_key="beverage_retail_demo"
+        )
+        headers = {
+            "X-Spark-Tenant": str(tenant.uuid),
+            "X-Tenant-ID": str(tenant.uuid),
+        }
+
+        # 1. Non-staff client brand owner is rejected across ALL billing queries & mutations
+        blocked_queries = _exec_gql(
+            """
+            query {
+              plansAndBillingOverview { effectivePlanCode }
+            }
+            """,
+            user=client_owner,
+            headers=headers,
+        )
+        self.assertIsNotNone(blocked_queries.errors)
+        self.assertIn("Ignite", str(blocked_queries.errors[0].message))
+
+        blocked_preview = _exec_gql(
+            """
+            query {
+              previewSubscriptionPlanChange(targetPlanCode: "core") {
+                monthlyPriceUsd
+              }
+            }
+            """,
+            user=client_owner,
+            headers=headers,
+        )
+        self.assertIsNotNone(blocked_preview.errors)
+
+        blocked_readiness = _exec_gql(
+            """
+            query {
+              billingReadiness {
+                billingMode
+                clientBillingHidden
+              }
+            }
+            """,
+            user=client_owner,
+            headers=headers,
+        )
+        self.assertIsNotNone(blocked_readiness.errors)
+        self.assertIn("Ignite", str(blocked_readiness.errors[0].message))
+
+        blocked_muts = _exec_gql(
+            """
+            mutation($tid: String!) {
+              chk: createSubscriptionCheckout(
+                targetPlanCode: "core"
+                explicitTermsAccepted: true
+              ) { ok error }
+              comp: completeTestSubscriptionCheckout(
+                stripeSessionId: "cs_test_any"
+              ) { ok error }
+              portal: createSubscriptionPortalSession { ok error }
+              chg: changeSubscriptionPlan(
+                targetPlanCode: "core"
+                explicitTermsAccepted: true
+              ) { ok error }
+              can: cancelSubscription(immediate: false) { ok error }
+              ovg: approveVolumeBandOrOverage(
+                overageAgreementApproved: true
+              ) { ok error }
+              pil: provisionProPilotWorkspace(tenantUuid: $tid) { ok error }
+              probe: runBillingTestCheck(tenantUuid: $tid) { ok error }
+            }
+            """,
+            user=client_owner,
+            variables={"tid": str(tenant.uuid)},
+            headers=headers,
+        )
+        self.assertIsNone(blocked_muts.errors)
+        for key in ("chk", "comp", "portal", "chg", "can", "ovg", "pil", "probe"):
+            self.assertFalse(
+                blocked_muts.data[key]["ok"], f"Expected {key} to reject client"
+            )
+            self.assertIn("Ignite", blocked_muts.data[key]["error"] or "")
+
+        # 2. Client workspace features & visit scheduling are NOT blocked while billing is unlaunched
+        now = timezone.now()
+        for idx in range(1, 7):
+            v, _ = schedule_standalone_visit(
+                client_access,
+                store_name=f"Oakland Market #{idx}",
+                visit_date=now.date(),
+                city="Oakland",
+                state_code="CA",
+            )
+            approve_canonical_visit_recap(
+                client_access, visit_uuid=str(v.uuid), completed_at=now
+            )
+        # Even at 6 completed visits on Free, 7th visit is NOT blocked while client billing is hidden!
+        seventh, _ = schedule_standalone_visit(
+            client_access,
+            store_name="Oakland Market #7 Unblocked",
+            visit_date=now.date(),
+            city="Oakland",
+            state_code="CA",
+        )
+        self.assertIsNotNone(seventh.id)
+
+        BrandInsight.objects.create(
+            tenant=tenant,
+            kind="recommendation",
+            code="rebook_high_velocity",
+            scope_key="store:oakland-1",
+            subject="Oakland Market #1",
+            template="Rebook Oakland Market #1.",
+            body="Rebook Oakland Market #1.",
+            period_start=now.date() - timedelta(days=7),
+            period_end=now.date(),
+            generated_at=now,
+            status="published",
+        )
+        client_dashboards = _exec_gql(
+            """
+            query($tid: ID!) {
+              tenantStoreInsights(tenantId: $tid) {
+                recommendations { id subject }
+              }
+              brandCostDashboard { planGated }
+              financeExceptionQueue { planGated }
+              retailerPosDashboard { planGated }
+              weeklyBuyerStoreReport { planGated }
+            }
+            """,
+            user=client_owner,
+            variables={"tid": str(tenant.id)},
+            headers=headers,
+        )
+        self.assertIsNone(client_dashboards.errors)
+        self.assertEqual(
+            len(client_dashboards.data["tenantStoreInsights"]["recommendations"]),
+            1,
+        )
+        self.assertFalse(client_dashboards.data["brandCostDashboard"]["planGated"])
+        self.assertFalse(
+            client_dashboards.data["financeExceptionQueue"]["planGated"]
+        )
+        self.assertFalse(
+            client_dashboards.data["retailerPosDashboard"]["planGated"]
+        )
+        self.assertFalse(
+            client_dashboards.data["weeklyBuyerStoreReport"]["planGated"]
+        )
+
+        # 3. Ignite staff sees boolean-only BillingReadiness + runs one-click test check safely
+        with override_settings(
+            STRIPE_BILLING_MODE="test",
+            STRIPE_SECRET_KEY="sk_test_SUPER_SECRET_NEVER_EXPOSE",
+            STRIPE_WEBHOOK_SECRET="whsec_SUPER_SECRET_NEVER_EXPOSE",
+            STRIPE_PRICE_ID_CORE="price_core_test_123",
+            STRIPE_PRICE_ID_PRO="price_pro_test_456",
+        ):
+            staff_probe = _exec_gql(
+                """
+                mutation($tid: String!) {
+                  runBillingTestCheck(tenantUuid: $tid) {
+                    ok
+                    error
+                    billingMode
+                    transport
+                    signatureVerified
+                    idempotencyVerified
+                    probeEventId
+                    summary
+                  }
+                }
+                """,
+                user=self.ignite_admin,
+                variables={"tid": str(tenant.uuid)},
+                headers=headers,
+            )
+            self.assertIsNone(staff_probe.errors)
+            probe_data = staff_probe.data["runBillingTestCheck"]
+            self.assertTrue(probe_data["ok"])
+            self.assertEqual(probe_data["billingMode"], "test")
+            self.assertEqual(probe_data["transport"], "stripe_test_api")
+            self.assertTrue(probe_data["signatureVerified"])
+            self.assertTrue(probe_data["idempotencyVerified"])
+            # Customer subscription was NOT altered by readiness probe!
+            self.assertEqual(
+                resolve_brand_entitlements(tenant).effective_plan_code,
+                WorkspaceProfile.PLAN_FREE,
+            )
+
+            staff_readiness = _exec_gql(
+                """
+                query {
+                  billingReadiness {
+                    billingMode
+                    billingEnabled
+                    clientBillingHidden
+                    secretKeyConfigured
+                    publishableKeyConfigured
+                    webhookSecretConfigured
+                    corePriceConfigured
+                    proPriceConfigured
+                    scalePriceConfigured
+                    testSimulationActive
+                    webhookEndpointUrl
+                    recentWebhookCount
+                    failedWebhookCount
+                    lastWebhookAt
+                    lastWebhookEventType
+                    lastWebhookStatus
+                    recentWebhooks {
+                      stripeEventId
+                      eventType
+                      processingStatus
+                    }
+                  }
+                  plansAndBillingOverview {
+                    effectivePlanCode
+                    isIgniteAdmin
+                  }
+                }
+                """,
+                user=self.ignite_admin,
+                headers=headers,
+            )
+            self.assertIsNone(staff_readiness.errors)
+            serialized = json.dumps(staff_readiness.data)
+            self.assertNotIn("SUPER_SECRET_NEVER_EXPOSE", serialized)
+            rd = staff_readiness.data["billingReadiness"]
+            self.assertEqual(rd["billingMode"], "test")
+            self.assertTrue(rd["clientBillingHidden"])
+            self.assertTrue(rd["secretKeyConfigured"])
+            self.assertTrue(rd["webhookSecretConfigured"])
+            self.assertTrue(rd["corePriceConfigured"])
+            self.assertTrue(rd["proPriceConfigured"])
+            self.assertFalse(rd["testSimulationActive"])
+            self.assertTrue(
+                rd["webhookEndpointUrl"].endswith(
+                    "/api/public/stripe-billing/webhook"
+                )
+            )
+            self.assertGreaterEqual(rd["recentWebhookCount"], 1)
+            self.assertEqual(
+                rd["lastWebhookEventType"], "spark.billing.readiness_probe"
+            )
+            self.assertTrue(
+                staff_readiness.data["plansAndBillingOverview"]["isIgniteAdmin"]
+            )
+
 

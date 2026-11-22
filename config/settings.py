@@ -887,6 +887,11 @@ STANDALONE_SIGNUP_ENABLED = env.bool(
 STANDALONE_BILLING_ENABLED = env.bool(
     "STANDALONE_BILLING_ENABLED", default=True
 )
+# Keep self-serve billing strictly in Ignite Admin internal test mode (hidden
+# from non-staff client workspaces) until explicitly launched.
+CLIENT_BILLING_LAUNCHED = env.bool(
+    "CLIENT_BILLING_LAUNCHED", default=False
+)
 # "test" or "live". Live billing is refused while DEBUG is True unless
 # STRIPE_ALLOW_LIVE_IN_DEBUG is explicitly set.
 STRIPE_BILLING_MODE = env("STRIPE_BILLING_MODE", default="test")

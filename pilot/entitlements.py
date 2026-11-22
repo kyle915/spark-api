@@ -644,12 +644,22 @@ def compute_monthly_visit_usage(
 # ---------------------------------------------------------------------------
 
 
+def is_client_billing_launched() -> bool:
+    """Return True only when client-facing subscription billing & plan gates
+    are explicitly launched (`CLIENT_BILLING_LAUNCHED=True`). While False
+    (default), billing stays strictly an Ignite-admin internal test surface
+    and client workspaces are never blocked by self-serve plan upsells."""
+    return bool(getattr(settings, "CLIENT_BILLING_LAUNCHED", False))
+
+
 def require_new_visit_capacity(
     tenant: Tenant, *, is_ignite_admin: bool = False
 ) -> None:
     """Gate NEW billable visit bookings when a self-serve brand has reached
     its monthly completed-visit allowance without an approved overage
     agreement. Never called on in-progress fieldwork / recap submission!"""
+    if not is_client_billing_launched():
+        return
     ent = resolve_brand_entitlements(tenant)
     if ent.is_managed_sow:
         return
@@ -677,7 +687,7 @@ def require_plan_feature(
     required_plan: str,
 ) -> EffectiveBrandEntitlements:
     ent = resolve_brand_entitlements(tenant)
-    if ent.is_managed_sow:
+    if not is_client_billing_launched() or ent.is_managed_sow:
         return ent
     if not getattr(ent, feature_attr, False):
         raise PlanEntitlementError(
@@ -692,6 +702,8 @@ def require_plan_feature(
 def require_active_program_capacity(
     tenant: Tenant, *, existing_event_type_id: int | None = None
 ) -> None:
+    if not is_client_billing_launched():
+        return
     ent = resolve_brand_entitlements(tenant)
     if ent.is_managed_sow or ent.max_active_programs is None:
         return
@@ -710,6 +722,8 @@ def require_active_program_capacity(
 def require_provider_feed_capacity(
     tenant: Tenant, *, candidate_provider: ProviderOrganization | None = None
 ) -> None:
+    if not is_client_billing_launched():
+        return
     ent = resolve_brand_entitlements(tenant)
     if ent.is_managed_sow or ent.max_operating_providers is None:
         return
@@ -753,6 +767,8 @@ def require_provider_feed_capacity(
 def require_pos_retailer_capacity(
     tenant: Tenant, *, retailer_banner: str
 ) -> None:
+    if not is_client_billing_launched():
+        return
     ent = require_plan_feature(
         tenant,
         "allows_retailer_pos_measurement",

@@ -32,6 +32,7 @@ from pilot.costs import (
 )
 from pilot.entitlements import (
     PlanEntitlementError,
+    is_client_billing_launched,
     require_plan_feature,
     resolve_brand_entitlements,
 )
@@ -80,6 +81,7 @@ from pilot.onboarding import (
 )
 from pilot.permissions import (
     ResolvedWorkspaceAccess,
+    is_ignite_staff_user,
     resolve_tenant_from_request,
     resolve_workspace_access,
 )
@@ -96,9 +98,11 @@ from pilot.subscriptions import (
     complete_test_mode_checkout,
     create_customer_portal_session,
     create_subscription_checkout_session,
+    get_billing_readiness,
     get_plans_and_billing_overview,
     preview_subscription_change,
     provision_pro_pilot,
+    run_billing_readiness_test_check,
 )
 from pilot.workspaces import (
     accept_workspace_invitation,
@@ -870,6 +874,49 @@ class PortalSessionOutcome:
     error: str | None = None
     portal_url: str | None = None
     mode: str | None = None
+
+
+@strawberry.type
+class BillingWebhookHealthItem:
+    stripe_event_id: str
+    event_type: str
+    processing_status: str
+    livemode: bool
+    processed_at: str
+    note: str
+
+
+@strawberry.type
+class BillingReadinessView:
+    billing_mode: str
+    billing_enabled: bool
+    client_billing_hidden: bool
+    secret_key_configured: bool
+    publishable_key_configured: bool
+    webhook_secret_configured: bool
+    core_price_configured: bool
+    pro_price_configured: bool
+    scale_price_configured: bool
+    test_simulation_active: bool
+    webhook_endpoint_url: str
+    recent_webhook_count: int
+    failed_webhook_count: int
+    last_webhook_at: str | None
+    last_webhook_event_type: str | None
+    last_webhook_status: str | None
+    recent_webhooks: list[BillingWebhookHealthItem]
+
+
+@strawberry.type
+class BillingTestCheckOutcome:
+    ok: bool
+    error: str | None = None
+    billing_mode: str = "test"
+    transport: str = "local_test_simulator"
+    signature_verified: bool = False
+    idempotency_verified: bool = False
+    probe_event_id: str | None = None
+    summary: str = ""
 
 
 def _serialize_action(act: StoreRecommendationAction) -> StoreActionItem:
@@ -1728,7 +1775,10 @@ class PilotQueries:
         def _run():
             access = _access_for_info(info)
             ent = resolve_brand_entitlements(access.tenant)
-            if not ent.allows_exports_and_weekly_reporting:
+            if (
+                is_client_billing_launched()
+                and not ent.allows_exports_and_weekly_reporting
+            ):
                 return WeeklyBuyerReport(
                     period_start=period_start or "",
                     period_end=period_end or "",
@@ -1988,6 +2038,38 @@ class PilotQueries:
                 access, target_plan_code=target_plan_code
             )
             return SubscriptionChangePreview(**p)
+
+        return await sync_to_async(_run, thread_sensitive=True)()
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def billing_readiness(
+        self, info: strawberry.Info
+    ) -> BillingReadinessView:
+        def _run():
+            user = info.context.request.user
+            r = get_billing_readiness(user=user)
+            return BillingReadinessView(
+                billing_mode=r["billing_mode"],
+                billing_enabled=r["billing_enabled"],
+                client_billing_hidden=r["client_billing_hidden"],
+                secret_key_configured=r["secret_key_configured"],
+                publishable_key_configured=r["publishable_key_configured"],
+                webhook_secret_configured=r["webhook_secret_configured"],
+                core_price_configured=r["core_price_configured"],
+                pro_price_configured=r["pro_price_configured"],
+                scale_price_configured=r["scale_price_configured"],
+                test_simulation_active=r["test_simulation_active"],
+                webhook_endpoint_url=r["webhook_endpoint_url"],
+                recent_webhook_count=r["recent_webhook_count"],
+                failed_webhook_count=r["failed_webhook_count"],
+                last_webhook_at=r["last_webhook_at"],
+                last_webhook_event_type=r["last_webhook_event_type"],
+                last_webhook_status=r["last_webhook_status"],
+                recent_webhooks=[
+                    BillingWebhookHealthItem(**item)
+                    for item in r["recent_webhooks"]
+                ],
+            )
 
         return await sync_to_async(_run, thread_sensitive=True)()
 
@@ -3308,6 +3390,10 @@ class PilotMutations:
         def _run():
             try:
                 access = _access_for_info(info)
+                if not is_ignite_staff_user(access.user):
+                    raise PermissionError(
+                        "Only Ignite platform administrators can manually provision a 60-day Pro pilot."
+                    )
                 target_tenant = Tenant.objects.filter(
                     uuid=tenant_uuid
                 ).first()
@@ -3327,5 +3413,44 @@ class PilotMutations:
                 )
             except Exception as exc:  # noqa: BLE001
                 return PilotMutationOutcome(ok=False, error=str(exc))
+
+        return await sync_to_async(_run, thread_sensitive=True)()
+
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def run_billing_test_check(
+        self,
+        info: strawberry.Info,
+        tenant_uuid: str | None = None,
+    ) -> BillingTestCheckOutcome:
+        def _run():
+            try:
+                user = info.context.request.user
+                if not is_ignite_staff_user(user):
+                    raise PermissionError(
+                        "Only Ignite platform administrators can run billing readiness checks."
+                    )
+                target_tenant = None
+                if tenant_uuid:
+                    target_tenant = Tenant.objects.filter(
+                        uuid=tenant_uuid
+                    ).first()
+                else:
+                    target_tenant = resolve_tenant_from_request(
+                        info.context.request, user
+                    )
+                res = run_billing_readiness_test_check(
+                    actor=user, tenant=target_tenant
+                )
+                return BillingTestCheckOutcome(
+                    ok=res["ok"],
+                    billing_mode=res["billing_mode"],
+                    transport=res["transport"],
+                    signature_verified=res["signature_verified"],
+                    idempotency_verified=res["idempotency_verified"],
+                    probe_event_id=res["probe_event_id"],
+                    summary=res["summary"],
+                )
+            except Exception as exc:  # noqa: BLE001
+                return BillingTestCheckOutcome(ok=False, error=str(exc))
 
         return await sync_to_async(_run, thread_sensitive=True)()

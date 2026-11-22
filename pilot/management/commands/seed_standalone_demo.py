@@ -743,18 +743,17 @@ class Command(BaseCommand):
             target_user=harbor_admin,
             workspace_role=WorkspaceMembership.ROLE_BRAND_ADMIN,
         )
-        access_harbor = resolve_workspace_access(harbor_admin, tenant=harbor)
         harbor_sub = ensure_brand_subscription(harbor)
         if harbor_sub.status != BrandSubscription.STATUS_ACTIVE:
             chk_harbor = create_subscription_checkout_session(
-                access_harbor,
+                staff_access_harbor,
                 target_plan_code=WorkspaceProfile.PLAN_PRO,
                 explicit_terms_accepted=True,
                 success_url="http://localhost:3000/plans-billing",
                 cancel_url="http://localhost:3000/plans-billing",
             )
             complete_test_mode_checkout(
-                access_harbor,
+                staff_access_harbor,
                 stripe_session_id=chk_harbor.stripe_session_id,
             )
 
