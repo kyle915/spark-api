@@ -57,8 +57,8 @@ from recaps.models import (
     RecapSection,
 )
 from sales_assist.marketing_lead import (
+    queue_self_serve_close_sync,
     sanitize_utm,
-    sync_self_serve_signup_to_close,
 )
 from tenants.models import Role, Tenant, TenantedUser, User
 
@@ -569,64 +569,19 @@ def start_or_resume_self_serve_onboarding(
         target_id=str(tenant.uuid),
         summary=f"Created self-service Free workspace for {tenant.name} ({profile.business_timezone}).",
     )
-    # Defer Close I/O until after commit so signup never stalls on CRM and we
-    # never write a Close lead for a rolled-back workspace.
-    tenant_id = tenant.id
-    progress_id = progress.id
-    user_id = user.id
-    sync_brand = clean_brand
-    sync_email = clean_email
-    sync_first = first_name
-    sync_last = last_name
-    sync_utm = dict(clean_attribution)
-    sync_landing = landing_path or "/onboarding"
-
-    def _sync_close_after_commit() -> None:
-        try:
-            committed_tenant = Tenant.objects.filter(id=tenant_id).first()
-            committed_user = User.objects.filter(id=user_id).first()
-            committed_progress = BrandOnboardingProgress.objects.filter(
-                id=progress_id
-            ).first()
-            if (
-                committed_tenant is None
-                or committed_user is None
-                or committed_progress is None
-            ):
-                return
-            sync = sync_self_serve_signup_to_close(
-                tenant=committed_tenant,
-                user=committed_user,
-                brand_name=sync_brand,
-                email=sync_email,
-                first_name=sync_first,
-                last_name=sync_last,
-                utm=sync_utm,
-                landing_path=sync_landing,
-            )
-            if sync.get("close_lead_id"):
-                BrandOnboardingProgress.objects.filter(id=progress_id).update(
-                    close_lead_id=sync["close_lead_id"]
-                )
-                log_workspace_audit(
-                    tenant=committed_tenant,
-                    actor=committed_user,
-                    category="onboarding",
-                    action="close_lead_synced",
-                    target_type="CloseLead",
-                    target_id=sync["close_lead_id"],
-                    summary=(
-                        f"Synced self-serve signup to Close lead {sync['close_lead_id']} "
-                        f"({sync.get('reason') or 'ok'})."
-                    ),
-                )
-        except Exception:  # noqa: BLE001 — never surface Close failures to signup
-            logger.exception(
-                "Post-commit Close marketing sync failed for tenant_id=%s",
-                tenant_id,
-            )
-
-    transaction.on_commit(_sync_close_after_commit)
+    # After commit, enqueue Close I/O onto Cloud Tasks (else a daemon thread)
+    # so signup never waits on CRM HTTP even though on_commit itself is sync.
+    queue_self_serve_close_sync(
+        tenant_id=tenant.id,
+        progress_id=progress.id,
+        user_id=user.id,
+        brand_name=clean_brand,
+        email=clean_email,
+        first_name=first_name,
+        last_name=last_name,
+        utm=dict(clean_attribution),
+        landing_path=landing_path or "/onboarding",
+    )
     jwt_tok, ref_tok = _issue_auth_tokens(user)
     return {
         "user": user,

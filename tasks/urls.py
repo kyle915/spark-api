@@ -40,4 +40,9 @@ urlpatterns = [
         views.connecteam_import_recap_view,
         name="tasks.connecteam_import_recap",
     ),
+    path(
+        "marketing-close-sync",
+        views.marketing_close_sync_view,
+        name="tasks.marketing_close_sync",
+    ),
 ]

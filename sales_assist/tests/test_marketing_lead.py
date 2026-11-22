@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+from unittest import mock
+
 import pytest
 
 from sales_assist.close_client import CloseClient, CloseError
 from sales_assist.marketing_lead import (
     NOTE_MARKER,
+    _dispatch_close_sync,
     lead_contact_emails,
+    queue_self_serve_close_sync,
     sanitize_utm,
     sync_self_serve_signup_to_close,
 )
@@ -206,3 +210,54 @@ def test_sync_aborts_create_when_lookup_errors(settings):
     assert result["reason"].startswith("lookup-failed:")
     assert not any(c[1] == "/lead/" and c[0] == "POST" for c in session.calls)
     assert CloseLink.objects.filter(tenant=tenant).count() == 0
+
+
+def test_dispatch_falls_back_to_thread_when_cloud_tasks_off():
+    payload = {"tenant_id": 1, "progress_id": 2, "user_id": 3}
+    with mock.patch(
+        "sales_assist.marketing_lead.cloud_tasks.enqueue", return_value=False
+    ), mock.patch("sales_assist.marketing_lead.threading.Thread") as thread:
+        _dispatch_close_sync(payload)
+    thread.assert_called_once()
+    assert thread.call_args.kwargs["args"] == (payload,)
+    assert thread.call_args.kwargs["daemon"] is True
+
+
+def test_dispatch_skips_thread_when_cloud_tasks_enqueued():
+    payload = {"tenant_id": 1}
+    with mock.patch(
+        "sales_assist.marketing_lead.cloud_tasks.enqueue", return_value=True
+    ), mock.patch("sales_assist.marketing_lead.threading.Thread") as thread:
+        _dispatch_close_sync(payload)
+    thread.assert_not_called()
+
+
+def test_queue_registers_on_commit_not_inline_http(monkeypatch):
+    """Signup path must schedule Close work; never call sync on the request thread."""
+    registered = []
+
+    def fake_on_commit(fn):
+        registered.append(fn)
+
+    monkeypatch.setattr(
+        "sales_assist.marketing_lead.transaction.on_commit", fake_on_commit
+    )
+    with mock.patch(
+        "sales_assist.marketing_lead._dispatch_close_sync"
+    ) as dispatch, mock.patch(
+        "sales_assist.marketing_lead.sync_self_serve_signup_to_close"
+    ) as sync:
+        queue_self_serve_close_sync(
+            tenant_id=10,
+            progress_id=20,
+            user_id=30,
+            brand_name="Acme",
+            email="a@b.test",
+            utm={"utm_source": "meta"},
+        )
+        sync.assert_not_called()
+        assert len(registered) == 1
+        registered[0]()
+        dispatch.assert_called_once()
+        assert dispatch.call_args.args[0]["tenant_id"] == 10
+        assert dispatch.call_args.args[0]["utm"]["utm_source"] == "meta"

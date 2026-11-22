@@ -13,18 +13,21 @@ This is intentionally different from fuzzy ``suggest-links``: the brand just
 created their own Spark workspace, so the link is authored by the signup, not
 guessed from a name match. Failures never block onboarding.
 
-Callers must invoke this **after** the signup transaction commits (e.g.
-``transaction.on_commit``) so Close I/O cannot stall or roll back the DB write
-and cannot leave orphaned CRM state when signup fails.
+Callers must schedule this **after** the signup transaction commits via
+:func:`queue_self_serve_close_sync` so Close I/O cannot stall or roll back the
+DB write, cannot leave orphaned CRM state when signup fails, and never runs
+on the GraphQL request thread (Cloud Tasks, else a daemon worker thread).
 """
 
 from __future__ import annotations
 
 import logging
 import re
+import threading
 from typing import Any
 
 from django.conf import settings
+from django.db import close_old_connections, transaction
 
 from sales_assist.close_client import (
     CloseClient,
@@ -34,8 +37,11 @@ from sales_assist.close_client import (
     close_configured,
 )
 from sales_assist.models import CloseLink
+from utils import cloud_tasks
 
 logger = logging.getLogger(__name__)
+
+TASK_PATH = "/api/tasks/marketing-close-sync"
 
 UTM_KEYS = (
     "utm_source",
@@ -266,3 +272,98 @@ def sync_self_serve_signup_to_close(
         result["reason"] = f"{result['reason']}; link-failed"
 
     return result
+
+
+def queue_self_serve_close_sync(
+    *,
+    tenant_id: int,
+    progress_id: int,
+    user_id: int,
+    brand_name: str,
+    email: str,
+    first_name: str = "",
+    last_name: str = "",
+    utm: dict[str, Any] | None = None,
+    landing_path: str = "/onboarding",
+) -> None:
+    """After commit, enqueue Close sync off the request path (never inline HTTP)."""
+    payload = {
+        "tenant_id": tenant_id,
+        "progress_id": progress_id,
+        "user_id": user_id,
+        "brand_name": brand_name,
+        "email": email,
+        "first_name": first_name or "",
+        "last_name": last_name or "",
+        "utm": dict(utm or {}),
+        "landing_path": landing_path or "/onboarding",
+    }
+    transaction.on_commit(lambda: _dispatch_close_sync(payload))
+
+
+def _dispatch_close_sync(payload: dict[str, Any]) -> None:
+    """Cloud Tasks first; daemon thread when the queue is off / enqueue fails."""
+    if cloud_tasks.enqueue(TASK_PATH, payload):
+        return
+    threading.Thread(
+        target=_run_close_sync_in_thread,
+        args=(payload,),
+        daemon=True,
+    ).start()
+
+
+def _run_close_sync_in_thread(payload: dict[str, Any]) -> None:
+    close_old_connections()
+    try:
+        run_self_serve_close_sync_job(payload)
+    except Exception:  # noqa: BLE001 — never crash a worker thread into signup
+        logger.exception(
+            "Background Close marketing sync failed for tenant_id=%s",
+            payload.get("tenant_id"),
+        )
+    finally:
+        close_old_connections()
+
+
+def run_self_serve_close_sync_job(payload: dict[str, Any]) -> dict[str, Any]:
+    """Load committed rows and sync Close; used by the thread + Cloud Tasks handler."""
+    from pilot.models import BrandOnboardingProgress
+    from pilot.permissions import log_workspace_audit
+    from tenants.models import Tenant, User
+
+    tenant_id = payload.get("tenant_id")
+    progress_id = payload.get("progress_id")
+    user_id = payload.get("user_id")
+    committed_tenant = Tenant.objects.filter(id=tenant_id).first()
+    committed_user = User.objects.filter(id=user_id).first()
+    committed_progress = BrandOnboardingProgress.objects.filter(id=progress_id).first()
+    if committed_tenant is None or committed_user is None or committed_progress is None:
+        return {"ok": False, "reason": "missing-committed-rows"}
+
+    sync = sync_self_serve_signup_to_close(
+        tenant=committed_tenant,
+        user=committed_user,
+        brand_name=str(payload.get("brand_name") or ""),
+        email=str(payload.get("email") or ""),
+        first_name=str(payload.get("first_name") or ""),
+        last_name=str(payload.get("last_name") or ""),
+        utm=payload.get("utm") if isinstance(payload.get("utm"), dict) else {},
+        landing_path=str(payload.get("landing_path") or "/onboarding"),
+    )
+    if sync.get("close_lead_id"):
+        BrandOnboardingProgress.objects.filter(id=progress_id).update(
+            close_lead_id=sync["close_lead_id"]
+        )
+        log_workspace_audit(
+            tenant=committed_tenant,
+            actor=committed_user,
+            category="onboarding",
+            action="close_lead_synced",
+            target_type="CloseLead",
+            target_id=sync["close_lead_id"],
+            summary=(
+                f"Synced self-serve signup to Close lead {sync['close_lead_id']} "
+                f"({sync.get('reason') or 'ok'})."
+            ),
+        )
+    return sync
