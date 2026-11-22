@@ -2246,6 +2246,9 @@ class BrandOnboardingProgress(models.Model):
     step_contributor_invited = models.BooleanField(default=False)
     step_mobile_link_opened = models.BooleanField(default=False)
     step_first_visit_completed = models.BooleanField(default=False)
+    # Marketing UTM attribution captured on /onboarding (utm_source…utm_term).
+    marketing_attribution = models.JSONField(default=dict, blank=True)
+    close_lead_id = models.CharField(max_length=80, blank=True, default="")
     completed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
     updated_at = models.DateTimeField(auto_now=True)

@@ -77,6 +77,17 @@ class FakeCloseSession:
             return FakeResponse(200, {"data": self.notes.get(params.get("lead_id"), [])})
         if method == "GET" and path == "/opportunity/":
             return FakeResponse(200, {"data": []})
+        if method == "POST" and path == "/lead/":
+            lead_id = f"lead_new{len(self.leads) + 1}"
+            lead = {
+                "id": lead_id,
+                "name": (json or {}).get("name"),
+                "display_name": (json or {}).get("name"),
+                "description": (json or {}).get("description", ""),
+                "contacts": (json or {}).get("contacts") or [],
+            }
+            self.leads[lead_id] = lead
+            return FakeResponse(200, lead)
         if method == "POST" and path == "/activity/note/":
             self.notes.setdefault(json["lead_id"], []).append({"id": "acti_n", "note": json["note"]})
             return FakeResponse(200, {"id": f"acti_note{len(self.writes)}"})
@@ -185,19 +196,21 @@ def test_chain_names_and_descriptor_safety():
 # ── Close client: drafts only ───────────────────────────────────────────
 
 
-def test_close_client_refuses_anything_but_notes_and_drafts():
+def test_close_client_refuses_anything_but_notes_drafts_and_lead_create():
     for method, path, payload in (
         ("PUT", "/activity/email/acti_1/", {"status": "outbox"}),
         ("DELETE", "/lead/lead_1/", None),
         ("POST", "/activity/email/", {"status": "outbox"}),
         ("POST", "/activity/email/", {"status": "draft", "date_scheduled": "2026-11-19"}),
         ("POST", "/activity/sms/", {"status": "draft"}),
-        ("POST", "/lead/", {}),
+        ("POST", "/lead/", {}),  # name required
+        ("POST", "/lead/", {"name": "Acme", "opportunities": []}),
     ):
         with pytest.raises(close_client.UnsafeCloseWrite):
             close_client._assert_safe(method, path, payload)
     close_client._assert_safe("POST", "/activity/email/", {"status": "draft"})
     close_client._assert_safe("POST", "/activity/note/", {"note": "x"})
+    close_client._assert_safe("POST", "/lead/", {"name": "Acme Spark Brand"})
 
 
 def test_close_client_needs_a_key(settings):

@@ -73,9 +73,26 @@ Leads are skipped in these cases:
    figures from another client's dashboard. Never quote rates or pricing in
    these emails.
 
+## Self-serve marketing onboarding → Close lead
+
+When a brand completes **Start free** at `/onboarding` (from Ignite Spark
+marketing pages or spark-by-ignite with UTM params), Spark best-effort:
+
+1. Creates a Close lead (or finds one by brand name / contact email).
+2. Writes a note starting with **`SPARK SELF-SERVE ONBOARDING`** that includes
+   the six approved UTM tags (`utm_source` … `utm_term`).
+3. Creates a `CloseLink` for that tenant so prospect drafts skip them as an
+   existing client.
+
+This path is gated by `CLOSE_API_KEY` and `STANDALONE_SIGNUP_CLOSE_SYNC_ENABLED`
+(default true). Failures never block signup. It does **not** send email or
+create sequences — notes and lead create only.
+
 ## For staff: linking clients to Close
 
-Nothing is linked automatically. To link a brand, use one of these:
+Fuzzy name-match linking is never automatic. Self-serve signup (above) is the
+one exception: the brand just created their Spark workspace, so the link is
+authored by signup, not guessed. Otherwise, to link a brand, use one of these:
 
 - **GraphQL (staff only)** on the clients schema:
   `linkTenantToClose(tenantId, closeLeadId, closeOpportunityId?, renewalDate?, contactEmail?)`

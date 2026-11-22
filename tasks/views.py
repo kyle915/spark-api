@@ -298,3 +298,37 @@ async def recap_deck_build_view(request: HttpRequest) -> HttpResponse:
         # 200: the cron picks the deck up again; no retry storm.
         return JsonResponse({"ok": False}, status=200)
     return JsonResponse({"ok": True, "outcome": outcome})
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def marketing_close_sync_view(request: HttpRequest) -> HttpResponse:
+    """POST `/api/tasks/marketing-close-sync`.
+
+    Body JSON matches :func:`sales_assist.marketing_lead.queue_self_serve_close_sync`
+    payload. Always 200 after attempting so Cloud Tasks does not retry a
+    half-synced lead into duplicate notes.
+    """
+    if not _secret_ok(request):
+        return HttpResponseForbidden("Forbidden")
+
+    from sales_assist.marketing_lead import run_self_serve_close_sync_job
+
+    try:
+        body = json.loads((request.body or b"").decode("utf-8") or "{}")
+    except (ValueError, UnicodeDecodeError):
+        logger.warning("marketing-close-sync: could not parse request body.")
+        return JsonResponse({"ok": False, "error": "bad-json"}, status=200)
+
+    if not isinstance(body, dict) or not body.get("tenant_id"):
+        return JsonResponse({"ok": False, "error": "bad-payload"}, status=200)
+
+    try:
+        result = run_self_serve_close_sync_job(body)
+    except Exception:
+        logger.exception(
+            "marketing-close-sync failed tenant_id=%s", body.get("tenant_id")
+        )
+        return JsonResponse({"ok": False}, status=200)
+
+    return JsonResponse({"ok": True, "reason": result.get("reason", "")})
