@@ -24,6 +24,7 @@ from recaps.drop_off_locations import (
 from events.event_confirmations import PRODUCT_CATEGORY_SEPARATOR
 from recaps.products_sampled import is_products_sampled_field
 from recaps.sample_qty import sample_qty_labels
+from recaps.signoff import signature_data_url, signature_pdf_html
 from recaps.template_fallback import is_activation_template
 from recaps.types import (
     _co_activation_info,
@@ -350,6 +351,10 @@ def _readable_json(parsed) -> str:
 def _format_field_value(value):
     """Render a stored custom-field value for display.
 
+    A clerk signature is a PNG data URL. Text exports say "Signed" so the
+    base64 never lands in a paragraph. The PDF renderer embeds the image
+    before it gets here.
+
     A multiselect answer is persisted as a JSON array of the chosen option
     strings (e.g. '["Detroit", "Lansing"]'); show it as a readable comma
     list rather than raw JSON. Drop-off Locations become one line per stop.
@@ -357,6 +362,8 @@ def _format_field_value(value):
     display-ready and passes through untouched.
     """
     if isinstance(value, str):
+        if signature_data_url(value):
+            return "Signed"
         stripped = value.strip()
         if stripped.startswith("[") and stripped.endswith("]"):
             try:
@@ -965,6 +972,9 @@ def build_recap_pdf_html(
     def _render_custom_field(field_name: str, value) -> str:
         if isinstance(value, list):
             return _drop_off_locations_html(field_name, value)
+        signed = signature_data_url(value) if isinstance(value, str) else None
+        if signed:
+            return signature_pdf_html(field_name, signed)
         # Image-type field: value is a blob path we pre-fetched bytes for.
         # Embed the image (reusing the gallery figure/img styling) rather
         # than printing the raw blob path. bytes_to_data_uri handles the

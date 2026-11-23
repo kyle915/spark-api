@@ -75,6 +75,14 @@ from recaps.models import (
     TypeOfGood,
 )
 from recaps.products_sampled import PRODUCTS_SAMPLED_FIELD
+from recaps.signoff import (
+    CLERK_FIRST_NAME,
+    CLERK_LAST_INITIAL,
+    CLERK_SIGNATURE,
+    LETTER_TYPE,
+    SIGNATURE_TYPE,
+    STORE_SIGNOFF_SECTION,
+)
 from tenants.brand_group_demo import DEMO_DOMAIN
 from tenants.models import BrandGroup, Tenant, TenantTheme
 from tenants.mutations import (
@@ -264,6 +272,22 @@ NEXT_DEMO_QUESTION = (
 )
 NEXT_DEMO_FIELD: FieldSpec = (NEXT_DEMO_QUESTION, "longtext", False, [])
 
+# Famus only. Alcohol Armor, Wook Water, and Martinelli's do not get this
+# closer. `letter` and `signature` are opt-in field types; other templates
+# stay on text / number / longtext / select / image.
+SIGNOFF_FIELD_TYPES = (LETTER_TYPE, SIGNATURE_TYPE)
+
+
+def signoff_section() -> SectionSpec:
+    return (
+        STORE_SIGNOFF_SECTION,
+        [
+            (CLERK_FIRST_NAME, "text", True, []),
+            (CLERK_LAST_INITIAL, LETTER_TYPE, True, []),
+            (CLERK_SIGNATURE, SIGNATURE_TYPE, True, []),
+        ],
+    )
+
 
 def retail_spec(brand: Brand) -> list[SectionSpec]:
     brand_name = brand.name
@@ -431,6 +455,9 @@ def sections_for(brand: Brand) -> list[tuple[str, list[SectionSpec]]]:
     if EVENT in brand.programs:
         event = martinellis_event_spec() if brand.slug == "martinellis" else event_spec(brand.name)
         specs.append((EVENT, event))
+    if brand.slug == "famus-energy":
+        for _program, sections in specs:
+            sections.append(signoff_section())
     return specs
 
 
@@ -440,6 +467,7 @@ SECTION_ORDER = {
     "Brand Results": 1,
     "Brand Feedback": 2,
     FOLLOW_UP: 3,
+    STORE_SIGNOFF_SECTION: 4,
     "Consumer Engagement": 0,
     "Feedback & Account Notes": 1,
     "Products Sampled": 2,
@@ -833,6 +861,18 @@ class Command(BaseCommand):
     def _field_type(self, kind: str):
         if kind in self.ft_cache:
             return self.ft_cache[kind]
+        # Exact names. The fuzzy matcher treats "int" as a number, so a type
+        # named "letter" must not go through it, and "signature" must not be
+        # created twice on a re-run.
+        if kind in SIGNOFF_FIELD_TYPES:
+            found = CustomRecapFieldType.objects.filter(name__iexact=kind).first()
+            if found is None and self.apply:
+                found = CustomRecapFieldType.objects.create(
+                    name=kind, created_by=self.creator
+                )
+                self.stdout.write(f"    (created field type {kind!r})")
+            self.ft_cache[kind] = found
+            return found
         found = next(
             (
                 ft
@@ -879,7 +919,12 @@ class Command(BaseCommand):
             )
             layout = dict(template.layout or {})
             if brand.in_group:
-                layout[CO_BRAND_SECTIONS_KEY] = list(PER_BRAND_SECTIONS)
+                per_brand = list(PER_BRAND_SECTIONS)
+                # Famus clerk sign-off is per Famus recap, including a slice
+                # filed while Alcohol Armor or Wook Water is the host.
+                if brand.slug == "famus-energy":
+                    per_brand.append(STORE_SIGNOFF_SECTION)
+                layout[CO_BRAND_SECTIONS_KEY] = per_brand
             else:
                 layout.pop(CO_BRAND_SECTIONS_KEY, None)
             template.layout = layout
@@ -898,6 +943,11 @@ class Command(BaseCommand):
                     section.save(update_fields=["order"])
                 for f_idx, (fname, kind, required, options) in enumerate(fields):
                     ft = self._field_type(kind)
+                    if ft is None:
+                        raise CommandError(
+                            f"No field type for {kind!r}. "
+                            "Re-run with --apply so missing types can be created."
+                        )
                     row, created = CustomField.objects.get_or_create(
                         custom_recap_template=template,
                         recap_section=section,

@@ -26,6 +26,14 @@ from recaps.models import (
 )
 from recaps.products_sampled import PRODUCTS_SAMPLED_FIELD
 from tenants.brand_group_demo import DEMO_DOMAIN
+from recaps.signoff import (
+    CLERK_FIRST_NAME,
+    CLERK_LAST_INITIAL,
+    CLERK_SIGNATURE,
+    LETTER_TYPE,
+    SIGNATURE_TYPE,
+    STORE_SIGNOFF_SECTION,
+)
 from tenants.management.commands.setup_brand_group import NEXT_DEMO_QUESTION
 from tenants.models import Tenant
 
@@ -182,19 +190,38 @@ class TestBrandGroupCatalog(AmbassadorsGraphQLTestCase):
                     .select_related("recap_section", "custom_field_type")
                     .order_by("recap_section__order", "order", "id")
                 )
-                closer = fields[-1]
-                assert closer.name == label
-                assert closer.required is False
-                assert closer.placeholder == ""
-                assert closer.recap_section.name == "Follow-up"
-                kind = (closer.custom_field_type.name or "").lower()
+                follow = next(f for f in fields if f.name == label)
+                assert follow.required is False
+                assert follow.placeholder == ""
+                assert follow.recap_section.name == "Follow-up"
+                kind = (follow.custom_field_type.name or "").lower()
                 assert "long" in kind or "textarea" in kind or "paragraph" in kind
                 notes = next(f for f in fields if f.name == "Quotes from Consumers")
                 assert notes.required is False
-                assert closer.recap_section.order > notes.recap_section.order
+                assert follow.recap_section.order > notes.recap_section.order
                 co_brand = (template.layout or {}).get(CO_BRAND_SECTIONS_KEY) or []
                 assert "Follow-up" not in co_brand
                 assert "Brand Feedback" in co_brand
+                if tenant.slug == "famus-energy":
+                    assert STORE_SIGNOFF_SECTION in co_brand
+                else:
+                    assert STORE_SIGNOFF_SECTION not in co_brand
+                if tenant.slug == "famus-energy":
+                    signoff = fields[-3:]
+                    assert [f.name for f in signoff] == [
+                        CLERK_FIRST_NAME,
+                        CLERK_LAST_INITIAL,
+                        CLERK_SIGNATURE,
+                    ]
+                    assert all(f.required for f in signoff)
+                    assert all(f.recap_section.name == STORE_SIGNOFF_SECTION for f in signoff)
+                    assert (signoff[0].custom_field_type.name or "").lower() == "text"
+                    assert (signoff[1].custom_field_type.name or "").lower() == LETTER_TYPE
+                    assert (signoff[2].custom_field_type.name or "").lower() == SIGNATURE_TYPE
+                    assert signoff[0].recap_section.order > follow.recap_section.order
+                else:
+                    assert fields[-1].name == label
+                    assert not any(f.name == CLERK_SIGNATURE for f in fields)
 
         other = self.create_tenant(name="Liquid Death", slug="liquid-death")
         event_type = EventType.objects.create(

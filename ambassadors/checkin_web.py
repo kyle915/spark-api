@@ -1659,6 +1659,7 @@ def submit_checkin_recap(
         _resolve_explicit_file_recap_category,
         _resolve_file_recap_category,
     )
+    from recaps.signoff import assert_recap_signoff, stored_signoff_value
     from recaps.spend_amount import guard_spend_amount
     from utils.gcs import extract_blob_name_from_url
 
@@ -1871,7 +1872,9 @@ def submit_checkin_recap(
             except (TypeError, ValueError):
                 continue
             custom_field = (
-                rmodels.CustomField.objects.select_related("custom_field_type")
+                rmodels.CustomField.objects.select_related(
+                    "custom_field_type", "recap_section"
+                )
                 .filter(id=field_id, custom_recap_template_id=template.id)
                 .first()
             )
@@ -1880,13 +1883,17 @@ def submit_checkin_recap(
             value = fv.get("value")
             if value is None:
                 continue
-            value = guard_spend_amount(
-                custom_field.name,
-                getattr(
-                    getattr(custom_field, "custom_field_type", None), "name", ""
-                )
-                or "",
-                value,
+            value = stored_signoff_value(
+                custom_field,
+                guard_spend_amount(
+                    custom_field.name,
+                    getattr(
+                        getattr(custom_field, "custom_field_type", None), "name", ""
+                    )
+                    or "",
+                    value,
+                ),
+                enforce_required=True,
             )
             rmodels.CustomFieldValue.objects.create(
                 custom_recap=recap,
@@ -1894,6 +1901,11 @@ def submit_checkin_recap(
                 value=str(value),
                 created_by=actor,
             )
+
+        # Famus clerk sign-off, when the template asks for it. Other brands
+        # have no such fields, so this returns without changing them. Clock-out
+        # does not come through here.
+        assert_recap_signoff(template, recap)
 
         # Torch (and most retail templates) already ask "total number of
         # consumers sampled". That IS Spark's engagements metric — copy it

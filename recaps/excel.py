@@ -10,6 +10,7 @@ from recaps.drop_off_locations import (
     looks_like_drop_off_locations,
     parse_drop_off_locations,
 )
+from recaps.signoff import signature_data_url
 from utils.gcs import extract_blob_name_from_url
 
 INVALID_SHEET_CHARS = set(r'[]:*?/\\')
@@ -47,6 +48,8 @@ def _format_field_value(value) -> str:
     Single-select / text / number pass through _safe.
     """
     if isinstance(value, str):
+        if signature_data_url(value):
+            return "Signed"
         stripped = value.strip()
         if stripped.startswith("[") and stripped.endswith("]"):
             try:

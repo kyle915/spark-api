@@ -136,6 +136,13 @@ def _options(raw: object) -> list[str]:
 def field_kind(name: str, field_type: str, options: list[str]) -> str | None:
     """Which kind of answer the draft may give this field, or None to skip it."""
     kind = (field_type or "").strip().lower()
+    # Clerk sign-off is written by the store, not spoken by the BA.
+    if kind in {"signature", "letter"} or (name or "").strip().lower() in {
+        "first name",
+        "last initial",
+        "signature",
+    }:
+        return None
     if _SKIP_TYPE.search(kind) or _SKIP_NAME.search(name or ""):
         return None
     if _MULTI_TYPE.search(kind):
