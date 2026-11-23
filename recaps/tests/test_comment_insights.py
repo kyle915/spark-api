@@ -671,8 +671,54 @@ def test_count_mentions_settles_each_recap_once_and_survives_junk():
     assert count_mentions({"mentions": "x"}, comments, "Alpha", [])["brands"] == []
 
 
+def test_a_brand_quote_is_the_sentence_that_spells_it():
+    comments = [
+        _c(
+            "L1",
+            "Peanut butter cups. The cola reminds me of Dr Pepper. They handed out stickers.",
+        )
+    ]
+    raw = {
+        "mentions": [
+            {
+                "comment": 1,
+                "brand": "Dr Pepper-style",
+                "name": "Dr Pepper",
+                "stance": "neutral",
+            }
+        ]
+    }
+    out = count_mentions(raw, comments, "Liquid Death", ["Dead Billionaire"])
+    (brand,) = out["brands"]
+    assert brand["brand"] == "Dr Pepper"
+    assert brand["recap_count"] == 1
+    assert brand["quote"] == "The cola reminds me of Dr Pepper."
+    assert "stickers" not in brand["quote"]
+    assert "Peanut" not in brand["quote"]
+
+
+def test_a_proper_name_still_quotes_the_plural_spelling():
+    comments = [_c("L1", "I prefer Red Bulls.")]
+    raw = {
+        "mentions": [
+            {
+                "comment": 1,
+                "brand": "Red Bulls",
+                "name": "Red Bull",
+                "stance": "prefers_theirs",
+            }
+        ]
+    }
+    out = count_mentions(raw, comments, "Liquid Death", [])
+    (brand,) = out["brands"]
+    assert brand["brand"] == "Red Bull"
+    assert brand["recap_count"] == 1
+    assert brand["quote"] == "I prefer Red Bulls."
+
+
 def test_a_product_is_named_by_its_distinctive_words_only():
     assert names_product(normalise("the blue razz was great"), "Torch Blue Razz 10mg", "Torch")
+    assert not names_product(normalise("just blue"), "Torch Blue Razz 10mg", "Torch")
     assert not names_product(normalise("love torch"), "Torch Blue Razz 10mg", "Torch")
     assert not names_product(normalise("want the 10mg pack"), "Torch Blue Razz 10mg Pack", "Torch")
     products = [(1, "Blue Razz"), (2, "Mango")]

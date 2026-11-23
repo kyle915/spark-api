@@ -154,6 +154,8 @@ query MonthHighlightQuery($tenantId: ID!, $month: String!) {
       recaps
       recapUuid
       recapKind
+      linkedConsumers
+      linkedUnitsSold
     }
     quote { text recapUuid recapKind }
     photo { url category recapUuid }
@@ -518,6 +520,11 @@ class TestSearchStoreHighlight(AmbassadorsGraphQLTestCase):
         self.d = [
             self._recap(
                 oct_(8 + i), 100, 40, store=self.dallas,
+                feedback=(
+                    "This was the best sparkling water I have tried at a grocery store."
+                    if i == 0
+                    else None
+                ),
                 photo=(
                     [("receipt.jpg", self.receipts), ("table.jpg", self.sampling)]
                     if i == 0
@@ -933,17 +940,22 @@ class TestSearchStoreHighlight(AmbassadorsGraphQLTestCase):
             dallas, "Kroger", "Dallas, TX",
         )
         assert (store["conversion"], store["consumers"], store["unitsSold"]) == (40.0, 200, 80)
-        assert store["recapUuid"] in {str(r.uuid) for r in self.d}
+        assert store["recaps"] == 2
+        assert (store["linkedConsumers"], store["linkedUnitsSold"]) == (100, 40)
+        assert store["recapUuid"] == str(self.d[0].uuid)
         assert brand["captionSource"] == "template"
         assert brand["caption"] == (
-            "Kroger in Dallas, TX had the highest conversion rate in October 2026: "
-            "40% from 200 consumers sampled, with 80 units sold."
+            "Kroger in Dallas, TX had 2 approved recaps in October 2026, "
+            "200 consumers sampled and 80 units sold, a 40% conversion. "
+            "The recap this opens sampled 100 and sold 40."
         )
-        # The stored comment, with the ambassador's name taken out; never
-        # the unapproved recap's longer one.
-        assert brand["quote"]["text"].startswith("I loved the citrus flavor")
+        # The whole comment from the recap the link opens, not a comment
+        # from another store and not the unapproved recap.
+        assert brand["quote"]["text"] == (
+            "This was the best sparkling water I have tried at a grocery store."
+        )
         assert "Rivera" not in str(brand) and "whole shelf" not in str(brand)
-        assert brand["quote"]["recapUuid"] == str(self.h[0].uuid)
+        assert brand["quote"]["recapUuid"] == str(self.d[0].uuid)
         # The best store's sampling photo, not its receipt.
         assert brand["photo"]["url"].endswith("table.jpg")
         assert brand["photo"]["recapUuid"] == str(self.d[0].uuid)

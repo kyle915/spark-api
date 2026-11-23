@@ -1,10 +1,12 @@
 """Consumer comments grouped into themes: what people liked, why they
 passed, what they asked.
 
-The model does one job here: it reads numbered comments and says which
-comments belong together and what to call the group. Everything a reader
-sees as a number is counted in Python from that assignment, and every quote
-is the stored text of one of the numbered comments, never model prose.
+The model does two jobs here, and neither of them is a number. It reads
+numbered comments and says which comments belong together and what to call
+the group. It may also name one sentence per section, and that sentence is
+kept only when it is one whole sentence copied from a quote in that
+section. Everything a reader sees as a number is counted in Python, and
+every quote is the stored text of one of the numbered comments.
 
 What reaches the model, for staff and brand users alike:
 
@@ -78,7 +80,7 @@ MAX_QUOTE_CHARS = 160
 MAX_LABEL_CHARS = 60
 
 # Bump when the prompt or the cleaning changes, so stored themes are rebuilt.
-_VERSION = "1"
+_VERSION = "2"
 
 # How long one attempt may take. The page shows "not available right now"
 # after this rather than leaving the section loading.
@@ -124,7 +126,7 @@ _EMPTY_ANSWERS = frozenset(
 THEMES_JSON_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["themes"],
+    "required": ["themes", "sentences"],
     "properties": {
         "themes": {
             "type": "array",
@@ -139,7 +141,19 @@ THEMES_JSON_SCHEMA = {
                     "quote": {"type": "integer"},
                 },
             },
-        }
+        },
+        "sentences": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["section", "text"],
+                "properties": {
+                    "section": {"type": "string", "enum": list(SECTIONS)},
+                    "text": {"type": "string"},
+                },
+            },
+        },
     },
 }
 
@@ -157,7 +171,10 @@ _SYSTEM_PROMPT = (
     "A comment belongs to at most one theme; leave out a comment that fits "
     "none. In 'quote' give the number of one short comment from that theme "
     "that represents it and holds no person's name or other personal detail. "
-    "Do not count anything and do not write any totals: only assign comments."
+    "In 'sentences' give one item for each section you used. 'text' is one "
+    "whole sentence copied from a single comment in that section. Do not "
+    "join comments together and do not write a number. Do not count anything "
+    "and do not write any totals: only assign comments."
 )
 
 
@@ -440,7 +457,46 @@ def count_themes(raw: dict | None, comments: list[Comment]) -> list[dict]:
     return themes[:MAX_THEMES]
 
 
-def build_themes(comments: list[Comment]) -> list[dict] | None:
+def _sentences_of(text: str) -> list[str]:
+    return [part.strip() for part in re.split(r"(?<=[.!?])\s+|\n+", str(text or "")) if part.strip()]
+
+
+def keep_section_sentences(raw: dict | None, themes: list[dict]) -> list[dict]:
+    """One sentence per section. The model's sentence is kept only when it
+    is one whole sentence of a quote in that section. Otherwise the first
+    quote's first sentence is used. Counts are not part of the sentence."""
+    quotes: dict[str, list[str]] = {}
+    for theme in themes:
+        quote = str(theme.get("quote") or "").strip()
+        if quote:
+            quotes.setdefault(str(theme.get("section")), []).append(quote)
+    offered: dict[str, str] = {}
+    for item in (raw or {}).get("sentences") or []:
+        if isinstance(item, dict) and item.get("section") in SECTIONS:
+            offered[str(item["section"])] = str(item.get("text") or "")
+    out: list[dict] = []
+    for section, section_quotes in quotes.items():
+        cleaned = " ".join(offered.get(section, "").split())
+        chosen = ""
+        if cleaned:
+            for quote in section_quotes:
+                if cleaned == " ".join(quote.split()):
+                    chosen = quote
+                    break
+                for sentence in _sentences_of(quote):
+                    if " ".join(sentence.split()) == cleaned:
+                        chosen = sentence
+                        break
+                if chosen:
+                    break
+        if not chosen:
+            chosen = _sentences_of(section_quotes[0])[0]
+        if chosen:
+            out.append({"section": section, "text": chosen})
+    return out
+
+
+def build_themes(comments: list[Comment]) -> tuple[list[dict], list[dict]] | None:
     """Ask the model to group ``comments``. None when it is not available."""
     try:
         # Sorting comments into groups is a short classification job: the
@@ -459,13 +515,21 @@ def build_themes(comments: list[Comment]) -> list[dict] | None:
         logger.exception("feedback themes: model call failed")
         return None
     themes = count_themes(raw, comments)
-    return themes or None
+    if not themes:
+        return None
+    return themes, keep_section_sentences(raw, themes)
 
 
 def _result(status: str, comments: list[Comment], *, row=None, truncated=False) -> dict:
+    payload = (row.payload or {}) if row else {}
+    themes = list(payload.get("themes") or []) if row else []
+    sentences = list(payload.get("sentences") or []) if row else []
+    if themes and not sentences:
+        sentences = keep_section_sentences(None, themes)
     return {
         "status": status,
-        "themes": list((row.payload or {}).get("themes") or []) if row else [],
+        "themes": themes,
+        "sentences": sentences,
         "recap_count": len({c.recap for c in comments}),
         "comment_count": len(comments),
         "truncated": truncated,
@@ -502,11 +566,12 @@ def get_feedback_themes(
     if row is not None and not refresh:
         return _result(STATUS_READY, comments, row=row, truncated=truncated)
 
-    themes = build_themes(comments)
-    if themes is None:
+    built = build_themes(comments)
+    if built is None:
         if row is not None:
             return _result(STATUS_READY, comments, row=row, truncated=truncated)
         return _result(STATUS_UNAVAILABLE, comments, truncated=truncated)
+    themes, sentences = built
 
     row, _created = TenantFeedbackThemes.objects.update_or_create(
         tenant_id=tenant_id,
@@ -514,7 +579,7 @@ def get_feedback_themes(
         defaults={
             "start_date": start,
             "end_date": end,
-            "payload": {"themes": themes},
+            "payload": {"themes": themes, "sentences": sentences},
             "recap_count": len({c.recap for c in comments}),
             "comment_count": len(comments),
         },
@@ -536,12 +601,21 @@ class FeedbackTheme:
 
 
 @strawberry.type
+class ThemeSentence:
+    """One sentence for a theme section, copied from a quote in that section."""
+
+    section: str
+    text: str
+
+
+@strawberry.type
 class TenantFeedbackThemes:
     """What consumers said, grouped. ``status`` is ``ready``, ``too_few``
     or ``unavailable``; ``themes`` is empty unless it is ``ready``."""
 
     status: str
     themes: list[FeedbackTheme]
+    sentences: list[ThemeSentence]
     recap_count: int
     comment_count: int
     truncated: bool
@@ -567,6 +641,11 @@ def _to_type(data: dict, start: date | None, end: date | None) -> TenantFeedback
         comment_count=data["comment_count"],
         truncated=data["truncated"],
         generated_at=data["generated_at"],
+        sentences=[
+            ThemeSentence(section=str(s.get("section") or ""), text=str(s.get("text") or ""))
+            for s in data.get("sentences") or []
+            if isinstance(s, dict) and s.get("text")
+        ],
         start_date=start.isoformat() if start else None,
         end_date=end.isoformat() if end else None,
     )
@@ -576,6 +655,7 @@ def _unavailable(start: date | None, end: date | None) -> TenantFeedbackThemes:
     return TenantFeedbackThemes(
         status=STATUS_UNAVAILABLE,
         themes=[],
+        sentences=[],
         recap_count=0,
         comment_count=0,
         truncated=False,

@@ -69,6 +69,25 @@ def parse_number(raw) -> tuple[float, bool] | None:
     return value, bool(m.group(3))
 
 
+def is_sampled_question(label: str) -> bool:
+    """Whether this form question is one of the counts behind consumers sampled.
+
+    Same wording as the headline matcher, so "Total number of consumers
+    sampled" and "How many TOTAL consumers did you sample?" are parts of
+    that total, not a second KPI. A demographics description is not.
+    """
+    from recaps.types import (
+        _CONSUMERS_SAMPLED_RE,
+        _SAMPLED_DESC_EXCLUDE_RE,
+        _SAMPLED_TOTAL_RE,
+    )
+
+    text = label or ""
+    if _SAMPLED_DESC_EXCLUDE_RE.search(text):
+        return False
+    return bool(_CONSUMERS_SAMPLED_RE.search(text) or _SAMPLED_TOTAL_RE.search(text))
+
+
 def field_kind(label: str, saw_percent: bool) -> str:
     """'money' | 'average' | 'count' for an included field."""
     label = label or ""
@@ -243,6 +262,7 @@ def rollup_field_values(rows) -> list[dict]:
                 "average": average,
                 "recaps": len(f["recaps"]),
                 "is_percent": bool(f["percent"]),
+                "sampled_question": is_sampled_question(f["label"]),
             }
         )
     return [s for s in sections.values() if s["fields"]]

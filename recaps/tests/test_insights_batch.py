@@ -75,6 +75,54 @@ def test_groups_by_weekday_daypart_and_store():
     assert top[1]["label"] == "Kroger"
 
 
+def test_impossible_rates_are_held_and_units_stay():
+    out = summarize_efficiency(
+        [
+            _row(5500, 2400, 1.0, weekday=0, hour=9, store="Chevron EM 5520"),
+            _row(294, 182, 1.0, weekday=0, hour=15, store="Albertsons 524"),
+            _row(40, 8, 4.0, weekday=4, hour=12, store="Kroger"),
+            _row(30, 6, 4.0, weekday=4, hour=12, store="Kroger"),
+        ]
+    )
+    by = {row["label"]: row for row in out["top_stores"]}
+    assert by["Chevron EM 5520"]["sold"] == 2400
+    assert by["Chevron EM 5520"]["samples_per_hour"] is None
+    assert by["Chevron EM 5520"]["units_per_hour"] is None
+    assert by["Albertsons 524"]["samples_per_hour"] is None
+    assert by["Albertsons 524"]["units_per_hour"] is None
+    assert by["Kroger"]["samples_per_hour"] == 8.8
+    assert by["Kroger"]["units_per_hour"] == 1.8
+    assert out["rates_held"] >= 2
+    from recaps.field_efficiency import efficiency_draft
+
+    draft = efficiency_draft(out)
+    assert draft is not None
+    assert "5500" not in draft.facts and "294" not in draft.facts
+    assert "Kroger" not in draft.facts
+    assert draft.template == "Fridays and midday shifts sell the most per hour."
+
+
+def test_headline_does_not_call_a_samples_shift_a_sales_leader():
+    from recaps.field_efficiency import efficiency_headline
+
+    out = summarize_efficiency(
+        [
+            # Friday morning sells at a rate the clock can support.
+            _row(20, 8, 4.0, weekday=4, hour=10, store="Kroger"),
+            _row(20, 8, 4.0, weekday=4, hour=10, store="HEB"),
+            # The same morning on Monday is impossible, so the morning
+            # slice's per-hour figures are held.
+            _row(5500, 2400, 1.0, weekday=0, hour=10, store="Chevron"),
+            # Midday has samples and no sales.
+            _row(80, 0, 4.0, weekday=2, hour=12, store="Costco"),
+            _row(40, 0, 4.0, weekday=2, hour=12, store="Sprouts"),
+        ]
+    )
+    assert efficiency_headline(out) == (
+        "Fridays sell the most per hour. Midday shifts sample the most per hour."
+    )
+
+
 def test_empty_window():
     out = summarize_efficiency([])
     assert out["total"]["recaps"] == 0

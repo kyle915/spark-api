@@ -17,6 +17,15 @@ An event with no clocked hours still counts toward sampled/sold totals but
 is left out of every per-hour rate — dividing by zero hours, or by an
 assumed shift length, would invent a number.
 
+A rate the clock cannot support is held (returned as null) rather than
+printed. One person cannot sustain more than one sample every 30 seconds
+(120 samples an hour) or one unit sold a minute (60 an hour) across the
+clocked time. Chevron at 5,500 samples an hour and Albertsons at 294 are
+held; the units-sold count on that row stays.
+
+The Friday / midday sentence is worded from the day and shift rows after
+those rates are held. Spark still owns samples per hour and units per hour.
+
 READ-ONLY.
 """
 
@@ -36,6 +45,18 @@ from recaps.types import _consumers_sampled_from_fields, _sold_units_from_fields
 WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 DAYPARTS = ["Morning", "Midday", "Afternoon", "Evening"]
 TOP_STORES = 10
+# Faster than this, the clock does not support the rate.
+MAX_SAMPLES_PER_HOUR = 120
+MAX_UNITS_PER_HOUR = 60
+_DAY_NAMES = {
+    "Mon": "Mondays",
+    "Tue": "Tuesdays",
+    "Wed": "Wednesdays",
+    "Thu": "Thursdays",
+    "Fri": "Fridays",
+    "Sat": "Saturdays",
+    "Sun": "Sundays",
+}
 
 
 def daypart_for_hour(hour: int) -> str:
@@ -53,11 +74,22 @@ def _rate(amount: int, hours: float) -> float | None:
     return round(amount / hours, 1) if hours > 0 else None
 
 
+def _hold(rate: float | None, ceiling: float) -> tuple[float | None, bool]:
+    """Null a per-hour figure the clocked time cannot support."""
+    if rate is None or rate <= ceiling:
+        return rate, False
+    return None, True
+
+
 def _bucket() -> dict:
     return {"recaps": 0, "sampled": 0, "sold": 0, "hours": 0.0, "timed_sampled": 0, "timed_sold": 0}
 
 
-def _finish(label: str, b: dict) -> dict:
+def _finish(label: str, b: dict) -> tuple[dict, bool]:
+    samples, held_samples = _hold(
+        _rate(b["timed_sampled"], b["hours"]), MAX_SAMPLES_PER_HOUR
+    )
+    units, held_units = _hold(_rate(b["timed_sold"], b["hours"]), MAX_UNITS_PER_HOUR)
     return {
         "label": label,
         "recaps": b["recaps"],
@@ -65,9 +97,9 @@ def _finish(label: str, b: dict) -> dict:
         "sold": b["sold"],
         "hours": round(b["hours"], 1),
         # Rates use only the recaps that have clocked hours behind them.
-        "samples_per_hour": _rate(b["timed_sampled"], b["hours"]),
-        "units_per_hour": _rate(b["timed_sold"], b["hours"]),
-    }
+        "samples_per_hour": samples,
+        "units_per_hour": units,
+    }, held_samples or held_units
 
 
 def summarize_efficiency(rows: list[dict]) -> dict:
@@ -99,13 +131,130 @@ def summarize_efficiency(rows: list[dict]) -> dict:
             add(stores.setdefault(name, _bucket()), r)
 
     top = sorted(stores.items(), key=lambda kv: (-kv[1]["sold"], -kv[1]["sampled"], kv[0]))
+
+    def _rows(pairs) -> tuple[list[dict], int]:
+        finished: list[dict] = []
+        held = 0
+        for label, bucket in pairs:
+            row, was_held = _finish(label, bucket)
+            finished.append(row)
+            held += int(was_held)
+        return finished, held
+
+    total_row, total_held = _finish("All activations", total)
+    by_weekday, weekday_held = _rows((d, b) for d, b in by_day.items() if b["recaps"])
+    by_daypart, daypart_held = _rows((p, b) for p, b in by_part.items() if b["recaps"])
+    top_stores, store_held = _rows(top[:TOP_STORES])
     return {
-        "total": _finish("All activations", total),
-        "by_weekday": [_finish(d, b) for d, b in by_day.items() if b["recaps"]],
-        "by_daypart": [_finish(p, b) for p, b in by_part.items() if b["recaps"]],
-        "top_stores": [_finish(n, b) for n, b in top[:TOP_STORES]],
+        "total": total_row,
+        "by_weekday": by_weekday,
+        "by_daypart": by_daypart,
+        "top_stores": top_stores,
         "recaps_without_hours": sum(1 for r in rows if r["hours"] <= 0),
+        "rates_held": total_held + weekday_held + daypart_held + store_held,
     }
+
+
+def _best_slice(rows: list[dict], min_recaps: int = 2) -> dict | None:
+    """The slice with the best units-per-hour among rows whose rate was kept.
+    Falls back to samples per hour when nothing was sold."""
+    solid = [r for r in rows if r["recaps"] >= min_recaps and r["hours"] > 0]
+    by_sold = [r for r in solid if (r["units_per_hour"] or 0) > 0]
+    pool = by_sold or [r for r in solid if (r["samples_per_hour"] or 0) > 0]
+    if not pool:
+        return None
+    key = (
+        (lambda r: r["units_per_hour"] or 0)
+        if by_sold
+        else (lambda r: r["samples_per_hour"] or 0)
+    )
+    return max(pool, key=key)
+
+
+def _slice_sold(row: dict | None) -> bool:
+    return row is not None and (row["units_per_hour"] or 0) > 0
+
+
+def _slice_line(row: dict, *, sold: bool) -> str:
+    verb = "sell the most per hour" if sold else "sample the most per hour"
+    if row["label"] in _DAY_NAMES:
+        return f"{_DAY_NAMES[row['label']]} {verb}."
+    return f"{row['label']} shifts {verb}."
+
+
+def efficiency_headline(summary: dict) -> str:
+    """The day and shift line, from rows whose per-hour figures were kept.
+
+    A day picked by units sold and a shift picked by samples are two
+    sentences. One verb would call the samples shift a sales leader.
+    """
+    day = _best_slice(summary["by_weekday"])
+    part = _best_slice(summary["by_daypart"])
+    day_sold = _slice_sold(day)
+    part_sold = _slice_sold(part)
+    if day and part and day_sold != part_sold:
+        return f"{_slice_line(day, sold=day_sold)} {_slice_line(part, sold=part_sold)}"
+    verb = "sell the most per hour" if day_sold or part_sold else "sample the most per hour"
+    if day and part:
+        name = _DAY_NAMES.get(day["label"], day["label"])
+        return f"{name} and {part['label'].lower()} shifts {verb}."
+    if day:
+        return _slice_line(day, sold=day_sold)
+    if part:
+        return _slice_line(part, sold=part_sold)
+    return ""
+
+
+def efficiency_draft(summary: dict):
+    """Facts for the day/shift sentence: cleaned day and shift rows only."""
+    from recaps.explain_text import Draft
+
+    template = efficiency_headline(summary)
+    if not template:
+        return None
+    lines = [
+        "Day and shift rows after per-hour figures the clock cannot support were removed.",
+        "Do not mention a store. Do not mention a rate that is not listed.",
+    ]
+    for group, rows in (
+        ("Day", summary["by_weekday"]),
+        ("Shift", summary["by_daypart"]),
+    ):
+        for row in rows:
+            if row["samples_per_hour"] is None and row["units_per_hour"] is None:
+                continue
+            bits = [f"{group} {row['label']}: {row['recaps']} activations"]
+            if row["samples_per_hour"] is not None:
+                bits.append(f"{row['samples_per_hour']} samples per hour")
+            if row["units_per_hour"] is not None:
+                bits.append(f"{row['units_per_hour']} units sold per hour")
+            lines.append(", ".join(bits) + ".")
+    return Draft("headline", template, "\n".join(lines))
+
+
+def _with_headline(tenant_id: int, start: date | None, end: date | None, summary: dict) -> dict:
+    """Word the day/shift line. The template is used when the model is out
+    or adds a number that is not in the cleaned tables."""
+    draft = efficiency_draft(summary)
+    if draft is None:
+        summary["headline"] = ""
+        summary["headline_source"] = "template"
+        return summary
+    try:
+        from recaps import explain_text
+
+        written = explain_text.write(
+            tenant_id,
+            "field_efficiency",
+            explain_text.window_key(start, end),
+            [draft],
+        )[0]
+        summary["headline"] = written.text
+        summary["headline_source"] = written.source
+    except Exception:  # noqa: BLE001 — the tables still stand without the sentence
+        summary["headline"] = draft.template
+        summary["headline_source"] = "template"
+    return summary
 
 
 def tenant_field_efficiency(tenant_id: int, start: date | None, end: date | None) -> dict:
@@ -123,7 +272,7 @@ def tenant_field_efficiency(tenant_id: int, start: date | None, end: date | None
     ).select_related("event", "event__timezone", "event__retailer", "event__state")
     recaps = list(recaps)
     if not recaps:
-        return summarize_efficiency([])
+        return _with_headline(tenant_id, start, end, summarize_efficiency([]))
 
     pairs: dict[int, list[tuple[str | None, str | None]]] = {}
     from recaps import metric_mapping
@@ -202,4 +351,4 @@ def tenant_field_efficiency(tenant_id: int, start: date | None, end: date | None
                 "store": store,
             }
         )
-    return summarize_efficiency(rows)
+    return _with_headline(tenant_id, start, end, summarize_efficiency(rows))

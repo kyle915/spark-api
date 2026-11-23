@@ -72,10 +72,7 @@ class TerritoryFromEnvTests(SimpleTestCase):
             '"rmm.east@example.com": ["NY"]}'
         )
         liquid_death_territory.cache_clear()
-        self.assertEqual(
-            territory_emails_for_state("ighn-liquid-death", "TX"),
-            [],
-        )
+        self.assertEqual(territory_emails_for_state("ighn-liquid-death", "TX"), [])
 
     def test_other_tenant_slug_ignored(self):
         self.assertEqual(territory_emails_for_state("other-brand", "CA"), [])
