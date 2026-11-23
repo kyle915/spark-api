@@ -112,9 +112,9 @@ class TestCheckinRecapSubmittedMailer(AmbassadorsGraphQLTestCase):
         )
         recap.uuid = None
         # The list is per client, so the fallback names the recap's tenant
-        # (?tenant=) — a bare /recaps/list opens the reader's last client.
+        # (?t=) — a bare /recaps/list opens the reader's last client.
         assert checkin_recap_open_url(recap) == (
-            f"{CLIENT_HOST}/recaps/list?tenant={self.tenant.uuid}"
+            f"{CLIENT_HOST}/recaps/list?t={self.tenant.uuid}"
         )
 
     @override_settings(

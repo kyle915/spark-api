@@ -52,7 +52,7 @@ class AdminDigestMailer(Mailer):
                 "digest": d,
                 "web_app_base_url": self.web_app_base_url,
                 # One digest per client: every list link names that client
-                # (?tenant=) or it opens the reader's last-selected one.
+                # (?t=) or it opens the reader's last-selected one.
                 "tracker_url": self._link("/requests/list"),
                 "inbox_url": self._link("/inbox"),
                 "approvals_url": self._link("/approvals"),

@@ -239,7 +239,7 @@ class TestClientWeeklyDigest(AmbassadorsGraphQLTestCase):
         # List links name the digest's client so a copied Ignite staffer
         # lands in THIS brand, not their last-selected one.
         assert ctx["links"]["tracker"].endswith(
-            f"/requests/list?tenant={self.enabled_tenant.uuid}"
+            f"/requests/list?t={self.enabled_tenant.uuid}"
         )
         assert "/master-tracker" not in ctx["links"]["tracker"]
         assert "spark.igniteproductions.co" not in ctx["links"]["tracker"]

@@ -692,9 +692,10 @@ class TestApproveRecapNotifications(JobsGraphQLTestCase):
             ambassador_name="Alex",
         )
         envelope = await sync_to_async(mailer.envelope)()
+        tenant_uuid = recap.event.tenant.uuid
         assert (
             envelope.context["review_link"]
-            == f"http://admin.app/recap/view/{recap.uuid}"
+            == f"http://admin.app/recap/view/{recap.uuid}?t={tenant_uuid}"
         )
 
     @pytest.mark.asyncio

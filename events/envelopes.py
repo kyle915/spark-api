@@ -86,6 +86,9 @@ def _admin_request_url(request: models.Request | None) -> str:
     canonical host if the setting is missing). Every transactional email should
     surface this so the reviewer goes straight to the request instead
     of landing on /requests/list and hunting for it.
+
+    Stamps ``?t=<tenant uuid>`` so multi-workspace readers land on the
+    right brand before the record-tenant adopt path paints.
     """
     if not request or not getattr(request, "uuid", None):
         return ""
@@ -94,7 +97,12 @@ def _admin_request_url(request: models.Request | None) -> str:
         "ADMIN_FRONTEND_URL",
         "https://admin.igniteproductions.co",
     ).rstrip("/")
-    return f"{base}/request/view/{request.uuid}"
+    from utils.deep_links import with_tenant
+
+    return with_tenant(
+        f"{base}/request/view/{request.uuid}",
+        getattr(request, "tenant", None),
+    )
 
 
 def _request_product_names(request) -> list[str]:

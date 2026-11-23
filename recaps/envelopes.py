@@ -291,7 +291,11 @@ class RecapReadyForReviewAdminMailer(Mailer):
             if is_custom_recap
             else f"/recap/view/{self.recap.uuid}"
         )
-        review_link = f"{frontend_base_url}{view_path}"
+        from utils.deep_links import with_tenant
+
+        # ``?t=`` so multi-workspace staff open the brand this recap belongs
+        # to — not whichever client was last selected in the switcher.
+        review_link = with_tenant(f"{frontend_base_url}{view_path}", tenant)
 
         return Envelope(
             subject="Recap ready for review",
@@ -724,7 +728,7 @@ class ClientMonthlyReportMailer(Mailer):
 
 
 def _tenant_link(url: str, payload) -> str:
-    """``url`` stamped with the digest's client (``?tenant=<uuid>``).
+    """``url`` stamped with the digest's client (``?t=<uuid>``).
 
     These digests are per client but Ignite staff are copied on them; a bare
     ``/recaps/list`` opened whichever client the reader last had selected.
