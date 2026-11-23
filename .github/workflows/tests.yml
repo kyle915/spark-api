@@ -8,12 +8,19 @@ name: Tests
 # the queue layer logs-and-falls-back inline, same as prod.
 
 on:
+  # Feature-branch commits are tested here, once, when the pull request
+  # opens, updates, or reopens. `push` is not listed for those branches,
+  # so the six shards do not start a second time for that same SHA.
+  # A push to develop is the merge result and is tested once on its own.
   pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [develop]
   push:
     branches: [develop]
 
 concurrency:
-  group: tests-${{ github.ref }}
+  # Newer commits on the same PR or branch cancel the in-progress suite.
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:

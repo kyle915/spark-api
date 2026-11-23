@@ -65,7 +65,7 @@ class TerritoryFromEnvTests(SimpleTestCase):
             ["rmm.west@example.com"],
         )
 
-    def test_unknown_state_stays_ignite_only_when_env_map_is_set(self):
+    def test_unknown_state_stays_with_ignite(self):
         """An uncovered state stays Ignite-only, even when the env map is set.
 
         Fan-out used to mail every RMM for a state nobody owns.

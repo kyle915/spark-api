@@ -42,6 +42,7 @@ from recaps.review_triage import (
     LABEL_NEEDS_EYES,
     recap_review_triage_for_ids,
 )
+from recaps.triage_why import attach_triage_why
 from recaps.report_tokens import make_report_token
 from recaps.tenant_ba_leaderboard import tenant_ba_leaderboard
 from recaps.scoped_ai import build_event_scope, build_recap_scope
@@ -1748,14 +1749,20 @@ class RecapReviewTriageForRecap:
 
     Staff only. Never auto-approves. ``label`` is ``clean`` or
     ``needs_eyes``; ``reasons`` lists the signals that tipped Needs Eyes.
+    ``why`` is a short sentence for Needs Eyes only (null when Clean). The
+    sentence does not change the label.
     """
 
     recap_id: strawberry.ID
     label: str
     reasons: list[RecapTriageReason]
+    why: str | None
+    why_source: str
 
 
-def _build_recap_triage(result: dict) -> tuple[str, list[RecapTriageReason]]:
+def _build_recap_triage(
+    result: dict,
+) -> tuple[str, list[RecapTriageReason], str | None, str]:
     raw_label = (result or {}).get("label")
     label = (
         LABEL_NEEDS_EYES
@@ -1776,7 +1783,13 @@ def _build_recap_triage(result: dict) -> tuple[str, list[RecapTriageReason]]:
             and source
         ):
             reasons.append(RecapTriageReason(code=code, label=lab, source=source))
-    return label, reasons
+    why = (result or {}).get("why")
+    why_source = (result or {}).get("why_source") or ""
+    if label != LABEL_NEEDS_EYES or not isinstance(why, str) or not why.strip():
+        return label, reasons, None, ""
+    if why_source not in ("rules", "model"):
+        why_source = "rules"
+    return label, reasons, why.strip(), why_source
 
 
 def _build_recap_review_checks(result) -> list[RecapReviewCheck]:
@@ -3737,9 +3750,10 @@ class CampaignReportQueries:
                 allowed.append(rid)
 
             by_id = recap_review_triage_for_ids(allowed, is_custom=is_custom)
+            attach_triage_why(by_id)
             bundles: list[RecapReviewTriageForRecap] = []
             for raw_id, rid in parsed:
-                label, reasons = _build_recap_triage(
+                label, reasons, why, why_source = _build_recap_triage(
                     by_id.get(rid, {"label": LABEL_CLEAN, "reasons": []})
                 )
                 bundles.append(
@@ -3747,6 +3761,8 @@ class CampaignReportQueries:
                         recap_id=strawberry.ID(raw_id),
                         label=label,
                         reasons=reasons,
+                        why=why,
+                        why_source=why_source,
                     )
                 )
             return bundles
@@ -3759,6 +3775,8 @@ class CampaignReportQueries:
                     recap_id=strawberry.ID(raw_id),
                     label=LABEL_CLEAN,
                     reasons=[],
+                    why=None,
+                    why_source="",
                 )
                 for raw_id, _ in parsed
             ]
