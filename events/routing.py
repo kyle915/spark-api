@@ -462,3 +462,15 @@ def route_request_sync(request) -> tuple[object | None, str | None]:
         event_models.Request.objects.filter(pk=request.pk).update(**updates)
 
     return assigned, state_code, bool(updates)
+
+
+def __getattr__(name: str):
+    """Lazy exports for code that still does ``from events.routing import X``.
+
+    Returns env-backed values when configured, else the legacy in-repo map.
+    """
+    if name == "LIQUID_DEATH_TERRITORY":
+        return liquid_death_territory()
+    if name == "IGNITE_REVIEW_CC":
+        return ignite_review_cc()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
