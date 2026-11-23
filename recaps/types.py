@@ -921,6 +921,23 @@ class MissingRecapAmbassadorInfo:
 
 
 @strawberry.type
+class SuggestedWalkupAttachType:
+    """High-confidence filed walk-up that clears this Missing / DUE row.
+
+    Same match rules as ``link_walkin_recaps_to_requests``: unique
+    same-day place match. Staff tap Attach on /recaps/missing to set
+    ``request_id`` on the orphan Event; sibling filed-recap logic then
+    drops the empty Tracker shell from Recaps due.
+    """
+
+    orphan_event_uuid: strawberry.ID
+    orphan_event_name: str
+    orphan_address: str | None = None
+    request_uuid: strawberry.ID
+    confidence: str = "safe"
+
+
+@strawberry.type
 class MissingRecapEventType:
     """One row in the /recaps/missing report — an event that's already
     over but doesn't have a recap yet.
@@ -948,6 +965,9 @@ class MissingRecapEventType:
     assigned_ambassadors: List[MissingRecapAmbassadorInfo] = strawberry.field(
         default_factory=list,
     )
+    # When a filed walk-up uniquely matches this row's request, the
+    # admin can 1-click attach instead of nudging for a duplicate file.
+    suggested_walkup_attach: SuggestedWalkupAttachType | None = None
 
 
 @strawberry.type
@@ -1011,6 +1031,18 @@ class NudgeRecapResponse:
     # a successful nudge attempt (same field the hourly cron uses).
     last_nudged_at: str | None = None
     last_nudge_channel: str | None = None
+
+
+@strawberry.type
+class AttachWalkupOrphanResponse:
+    """Result of 1-click or bulk orphan walk-up → Tracker request attach."""
+
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    linked_count: int = 0
+    orphan_event_uuid: strawberry.ID | None = None
+    request_uuid: strawberry.ID | None = None
 
 
 @strawberry.type
