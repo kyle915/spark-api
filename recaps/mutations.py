@@ -7313,6 +7313,173 @@ class RecapMutations:
         )
 
     @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def attach_walkup_orphan(
+        self,
+        info: strawberry.Info,
+        input: inputs.AttachWalkupOrphanInput,
+    ) -> types.AttachWalkupOrphanResponse:
+        """1-click attach a filed walk-up Event onto a Tracker request.
+
+        Ignite staff only. Reuses ``events.walkin_link.attach_orphan_to_request``
+        — unique same-day place match only (same rules as the nightly
+        ``link_walkin_recaps_to_requests`` job). Powers the chip on
+        /recaps/missing so ops can clear ghost RECAP DUE rows without CLI.
+        """
+        from events.models import Event as EventModel
+        from events.models import Request as RequestModel
+        from events.staffing_board import _accessible_tenants
+        from events.walkin_link import WalkinAttachError, attach_orphan_to_request
+
+        user = info.context.request.user
+        is_admin, _allowed = await _accessible_tenants(user)
+        if not is_admin:
+            return build_mutation_response(
+                types.AttachWalkupOrphanResponse,
+                success=False,
+                message="Only Ignite staff can attach walk-up recaps.",
+                input_obj=input,
+            )
+
+        orphan_uuid = str(input.orphan_event_uuid or "").strip()
+        request_uuid = str(input.request_uuid or "").strip()
+        if not orphan_uuid or not request_uuid:
+            return build_mutation_response(
+                types.AttachWalkupOrphanResponse,
+                success=False,
+                message="orphan_event_uuid and request_uuid are required.",
+                input_obj=input,
+            )
+        days = max(1, min(int(input.lookback_days or 45), 365))
+
+        def _resolve_and_attach():
+            orphan = (
+                EventModel.objects.filter(uuid=orphan_uuid)
+                .only("id", "uuid")
+                .first()
+            )
+            req = (
+                RequestModel.objects.filter(uuid=request_uuid)
+                .only("id", "uuid")
+                .first()
+            )
+            if orphan is None:
+                raise WalkinAttachError("Walk-up event not found.")
+            if req is None:
+                raise WalkinAttachError("Request not found.")
+            return attach_orphan_to_request(
+                orphan.id, req.id, days_back=days
+            )
+
+        try:
+            suggestion = await sync_to_async(_resolve_and_attach)()
+        except WalkinAttachError as e:
+            return build_mutation_response(
+                types.AttachWalkupOrphanResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+        except Exception as e:  # noqa: BLE001
+            return build_mutation_response(
+                types.AttachWalkupOrphanResponse,
+                success=False,
+                message=f"Attach failed: {e}",
+                input_obj=input,
+            )
+
+        return build_mutation_response(
+            types.AttachWalkupOrphanResponse,
+            success=True,
+            message="Walk-up recap attached to the Tracker request.",
+            input_obj=input,
+            linked_count=1,
+            orphan_event_uuid=strawberry.ID(suggestion.orphan_event_uuid),
+            request_uuid=strawberry.ID(suggestion.request_uuid),
+        )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def attach_safe_walkup_orphans(
+        self,
+        info: strawberry.Info,
+        input: inputs.AttachSafeWalkupOrphansInput,
+    ) -> types.AttachWalkupOrphanResponse:
+        """Bulk-apply every high-confidence walk-up → DUE request link.
+
+        Ignite staff only. Same apply path as
+        ``link_walkin_recaps_to_requests --apply`` for one tenant.
+        """
+        from events.staffing_board import _accessible_tenants
+        from events.walkin_link import attach_all_safe_orphans
+        from tenants.models import Tenant as TenantModel
+
+        user = info.context.request.user
+        is_admin, _allowed = await _accessible_tenants(user)
+        if not is_admin:
+            return build_mutation_response(
+                types.AttachWalkupOrphanResponse,
+                success=False,
+                message="Only Ignite staff can attach walk-up recaps.",
+                input_obj=input,
+            )
+
+        resolved_tenant_id: int | None = None
+        if input.tenant_id not in (None, ""):
+            try:
+                resolved_tenant_id = resolve_id_to_int(input.tenant_id)
+            except (TypeError, ValueError, GraphQLError):
+                return build_mutation_response(
+                    types.AttachWalkupOrphanResponse,
+                    success=False,
+                    message="Invalid tenant id.",
+                    input_obj=input,
+                )
+        if resolved_tenant_id is None:
+            return build_mutation_response(
+                types.AttachWalkupOrphanResponse,
+                success=False,
+                message="tenant_id is required.",
+                input_obj=input,
+            )
+
+        days = max(1, min(int(input.lookback_days or 45), 365))
+
+        def _apply():
+            tenant = TenantModel.objects.filter(pk=resolved_tenant_id).first()
+            if tenant is None:
+                raise GraphQLError("Tenant not found.")
+            return attach_all_safe_orphans(tenant, days_back=days)
+
+        try:
+            result = await sync_to_async(_apply)()
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.AttachWalkupOrphanResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+        except Exception as e:  # noqa: BLE001
+            return build_mutation_response(
+                types.AttachWalkupOrphanResponse,
+                success=False,
+                message=f"Attach failed: {e}",
+                input_obj=input,
+            )
+
+        n = int(result.linked or 0)
+        return build_mutation_response(
+            types.AttachWalkupOrphanResponse,
+            success=True,
+            message=(
+                f"Attached {n} walk-up recap{'' if n == 1 else 's'}."
+                if n
+                else "No safe walk-up matches to attach."
+            ),
+            input_obj=input,
+            linked_count=n,
+        )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
     async def nudge_ambassador_for_recap(
         self,
         info: strawberry.Info,

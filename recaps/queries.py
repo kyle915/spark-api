@@ -2341,6 +2341,38 @@ class RecapQueries:
 
             dismissed = DismissedLookup(ev.id for ev in events)
 
+            # High-confidence walk-up → request suggestions for 1-click
+            # attach chips. One dry-run per tenant in the page (usually 1).
+            from events.walkin_link import safe_attach_suggestions_for_tenant
+            from tenants.models import Tenant as TenantModel
+
+            suggest_by_request_uuid: dict[str, types.SuggestedWalkupAttachType] = {}
+            tenant_ids = {
+                tid
+                for tid in (getattr(ev, "tenant_id", None) for ev in events)
+                if tid is not None
+            }
+            for tid in tenant_ids:
+                tenant_obj = (
+                    TenantModel.objects.filter(pk=tid)
+                    .only("id", "slug", "request_url_name")
+                    .first()
+                )
+                if tenant_obj is None:
+                    continue
+                for sug in safe_attach_suggestions_for_tenant(
+                    tenant_obj, days_back=days
+                ):
+                    suggest_by_request_uuid[sug.request_uuid] = (
+                        types.SuggestedWalkupAttachType(
+                            orphan_event_uuid=strawberry.ID(sug.orphan_event_uuid),
+                            orphan_event_name=sug.orphan_event_name,
+                            orphan_address=sug.orphan_address,
+                            request_uuid=strawberry.ID(sug.request_uuid),
+                            confidence="safe",
+                        )
+                    )
+
             rows: List[types.MissingRecapEventType] = []
             for ev in events:
                 hours_overdue: int | None = None
@@ -2374,6 +2406,11 @@ class RecapQueries:
                 )
                 state_code = getattr(getattr(ev, "state", None), "code", None)
                 req_uuid = getattr(getattr(ev, "request", None), "uuid", None)
+                suggested = (
+                    suggest_by_request_uuid.get(str(req_uuid))
+                    if req_uuid
+                    else None
+                )
 
                 rows.append(
                     types.MissingRecapEventType(
@@ -2400,6 +2437,7 @@ class RecapQueries:
                             strawberry.ID(str(req_uuid)) if req_uuid else None
                         ),
                         assigned_ambassadors=ambassadors,
+                        suggested_walkup_attach=suggested,
                     )
                 )
             return rows

@@ -319,3 +319,180 @@ def try_link_orphan_event(event_id: int) -> int | None:
     except Exception:  # noqa: BLE001
         logger.exception("walkin auto-link failed event=%s", event_id)
         return None
+
+
+@dataclass
+class WalkinAttachSuggestion:
+    """One high-confidence orphan → DUE request pair for admin 1-click."""
+
+    orphan_event_id: int
+    orphan_event_uuid: str
+    orphan_event_name: str
+    orphan_address: str | None
+    request_id: int
+    request_uuid: str
+    day: str | None = None
+
+
+class WalkinAttachError(Exception):
+    """Staff-facing attach failure (not found, ambiguous, already linked)."""
+
+
+def _parked_orphan_ids() -> frozenset[int]:
+    try:
+        from events.missing_recaps_gate import ACCEPTED_WALKUP_ORPHAN_EVENT_IDS
+
+        return ACCEPTED_WALKUP_ORPHAN_EVENT_IDS
+    except Exception:  # noqa: BLE001
+        return frozenset()
+
+
+def safe_attach_suggestions_for_tenant(
+    tenant: Tenant,
+    *,
+    days_back: int = 45,
+) -> list[WalkinAttachSuggestion]:
+    """Dry-run unique matches, enriched for /recaps/missing chips."""
+    parked = _parked_orphan_ids()
+    result = link_walkin_recaps_for_tenant(
+        tenant, days_back=days_back, apply=False
+    )
+    pair_ids = [
+        (int(row["orphan_id"]), int(row["request_id"]), row.get("day"))
+        for row in result.rows
+        if row.get("status") == "would-link"
+        and row.get("orphan_id") is not None
+        and row.get("request_id") is not None
+        and int(row["orphan_id"]) not in parked
+    ]
+    if not pair_ids:
+        return []
+
+    orphan_ids = [oid for oid, _, _ in pair_ids]
+    request_ids = [rid for _, rid, _ in pair_ids]
+    orphans = {
+        e.id: e
+        for e in Event.objects.filter(pk__in=orphan_ids).only(
+            "id", "uuid", "name", "address"
+        )
+    }
+    requests = {
+        r.id: r
+        for r in Request.objects.filter(pk__in=request_ids).only("id", "uuid")
+    }
+    out: list[WalkinAttachSuggestion] = []
+    for orphan_id, request_id, day in pair_ids:
+        orphan = orphans.get(orphan_id)
+        req = requests.get(request_id)
+        if orphan is None or req is None:
+            continue
+        out.append(
+            WalkinAttachSuggestion(
+                orphan_event_id=orphan.id,
+                orphan_event_uuid=str(orphan.uuid),
+                orphan_event_name=(getattr(orphan, "name", None) or "(walk-up)"),
+                orphan_address=getattr(orphan, "address", None) or None,
+                request_id=req.id,
+                request_uuid=str(req.uuid),
+                day=day if isinstance(day, str) else None,
+            )
+        )
+    return out
+
+
+def attach_orphan_to_request(
+    orphan_event_id: int,
+    request_id: int,
+    *,
+    days_back: int = 45,
+) -> WalkinAttachSuggestion:
+    """1-click attach: only when the pair is still a unique safe match.
+
+    Sets ``request_id`` on the orphan Event (same write as
+    ``link_walkin_recaps_to_requests --apply``). Sibling filed-recap
+    logic then clears the MasterTracker / Missing Recaps DUE shell.
+    """
+    orphan = (
+        Event.objects.select_related("tenant", "retailer")
+        .filter(pk=orphan_event_id)
+        .first()
+    )
+    if orphan is None:
+        raise WalkinAttachError("Walk-up event not found.")
+    if orphan.request_id is not None:
+        if orphan.request_id == request_id:
+            req = Request.objects.filter(pk=request_id).only("id", "uuid").first()
+            if req is None:
+                raise WalkinAttachError("Request not found.")
+            return WalkinAttachSuggestion(
+                orphan_event_id=orphan.id,
+                orphan_event_uuid=str(orphan.uuid),
+                orphan_event_name=(getattr(orphan, "name", None) or "(walk-up)"),
+                orphan_address=getattr(orphan, "address", None) or None,
+                request_id=req.id,
+                request_uuid=str(req.uuid),
+            )
+        raise WalkinAttachError("Walk-up is already attached to another request.")
+    if orphan.id in _parked_orphan_ids():
+        raise WalkinAttachError(
+            "This walk-up is parked as accepted debt — no safe Tracker twin."
+        )
+    if not has_filed_recap(orphan.id):
+        raise WalkinAttachError("Walk-up has no filed recap to attach.")
+    if orphan.tenant_id is None:
+        raise WalkinAttachError("Walk-up has no tenant.")
+
+    req = (
+        Request.objects.select_related("retailer", "tenant")
+        .prefetch_related("event_set__retailer")
+        .filter(pk=request_id, deleted_at__isnull=True)
+        .first()
+    )
+    if req is None:
+        raise WalkinAttachError("Request not found.")
+    if req.tenant_id != orphan.tenant_id:
+        raise WalkinAttachError("Walk-up and request must be the same brand.")
+
+    shells = list(req.event_set.all())
+    if not shells:
+        raise WalkinAttachError("Request has no schedule shell to clear.")
+    if any(has_filed_recap(ev.id) for ev in shells):
+        raise WalkinAttachError("Request already has a filed recap.")
+
+    # Re-run unique match against live DUE set — refuse ambiguous attaches.
+    suggestions = safe_attach_suggestions_for_tenant(
+        orphan.tenant, days_back=days_back
+    )
+    match = next(
+        (
+            s
+            for s in suggestions
+            if s.orphan_event_id == orphan.id and s.request_id == req.id
+        ),
+        None,
+    )
+    if match is None:
+        raise WalkinAttachError(
+            "Not a unique same-day place match — attach refused."
+        )
+
+    with transaction.atomic():
+        updated = Event.objects.filter(
+            pk=orphan.id, request__isnull=True
+        ).update(request_id=req.id)
+    if not updated:
+        raise WalkinAttachError("Walk-up was linked by someone else just now.")
+
+    orphan.refresh_from_db(fields=["request_id"])
+    return match
+
+
+def attach_all_safe_orphans(
+    tenant: Tenant,
+    *,
+    days_back: int = 45,
+) -> WalkinLinkResult:
+    """Bulk apply every high-confidence orphan → DUE link for a tenant."""
+    return link_walkin_recaps_for_tenant(
+        tenant, days_back=days_back, apply=True
+    )
