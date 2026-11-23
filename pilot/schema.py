@@ -46,6 +46,7 @@ from pilot.finance import (
     request_finance_clarification,
     resolve_finance_exception,
 )
+from pilot.finance_explain import finance_dispute_pack
 from pilot.buyer_digest import set_buyer_weekly_digest
 from pilot.imports import (
     IMPORT_PRESETS,
@@ -510,6 +511,20 @@ class FinanceExceptionAuditItem:
 
 
 @strawberry.type
+class FinanceDisputePack:
+    """Copy-ready dispute context for one finance exception.
+
+    ``summary`` is a grounded one-liner (rules, or model polish over OCR
+    facts). Dollars always come from stored rows — never invented.
+    """
+
+    summary: str
+    source: str
+    facts: list[str]
+    suggested_next_step: str
+
+
+@strawberry.type
 class FinanceExceptionItem:
     uuid: str
     exception_type: str
@@ -529,6 +544,7 @@ class FinanceExceptionItem:
     resolution_reason: str
     created_at: str
     audits: list[FinanceExceptionAuditItem]
+    dispute_pack: FinanceDisputePack | None = None
 
 
 @strawberry.type
@@ -1594,8 +1610,11 @@ class PilotQueries:
                     required_plan=exc.required_plan,
                 )
             notices = list_operational_field_notices(access)
-            return FinanceQueueView(
-                exceptions=[
+
+            exception_items: list[FinanceExceptionItem] = []
+            for e in excs:
+                pack = finance_dispute_pack(e)
+                exception_items.append(
                     FinanceExceptionItem(
                         uuid=str(e.uuid),
                         exception_type=e.exception_type,
@@ -1646,9 +1665,16 @@ class PilotQueries:
                             )
                             for au in e.audits.all()
                         ],
+                        dispute_pack=FinanceDisputePack(
+                            summary=pack["summary"],
+                            source=pack["source"],
+                            facts=list(pack["facts"]),
+                            suggested_next_step=pack["suggested_next_step"],
+                        ),
                     )
-                    for e in excs
-                ],
+                )
+            return FinanceQueueView(
+                exceptions=exception_items,
                 operational_notices=[
                     OperationalFieldNoticeItem(
                         id=n["id"],

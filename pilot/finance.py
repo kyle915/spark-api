@@ -596,8 +596,18 @@ def list_finance_exceptions(
         required_plan="pro",
     )
     qs = FinanceException.objects.select_related(
-        "canonical_visit", "cost_line", "provider", "owner", "resolved_by"
-    ).prefetch_related("audits", "audits__actor").filter(tenant=access.tenant)
+        "canonical_visit",
+        "cost_line",
+        "provider",
+        "owner",
+        "resolved_by",
+        "recap_file",
+    ).prefetch_related(
+        "audits",
+        "audits__actor",
+        "cost_line__evidence_links",
+        "cost_line__evidence_links__receipt_reading",
+    ).filter(tenant=access.tenant)
     if exception_type:
         qs = qs.filter(exception_type=exception_type)
     if status:
