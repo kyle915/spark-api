@@ -17,15 +17,14 @@ THE RULES
   sampled in the month and a conversion base. The highest conversion rate
   wins; ties go to more units sold, then more consumers sampled, then the
   store key. A recap that cannot be tied to one store counts for no store.
-* Quote: a consumer comment from the month
+* Quote: a whole consumer comment from the recap the store link opens
   (:func:`recaps.feedback_themes.gather_comments`: comment fields only,
   never an ambassador's notes; names, emails and phone numbers removed), at
-  least :data:`MIN_QUOTE_CHARS` characters. When the month's feedback
-  themes are already stored for exactly these comments, the candidates are
-  the quotes of its "liked" themes. Otherwise a comment is a candidate when
+  least :data:`MIN_QUOTE_CHARS` characters. A comment is a candidate when
   it is a general comment (not a reason to decline, not a question), holds
   a word of praise and holds no word of complaint. The longest candidate
-  wins; ties go to the newer event. The text is the stored comment.
+  wins. The model may return that comment; any other wording is dropped
+  and the whole comment is shown. Comments from other recaps are not used.
 * Photo (:mod:`recaps.photo_picks`): a photo staff pinned, else the
   scorer's pick with the highest score, else the first photo, oldest event
   first, in a category that reads as sampling or table set-up. At each step
@@ -86,6 +85,9 @@ class HighlightStore:
     # The store's recap with the most units sold that month, to open.
     recap_uuid: str | None
     recap_kind: str | None
+    # That recap's own counts, separate from the store totals above.
+    linked_consumers: int
+    linked_units_sold: int
 
 
 @strawberry.type
@@ -197,26 +199,6 @@ def pick_quote(comments, liked_quotes: list[str] | None = None):
     return candidates[0][2]
 
 
-def _stored_liked_quotes(tenant_id: int, comments) -> list[str] | None:
-    """Quotes of the "liked" themes, when themes are stored for exactly
-    these comments. Reads a row; never builds themes."""
-    from recaps.feedback_themes import SECTION_LIKED, source_hash
-    from tenants.models import TenantFeedbackThemes
-
-    row = TenantFeedbackThemes.objects.filter(
-        tenant_id=tenant_id, source_hash=source_hash(comments)
-    ).first()
-    themes = (row.payload or {}).get("themes") if row is not None else None
-    if not isinstance(themes, list):
-        return None
-    quotes = [
-        t["quote"]
-        for t in themes
-        if isinstance(t, dict) and t.get("section") == SECTION_LIKED and t.get("quote")
-    ]
-    return quotes or None
-
-
 def _pick_photo(tenant_id: int, start: date, end: date, preferred_ids: list[int]):
     """Staff pins first, then the scorer's picks by score, then the first
     photo in a sampling or table bucket. Within each step the best store's
@@ -272,6 +254,11 @@ def _recap_uuids(keys: set[tuple[str, int]]) -> dict[tuple[str, int], str]:
     return out
 
 
+def _linked_counts(store: dict | None) -> tuple[int, int]:
+    top = (store or {}).get("top") or {}
+    return int(top.get("consumers") or 0), int(top.get("units") or 0)
+
+
 def caption_draft(label: str, store: dict | None, recaps: int):
     from recaps.explain_text import Draft, n, pct, plural
 
@@ -281,21 +268,52 @@ def caption_draft(label: str, store: dict | None, recaps: int):
     place = store["name"] or "One store"
     if store["market"]:
         place += f" in {store['market']}"
+    linked_consumers, linked_units = _linked_counts(store)
     template = (
-        f"{place} had the highest conversion rate in {label}: "
-        f"{pct(store['conversion'])}% from {n(store['consumers'])} consumers sampled, "
-        f"with {n(store['units'])} units sold."
+        f"{place} had {plural(store['recaps'], 'approved recap')} in {label}, "
+        f"{n(store['consumers'])} consumers sampled and {n(store['units'])} units sold, "
+        f"a {pct(store['conversion'])}% conversion. "
+        f"The recap this opens sampled {n(linked_consumers)} and sold {n(linked_units)}."
     )
     facts = "\n".join(
         [
             f"Month: {label}.",
             f"Store: {place}.",
+            f"Approved recaps at that store: {n(store['recaps'])}.",
             f"Its conversion rate: {pct(store['conversion'])}%.",
             f"Consumers sampled there: {n(store['consumers'])}.",
             f"Units sold there: {n(store['units'])}.",
+            f"Consumers sampled on the recap this opens: {n(linked_consumers)}.",
+            f"Units sold on the recap this opens: {n(linked_units)}.",
         ]
     )
     return Draft("caption", template, facts)
+
+
+def _norm_text(text: str | None) -> str:
+    return " ".join(str(text or "").split())
+
+
+def whole_comment(text: str | None, comments) -> str | None:
+    """The model's text when it is one whole comment, else None."""
+    cleaned = _norm_text(text)
+    if not cleaned:
+        return None
+    for comment in comments:
+        if _norm_text(comment.text) == cleaned:
+            return comment.text
+    return None
+
+
+def quote_draft(comment):
+    from recaps.explain_text import Draft
+
+    text = comment.text
+    return Draft(
+        "quote",
+        text,
+        "Return this whole comment and nothing else.\nWhole comment: " + text,
+    )
 
 
 def build_month_highlight(tenant_id: int, raw_month) -> MonthHighlight | None:
@@ -315,7 +333,14 @@ def build_month_highlight(tenant_id: int, raw_month) -> MonthHighlight | None:
     places = tenant_places(tenant_id)
     store = pick_store(facts, places.for_event_ids(f["event_id"] for f in facts))
     comments, _cut = gather_comments(tenant_id, start, end)
-    chosen = pick_quote(comments, _stored_liked_quotes(tenant_id, comments))
+    linked_comments = []
+    top = (store or {}).get("top")
+    if top is not None:
+        prefix = "C" if top["kind"] == "custom" else "L"
+        linked_key = f"{prefix}{top['id']}"
+        linked_comments = [c for c in comments if c.recap == linked_key]
+    # The quote is from the recap the link opens, not from another store.
+    chosen = pick_quote(linked_comments) if linked_comments else None
     if store is None and chosen is None:
         return None
 
@@ -341,6 +366,7 @@ def build_month_highlight(tenant_id: int, raw_month) -> MonthHighlight | None:
             f["id"] for f in facts if f["kind"] == "custom" and f["event_id"] in store_events
         ]
         top = store["top"]
+        linked_consumers, linked_units = _linked_counts(store)
         store_type = HighlightStore(
             store_key=store["key"],
             name=store["name"],
@@ -351,26 +377,32 @@ def build_month_highlight(tenant_id: int, raw_month) -> MonthHighlight | None:
             recaps=store["recaps"],
             recap_uuid=uuids.get((top["kind"], top["id"])) if top else None,
             recap_kind=top["kind"] if top else None,
+            linked_consumers=linked_consumers,
+            linked_units_sold=linked_units,
         )
 
     label = f"{calendar.month_name[start.month]} {start.year}"
     month = f"{start.year:04d}-{start.month:02d}"
-    written = explain_text.write(
-        tenant_id, KIND, month, [caption_draft(label, store, len(facts))]
-    )[0]
+    drafts = [caption_draft(label, store, len(facts))]
+    if chosen is not None:
+        drafts.append(quote_draft(chosen))
+    written = {item.key: item for item in explain_text.write(tenant_id, KIND, month, drafts)}
+    caption = written["caption"]
 
     quote_type = None
     if chosen is not None:
+        offered = written.get("quote")
+        quote_text = whole_comment(offered.text if offered else None, [chosen]) or chosen.text
         quote_type = HighlightQuote(
-            text=chosen.text,
+            text=quote_text,
             recap_uuid=uuids.get(quote_key),
             recap_kind=quote_key[0] if uuids.get(quote_key) else None,
         )
     return MonthHighlight(
         month=month,
         label=label,
-        caption=written.text,
-        caption_source=written.source,
+        caption=caption.text,
+        caption_source=caption.source,
         recaps=len(facts),
         store=store_type,
         quote=quote_type,

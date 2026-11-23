@@ -67,7 +67,7 @@ KIND_COMPETITORS = "competitors"
 KIND_PRODUCT_FEELING = "product_feeling"
 
 # Bump when a prompt or a rule here changes, so stored rows are rebuilt.
-_VERSION = "2"
+_VERSION = "3"
 
 STANCE_OURS = "prefers_ours"
 STANCE_THEIRS = "prefers_theirs"
@@ -144,6 +144,44 @@ def written_in(comment_norm: str, name_norm: str) -> bool:
     if _has_phrase(comment_norm, name_norm):
         return True
     return name_norm.replace(" ", "") in comment_norm.split()
+
+
+_STYLE_SUFFIXES = frozenset(
+    {"style", "like", "type", "flavored", "flavoured", "flavor", "flavour"}
+)
+_STYLE_TAIL_RE = re.compile(
+    r"[-–]\s*(?:style|like|type|flavou?red|flavou?r)\s*$",
+    re.IGNORECASE,
+)
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\n+")
+
+
+def strip_brand_suffix(label: str) -> str:
+    """"Dr Pepper-style" is Dr Pepper. A flavour word on the end is not a
+    second brand."""
+    cleaned = _clean_brand(label)
+    cut = _STYLE_TAIL_RE.sub("", cleaned).strip(" -–")
+    words = cut.split()
+    if len(words) >= 2 and normalise(words[-1]) in _STYLE_SUFFIXES:
+        cut = " ".join(words[:-1])
+    return cut.strip()
+
+
+def spelling_sentence(text: str, name_norm: str) -> str:
+    """The shortest whole sentence in ``text`` that spells ``name_norm``.
+
+    A pasted comment that also mentions stickers or another product keeps
+    only the sentence that names this brand. Empty when the name is not
+    written in any sentence.
+    """
+    raw = " ".join(str(text or "").split())
+    if not raw or not name_norm:
+        return ""
+    parts = [part.strip() for part in _SENTENCE_SPLIT_RE.split(str(text or "")) if part.strip()]
+    hits = [part for part in parts if written_in(normalise(part), name_norm)]
+    if not hits:
+        return raw if written_in(normalise(raw), name_norm) else ""
+    return min(hits, key=len)
 
 
 def tenant_names(tenant_id: int) -> tuple[str, list[tuple[int, str]]]:
@@ -277,9 +315,10 @@ def competitor_system_prompt(brand: str, product_names: list[str]) -> str:
         f"the shopper prefers {own} to that brand, 'prefers_theirs' when they "
         "prefer the other brand, 'neutral' when they only mention it. A "
         "comment that names two other brands gets two entries. A flavour, an "
-        "ingredient, a store or a kind of product is not a brand. Do not "
-        "guess a brand the comment does not name. Do not count anything: "
-        "only tag comments."
+        "ingredient, a store or a kind of product is not a brand. A name "
+        "with a suffix such as style or flavor is that brand without the "
+        "suffix. Do not guess a brand the comment does not spell. Do not "
+        "count anything: only tag comments."
     )
 
 
@@ -322,7 +361,7 @@ def count_mentions(
         if not isinstance(tag, dict):
             continue
         number = _number(tag.get("comment"))
-        label = _clean_brand(tag.get("brand"))
+        label = strip_brand_suffix(tag.get("brand"))
         stance = tag.get("stance")
         name = normalise(label)
         if number is None or not 1 <= number <= len(comments):
@@ -344,7 +383,7 @@ def count_mentions(
         entry["spellings"][label] += 1
         # The model's proper name is used only when it is this same brand
         # written properly, never a different name it came up with.
-        proper = _clean_brand(tag.get("name"))
+        proper = strip_brand_suffix(tag.get("name"))
         if proper and brand_key(normalise(proper)) == key:
             entry["proper"][proper] += 1
         entry["tags"].append((index, stance))
@@ -362,24 +401,29 @@ def count_mentions(
         quote_index = next(
             (i for i, stance in entry["tags"] if stance == leading), entry["tags"][0][0]
         )
+        # The brand's proper name when the model gave one for this same
+        # brand; otherwise the shortest spelling people used (the singular),
+        # the most common one on a tie.
+        shown = (
+            entry["proper"].most_common(1)[0][0]
+            if entry["proper"]
+            else min(
+                entry["spellings"],
+                key=lambda sp: (len(sp), -entry["spellings"][sp]),
+            )
+        )
         out.append(
             {
-                # The brand's proper name when the model gave one for this
-                # same brand; otherwise the shortest spelling people used
-                # (the singular), the most common one on a tie.
-                "brand": (
-                    entry["proper"].most_common(1)[0][0]
-                    if entry["proper"]
-                    else min(
-                        entry["spellings"],
-                        key=lambda sp: (len(sp), -entry["spellings"][sp]),
-                    )
-                ),
+                "brand": shown,
                 "recap_count": len(by_recap),
                 "prefer_ours": settled[STANCE_OURS],
                 "prefer_theirs": settled[STANCE_THEIRS],
                 "neutral": settled[STANCE_NEUTRAL],
-                "quote": _short_quote(comments[quote_index].text),
+                # The sentence that spells the brand, not the rest of a
+                # pasted comment.
+                "quote": _short_quote(
+                    spelling_sentence(comments[quote_index].text, normalise(shown))
+                ),
             }
         )
     out.sort(key=lambda b: (-b["recap_count"], b["brand"].casefold()))
@@ -479,12 +523,14 @@ def product_words(name: str, brand: str) -> set[str]:
 
 
 def names_product(comment_norm: str, name: str, brand: str) -> bool:
-    """Whether a comment names a product: its whole name, or one of the
-    words that set it apart ("blue razz" for "Blue Razz 10mg")."""
+    """Whether a comment spells a product: its whole name, or every word
+    that sets it apart ("blue razz" for "Blue Razz 10mg", not "blue" alone)."""
     if written_in(comment_norm, normalise(name)):
         return True
-    words = set(comment_norm.split())
-    return any(word in words for word in product_words(name, brand))
+    words = product_words(name, brand)
+    if not words:
+        return False
+    return words <= set(comment_norm.split())
 
 
 def feeling_system_prompt(brand: str, products: list[tuple[int, str]]) -> str:
@@ -499,9 +545,10 @@ def feeling_system_prompt(brand: str, products: list[tuple[int, str]]) -> str:
         "For each comment that is about one of these products, give the "
         "comment's number, the product's number (the digits after P) and how "
         "the shopper felt about THAT product: 'positive', 'negative' or "
-        "'neutral'. A comment about two products gets two entries. Leave out "
-        "a comment when you cannot tell which product it is about. Do not "
-        "count anything and do not rank the products: only tag comments."
+        "'neutral'. A comment about two products gets two entries. Tag a "
+        "product only when the comment spells that product's name. Leave "
+        "out a comment when you cannot tell which product it is about. Do "
+        "not count anything and do not rank the products: only tag comments."
     )
 
 

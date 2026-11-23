@@ -4194,6 +4194,8 @@ class RecapFieldTotal:
     average: float
     recaps: int
     is_percent: bool
+    # True when this question is one of the counts behind consumers sampled.
+    sampled_question: bool = False
 
 
 @strawberry.type
@@ -4224,6 +4226,12 @@ class FieldEfficiency:
     by_daypart: list[EfficiencyRow]
     top_stores: list[EfficiencyRow]
     recaps_without_hours: int
+    # The day/shift sentence, worded from rows whose rates were kept.
+    headline: str = ""
+    # "model" or "template"
+    headline_source: str = "template"
+    # Slices whose per-hour figure was held because the clock cannot support it.
+    rates_held: int = 0
 
 
 @strawberry.type
@@ -4438,6 +4446,9 @@ class ReportSubscriptionQueries:
             by_daypart=[_row(d) for d in data["by_daypart"]],
             top_stores=[_row(d) for d in data["top_stores"]],
             recaps_without_hours=data["recaps_without_hours"],
+            headline=str(data.get("headline") or ""),
+            headline_source=str(data.get("headline_source") or "template"),
+            rates_held=int(data.get("rates_held") or 0),
         )
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])

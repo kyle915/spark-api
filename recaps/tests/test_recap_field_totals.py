@@ -37,6 +37,7 @@ def test_counts_sum_across_recaps_and_keep_form_order():
     by = {s["section"]: s["fields"] for s in out}
     sampled = by["Sampling"][0]
     assert sampled["label"] == "Total number of consumers sampled"
+    assert sampled["sampled_question"] is True
     assert sampled["kind"] == "count" and sampled["total"] == 4350
     assert sampled["recaps"] == 2
     assert by["Sales"][0]["total"] == 50
