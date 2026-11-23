@@ -9,11 +9,16 @@ are identical:
 * consumer splits → ``recaps.consumer_breakdown`` (``tenantConsumerBreakdown``);
 * products → ``recaps.comment_insights.product_lines`` (``tenantProductRegions``);
 * weekly summary → ``recaps.weekly_summary.latest_summary`` (reviewed only,
-  as ``tenantWeeklySummary`` gives a brand user).
+  as ``tenantWeeklySummary`` gives a brand user);
+* shelf OSA → ``recaps.shelf_check.shelf_summary``;
+* demo cost → ``pilot.costs.build_brand_cost_rollups`` (brand-consolidated);
+* POS velocity / ROI → ``pilot.pos.build_retailer_pos_measurement`` (brand-consolidated);
+* competitor brands → ``consumer_mentions.RecapMentionTag.brands`` (stored tags).
 
 Recaps are client-visible only: approved, not archived, not on a deleted
 request, not kept off the dashboard, not an agency filing kept out of
-aggregates (``recaps.feedback_themes._client_visible``).
+aggregates (``recaps.feedback_themes._client_visible``). Cost and POS tools
+refuse outside provider-scoped memberships (agency isolation).
 
 Brand ambassador privacy: no tool selects an ambassador's name, contact,
 address, payment, document or location columns, and there is no ambassador
@@ -629,6 +634,511 @@ def get_connection_info(ctx: ToolContext, args: dict) -> tuple[dict, int]:
     )
 
 
+# ─── Shelf / cost / POS / competitor (BrandChat + MCP) ─────────────
+
+MAX_SHELF_NOT_FOUND = 15
+MAX_COST_ROWS = 25
+MAX_POS_STORE_WEEKS = 25
+MAX_COMPETITOR_ROWS = 15
+MAX_POS_OFFSET = 5000
+COST_GROUP_BY = ("store", "program", "provider", "month")
+
+
+def _brand_workspace_access(ctx: ToolContext):
+    """Brand-consolidated access for the tool's pinned tenant.
+
+    Ignores ``UserActiveWorkspaceContext`` (and membership headers): a brand
+    MCP connection or BrandChat session must keep cost/POS access when the
+    caller also has a provider membership and last selected that in the UI.
+    Outside agencies with only a provider role are still refused.
+    """
+    from django.contrib.auth import get_user_model
+
+    from pilot.models import WorkspaceMembership
+    from pilot.permissions import ResolvedWorkspaceAccess, is_ignite_staff_user
+    from tenants.models import Role, Tenant, TenantedUser
+
+    user = (
+        get_user_model()
+        .objects.select_related("role")
+        .filter(pk=ctx.user_id, is_active=True)
+        .first()
+    )
+    tenant = Tenant.objects.filter(pk=ctx.tenant_id).first()
+    if user is None or tenant is None:
+        raise ToolInputError("This connection's brand could not be loaded.")
+
+    if is_ignite_staff_user(user):
+        return ResolvedWorkspaceAccess(
+            user=user,
+            tenant=tenant,
+            membership=None,
+            workspace_role=WorkspaceMembership.ROLE_BRAND_ADMIN,
+            provider=None,
+            is_ignite_admin=True,
+            is_legacy_managed_member=False,
+            can_approve_recaps=True,
+            can_approve_finance=True,
+            can_approve_spend=True,
+        )
+
+    brand_membership = (
+        WorkspaceMembership.objects.select_related("provider")
+        .filter(
+            tenant=tenant,
+            user=user,
+            status=WorkspaceMembership.STATUS_ACTIVE,
+            workspace_role__in=WorkspaceMembership.BRAND_ROLES,
+        )
+        .order_by("id")
+        .first()
+    )
+    if brand_membership is not None:
+        is_admin_role = (
+            brand_membership.workspace_role == WorkspaceMembership.ROLE_BRAND_ADMIN
+        )
+        return ResolvedWorkspaceAccess(
+            user=user,
+            tenant=tenant,
+            membership=brand_membership,
+            workspace_role=brand_membership.workspace_role,
+            provider=None,
+            is_ignite_admin=False,
+            is_legacy_managed_member=False,
+            can_approve_recaps=bool(
+                is_admin_role
+                or brand_membership.can_approve_recaps
+                or brand_membership.workspace_role
+                == WorkspaceMembership.ROLE_BRAND_REVIEWER
+            ),
+            can_approve_finance=bool(
+                is_admin_role
+                or brand_membership.can_approve_finance
+                or brand_membership.workspace_role
+                == WorkspaceMembership.ROLE_FINANCE_REVIEWER
+            ),
+            can_approve_spend=bool(is_admin_role or brand_membership.can_approve_spend),
+        )
+
+    role = getattr(user, "role", None)
+    if (
+        role
+        and role.slug == Role.CLIENT_SLUG
+        and TenantedUser.objects.filter(
+            tenant=tenant, user=user, is_active=True
+        ).exists()
+    ):
+        return ResolvedWorkspaceAccess(
+            user=user,
+            tenant=tenant,
+            membership=None,
+            workspace_role=WorkspaceMembership.ROLE_BRAND_REVIEWER,
+            provider=None,
+            is_ignite_admin=False,
+            is_legacy_managed_member=True,
+            can_approve_recaps=True,
+            can_approve_finance=False,
+            can_approve_spend=True,
+        )
+
+    if WorkspaceMembership.objects.filter(
+        tenant=tenant,
+        user=user,
+        status=WorkspaceMembership.STATUS_ACTIVE,
+        workspace_role__in=WorkspaceMembership.PROVIDER_ROLES,
+    ).exists():
+        raise ToolInputError(
+            "Outside field agencies cannot see consolidated brand cost or "
+            "retailer POS figures. Ask a brand teammate, or open Spark as the brand."
+        )
+    raise ToolInputError("No brand workspace access for this connection.")
+
+
+def _dec(raw):
+    from decimal import Decimal, InvalidOperation
+
+    if raw is None or raw == "":
+        return None
+    try:
+        return Decimal(str(raw))
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+
+
+def _cost_bucket_totals(rows: list[dict]) -> dict:
+    """Honest sums across rollup rows. ``total_cost`` stays null when any
+    included bucket is incomplete — never treat incomplete as $0."""
+    from decimal import Decimal
+
+    from pilot.costs import quantize_money
+
+    visit_count = sum(int(r.get("visit_count") or 0) for r in rows)
+    complete = sum(int(r.get("complete_visit_count") or 0) for r in rows)
+    incomplete = sum(int(r.get("incomplete_visit_count") or 0) for r in rows)
+    known = sum((_dec(r.get("known_total_cost")) or Decimal("0.00")) for r in rows)
+    supported = sum((_dec(r.get("supported_cost")) or Decimal("0.00")) for r in rows)
+    invoiced = sum((_dec(r.get("invoiced_cost")) or Decimal("0.00")) for r in rows)
+    paid = sum((_dec(r.get("paid_cost")) or Decimal("0.00")) for r in rows)
+    estimated = sum((_dec(r.get("estimated_cost")) or Decimal("0.00")) for r in rows)
+    has_incomplete = any(bool(r.get("has_incomplete_costs")) for r in rows) or incomplete > 0
+    total_cost = None if has_incomplete or not rows else str(quantize_money(known))
+    return {
+        "visit_count": visit_count,
+        "complete_visit_count": complete,
+        "incomplete_visit_count": incomplete,
+        "known_total_cost": str(quantize_money(known)),
+        "supported_cost": str(quantize_money(supported)),
+        "invoiced_cost": str(quantize_money(invoiced)),
+        "paid_cost": str(quantize_money(paid)),
+        "estimated_cost": str(quantize_money(estimated)),
+        "has_incomplete_costs": has_incomplete,
+        "total_cost": total_cost,
+        "cost_per_sample": None,
+        "cost_per_observed_unit": None,
+    }
+
+
+def _limit_cost_rollups(rollups: list[dict]) -> tuple[list[dict], dict, int]:
+    """Rank by known cost, keep top rows, fold the rest into an Other bucket
+    so overall brand totals stay answerable."""
+    ranked = sorted(
+        list(rollups),
+        key=lambda r: (
+            _dec(r.get("known_total_cost")) or 0,
+            str(r.get("label") or ""),
+        ),
+        reverse=True,
+    )
+    totals = _cost_bucket_totals(ranked)
+    if len(ranked) <= MAX_COST_ROWS:
+        return ranked, totals, 0
+    head = ranked[: MAX_COST_ROWS - 1]
+    tail = ranked[MAX_COST_ROWS - 1 :]
+    folded = _cost_bucket_totals(tail)
+    other = {
+        "key": "other",
+        "label": f"Other ({len(tail)} more)",
+        "is_other_bucket": True,
+        "other_bucket_count": len(tail),
+        **folded,
+    }
+    return head + [other], totals, len(tail)
+
+
+def _slim_store_week(sw: dict) -> dict:
+    return {
+        "store_key": sw.get("store_key"),
+        "store_label": sw.get("store_label"),
+        "week_start": (
+            sw["week_start"].isoformat()
+            if hasattr(sw.get("week_start"), "isoformat")
+            else sw.get("week_start")
+        ),
+        "register_units": sw.get("register_units"),
+        "crew_purchased_units": sw.get("crew_purchased_units"),
+        "adjusted_register_units": sw.get("adjusted_register_units"),
+        "observed_vs_baseline_diff": sw.get("observed_vs_baseline_diff"),
+        "incremental_lift_units": sw.get("incremental_lift_units"),
+        "eligible_brand_cost": sw.get("eligible_brand_cost"),
+        "incremental_contribution": sw.get("incremental_contribution"),
+        "roi": sw.get("roi"),
+        "roi_withheld_reason": sw.get("roi_withheld_reason"),
+    }
+
+
+def _rank_store_weeks(weeks: list[dict]) -> list[dict]:
+    """Largest |lift| first, then register units — not chronological."""
+
+    def _key(sw: dict):
+        lift = _dec(sw.get("incremental_lift_units"))
+        lift_abs = abs(lift) if lift is not None else -1
+        reg = sw.get("register_units")
+        reg_n = int(reg) if isinstance(reg, (int, float)) else -1
+        return (lift_abs, reg_n, str(sw.get("store_label") or ""))
+
+    return sorted(weeks, key=_key, reverse=True)
+
+
+def get_shelf_compliance_summary(ctx: ToolContext, args: dict) -> tuple[dict, int]:
+    """On-shelf / OSA figures from stored shelf readings (approved retail)."""
+    from recaps.shelf_check import shelf_summary
+
+    start, end = date_range(args)
+    data = shelf_summary(ctx.tenant_id, start, end)
+    visits = int(data.get("visits") or 0)
+    on_shelf = int(data.get("on_shelf") or 0)
+    not_found = int(data.get("not_found") or 0)
+    unclear = int(data.get("unclear") or 0)
+    price_tag = int(data.get("price_tag") or 0)
+    unread = int(data.get("unread_visits") or 0)
+    stores = list(data.get("not_found_stores") or [])[:MAX_SHELF_NOT_FOUND]
+    return (
+        {
+            "brand": ctx.tenant_name,
+            "start_date": start.isoformat(),
+            "end_date": end.isoformat(),
+            "basis": (
+                "Approved retail recaps only, dated by the event date. Counts come "
+                "from stored shelf-photo answers (staff corrections win). Visits "
+                "with shelf photos but no answer yet are unread_visits, not in the "
+                "on-shelf base. Agency filings kept out of aggregates are excluded."
+            ),
+            "visits_with_shelf_reading": visits,
+            "on_shelf": on_shelf,
+            "not_found": not_found,
+            "unclear": unclear,
+            "price_tag_visible": price_tag,
+            "on_shelf_pct_of_visits": _pct(on_shelf, visits),
+            "not_found_pct_of_visits": _pct(not_found, visits),
+            "price_tag_pct_of_visits": _pct(price_tag, visits),
+            "unread_visits": unread,
+            "not_found_stores": stores,
+            "not_found_more": int(data.get("not_found_more") or 0),
+        },
+        visits if visits else (1 if unread or stores else 0),
+    )
+
+
+def get_demo_cost_summary(ctx: ToolContext, args: dict) -> tuple[dict, int]:
+    """Brand-paid demo cost rollups (same reader as /demo-costs)."""
+    from pilot.costs import build_brand_cost_rollups
+    from pilot.entitlements import PlanEntitlementError
+
+    access = _brand_workspace_access(ctx)
+    start, end = date_range(args)
+    group_by = args.get("group_by") or "store"
+    if not isinstance(group_by, str) or group_by not in COST_GROUP_BY:
+        raise ToolInputError(
+            "group_by must be one of: " + ", ".join(COST_GROUP_BY) + "."
+        )
+    try:
+        rollups = build_brand_cost_rollups(
+            access,
+            group_by=group_by,
+            period_start=start,
+            period_end=end,
+        )
+    except PlanEntitlementError as exc:
+        return (
+            {
+                "brand": ctx.tenant_name,
+                "available": False,
+                "plan_gated": True,
+                "required_plan": getattr(exc, "required_plan", None),
+                "message": str(exc),
+                "start_date": start.isoformat(),
+                "end_date": end.isoformat(),
+                "group_by": group_by,
+                "totals": {},
+                "rollups": [],
+            },
+            0,
+        )
+    rows, totals, folded = _limit_cost_rollups(list(rollups))
+    return (
+        {
+            "brand": ctx.tenant_name,
+            "available": True,
+            "start_date": start.isoformat(),
+            "end_date": end.isoformat(),
+            "group_by": group_by,
+            "basis": (
+                "Brand-visible demo cost lines on included canonical visits in the "
+                "date range. totals cover every bucket. When more than "
+                f"{MAX_COST_ROWS} buckets exist, the highest-cost ones are listed and "
+                "the rest fold into an Other row — never drop cost from the brand "
+                "total. total_cost is null when any visit has incomplete costs. "
+                "Outside agencies cannot call this tool. Same source as Spark Demo Costs."
+            ),
+            "rollup_count": len(rollups),
+            "returned": len(rows),
+            "folded_into_other": folded,
+            "totals": totals,
+            "rollups": rows,
+        },
+        len(rows),
+    )
+
+
+def get_store_velocity_and_roi(ctx: ToolContext, args: dict) -> tuple[dict, int]:
+    """Retailer POS velocity, lift and ROI (same reader as /retailer-pos)."""
+    from pilot.entitlements import PlanEntitlementError
+    from pilot.pos import build_retailer_pos_measurement, monday_of_week
+
+    access = _brand_workspace_access(ctx)
+    start, end = date_range(args)
+    # POS rows are keyed by week_start (Monday). Align the start so a midweek
+    # range does not drop the week's POS while still counting demos in it.
+    period_start = monday_of_week(start)
+    store_key = args.get("store_key")
+    if store_key is not None and (
+        not isinstance(store_key, str) or not store_key.strip()
+    ):
+        raise ToolInputError("store_key must be non-empty text when given.")
+    store_key = store_key.strip() if isinstance(store_key, str) else None
+    offset = _int_arg(args, "offset", 0, 0, MAX_POS_OFFSET)
+    try:
+        data = build_retailer_pos_measurement(
+            access,
+            period_start=period_start,
+            period_end=end,
+            store_key=store_key,
+        )
+    except PlanEntitlementError as exc:
+        return (
+            {
+                "brand": ctx.tenant_name,
+                "available": False,
+                "plan_gated": True,
+                "required_plan": getattr(exc, "required_plan", None),
+                "message": str(exc),
+                "start_date": start.isoformat(),
+                "period_start": period_start.isoformat(),
+                "end_date": end.isoformat(),
+                "totals": {},
+                "store_weeks": [],
+            },
+            0,
+        )
+    coverage = data.get("coverage") or {}
+    totals = data.get("totals") or {}
+    # Drop per-SKU cells — too large for the model; keep store-week rollups.
+    ranked = _rank_store_weeks(
+        [_slim_store_week(sw) for sw in list(data.get("store_weeks") or [])]
+    )
+    page = ranked[offset : offset + MAX_POS_STORE_WEEKS]
+    next_offset = offset + len(page) if offset + len(page) < len(ranked) else None
+    available = bool(data.get("available"))
+    return (
+        {
+            "brand": ctx.tenant_name,
+            "available": available,
+            "unavailable_message": data.get("unavailable_message"),
+            "start_date": start.isoformat(),
+            "period_start": period_start.isoformat(),
+            "end_date": end.isoformat(),
+            "store_key": store_key,
+            "basis": (
+                "Active retailer POS imports for this brand, matched store-SKU-weeks, "
+                "crew-purchase adjustments, and eligible brand demo cost. period_start "
+                "is the Monday of the requested start week so weekly POS rows are not "
+                "dropped midweek. totals cover the full period; store_weeks are ranked "
+                f"by |lift| then register units (up to {MAX_POS_STORE_WEEKS} per call — "
+                "pass next_offset as offset for more). Lift and ROI are null (with a "
+                "reason) when incomplete — never invent them. Outside agencies cannot "
+                "call this tool. Same source as Spark Retailer POS."
+            ),
+            "retailer_banners": list(data.get("retailer_banners") or []),
+            "coverage": {
+                "matched_store_sku_weeks": coverage.get("matched_store_sku_weeks"),
+                "eligible_store_sku_weeks": coverage.get("eligible_store_sku_weeks"),
+                "coverage_ratio": coverage.get("coverage_ratio"),
+                "unmatched_row_count": coverage.get("unmatched_row_count"),
+            },
+            "totals": {
+                "rep_observed_units": totals.get("rep_observed_units"),
+                "register_units": totals.get("register_units"),
+                "crew_purchased_units": totals.get("crew_purchased_units"),
+                "adjusted_register_units": totals.get("adjusted_register_units"),
+                "observed_vs_baseline_diff": totals.get("observed_vs_baseline_diff"),
+                "incremental_lift_units": totals.get("incremental_lift_units"),
+                "incremental_contribution": totals.get("incremental_contribution"),
+                "eligible_brand_cost": totals.get("eligible_brand_cost"),
+                "roi": totals.get("roi"),
+                "lift_withheld_reason": totals.get("lift_withheld_reason"),
+                "roi_withheld_reason": totals.get("roi_withheld_reason"),
+            },
+            "store_week_count": len(ranked),
+            "returned_store_weeks": len(page),
+            "offset": offset,
+            "next_offset": next_offset,
+            "store_weeks": page,
+        },
+        len(page) if page else (1 if available else 0),
+    )
+
+
+def get_competitor_mentions(ctx: ToolContext, args: dict) -> tuple[dict, int]:
+    """Other brands named in approved recap comments (stored mention tags)."""
+    from collections import Counter, defaultdict
+
+    from consumer_mentions.models import RecapMentionTag
+    from consumer_mentions.trends import visible_recaps
+    from recaps.comment_insights import is_own_name, normalise, tenant_names
+
+    start, end = date_range(args, default_days=90)
+    recaps = visible_recaps(ctx.tenant_id, start, end)
+    brand, products = tenant_names(ctx.tenant_id)
+    product_names = [name for _pid, name in products]
+    keys = list(recaps.keys())
+    brand_counts: Counter[str] = Counter()
+    brand_names: dict[str, Counter] = defaultdict(Counter)
+    tagged = 0
+    if keys:
+        for recap_key, brands in (
+            RecapMentionTag.objects.filter(tenant_id=ctx.tenant_id, recap_key__in=keys)
+            .values_list("recap_key", "brands")
+            .iterator()
+        ):
+            if recap_key not in recaps:
+                continue
+            tagged += 1
+            seen: set[str] = set()
+            for item in brands or []:
+                if not isinstance(item, dict) or not item.get("key"):
+                    continue
+                name = str(item.get("name") or "")
+                if is_own_name(normalise(name), brand, product_names):
+                    continue
+                key = str(item["key"])
+                if name:
+                    brand_names[key][name] += 1
+                if key not in seen:
+                    seen.add(key)
+                    brand_counts[key] += 1
+    rows = []
+    for key, count in brand_counts.most_common(MAX_COMPETITOR_ROWS):
+        spellings = brand_names.get(key) or Counter()
+        label = (
+            min(spellings.most_common(), key=lambda nc: (-nc[1], len(nc[0])))[0]
+            if spellings
+            else key
+        )
+        rows.append(
+            {
+                "brand": label,
+                "recaps_mentioning": count,
+                "share_pct_of_tagged_recaps": _pct(count, tagged),
+            }
+        )
+    status = "ready"
+    if not recaps:
+        status = "too_few"
+    elif tagged == 0:
+        status = "not_tagged"
+    return (
+        {
+            "brand": ctx.tenant_name,
+            "start_date": start.isoformat(),
+            "end_date": end.isoformat(),
+            "status": status,
+            "basis": (
+                "Other brands named in consumer comments on approved, client-visible "
+                "recaps in the date range. Counts are recaps (not comments), from "
+                "stored mention tags — no model invents a competitor list. Shares "
+                "are of tagged recaps in the window. Agency filings kept out of "
+                "aggregates are excluded."
+            ),
+            "recaps_in_range": len(recaps),
+            "recaps_tagged": tagged,
+            "competitor_count": len(brand_counts),
+            "returned": len(rows),
+            "competitors": rows,
+        },
+        len(rows),
+    )
+
+
 # ─── Registry ──────────────────────────────────────────────────────
 
 _DATE_PROPS = {
@@ -784,6 +1294,83 @@ TOOLS: dict[str, Tool] = {
             "today under the brand's daily quota.",
             {"type": "object", "properties": {}, "additionalProperties": False},
             get_connection_info,
+        ),
+        Tool(
+            "get_shelf_compliance_summary",
+            "Shelf compliance",
+            "On-shelf / OSA figures for the connected brand over a date range "
+            "(max 366 days; default the last 30 days): visits with a shelf reading, "
+            "on shelf, not found, unclear, price-tag visible, percentages of visits, "
+            "unread visits, and up to 15 stores where product was not found. "
+            "Approved retail recaps only; numbers come from stored shelf answers.",
+            {"type": "object", "properties": dict(_DATE_PROPS), "additionalProperties": False},
+            get_shelf_compliance_summary,
+        ),
+        Tool(
+            "get_demo_cost_summary",
+            "Demo cost summary",
+            "Brand-paid demo cost rollups for the connected brand over a date range "
+            "(max 366 days; default the last 30 days), grouped by store (default), "
+            "program, provider or month. Always includes brand-wide totals. Lists up "
+            f"to {MAX_COST_ROWS} buckets (highest known cost); any further buckets "
+            "fold into an Other row so nothing is dropped from the brand total. "
+            "Incomplete buckets leave total_cost null. Outside field agencies cannot "
+            "use this tool. Plan may gate cost tracking.",
+            {
+                "type": "object",
+                "properties": {
+                    **_DATE_PROPS,
+                    "group_by": {
+                        "type": "string",
+                        "enum": list(COST_GROUP_BY),
+                        "description": "Rollup dimension: store (default), program, provider or month.",
+                    },
+                },
+                "additionalProperties": False,
+            },
+            get_demo_cost_summary,
+        ),
+        Tool(
+            "get_store_velocity_and_roi",
+            "Store velocity and ROI",
+            "Retailer POS velocity, incremental lift and ROI for the connected brand "
+            "over a date range (max 366 days; default the last 30 days). start_date is "
+            "aligned to that week's Monday for POS matching. totals cover the full "
+            f"period; store_weeks are ranked by |lift| (up to {MAX_POS_STORE_WEEKS} "
+            "per call — pass next_offset as offset for more). Optional store_key "
+            "narrows to one store. Outside field agencies cannot use this tool. Plan "
+            "may gate POS measurement.",
+            {
+                "type": "object",
+                "properties": {
+                    **_DATE_PROPS,
+                    "store_key": {
+                        "type": "string",
+                        "description": "Optional store key to limit to one store.",
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": MAX_POS_OFFSET,
+                        "description": (
+                            f"Skip this many ranked store-weeks (0-{MAX_POS_OFFSET}). "
+                            "Use next_offset from the previous call."
+                        ),
+                    },
+                },
+                "additionalProperties": False,
+            },
+            get_store_velocity_and_roi,
+        ),
+        Tool(
+            "get_competitor_mentions",
+            "Competitor mentions",
+            "Other brands consumers name in approved recap comments for the connected "
+            "brand over a date range (max 366 days; default the last 90 days): each "
+            "competitor with how many recaps mention it and share of tagged recaps. "
+            "Counts come from stored mention tags — never invented. Up to 15 brands.",
+            {"type": "object", "properties": dict(_DATE_PROPS), "additionalProperties": False},
+            get_competitor_mentions,
         ),
     ]
 }

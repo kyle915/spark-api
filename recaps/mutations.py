@@ -7313,6 +7313,173 @@ class RecapMutations:
         )
 
     @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def attach_walkup_orphan(
+        self,
+        info: strawberry.Info,
+        input: inputs.AttachWalkupOrphanInput,
+    ) -> types.AttachWalkupOrphanResponse:
+        """1-click attach a filed walk-up Event onto a Tracker request.
+
+        Ignite staff only. Reuses ``events.walkin_link.attach_orphan_to_request``
+        — unique same-day place match only (same rules as the nightly
+        ``link_walkin_recaps_to_requests`` job). Powers the chip on
+        /recaps/missing so ops can clear ghost RECAP DUE rows without CLI.
+        """
+        from events.models import Event as EventModel
+        from events.models import Request as RequestModel
+        from events.staffing_board import _accessible_tenants
+        from events.walkin_link import WalkinAttachError, attach_orphan_to_request
+
+        user = info.context.request.user
+        is_admin, _allowed = await _accessible_tenants(user)
+        if not is_admin:
+            return build_mutation_response(
+                types.AttachWalkupOrphanResponse,
+                success=False,
+                message="Only Ignite staff can attach walk-up recaps.",
+                input_obj=input,
+            )
+
+        orphan_uuid = str(input.orphan_event_uuid or "").strip()
+        request_uuid = str(input.request_uuid or "").strip()
+        if not orphan_uuid or not request_uuid:
+            return build_mutation_response(
+                types.AttachWalkupOrphanResponse,
+                success=False,
+                message="orphan_event_uuid and request_uuid are required.",
+                input_obj=input,
+            )
+        days = max(1, min(int(input.lookback_days or 45), 365))
+
+        def _resolve_and_attach():
+            orphan = (
+                EventModel.objects.filter(uuid=orphan_uuid)
+                .only("id", "uuid")
+                .first()
+            )
+            req = (
+                RequestModel.objects.filter(uuid=request_uuid)
+                .only("id", "uuid")
+                .first()
+            )
+            if orphan is None:
+                raise WalkinAttachError("Walk-up event not found.")
+            if req is None:
+                raise WalkinAttachError("Request not found.")
+            return attach_orphan_to_request(
+                orphan.id, req.id, days_back=days
+            )
+
+        try:
+            suggestion = await sync_to_async(_resolve_and_attach)()
+        except WalkinAttachError as e:
+            return build_mutation_response(
+                types.AttachWalkupOrphanResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+        except Exception as e:  # noqa: BLE001
+            return build_mutation_response(
+                types.AttachWalkupOrphanResponse,
+                success=False,
+                message=f"Attach failed: {e}",
+                input_obj=input,
+            )
+
+        return build_mutation_response(
+            types.AttachWalkupOrphanResponse,
+            success=True,
+            message="Walk-up recap attached to the Tracker request.",
+            input_obj=input,
+            linked_count=1,
+            orphan_event_uuid=strawberry.ID(suggestion.orphan_event_uuid),
+            request_uuid=strawberry.ID(suggestion.request_uuid),
+        )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def attach_safe_walkup_orphans(
+        self,
+        info: strawberry.Info,
+        input: inputs.AttachSafeWalkupOrphansInput,
+    ) -> types.AttachWalkupOrphanResponse:
+        """Bulk-apply every high-confidence walk-up → DUE request link.
+
+        Ignite staff only. Same apply path as
+        ``link_walkin_recaps_to_requests --apply`` for one tenant.
+        """
+        from events.staffing_board import _accessible_tenants
+        from events.walkin_link import attach_all_safe_orphans
+        from tenants.models import Tenant as TenantModel
+
+        user = info.context.request.user
+        is_admin, _allowed = await _accessible_tenants(user)
+        if not is_admin:
+            return build_mutation_response(
+                types.AttachWalkupOrphanResponse,
+                success=False,
+                message="Only Ignite staff can attach walk-up recaps.",
+                input_obj=input,
+            )
+
+        resolved_tenant_id: int | None = None
+        if input.tenant_id not in (None, ""):
+            try:
+                resolved_tenant_id = resolve_id_to_int(input.tenant_id)
+            except (TypeError, ValueError, GraphQLError):
+                return build_mutation_response(
+                    types.AttachWalkupOrphanResponse,
+                    success=False,
+                    message="Invalid tenant id.",
+                    input_obj=input,
+                )
+        if resolved_tenant_id is None:
+            return build_mutation_response(
+                types.AttachWalkupOrphanResponse,
+                success=False,
+                message="tenant_id is required.",
+                input_obj=input,
+            )
+
+        days = max(1, min(int(input.lookback_days or 45), 365))
+
+        def _apply():
+            tenant = TenantModel.objects.filter(pk=resolved_tenant_id).first()
+            if tenant is None:
+                raise GraphQLError("Tenant not found.")
+            return attach_all_safe_orphans(tenant, days_back=days)
+
+        try:
+            result = await sync_to_async(_apply)()
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.AttachWalkupOrphanResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+        except Exception as e:  # noqa: BLE001
+            return build_mutation_response(
+                types.AttachWalkupOrphanResponse,
+                success=False,
+                message=f"Attach failed: {e}",
+                input_obj=input,
+            )
+
+        n = int(result.linked or 0)
+        return build_mutation_response(
+            types.AttachWalkupOrphanResponse,
+            success=True,
+            message=(
+                f"Attached {n} walk-up recap{'' if n == 1 else 's'}."
+                if n
+                else "No safe walk-up matches to attach."
+            ),
+            input_obj=input,
+            linked_count=n,
+        )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
     async def nudge_ambassador_for_recap(
         self,
         info: strawberry.Info,
@@ -7409,6 +7576,20 @@ class RecapMutations:
                 or f"Submit your recap for {event_name}"
             )
 
+            # Preflight: Expo returns 0 for both "no devices" and
+            # "relay/ticket failure". We need the distinction so a
+            # temporary Expo outage does not stamp recap_nudge_sent_at
+            # and suppress the hourly cron / bulk overdue retry.
+            from ambassadors.models import PushDevice
+
+            @sync_to_async
+            def _has_active_devices() -> bool:
+                return PushDevice.objects.filter(
+                    user_id=user.pk, is_active=True
+                ).exists()
+
+            had_devices = await _has_active_devices()
+
             devices_notified = await send_push_to_user(
                 user,
                 title=title,
@@ -7419,55 +7600,102 @@ class RecapMutations:
                 },
             )
 
+            push_delivered = devices_notified > 0
+            intentional_no_device = not had_devices and devices_notified == 0
+            # Stamp only when something was delivered, or when there
+            # truly were no registered devices (ops already "tried" —
+            # DM them). Relay / ticket failures stay unstamped so the
+            # next admin click or cron can retry.
+            should_stamp = push_delivered or intentional_no_device
+
+            last_nudged_iso: str | None = None
+            last_nudge_channel: str | None = None
+            if should_stamp:
+                from django.utils import timezone as dj_tz
+
+                nudged_at = dj_tz.now()
+
+                @sync_to_async
+                def _stamp_nudge():
+                    a_models.AmbassadorEvent.objects.filter(pk=ae.pk).update(
+                        recap_nudge_sent_at=nudged_at
+                    )
+
+                await _stamp_nudge()
+                last_nudged_iso = nudged_at.isoformat()
+                last_nudge_channel = "push"
+
+            if had_devices and not push_delivered:
+                # Devices existed but Expo returned 0 — relay hiccup or
+                # every ticket failed. Do not pretend the nudge landed.
+                return build_mutation_response(
+                    types.NudgeRecapResponse,
+                    success=False,
+                    message=(
+                        "Push failed — Expo did not deliver to any device. "
+                        "Try again in a moment."
+                    ),
+                    input_obj=input,
+                    devices_notified=0,
+                    last_nudged_at=None,
+                    last_nudge_channel=None,
+                )
+
             # Audit log: write a nudge_sent entry on the request that
             # spawned this event so the timeline panel picks it up.
             # Best-effort; the nudge itself is the important action.
-            try:
-                req = None
-                if getattr(event, "request_id", None):
-                    req = await sync_to_async(
-                        lambda: e_models.Request.objects.filter(
-                            id=event.request_id
-                        ).first()
-                    )()
-                if req is not None:
-                    ambassador_obj = ae.ambassador
-                    ba_name = (
-                        " ".join(
-                            filter(
-                                None,
-                                [
-                                    getattr(ambassador_obj, "first_name", None),
-                                    getattr(ambassador_obj, "last_name", None),
-                                ],
+            # Only log when we stamped (delivered or intentional no-device).
+            if should_stamp:
+                try:
+                    req = None
+                    if getattr(event, "request_id", None):
+                        req = await sync_to_async(
+                            lambda: e_models.Request.objects.filter(
+                                id=event.request_id
+                            ).first()
+                        )()
+                    if req is not None:
+                        ambassador_obj = ae.ambassador
+                        ba_name = (
+                            " ".join(
+                                filter(
+                                    None,
+                                    [
+                                        getattr(ambassador_obj, "first_name", None),
+                                        getattr(ambassador_obj, "last_name", None),
+                                    ],
+                                )
                             )
+                            or getattr(ambassador_obj, "email", "")
+                            or "BA"
                         )
-                        or getattr(ambassador_obj, "email", "")
-                        or "BA"
-                    )
-                    # The user calling this mutation is the admin, not
-                    # the ambassador receiving the nudge. Pull from info.
-                    actor = None
-                    try:
-                        actor = info.context.request.user
-                    except Exception:
+                        # The user calling this mutation is the admin, not
+                        # the ambassador receiving the nudge. Pull from info.
                         actor = None
-                    await sync_to_async(
-                        e_models.RequestActivityLog.objects.create
-                    )(
-                        tenant=req.tenant,
-                        request=req,
-                        kind=e_models.RequestActivityLog.KIND_NUDGE_SENT,
-                        actor_user=actor if getattr(actor, "id", None) else None,
-                        summary=f"Nudged {ba_name} for recap",
-                        metadata={
-                            "ba_name": ba_name,
-                            "devices_notified": devices_notified,
-                            "event_uuid": str(getattr(event, "uuid", "")),
-                        },
-                    )
-            except Exception:
-                pass
+                        try:
+                            actor = info.context.request.user
+                        except Exception:
+                            actor = None
+                        await sync_to_async(
+                            e_models.RequestActivityLog.objects.create
+                        )(
+                            tenant=req.tenant,
+                            request=req,
+                            kind=e_models.RequestActivityLog.KIND_NUDGE_SENT,
+                            actor_user=(
+                                actor if getattr(actor, "id", None) else None
+                            ),
+                            summary=f"Nudged {ba_name} for recap",
+                            metadata={
+                                "ba_name": ba_name,
+                                "devices_notified": devices_notified,
+                                "event_uuid": str(getattr(event, "uuid", "")),
+                                "channel": "push",
+                                "no_device": intentional_no_device,
+                            },
+                        )
+                except Exception:
+                    pass
 
             return build_mutation_response(
                 types.NudgeRecapResponse,
@@ -7475,11 +7703,13 @@ class RecapMutations:
                 message=(
                     f"Nudged on {devices_notified} device"
                     f"{'s' if devices_notified != 1 else ''}."
-                    if devices_notified > 0
+                    if push_delivered
                     else "Nudge attempted, but the BA has no registered devices."
                 ),
                 input_obj=input,
                 devices_notified=devices_notified,
+                last_nudged_at=last_nudged_iso,
+                last_nudge_channel=last_nudge_channel,
             )
         except GraphQLError as e:
             return build_mutation_response(

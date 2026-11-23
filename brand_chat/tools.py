@@ -1,10 +1,11 @@
 """The read-only tools brand chat may call, all pinned to one brand.
 
-Six of them are the official Spark MCP tools (``spark_mcp.tools``), run
+Ten of them are the official Spark MCP tools (``spark_mcp.tools``), run
 with the same code so a number in chat is the number on the dashboard and
 in an AI app: program KPIs, recaps, consumer breakdown, upcoming events,
-pending approvals and the published weekly summary. Four are added here,
-each built on the reader the dashboard already uses:
+pending approvals, the published weekly summary, shelf compliance, demo
+cost, store velocity / ROI, and competitor mentions. Four more are added
+here, each built on the reader the dashboard already uses:
 
 * ``get_store_performance`` — per store: recaps, consumers sampled, units
   sold and conversion, from :func:`recaps.explain_facts.recap_facts` (the
@@ -19,7 +20,8 @@ each built on the reader the dashboard already uses:
   emails and phone numbers already taken out).
 
 Nothing here writes. The tenant comes from :class:`spark_mcp.tools.ToolContext`,
-never from the model's arguments: no tool has a tenant argument.
+never from the model's arguments: no tool has a tenant argument. Cost and
+POS tools enforce brand-consolidated access (agency isolation).
 
 Every payload is passed through :class:`spark_mcp.privacy.Scrubber` before
 the model sees it (``brand_chat.service``). Free text that came from the
@@ -292,6 +294,25 @@ CHAT_TOOLS: dict[str, ChatTool] = {
             "Approvals",
         ),
         _from_mcp("get_weekly_summary", "Weekly summary", "/client-dashboard", "Home"),
+        _from_mcp(
+            "get_shelf_compliance_summary",
+            "Shelf compliance",
+            "/reports",
+            "Reports",
+        ),
+        _from_mcp("get_demo_cost_summary", "Demo costs", "/demo-costs", "Demo costs"),
+        _from_mcp(
+            "get_store_velocity_and_roi",
+            "Store velocity and ROI",
+            "/retailer-pos",
+            "Retailer POS",
+        ),
+        _from_mcp(
+            "get_competitor_mentions",
+            "Competitor mentions",
+            "/client-dashboard#performance",
+            "Performance",
+        ),
         ChatTool(
             "get_store_performance",
             "Store performance",

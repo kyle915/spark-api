@@ -459,6 +459,10 @@ ALL_TOOL_CALLS = [
     ("get_consumer_breakdown", {"by": "product"}),
     ("list_upcoming_events", {"days": 14}),
     ("get_weekly_summary", {}),
+    ("get_shelf_compliance_summary", "window"),
+    ("get_demo_cost_summary", "window"),
+    ("get_store_velocity_and_roi", "window"),
+    ("get_competitor_mentions", "window"),
     ("get_connection_info", {}),
 ]
 
@@ -472,7 +476,10 @@ def _run_all(c, token, window):
             args = {**args, "start_date": window[0], "end_date": window[1]}
         res = call(c, token, name, args)
         assert res["isError"] is False, (name, res)
-        outputs[f"{name}:{json.dumps(args, sort_keys=True)}"] = json.dumps(res)
+        # New brand tools must still refuse to invent Omega markers.
+        text = json.dumps(res)
+        assert "OmegaOnlyMart" not in text and "OmegaSecretSummary" not in text
+        outputs[f"{name}:{json.dumps(args, sort_keys=True)}"] = text
     return outputs
 
 
@@ -719,3 +726,10 @@ def test_the_connector_does_not_offer_pending_approvals():
 
     assert "list_pending_approvals" not in TOOLS
     assert "list_pending_approvals" in CHAT_TOOLS
+    for name in (
+        "get_shelf_compliance_summary",
+        "get_demo_cost_summary",
+        "get_store_velocity_and_roi",
+        "get_competitor_mentions",
+    ):
+        assert name in TOOLS and name in CHAT_TOOLS

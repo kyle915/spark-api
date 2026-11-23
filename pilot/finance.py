@@ -10,12 +10,13 @@ from datetime import date
 from decimal import Decimal
 from typing import Any
 
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from billing.models import InvoiceLineItem
 from pilot.costs import (
     REIMBURSABLE_CATEGORIES,
+    attach_receipt_evidence_to_cost_line,
     link_receipt_evidence_to_cost_line,
     quantize_money,
     recompute_visit_cost_summary,
@@ -32,6 +33,332 @@ from pilot.models import (
 from pilot.permissions import ResolvedWorkspaceAccess, log_workspace_audit
 from recaps.models import ReceiptReading, RecapFlag
 from tenants.models import Tenant, User
+
+# Same band as recaps.receipt_reader.compare_spend_to_receipts: $1 or 5%.
+AUTO_MATCH_TOLERANCE_ABS = Decimal("1.00")
+AUTO_MATCH_TOLERANCE_PCT = Decimal("0.05")
+AUTO_MATCH_RECAP_SPEND_SOURCE_PREFIX = "recap-product-spend:"
+AUTO_MATCH_LINK_LABEL = "Auto-matched recap receipt"
+
+
+def amounts_within_auto_match_tolerance(
+    left: Decimal | None, right: Decimal | None
+) -> bool:
+    """True when two money amounts agree within $1 absolute or 5% of either."""
+    if left is None or right is None:
+        return False
+    a = quantize_money(left)
+    b = quantize_money(right)
+    if a <= Decimal("0.00") or b <= Decimal("0.00"):
+        return False
+    gap = abs(a - b)
+    allowed = max(
+        AUTO_MATCH_TOLERANCE_ABS,
+        (a * AUTO_MATCH_TOLERANCE_PCT).quantize(Decimal("0.01")),
+        (b * AUTO_MATCH_TOLERANCE_PCT).quantize(Decimal("0.01")),
+    )
+    return gap <= allowed
+
+
+def is_auto_match_evidence_link(link: CostEvidenceLink) -> bool:
+    """True for system auto-match links (never for manually linked proof)."""
+    return link.linked_by_id is None and (link.label or "") == AUTO_MATCH_LINK_LABEL
+
+
+def withdraw_auto_match_evidence_link(link: CostEvidenceLink) -> None:
+    """Delete an auto-match CostEvidenceLink and roll evidence_status back if needed."""
+    if not is_auto_match_evidence_link(link):
+        return
+    line = link.cost_line
+    link.delete()
+    if not CostEvidenceLink.objects.filter(cost_line=line).exists():
+        if line.evidence_status != BrandCostLine.EVIDENCE_MISSING:
+            line.evidence_status = BrandCostLine.EVIDENCE_MISSING
+            line.save(update_fields=["evidence_status", "updated_at"])
+            if line.canonical_visit_id is not None:
+                recompute_visit_cost_summary(line.canonical_visit)
+
+
+def _auto_link_still_valid(
+    link: CostEvidenceLink, reading: ReceiptReading
+) -> bool:
+    if reading.status != ReceiptReading.STATUS_READ:
+        return False
+    if reading.total is None or reading.total <= Decimal("0.00"):
+        return False
+    return amounts_within_auto_match_tolerance(reading.total, link.cost_line.amount)
+
+
+def _load_reading_for_auto_match(
+    reading: ReceiptReading, *, for_update: bool = False
+) -> ReceiptReading | None:
+    if reading is None or reading.pk is None:
+        return None
+    if for_update:
+        # Lock the reading row alone — select_related on nullable FKs cannot
+        # use FOR UPDATE (Postgres rejects outer-join locks).
+        locked = (
+            ReceiptReading.objects.select_for_update()
+            .filter(pk=reading.pk)
+            .first()
+        )
+        if locked is None:
+            return None
+        reading = locked
+    return (
+        ReceiptReading.objects.select_related(
+            "custom_recap_file",
+            "custom_recap_file__custom_recap",
+            "custom_recap_file__custom_recap__tenant",
+            "custom_recap_file__custom_recap__event",
+        )
+        .filter(pk=reading.pk)
+        .first()
+    )
+
+
+def _existing_evidence_for_reading(
+    reading_id: int, *, for_update: bool = False
+) -> CostEvidenceLink | None:
+    if for_update:
+        locked_ids = list(
+            CostEvidenceLink.objects.select_for_update()
+            .filter(receipt_reading_id=reading_id)
+            .order_by("id")
+            .values_list("id", flat=True)
+        )
+        if not locked_ids:
+            return None
+        return (
+            CostEvidenceLink.objects.select_related("cost_line")
+            .filter(id=locked_ids[0])
+            .first()
+        )
+    return (
+        CostEvidenceLink.objects.select_related("cost_line")
+        .filter(receipt_reading_id=reading_id)
+        .order_by("id")
+        .first()
+    )
+
+
+def sync_auto_match_after_ocr(reading: ReceiptReading) -> CostEvidenceLink | None:
+    """Reconcile auto-match after every OCR persist (success or failure).
+
+    Successful read → match/revalidate. Failed / unreadable / zero total →
+    withdraw auto-links only (manual links are preserved).
+    """
+    reading = _load_reading_for_auto_match(reading)
+    if reading is None:
+        return None
+    if (
+        reading.status == ReceiptReading.STATUS_READ
+        and reading.total is not None
+        and reading.total > Decimal("0.00")
+    ):
+        return maybe_auto_match_receipt_reading(reading)
+
+    for link in list(
+        CostEvidenceLink.objects.select_related("cost_line").filter(
+            receipt_reading_id=reading.id
+        )
+    ):
+        if is_auto_match_evidence_link(link):
+            withdraw_auto_match_evidence_link(link)
+    return None
+
+
+@transaction.atomic
+def maybe_auto_match_receipt_reading(
+    reading: ReceiptReading,
+) -> CostEvidenceLink | None:
+    """Conservatively attach a successful OCR receipt to a visit product line.
+
+    Rules:
+    - status=read and total > 0 required; otherwise withdraw stale auto-links.
+    - Manual evidence links are never removed.
+    - Auto-links are revalidated when OCR is reread; withdrawn if total drifts
+      out of tolerance or status is no longer a successful read.
+    - Same recap event → CanonicalVisit scope only; visit row is locked before
+      creating a recap-spend product line (plus DB uniqueness on source_ref /
+      receipt_reading) so concurrent OCR+evaluate cannot double-charge.
+    - Prefer a single positive CAT_PRODUCT line whose amount matches within
+      tolerance and still needs evidence; never invent a link when multiple
+      product lines match.
+    - If no product line exists but the recap has a single positive typed
+      product-spend amount that matches OCR, create one SOURCE_EXPENSE_RECEIPT
+      product line then attach proof (Link Visit happy path, no double charge).
+      Reused auto lines refresh amount from current recap spend.
+    """
+    reading = _load_reading_for_auto_match(reading, for_update=True)
+    if reading is None:
+        return None
+
+    existing = _existing_evidence_for_reading(reading.id, for_update=True)
+    if existing is not None:
+        if not is_auto_match_evidence_link(existing):
+            # Preserve manually linked proof even if OCR later drifts.
+            return existing
+        if _auto_link_still_valid(existing, reading):
+            ocr_total = quantize_money(reading.total)
+            if existing.verified_amount != ocr_total:
+                existing.verified_amount = ocr_total
+                existing.save(update_fields=["verified_amount"])
+            return existing
+        withdraw_auto_match_evidence_link(existing)
+        # Fall through and attempt a fresh match when still readable.
+
+    if reading.status != ReceiptReading.STATUS_READ:
+        return None
+    if reading.total is None or reading.total <= Decimal("0.00"):
+        return None
+
+    recap_file = reading.custom_recap_file
+    if recap_file is None:
+        return None
+    recap = recap_file.custom_recap
+    if recap is None:
+        return None
+    tenant = recap.tenant
+    if tenant is None:
+        return None
+
+    visit: CanonicalVisit | None = None
+    if recap.event_id:
+        visit = (
+            CanonicalVisit.objects.select_for_update()
+            .filter(tenant=tenant, event_id=recap.event_id)
+            .first()
+        )
+
+    ocr_total = quantize_money(reading.total)
+    candidates: list[BrandCostLine] = []
+    if visit is not None:
+        product_lines = list(
+            BrandCostLine.objects.select_for_update()
+            .filter(
+                tenant=tenant,
+                canonical_visit=visit,
+                category=BrandCostLine.CAT_PRODUCT,
+                amount__isnull=False,
+                amount__gt=Decimal("0.00"),
+                evidence_status=BrandCostLine.EVIDENCE_MISSING,
+            )
+            .order_by("id")
+        )
+        candidates = [
+            ln
+            for ln in product_lines
+            if amounts_within_auto_match_tolerance(ln.amount, ocr_total)
+        ]
+
+    if len(candidates) > 1:
+        return None
+
+    target_line: BrandCostLine | None = candidates[0] if candidates else None
+
+    if target_line is None:
+        # No matching product line: optionally book one from clear recap spend.
+        from recaps.receipt_gate import custom_recap_spend
+        from pilot.workspaces import ensure_canonical_visit_for_event
+
+        spend = custom_recap_spend(recap)
+        if not spend or spend <= 0:
+            return None
+        spend_amt = quantize_money(spend)
+        if not amounts_within_auto_match_tolerance(spend_amt, ocr_total):
+            return None
+        if recap.event_id is None:
+            return None
+        if visit is None:
+            visit = ensure_canonical_visit_for_event(recap.event)
+            visit = (
+                CanonicalVisit.objects.select_for_update().filter(pk=visit.pk).get()
+            )
+        source_ref = f"{AUTO_MATCH_RECAP_SPEND_SOURCE_PREFIX}{recap.id}"
+
+        # Under the visit lock: re-check for races with concurrent OCR/evaluate.
+        raced = _existing_evidence_for_reading(reading.id, for_update=True)
+        if raced is not None:
+            if not is_auto_match_evidence_link(raced):
+                return raced
+            if _auto_link_still_valid(raced, reading):
+                return raced
+            withdraw_auto_match_evidence_link(raced)
+
+        target_line = (
+            BrandCostLine.objects.select_for_update()
+            .filter(tenant=tenant, source_reference=source_ref)
+            .first()
+        )
+        if target_line is None:
+            # Refuse if another product line already exists — creating would
+            # risk a second charge when amounts simply did not align.
+            if BrandCostLine.objects.filter(
+                tenant=tenant,
+                canonical_visit=visit,
+                category=BrandCostLine.CAT_PRODUCT,
+                amount__isnull=False,
+                amount__gt=Decimal("0.00"),
+            ).exists():
+                return None
+            try:
+                with transaction.atomic():
+                    target_line = BrandCostLine.objects.create(
+                        tenant=tenant,
+                        canonical_visit=visit,
+                        provider=visit.primary_provider,
+                        category=BrandCostLine.CAT_PRODUCT,
+                        source_type=BrandCostLine.SOURCE_EXPENSE_RECEIPT,
+                        description=(
+                            f"Product spend ({reading.merchant or 'receipt'})"
+                        )[:300],
+                        amount=spend_amt,
+                        is_confirmed_zero=False,
+                        settlement_status=BrandCostLine.SETTLEMENT_ESTIMATED,
+                        evidence_status=BrandCostLine.EVIDENCE_MISSING,
+                        source_reference=source_ref,
+                    )
+            except IntegrityError:
+                target_line = (
+                    BrandCostLine.objects.select_for_update()
+                    .filter(tenant=tenant, source_reference=source_ref)
+                    .first()
+                )
+                if target_line is None:
+                    return None
+
+        # Refresh amount when the BA corrected recap product spend after booking.
+        if quantize_money(target_line.amount or Decimal("0.00")) != spend_amt:
+            target_line.amount = spend_amt
+            target_line.is_confirmed_zero = False
+            target_line.save(
+                update_fields=["amount", "is_confirmed_zero", "updated_at"]
+            )
+            if target_line.canonical_visit_id is not None:
+                recompute_visit_cost_summary(target_line.canonical_visit)
+
+        if (
+            target_line.evidence_status != BrandCostLine.EVIDENCE_MISSING
+            and not CostEvidenceLink.objects.filter(
+                cost_line=target_line, receipt_reading_id=reading.id
+            ).exists()
+        ):
+            # Already supported by other proof — do not invent a second link.
+            return None
+
+    try:
+        with transaction.atomic():
+            return attach_receipt_evidence_to_cost_line(
+                tenant=tenant,
+                cost_line=target_line,
+                recap_file=recap_file,
+                receipt_reading=reading,
+                label=AUTO_MATCH_LINK_LABEL,
+                verified_amount=ocr_total,
+            )
+    except IntegrityError:
+        return _existing_evidence_for_reading(reading.id)
 
 OPERATIONAL_ADVISORY_FLAG_KINDS = (
     RecapFlag.KIND_SHORT_CLOCK,
@@ -97,6 +424,24 @@ def evaluate_finance_exceptions(
         visits_qs = visits_qs.filter(pk=visit.pk)
     visits = list(visits_qs)
     visit_map = {v.id: v for v in visits}
+
+    # Heal clear OCR→product matches before detecting exceptions so
+    # missing_proof and unmatched_transaction both see linked evidence.
+    if visit is None:
+        already_linked = set(
+            CostEvidenceLink.objects.filter(
+                cost_line__tenant=tenant, receipt_reading__isnull=False
+            ).values_list("receipt_reading_id", flat=True)
+        )
+        heal_qs = ReceiptReading.objects.select_related(
+            "custom_recap_file", "custom_recap_file__custom_recap"
+        ).filter(
+            custom_recap_file__custom_recap__tenant=tenant,
+            status=ReceiptReading.STATUS_READ,
+            total__gt=Decimal("0.00"),
+        ).exclude(id__in=already_linked)
+        for reading in heal_qs.iterator(chunk_size=100):
+            maybe_auto_match_receipt_reading(reading)
 
     lines_qs = (
         BrandCostLine.objects.select_related("provider", "shared_source")
@@ -377,6 +722,9 @@ def evaluate_finance_exceptions(
         for reading in unmatched_readings:
             if reading.total is None or reading.total <= Decimal("0.00"):
                 continue
+            # Heal clear cases before emitting unmatched_transaction.
+            if maybe_auto_match_receipt_reading(reading) is not None:
+                continue
             recap_obj = reading.custom_recap_file.custom_recap
             ev_id = recap_obj.event_id if recap_obj else None
             matched_visit = (
@@ -596,8 +944,18 @@ def list_finance_exceptions(
         required_plan="pro",
     )
     qs = FinanceException.objects.select_related(
-        "canonical_visit", "cost_line", "provider", "owner", "resolved_by"
-    ).prefetch_related("audits", "audits__actor").filter(tenant=access.tenant)
+        "canonical_visit",
+        "cost_line",
+        "provider",
+        "owner",
+        "resolved_by",
+        "recap_file",
+    ).prefetch_related(
+        "audits",
+        "audits__actor",
+        "cost_line__evidence_links",
+        "cost_line__evidence_links__receipt_reading",
+    ).filter(tenant=access.tenant)
     if exception_type:
         qs = qs.filter(exception_type=exception_type)
     if status:

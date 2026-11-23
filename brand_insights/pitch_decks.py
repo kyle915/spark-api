@@ -29,6 +29,7 @@ from django.db import transaction
 from django.db.models import F
 from django.utils import timezone
 
+from brand_insights.deck_captions import enrich_deck_photos, overlay_snapshot_captions
 from brand_insights.models import BuyerPitchDeck
 from brand_insights.photo_wall import resolve_deck_photos
 from pilot.actions import build_weekly_buyer_store_report
@@ -396,6 +397,23 @@ def create_buyer_pitch_deck(
         photos=photos,
     )
 
+    # Sell-story captions from existing photo scores + mentions + shelf
+    # (no new vision). Staff intro_note wins; otherwise we draft a leave-behind.
+    enriched_photos, sell_story, sell_source = enrich_deck_photos(
+        access.tenant.id,
+        list(snapshot.get("photos") or []),
+        brand_name=(snapshot.get("brand") or {}).get("name") or access.tenant.name,
+        kpis=snapshot.get("kpis") or {},
+        period_start=eff_start.isoformat(),
+        period_end=eff_end.isoformat(),
+        intro_note=clean_intro,
+    )
+    snapshot["photos"] = enriched_photos
+    snapshot["sellStory"] = sell_story
+    snapshot["sellStorySource"] = sell_source
+    if not clean_intro and sell_story:
+        clean_intro = sell_story[:1500]
+
     deck = BuyerPitchDeck.objects.create(
         tenant=access.tenant,
         token=_mint_deck_token(),
@@ -505,7 +523,10 @@ def _sanitize_public_deck_payload(deck: BuyerPitchDeck) -> dict[str, Any]:
     kpis = dict(snap.get("kpis") or {})
     retailer_breakdown = [dict(r) for r in (snap.get("retailerBreakdown") or [])]
     top_store_wins = [dict(s) for s in (snap.get("topStoreWins") or [])]
-    photos = _fresh_deck_photos(deck)
+    photos = overlay_snapshot_captions(
+        _fresh_deck_photos(deck),
+        snap.get("photos") or [],
+    )
 
     if not deck.include_costs:
         for cost_key in (
@@ -525,12 +546,15 @@ def _sanitize_public_deck_payload(deck: BuyerPitchDeck) -> dict[str, Any]:
 
     brand = dict(snap.get("brand") or {})
     brand.setdefault("name", deck.tenant.name)
+    sell_story = (snap.get("sellStory") or "").strip() or (deck.intro_note or "")
 
     return {
         "title": deck.title,
         "subtitle": deck.subtitle,
         "buyerName": deck.buyer_name,
-        "introNote": deck.intro_note,
+        "introNote": deck.intro_note or sell_story,
+        "sellStory": sell_story,
+        "sellStorySource": snap.get("sellStorySource") or "",
         "periodStart": deck.period_start.isoformat(),
         "periodEnd": deck.period_end.isoformat(),
         "retailerFilter": deck.retailer_filter,

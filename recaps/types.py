@@ -909,6 +909,32 @@ class MissingRecapAmbassadorInfo:
     # haven't formally said yes; the admin may want to nudge them
     # differently or skip nudging entirely.
     is_approved: bool
+    # ISO timestamp of the last recap nudge for this BA+event
+    # (AmbassadorEvent.recap_nudge_sent_at) — cron timely nudge or an
+    # admin click on /recaps/missing. Null when never nudged. Powers the
+    # "last nudged" chip and the 12h skip on Nudge all overdue.
+    last_nudged_at: str | None = None
+    # Channel of the last nudge. Today only "push" (Expo). Reserved so
+    # SMS/email fallbacks can surface a channel pill without another
+    # schema bump.
+    last_nudge_channel: str | None = None
+
+
+@strawberry.type
+class SuggestedWalkupAttachType:
+    """High-confidence filed walk-up that clears this Missing / DUE row.
+
+    Same match rules as ``link_walkin_recaps_to_requests``: unique
+    same-day place match. Staff tap Attach on /recaps/missing to set
+    ``request_id`` on the orphan Event; sibling filed-recap logic then
+    drops the empty Tracker shell from Recaps due.
+    """
+
+    orphan_event_uuid: strawberry.ID
+    orphan_event_name: str
+    orphan_address: str | None = None
+    request_uuid: strawberry.ID
+    confidence: str = "safe"
 
 
 @strawberry.type
@@ -939,6 +965,9 @@ class MissingRecapEventType:
     assigned_ambassadors: List[MissingRecapAmbassadorInfo] = strawberry.field(
         default_factory=list,
     )
+    # When a filed walk-up uniquely matches this row's request, the
+    # admin can 1-click attach instead of nudging for a duplicate file.
+    suggested_walkup_attach: SuggestedWalkupAttachType | None = None
 
 
 @strawberry.type
@@ -998,6 +1027,22 @@ class NudgeRecapResponse:
     # BA has no registered devices — UI surfaces a clearer hint than
     # a generic "failed".
     devices_notified: int | None = None
+    # ISO timestamp stamped on AmbassadorEvent.recap_nudge_sent_at after
+    # a successful nudge attempt (same field the hourly cron uses).
+    last_nudged_at: str | None = None
+    last_nudge_channel: str | None = None
+
+
+@strawberry.type
+class AttachWalkupOrphanResponse:
+    """Result of 1-click or bulk orphan walk-up → Tracker request attach."""
+
+    success: bool
+    message: str
+    client_mutation_id: strawberry.ID | None = None
+    linked_count: int = 0
+    orphan_event_uuid: strawberry.ID | None = None
+    request_uuid: strawberry.ID | None = None
 
 
 @strawberry.type

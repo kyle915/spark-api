@@ -1,12 +1,12 @@
 """The Liquid Death RMM-by-state map stays in sync with the routing territory.
 
-ld_summary_export inverts events.routing.LIQUID_DEATH_TERRITORY to attribute
-each recap to an RMM by state. This pins the inversion (incl. the DE tie-break
-and the unmapped-state fallback) and guards against the two maps drifting.
+ld_summary_export inverts liquid_death_territory() to attribute each recap to
+an RMM by state. This pins the inversion (incl. the DE tie-break and the
+unmapped-state fallback) and guards against the two maps drifting.
 """
 from __future__ import annotations
 
-from events.routing import LIQUID_DEATH_TERRITORY
+from events.routing import liquid_death_territory
 from recaps.ld_summary_export import RMM_EMAIL_TO_NAME, STATE_TO_RMM
 
 
@@ -29,11 +29,13 @@ def test_unmapped_state_is_none():
 
 
 def test_every_territory_state_is_mapped():
-    all_states = {s for states in LIQUID_DEATH_TERRITORY.values() for s in states}
+    territory = liquid_death_territory()
+    all_states = {s for states in territory.values() for s in states}
     missing = [s for s in all_states if s not in STATE_TO_RMM]
     assert not missing, f"states missing from STATE_TO_RMM: {missing}"
 
 
 def test_every_territory_email_has_a_display_name():
-    missing = [e for e in LIQUID_DEATH_TERRITORY if e not in RMM_EMAIL_TO_NAME]
+    territory = liquid_death_territory()
+    missing = [e for e in territory if e not in RMM_EMAIL_TO_NAME]
     assert not missing, f"emails missing a display name: {missing}"

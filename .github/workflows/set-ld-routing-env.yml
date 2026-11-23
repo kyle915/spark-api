@@ -1,0 +1,61 @@
+name: Set LD RMM routing env on Cloud Run
+
+# Stamps LD_RMM_TERRITORY_JSON + IGNITE_REVIEW_CC onto spark-api-new so
+# Liquid Death spark-form RMM routing works without committing client
+# emails to git. Run once after adding the repo secrets, and again when
+# rotating the map.
+#
+# Land this workflow on the default branch (main) BEFORE merging any PR
+# that relies on env-backed routing. workflow_dispatch only fires for
+# workflow files already on the default branch.
+#
+# Uses a custom ^||^ delimiter so commas inside JSON / email lists do
+# not split --update-env-vars. Does NOT replace unrelated Cloud Run env.
+
+on:
+  workflow_dispatch:
+
+env:
+  GCP_PROJECT_ID: spark-479222
+  GCP_REGION: us-central1
+  CLOUD_RUN_SERVICE: spark-api-new
+
+jobs:
+  set-env:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_DEPLOY_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Update Cloud Run env
+        env:
+          LD_RMM_TERRITORY_JSON: ${{ secrets.LD_RMM_TERRITORY_JSON }}
+          IGNITE_REVIEW_CC: ${{ secrets.IGNITE_REVIEW_CC }}
+        run: |
+          set -euo pipefail
+          if [ -z "${LD_RMM_TERRITORY_JSON:-}" ]; then
+            echo "::error::LD_RMM_TERRITORY_JSON repo secret is empty"
+            exit 1
+          fi
+          if [ -z "${IGNITE_REVIEW_CC:-}" ]; then
+            echo "::error::IGNITE_REVIEW_CC repo secret is empty"
+            exit 1
+          fi
+          python3 -c 'import json,os; json.loads(os.environ["LD_RMM_TERRITORY_JSON"]); print("territory JSON ok")'
+          # Custom delimiter avoids comma-splitting of JSON / email lists.
+          gcloud run services update "$CLOUD_RUN_SERVICE" \
+            --region="$GCP_REGION" \
+            --project="$GCP_PROJECT_ID" \
+            --update-env-vars="^||^LD_RMM_TERRITORY_JSON=${LD_RMM_TERRITORY_JSON}||IGNITE_REVIEW_CC=${IGNITE_REVIEW_CC}" \
+            --quiet
+          gcloud run services describe "$CLOUD_RUN_SERVICE" \
+            --region="$GCP_REGION" \
+            --project="$GCP_PROJECT_ID" \
+            --format='yaml(spec.template.spec.containers[0].env)' \
+            | grep -q 'name: LD_RMM_TERRITORY_JSON'
+          echo "LD routing env vars set on ${CLOUD_RUN_SERVICE} (values not printed)"

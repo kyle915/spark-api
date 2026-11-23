@@ -567,6 +567,72 @@ def upsert_brand_cost_line(
     return line
 
 
+def attach_receipt_evidence_to_cost_line(
+    *,
+    tenant: Any,
+    cost_line: BrandCostLine,
+    recap_file: CustomRecapFile | None = None,
+    receipt_reading: ReceiptReading | None = None,
+    proof_url: str = "",
+    label: str = "",
+    verified_amount: Decimal | None = None,
+    is_itemized: bool | None = None,
+    linked_by: Any = None,
+) -> CostEvidenceLink:
+    """Create CostEvidenceLink on an existing BrandCostLine without inventing a
+    second charge. Permission checks belong to the caller."""
+    if receipt_reading is not None and recap_file is None:
+        recap_file = receipt_reading.custom_recap_file
+
+    resolved_itemized = True
+    if is_itemized is not None:
+        resolved_itemized = bool(is_itemized)
+    elif receipt_reading is not None:
+        items = getattr(receipt_reading, "line_items", None) or []
+        resolved_itemized = len(items) > 0
+
+    resolved_verified = (
+        quantize_money(verified_amount)
+        if verified_amount is not None
+        else (
+            quantize_money(receipt_reading.total)
+            if receipt_reading is not None and receipt_reading.total is not None
+            else cost_line.amount
+        )
+    )
+
+    link = CostEvidenceLink.objects.create(
+        cost_line=cost_line,
+        recap_file=recap_file,
+        receipt_reading=receipt_reading,
+        proof_url=(proof_url or "").strip()[:500],
+        label=(label or "Receipt proof").strip()[:200],
+        verified_amount=resolved_verified,
+        is_itemized=resolved_itemized,
+        linked_by=linked_by,
+    )
+
+    cost_line.evidence_status = BrandCostLine.EVIDENCE_SUPPORTED
+    cost_line.save(update_fields=["evidence_status", "updated_at"])
+
+    if cost_line.canonical_visit is not None:
+        recompute_visit_cost_summary(cost_line.canonical_visit)
+
+    log_workspace_audit(
+        tenant=tenant,
+        actor=linked_by,
+        category="cost",
+        action="evidence_linked",
+        target_type="BrandCostLine",
+        target_id=str(cost_line.uuid),
+        summary=(
+            f"Linked supporting proof ({link.label}) to {cost_line.category} "
+            f"(${cost_line.amount}); itemized={resolved_itemized}."
+        ),
+    )
+    return link
+
+
 @transaction.atomic
 def link_receipt_evidence_to_cost_line(
     access: ResolvedWorkspaceAccess,
@@ -622,55 +688,17 @@ def link_receipt_evidence_to_cost_line(
         if recap_file is None:
             recap_file = reading.custom_recap_file
 
-    resolved_itemized = True
-    if is_itemized is not None:
-        resolved_itemized = bool(is_itemized)
-    elif reading is not None:
-        items = getattr(reading, "line_items", None) or []
-        resolved_itemized = len(items) > 0
-
-    resolved_verified = (
-        quantize_money(verified_amount)
-        if verified_amount is not None
-        else (
-            quantize_money(reading.total)
-            if reading is not None and reading.total is not None
-            else line.amount
-        )
-    )
-
-    link = CostEvidenceLink.objects.create(
+    return attach_receipt_evidence_to_cost_line(
+        tenant=access.tenant,
         cost_line=line,
         recap_file=recap_file,
         receipt_reading=reading,
-        proof_url=(proof_url or "").strip()[:500],
-        label=(label or "Receipt proof").strip()[:200],
-        verified_amount=resolved_verified,
-        is_itemized=resolved_itemized,
+        proof_url=proof_url,
+        label=label,
+        verified_amount=verified_amount,
+        is_itemized=is_itemized,
         linked_by=access.user,
     )
-
-    line.evidence_status = BrandCostLine.EVIDENCE_SUPPORTED
-    line.save(update_fields=["evidence_status", "updated_at"])
-
-    # If a separate duplicate expense_receipt line was previously auto-created
-    # for the exact same receipt file, remove or avoid creating a second charge.
-    if line.canonical_visit is not None:
-        recompute_visit_cost_summary(line.canonical_visit)
-
-    log_workspace_audit(
-        tenant=access.tenant,
-        actor=access.user,
-        category="cost",
-        action="evidence_linked",
-        target_type="BrandCostLine",
-        target_id=str(line.uuid),
-        summary=(
-            f"Linked supporting proof ({link.label}) to {line.category} "
-            f"(${line.amount}); itemized={resolved_itemized}."
-        ),
-    )
-    return link
 
 
 def _split_total_by_percentages(
