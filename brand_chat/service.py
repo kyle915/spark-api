@@ -583,9 +583,13 @@ def _suggestions(tenant_id: int) -> list[str]:
     if RecapMentionTag.objects.filter(tenant_id=tenant_id).exists():
         theme = _top_theme(tenant_id)
         out.append(f"What are shoppers saying about {theme}?" if theme else "What are shoppers saying about price?")
+        if len(out) < 4:
+            out.append("Which competitor brands are shoppers mentioning?")
     next_month = (today.replace(day=1) + timedelta(days=32)).strftime("%B")
     if has_recaps or CustomRecap.objects.filter(tenant_id=tenant_id, approved=True).exists():
         out.append(f"Which stores should we hit in {next_month}?")
+    if len(out) < 4 and has_recaps:
+        out.append("How is our on-shelf rate looking?")
     if Request.objects.filter(
         tenant_id=tenant_id, deleted_at__isnull=True, date__date__gte=today, date__date__lte=today + timedelta(days=14)
     ).exists():

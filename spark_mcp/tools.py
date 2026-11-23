@@ -9,11 +9,16 @@ are identical:
 * consumer splits → ``recaps.consumer_breakdown`` (``tenantConsumerBreakdown``);
 * products → ``recaps.comment_insights.product_lines`` (``tenantProductRegions``);
 * weekly summary → ``recaps.weekly_summary.latest_summary`` (reviewed only,
-  as ``tenantWeeklySummary`` gives a brand user).
+  as ``tenantWeeklySummary`` gives a brand user);
+* shelf OSA → ``recaps.shelf_check.shelf_summary``;
+* demo cost → ``pilot.costs.build_brand_cost_rollups`` (brand-consolidated);
+* POS velocity / ROI → ``pilot.pos.build_retailer_pos_measurement`` (brand-consolidated);
+* competitor brands → ``consumer_mentions.RecapMentionTag.brands`` (stored tags).
 
 Recaps are client-visible only: approved, not archived, not on a deleted
 request, not kept off the dashboard, not an agency filing kept out of
-aggregates (``recaps.feedback_themes._client_visible``).
+aggregates (``recaps.feedback_themes._client_visible``). Cost and POS tools
+refuse outside provider-scoped memberships (agency isolation).
 
 Brand ambassador privacy: no tool selects an ambassador's name, contact,
 address, payment, document or location columns, and there is no ambassador
@@ -629,6 +634,326 @@ def get_connection_info(ctx: ToolContext, args: dict) -> tuple[dict, int]:
     )
 
 
+# ─── Shelf / cost / POS / competitor (BrandChat + MCP) ─────────────
+
+MAX_SHELF_NOT_FOUND = 15
+MAX_COST_ROWS = 25
+MAX_POS_STORE_WEEKS = 25
+MAX_COMPETITOR_ROWS = 15
+COST_GROUP_BY = ("store", "program", "provider", "month")
+
+
+def _brand_workspace_access(ctx: ToolContext):
+    """Resolve the caller's workspace on the tool's pinned brand.
+
+    Cost and POS rollups are brand-consolidated: outside agencies never
+    see another agency's (or the whole brand's) figures through these
+    tools. Tenant always comes from ``ctx``, never from the model.
+    """
+    from django.contrib.auth import get_user_model
+
+    from pilot.permissions import resolve_workspace_access
+    from tenants.models import Tenant
+
+    user = get_user_model().objects.filter(pk=ctx.user_id, is_active=True).first()
+    tenant = Tenant.objects.filter(pk=ctx.tenant_id).first()
+    if user is None or tenant is None:
+        raise ToolInputError("This connection's brand could not be loaded.")
+    try:
+        access = resolve_workspace_access(user, tenant)
+    except PermissionError as exc:
+        raise ToolInputError(str(exc)) from exc
+    if access.tenant.id != ctx.tenant_id:
+        raise ToolInputError("Workspace brand does not match this connection.")
+    if not access.can_view_brand_consolidated:
+        raise ToolInputError(
+            "Outside field agencies cannot see consolidated brand cost or "
+            "retailer POS figures. Ask a brand teammate, or open Spark as the brand."
+        )
+    return access
+
+
+def get_shelf_compliance_summary(ctx: ToolContext, args: dict) -> tuple[dict, int]:
+    """On-shelf / OSA figures from stored shelf readings (approved retail)."""
+    from recaps.shelf_check import shelf_summary
+
+    start, end = date_range(args)
+    data = shelf_summary(ctx.tenant_id, start, end)
+    visits = int(data.get("visits") or 0)
+    on_shelf = int(data.get("on_shelf") or 0)
+    not_found = int(data.get("not_found") or 0)
+    unclear = int(data.get("unclear") or 0)
+    price_tag = int(data.get("price_tag") or 0)
+    unread = int(data.get("unread_visits") or 0)
+    stores = list(data.get("not_found_stores") or [])[:MAX_SHELF_NOT_FOUND]
+    return (
+        {
+            "brand": ctx.tenant_name,
+            "start_date": start.isoformat(),
+            "end_date": end.isoformat(),
+            "basis": (
+                "Approved retail recaps only, dated by the event date. Counts come "
+                "from stored shelf-photo answers (staff corrections win). Visits "
+                "with shelf photos but no answer yet are unread_visits, not in the "
+                "on-shelf base. Agency filings kept out of aggregates are excluded."
+            ),
+            "visits_with_shelf_reading": visits,
+            "on_shelf": on_shelf,
+            "not_found": not_found,
+            "unclear": unclear,
+            "price_tag_visible": price_tag,
+            "on_shelf_pct_of_visits": _pct(on_shelf, visits),
+            "not_found_pct_of_visits": _pct(not_found, visits),
+            "price_tag_pct_of_visits": _pct(price_tag, visits),
+            "unread_visits": unread,
+            "not_found_stores": stores,
+            "not_found_more": int(data.get("not_found_more") or 0),
+        },
+        visits if visits else (1 if unread or stores else 0),
+    )
+
+
+def get_demo_cost_summary(ctx: ToolContext, args: dict) -> tuple[dict, int]:
+    """Brand-paid demo cost rollups (same reader as /demo-costs)."""
+    from pilot.costs import build_brand_cost_rollups
+    from pilot.entitlements import PlanEntitlementError
+
+    access = _brand_workspace_access(ctx)
+    start, end = date_range(args)
+    group_by = args.get("group_by") or "store"
+    if not isinstance(group_by, str) or group_by not in COST_GROUP_BY:
+        raise ToolInputError(
+            "group_by must be one of: " + ", ".join(COST_GROUP_BY) + "."
+        )
+    try:
+        rollups = build_brand_cost_rollups(
+            access,
+            group_by=group_by,
+            period_start=start,
+            period_end=end,
+        )
+    except PlanEntitlementError as exc:
+        return (
+            {
+                "brand": ctx.tenant_name,
+                "available": False,
+                "plan_gated": True,
+                "required_plan": getattr(exc, "required_plan", None),
+                "message": str(exc),
+                "start_date": start.isoformat(),
+                "end_date": end.isoformat(),
+                "group_by": group_by,
+                "rollups": [],
+            },
+            0,
+        )
+    rows = list(rollups)[:MAX_COST_ROWS]
+    return (
+        {
+            "brand": ctx.tenant_name,
+            "available": True,
+            "start_date": start.isoformat(),
+            "end_date": end.isoformat(),
+            "group_by": group_by,
+            "basis": (
+                "Brand-visible demo cost lines on included canonical visits in the "
+                "date range. total_cost is null when any visit in the bucket has "
+                "incomplete costs — never treat incomplete as $0. Outside agencies "
+                "cannot call this tool. Same source as Spark Demo Costs."
+            ),
+            "rollup_count": len(rollups),
+            "returned": len(rows),
+            "rollups": rows,
+        },
+        len(rows),
+    )
+
+
+def get_store_velocity_and_roi(ctx: ToolContext, args: dict) -> tuple[dict, int]:
+    """Retailer POS velocity, lift and ROI (same reader as /retailer-pos)."""
+    from pilot.entitlements import PlanEntitlementError
+    from pilot.pos import build_retailer_pos_measurement
+
+    access = _brand_workspace_access(ctx)
+    start, end = date_range(args)
+    store_key = args.get("store_key")
+    if store_key is not None and (
+        not isinstance(store_key, str) or not store_key.strip()
+    ):
+        raise ToolInputError("store_key must be non-empty text when given.")
+    store_key = store_key.strip() if isinstance(store_key, str) else None
+    try:
+        data = build_retailer_pos_measurement(
+            access,
+            period_start=start,
+            period_end=end,
+            store_key=store_key,
+        )
+    except PlanEntitlementError as exc:
+        return (
+            {
+                "brand": ctx.tenant_name,
+                "available": False,
+                "plan_gated": True,
+                "required_plan": getattr(exc, "required_plan", None),
+                "message": str(exc),
+                "start_date": start.isoformat(),
+                "end_date": end.isoformat(),
+                "totals": {},
+                "store_weeks": [],
+            },
+            0,
+        )
+    coverage = data.get("coverage") or {}
+    totals = data.get("totals") or {}
+    # Drop per-SKU cells — too large for the model; keep store-week rollups.
+    slim_weeks = []
+    for sw in list(data.get("store_weeks") or [])[:MAX_POS_STORE_WEEKS]:
+        slim_weeks.append(
+            {
+                "store_key": sw.get("store_key"),
+                "store_label": sw.get("store_label"),
+                "week_start": (
+                    sw["week_start"].isoformat()
+                    if hasattr(sw.get("week_start"), "isoformat")
+                    else sw.get("week_start")
+                ),
+                "register_units": sw.get("register_units"),
+                "crew_purchased_units": sw.get("crew_purchased_units"),
+                "adjusted_register_units": sw.get("adjusted_register_units"),
+                "observed_vs_baseline_diff": sw.get("observed_vs_baseline_diff"),
+                "incremental_lift_units": sw.get("incremental_lift_units"),
+                "eligible_brand_cost": sw.get("eligible_brand_cost"),
+                "incremental_contribution": sw.get("incremental_contribution"),
+                "roi": sw.get("roi"),
+                "roi_withheld_reason": sw.get("roi_withheld_reason"),
+            }
+        )
+    available = bool(data.get("available"))
+    return (
+        {
+            "brand": ctx.tenant_name,
+            "available": available,
+            "unavailable_message": data.get("unavailable_message"),
+            "start_date": start.isoformat(),
+            "end_date": end.isoformat(),
+            "store_key": store_key,
+            "basis": (
+                "Active retailer POS imports for this brand, matched store-SKU-weeks, "
+                "crew-purchase adjustments, and eligible brand demo cost. Lift and ROI "
+                "are null (with a reason) when coverage, baseline or cost is incomplete "
+                "— never invent them. Outside agencies cannot call this tool. Same "
+                "source as Spark Retailer POS."
+            ),
+            "retailer_banners": list(data.get("retailer_banners") or []),
+            "coverage": {
+                "matched_store_sku_weeks": coverage.get("matched_store_sku_weeks"),
+                "eligible_store_sku_weeks": coverage.get("eligible_store_sku_weeks"),
+                "coverage_ratio": coverage.get("coverage_ratio"),
+                "unmatched_row_count": coverage.get("unmatched_row_count"),
+            },
+            "totals": {
+                "rep_observed_units": totals.get("rep_observed_units"),
+                "register_units": totals.get("register_units"),
+                "crew_purchased_units": totals.get("crew_purchased_units"),
+                "adjusted_register_units": totals.get("adjusted_register_units"),
+                "observed_vs_baseline_diff": totals.get("observed_vs_baseline_diff"),
+                "incremental_lift_units": totals.get("incremental_lift_units"),
+                "incremental_contribution": totals.get("incremental_contribution"),
+                "eligible_brand_cost": totals.get("eligible_brand_cost"),
+                "roi": totals.get("roi"),
+                "lift_withheld_reason": totals.get("lift_withheld_reason"),
+                "roi_withheld_reason": totals.get("roi_withheld_reason"),
+            },
+            "store_week_count": len(data.get("store_weeks") or []),
+            "returned_store_weeks": len(slim_weeks),
+            "store_weeks": slim_weeks,
+        },
+        len(slim_weeks) if slim_weeks else (1 if available else 0),
+    )
+
+
+def get_competitor_mentions(ctx: ToolContext, args: dict) -> tuple[dict, int]:
+    """Other brands named in approved recap comments (stored mention tags)."""
+    from collections import Counter, defaultdict
+
+    from consumer_mentions.models import RecapMentionTag
+    from consumer_mentions.trends import visible_recaps
+    from recaps.comment_insights import is_own_name, normalise, tenant_names
+
+    start, end = date_range(args, default_days=90)
+    recaps = visible_recaps(ctx.tenant_id, start, end)
+    brand, products = tenant_names(ctx.tenant_id)
+    product_names = [name for _pid, name in products]
+    keys = list(recaps.keys())
+    brand_counts: Counter[str] = Counter()
+    brand_names: dict[str, Counter] = defaultdict(Counter)
+    tagged = 0
+    if keys:
+        for recap_key, brands in (
+            RecapMentionTag.objects.filter(tenant_id=ctx.tenant_id, recap_key__in=keys)
+            .values_list("recap_key", "brands")
+            .iterator()
+        ):
+            if recap_key not in recaps:
+                continue
+            tagged += 1
+            seen: set[str] = set()
+            for item in brands or []:
+                if not isinstance(item, dict) or not item.get("key"):
+                    continue
+                name = str(item.get("name") or "")
+                if is_own_name(normalise(name), brand, product_names):
+                    continue
+                key = str(item["key"])
+                if name:
+                    brand_names[key][name] += 1
+                if key not in seen:
+                    seen.add(key)
+                    brand_counts[key] += 1
+    rows = []
+    for key, count in brand_counts.most_common(MAX_COMPETITOR_ROWS):
+        spellings = brand_names.get(key) or Counter()
+        label = (
+            min(spellings.most_common(), key=lambda nc: (-nc[1], len(nc[0])))[0]
+            if spellings
+            else key
+        )
+        rows.append(
+            {
+                "brand": label,
+                "recaps_mentioning": count,
+                "share_pct_of_tagged_recaps": _pct(count, tagged),
+            }
+        )
+    status = "ready"
+    if not recaps:
+        status = "too_few"
+    elif tagged == 0:
+        status = "not_tagged"
+    return (
+        {
+            "brand": ctx.tenant_name,
+            "start_date": start.isoformat(),
+            "end_date": end.isoformat(),
+            "status": status,
+            "basis": (
+                "Other brands named in consumer comments on approved, client-visible "
+                "recaps in the date range. Counts are recaps (not comments), from "
+                "stored mention tags — no model invents a competitor list. Shares "
+                "are of tagged recaps in the window. Agency filings kept out of "
+                "aggregates are excluded."
+            ),
+            "recaps_in_range": len(recaps),
+            "recaps_tagged": tagged,
+            "competitor_count": len(brand_counts),
+            "returned": len(rows),
+            "competitors": rows,
+        },
+        len(rows),
+    )
+
+
 # ─── Registry ──────────────────────────────────────────────────────
 
 _DATE_PROPS = {
@@ -777,6 +1102,72 @@ TOOLS: dict[str, Tool] = {
             "today under the brand's daily quota.",
             {"type": "object", "properties": {}, "additionalProperties": False},
             get_connection_info,
+        ),
+        Tool(
+            "get_shelf_compliance_summary",
+            "Shelf compliance",
+            "On-shelf / OSA figures for the connected brand over a date range "
+            "(max 366 days; default the last 30 days): visits with a shelf reading, "
+            "on shelf, not found, unclear, price-tag visible, percentages of visits, "
+            "unread visits, and up to 15 stores where product was not found. "
+            "Approved retail recaps only; numbers come from stored shelf answers.",
+            {"type": "object", "properties": dict(_DATE_PROPS), "additionalProperties": False},
+            get_shelf_compliance_summary,
+        ),
+        Tool(
+            "get_demo_cost_summary",
+            "Demo cost summary",
+            "Brand-paid demo cost rollups for the connected brand over a date range "
+            "(max 366 days; default the last 30 days), grouped by store (default), "
+            "program, provider or month: visit counts, known/supported/invoiced/paid/"
+            "estimated cost, and cost per sample or observed unit when every visit in "
+            "the bucket has complete costs. Incomplete buckets leave total_cost null. "
+            "Outside field agencies cannot use this tool. Plan may gate cost tracking.",
+            {
+                "type": "object",
+                "properties": {
+                    **_DATE_PROPS,
+                    "group_by": {
+                        "type": "string",
+                        "enum": list(COST_GROUP_BY),
+                        "description": "Rollup dimension: store (default), program, provider or month.",
+                    },
+                },
+                "additionalProperties": False,
+            },
+            get_demo_cost_summary,
+        ),
+        Tool(
+            "get_store_velocity_and_roi",
+            "Store velocity and ROI",
+            "Retailer POS velocity, incremental lift and ROI for the connected brand "
+            "over a date range (max 366 days; default the last 30 days): coverage, "
+            "register vs rep-observed units, lift, eligible brand cost and ROI when "
+            "Spark can compute them (otherwise null with a withheld reason). Optional "
+            "store_key narrows to one store. Outside field agencies cannot use this "
+            "tool. Plan may gate POS measurement.",
+            {
+                "type": "object",
+                "properties": {
+                    **_DATE_PROPS,
+                    "store_key": {
+                        "type": "string",
+                        "description": "Optional store key to limit to one store.",
+                    },
+                },
+                "additionalProperties": False,
+            },
+            get_store_velocity_and_roi,
+        ),
+        Tool(
+            "get_competitor_mentions",
+            "Competitor mentions",
+            "Other brands consumers name in approved recap comments for the connected "
+            "brand over a date range (max 366 days; default the last 90 days): each "
+            "competitor with how many recaps mention it and share of tagged recaps. "
+            "Counts come from stored mention tags — never invented. Up to 15 brands.",
+            {"type": "object", "properties": dict(_DATE_PROPS), "additionalProperties": False},
+            get_competitor_mentions,
         ),
     ]
 }
