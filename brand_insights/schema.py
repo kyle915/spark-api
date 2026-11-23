@@ -472,6 +472,20 @@ class TodayAttentionQueue:
     buckets: list[TodayAttentionBucket]
 
 
+@strawberry.input
+class TodayAttentionDiscardItemInput:
+    bucket: str
+    ref_id: str
+
+
+@strawberry.type
+class TodayAttentionDiscardResult:
+    ok: bool
+    reason: str | None
+    discarded_count: int
+    fingerprints: list[str]
+
+
 @strawberry.type
 class DemoBudgetTargetResult:
     ok: bool
@@ -756,4 +770,70 @@ class BrandInsightPacingMutations:
             logger.exception("deleteDemoBudgetTarget failed")
             return DemoBudgetTargetResult(
                 ok=False, reason="Could not delete budget target.", target=None
+            )
+
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def discard_today_attention_items(
+        self,
+        info: strawberry.Info,
+        items: list[TodayAttentionDiscardItemInput],
+        tenant_id: strawberry.ID | None = None,
+    ) -> TodayAttentionDiscardResult:
+        """Discard Today's attention notices for **all** Ignite admins.
+
+        Writes shared ``AttentionDismissal`` rows keyed by
+        ``{bucket}:{refId}``. Brand / agency clients cannot call this.
+        """
+        from brand_insights.attention_dismissals import (
+            AttentionDismissalError,
+            dismiss_attention_items,
+        )
+        from pilot.permissions import is_ignite_staff_user
+
+        def _save():
+            user = info.context.request.user
+            if not is_ignite_staff_user(user):
+                return TodayAttentionDiscardResult(
+                    ok=False,
+                    reason="Only Ignite staff can discard attention notices.",
+                    discarded_count=0,
+                    fingerprints=[],
+                )
+            access = _access_or_none(info, tenant_id)
+            if access is None:
+                return TodayAttentionDiscardResult(
+                    ok=False,
+                    reason="Not available.",
+                    discarded_count=0,
+                    fingerprints=[],
+                )
+            try:
+                rows = dismiss_attention_items(
+                    user=user,
+                    tenant=access.tenant,
+                    items=[(i.bucket, i.ref_id) for i in (items or [])],
+                )
+            except AttentionDismissalError as exc:
+                return TodayAttentionDiscardResult(
+                    ok=False,
+                    reason=str(exc),
+                    discarded_count=0,
+                    fingerprints=[],
+                )
+            return TodayAttentionDiscardResult(
+                ok=True,
+                reason=None,
+                discarded_count=len(rows),
+                fingerprints=[r.fingerprint for r in rows],
+            )
+
+        try:
+            return await sync_to_async(_save, thread_sensitive=True)()
+        except Exception:  # noqa: BLE001
+            logger.exception("discardTodayAttentionItems failed")
+            return TodayAttentionDiscardResult(
+                ok=False,
+                reason="Could not discard attention notices.",
+                discarded_count=0,
+                fingerprints=[],
             )

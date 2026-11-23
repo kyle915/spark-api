@@ -18,8 +18,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Literal
+from uuid import UUID
 
-from django.db.models import Exists, OuterRef, Q
+from django.db.models import Exists, OuterRef, Q, QuerySet
 from django.utils import timezone
 
 from events.missing_recaps_gate import missing_recaps_disabled_for_tenant
@@ -32,6 +33,23 @@ Bucket = Literal["receipt_checks", "missing_recaps", "unstaffed", "rebooks"]
 RECEIPT_CAP = 5
 OTHER_CAP = 5
 UNSTAFFED_HOURS = 48
+
+
+def _parse_uuids(refs: set[str]) -> list[UUID]:
+    out: list[UUID] = []
+    for raw in refs:
+        try:
+            out.append(UUID(str(raw)))
+        except (TypeError, ValueError, AttributeError):
+            continue
+    return out
+
+
+def _exclude_dismissed_uuids(qs: QuerySet, dismissed: set[str], *, field: str = "uuid"):
+    uuids = _parse_uuids(dismissed)
+    if not uuids:
+        return qs
+    return qs.exclude(**{f"{field}__in": uuids})
 
 
 @dataclass(frozen=True)
@@ -60,8 +78,12 @@ class AttentionQueue:
 
 
 def _receipt_items(
-    access: ResolvedWorkspaceAccess, *, is_staff: bool
+    access: ResolvedWorkspaceAccess,
+    *,
+    is_staff: bool,
+    dismissed: set[str] | None = None,
 ) -> tuple[int, list[AttentionItem]]:
+    dismissed = dismissed or set()
     items: list[AttentionItem] = []
 
     fin_qs = FinanceException.objects.filter(
@@ -77,6 +99,7 @@ def _receipt_items(
             Q(canonical_visit__primary_provider_id=access.provider_id)
             | Q(provider_id=access.provider_id)
         )
+    fin_qs = _exclude_dismissed_uuids(fin_qs, dismissed)
 
     total = fin_qs.count()
     for ex in fin_qs[:RECEIPT_CAP]:
@@ -109,18 +132,26 @@ def _receipt_items(
             from recaps.models import RecapFlag
             from recaps.receipt_audit_schema import list_flags
 
-            flag_total = RecapFlag.objects.filter(
+            flag_qs = RecapFlag.objects.filter(
                 tenant_id=access.tenant.id,
                 resolved_at__isnull=True,
-            ).count()
+            )
+            # Flag ref_ids are numeric primary keys (not UUIDs).
+            numeric_dismissed = {
+                int(r) for r in dismissed if str(r).isdigit()
+            }
+            if numeric_dismissed:
+                flag_qs = flag_qs.exclude(id__in=numeric_dismissed)
+            flag_total = flag_qs.count()
             if len(items) < RECEIPT_CAP:
+                # Over-fetch so dismissed flags do not starve the strip cap.
                 flags = list_flags(
                     tenant_id=access.tenant.id,
                     date_from=None,
                     date_to=None,
                     kind=None,
                     unresolved_only=True,
-                    first=RECEIPT_CAP,
+                    first=RECEIPT_CAP + len(dismissed),
                 )
         except Exception:  # noqa: BLE001
             flag_total = 0
@@ -129,6 +160,8 @@ def _receipt_items(
             if len(items) >= RECEIPT_CAP:
                 break
             ref = str(getattr(flag, "id", "") or "")
+            if ref and ref in dismissed:
+                continue
             title = (
                 getattr(flag, "kind_label", None)
                 or getattr(flag, "kind", None)
@@ -159,6 +192,8 @@ def _receipt_items(
 
 def _missing_recap_items(
     access: ResolvedWorkspaceAccess,
+    *,
+    dismissed: set[str] | None = None,
 ) -> tuple[int, list[AttentionItem]]:
     if missing_recaps_disabled_for_tenant(access.tenant):
         return 0, []
@@ -169,6 +204,7 @@ def _missing_recap_items(
     qs = qs.filter(access.allowed_events_q()).select_related(
         "tenant", "request", "retailer"
     ).order_by("-end_time", "-id")
+    qs = _exclude_dismissed_uuids(qs, dismissed or set())
     total = qs.count()
     items: list[AttentionItem] = []
     for event in qs[:OTHER_CAP]:
@@ -192,6 +228,8 @@ def _missing_recap_items(
 
 def _unstaffed_items(
     access: ResolvedWorkspaceAccess,
+    *,
+    dismissed: set[str] | None = None,
 ) -> tuple[int, list[AttentionItem]]:
     from ambassadors.models import AmbassadorEvent
     from events.models import Event
@@ -228,6 +266,7 @@ def _unstaffed_items(
     qs = qs.exclude(
         request__status__slug__in={"cancelled", "canceled", "rejected", "declined"}
     )
+    qs = _exclude_dismissed_uuids(qs, dismissed or set())
 
     total = qs.count()
     items: list[AttentionItem] = []
@@ -254,6 +293,8 @@ def _unstaffed_items(
 
 def _rebook_items(
     access: ResolvedWorkspaceAccess,
+    *,
+    dismissed: set[str] | None = None,
 ) -> tuple[int, list[AttentionItem]]:
     qs = StoreRecommendationAction.objects.filter(
         tenant=access.tenant,
@@ -267,6 +308,7 @@ def _rebook_items(
     ).order_by("-created_at", "-id")
     if access.is_provider_scoped and access.provider_id:
         qs = qs.filter(provider_id=access.provider_id)
+    qs = _exclude_dismissed_uuids(qs, dismissed or set())
 
     total = qs.count()
     items: list[AttentionItem] = []
@@ -292,16 +334,29 @@ def _rebook_items(
 def build_today_attention_queue(
     access: ResolvedWorkspaceAccess,
 ) -> AttentionQueue:
+    from brand_insights.attention_dismissals import dismissed_refs_by_bucket
+
     is_staff = is_ignite_staff_user(access.user)
+    dismissed = dismissed_refs_by_bucket(access.tenant.id)
 
     # Brand members who cannot see consolidated costs still get ops buckets.
     receipt_total, receipt_items = (0, [])
     if access.can_view_brand_consolidated or is_staff or access.can_edit_finance:
-        receipt_total, receipt_items = _receipt_items(access, is_staff=is_staff)
+        receipt_total, receipt_items = _receipt_items(
+            access,
+            is_staff=is_staff,
+            dismissed=dismissed.get("receipt_checks", set()),
+        )
 
-    missing_total, missing_items = _missing_recap_items(access)
-    unstaffed_total, unstaffed_items = _unstaffed_items(access)
-    rebook_total, rebook_items = _rebook_items(access)
+    missing_total, missing_items = _missing_recap_items(
+        access, dismissed=dismissed.get("missing_recaps", set())
+    )
+    unstaffed_total, unstaffed_items = _unstaffed_items(
+        access, dismissed=dismissed.get("unstaffed", set())
+    )
+    rebook_total, rebook_items = _rebook_items(
+        access, dismissed=dismissed.get("rebooks", set())
+    )
 
     buckets = [
         AttentionBucket(

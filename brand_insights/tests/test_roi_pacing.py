@@ -125,6 +125,14 @@ query {
 }
 """
 
+DISCARD_ATTENTION = """
+mutation ($items: [TodayAttentionDiscardItemInput!]!) {
+  discardTodayAttentionItems(items: $items) {
+    ok reason discardedCount fingerprints
+  }
+}
+"""
+
 
 class RoiPacingTests(TransactionTestCase):
     def setUp(self):
@@ -429,3 +437,70 @@ class AttentionQueueTests(TransactionTestCase):
         by_key = {b["key"]: b for b in data["buckets"]}
         assert by_key["rebooks"]["items"][0]["actionUrl"] == "/buyer-report"
         assert by_key["receipt_checks"]["items"][0]["actionUrl"] == "/finance-queue"
+
+    def test_discard_is_shared_across_admins(self):
+        """Discarded notices stay gone for every staff user on refresh."""
+        from brand_insights.attention_dismissals import fingerprint
+        from tenants.models import Role
+
+        other_admin = _make_user("ops3@ignite.test", Role.SPARK_ADMIN_SLUG)
+
+        res_staff = _gql(ATTENTION_Q, user=self.admin, tenant=self.brand)
+        data = res_staff.data["todayAttentionQueue"]
+        by_key = {b["key"]: b for b in data["buckets"]}
+        receipt = by_key["receipt_checks"]["items"][0]
+        unstaffed = by_key["unstaffed"]["items"][0]
+        before_total = data["totalCount"]
+
+        # Brand clients cannot discard.
+        denied = _gql(
+            DISCARD_ATTENTION,
+            user=self.brand_admin,
+            tenant=self.brand,
+            variables={
+                "items": [{"bucket": "receipt_checks", "refId": receipt["refId"]}]
+            },
+        )
+        assert denied.errors is None
+        assert denied.data["discardTodayAttentionItems"]["ok"] is False
+
+        discarded = _gql(
+            DISCARD_ATTENTION,
+            user=self.admin,
+            tenant=self.brand,
+            variables={
+                "items": [
+                    {"bucket": "receipt_checks", "refId": receipt["refId"]},
+                    {"bucket": "unstaffed", "refId": unstaffed["refId"]},
+                ]
+            },
+        )
+        assert discarded.errors is None
+        payload = discarded.data["discardTodayAttentionItems"]
+        assert payload["ok"] is True
+        assert payload["discardedCount"] == 2
+        fps = set(payload["fingerprints"])
+        assert fingerprint("receipt_checks", receipt["refId"]) in fps
+        assert fingerprint("unstaffed", unstaffed["refId"]) in fps
+
+        # Same admin: items gone, counts drop.
+        after = _gql(ATTENTION_Q, user=self.admin, tenant=self.brand)
+        after_data = after.data["todayAttentionQueue"]
+        assert after_data["totalCount"] == before_total - 2
+        after_by = {b["key"]: b for b in after_data["buckets"]}
+        receipt_refs = {i["refId"] for i in after_by["receipt_checks"]["items"]}
+        unstaffed_refs = {i["refId"] for i in after_by["unstaffed"]["items"]}
+        assert receipt["refId"] not in receipt_refs
+        assert unstaffed["refId"] not in unstaffed_refs
+
+        # Another Ignite admin sees the same shared dismissals.
+        peer = _gql(ATTENTION_Q, user=other_admin, tenant=self.brand)
+        peer_data = peer.data["todayAttentionQueue"]
+        assert peer_data["totalCount"] == before_total - 2
+        peer_by = {b["key"]: b for b in peer_data["buckets"]}
+        assert receipt["refId"] not in {
+            i["refId"] for i in peer_by["receipt_checks"]["items"]
+        }
+        assert unstaffed["refId"] not in {
+            i["refId"] for i in peer_by["unstaffed"]["items"]
+        }
