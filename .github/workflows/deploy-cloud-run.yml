@@ -17,6 +17,14 @@ on:
   # a secret or env var without changing code).
   workflow_dispatch:
 
+# One deploy at a time for this ref. A newer push cancels a deploy that
+# is still queued, then runs when the current one finishes. An upload
+# that has already started is not cancelled: killing `gcloud run deploy`
+# mid-flight has left revisions created but never Ready.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 # Project + service identifiers — both safe to live in git. The
 # project ID is already visible in .firebaserc on the front-client
 # side; Cloud Run service name is whatever the deploy targets.
@@ -35,13 +43,6 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    # Concurrency: only one deploy at a time per branch. If a second
-    # PR merges while the first is mid-deploy, cancel the in-flight
-    # run and start fresh on the newer SHA. Cheaper than waiting and
-    # avoids the "two builds racing for the same revision slot" race.
-    concurrency:
-      group: deploy-cloud-run-${{ github.ref }}
-      cancel-in-progress: true
 
     steps:
       - name: Checkout repository
