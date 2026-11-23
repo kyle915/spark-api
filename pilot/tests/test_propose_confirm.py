@@ -9,7 +9,12 @@ from django.core.cache import cache
 
 from events.tests.base import EventsGraphQLTestCase
 from pilot.column_guesses import FIELD_LABELS, describe_column_map, lock_column_map
-from pilot.imports import _HEADER_SYNONYMS, resolve_canonical_store
+from pilot.imports import (
+    _HEADER_SYNONYMS,
+    _map_for_confirm,
+    _row_fingerprint,
+    resolve_canonical_store,
+)
 from pilot.store_match_why import plain_store_match_reason
 
 
@@ -48,6 +53,26 @@ def test_rule_match_is_applied_and_model_guess_is_not(settings, monkeypatch):
     assert by_header["Mystery Col"]["source"] == "model"
     assert by_header["Mystery Col"]["field"] == "notes"
     assert "notes" not in resolved
+
+
+def test_confirm_without_a_map_is_an_error_not_inference():
+    with pytest.raises(ValueError, match="columnMapJson"):
+        _map_for_confirm(True, None)
+    assert _map_for_confirm(True, {}) == {}
+    assert _map_for_confirm(False, None) is None
+
+
+def test_store_match_metadata_does_not_change_the_fingerprint():
+    base = {"visit_date": "2026-01-01", "retailer_name": "FreshMart", "samples_distributed": 4}
+    with_advice = {
+        **base,
+        "store_match": {
+            "needs_confirm": True,
+            "ai_reason": "wording that can change",
+            "candidates": [{"id": 1, "name": "FreshMart"}],
+        },
+    }
+    assert _row_fingerprint(base) == _row_fingerprint(with_advice)
 
 
 def test_locked_map_does_not_fill_an_unchecked_synonym_or_model_guess():

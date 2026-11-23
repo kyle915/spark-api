@@ -906,9 +906,37 @@ def _parse_csv_rows(csv_text: str) -> tuple[list[str], list[dict[str, str]]]:
     return headers, rows
 
 
+# Advisory only. It must not change the submission fingerprint, or a later
+# import of the same row (which has no store_match) looks like an edit.
+_FINGERPRINT_SKIP = frozenset({"store_match"})
+
+
 def _row_fingerprint(normalized: dict[str, Any]) -> str:
-    payload = json.dumps(normalized, sort_keys=True, default=str)
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    payload = {
+        key: value
+        for key, value in normalized.items()
+        if key not in _FINGERPRINT_SKIP
+    }
+    raw = json.dumps(payload, sort_keys=True, default=str)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _map_for_confirm(
+    confirm_column_map: bool, column_map: dict[str, str] | None
+) -> dict[str, str] | None:
+    """A confirm request must name its map. ``None`` is not an empty map.
+
+    An empty dict is an explicit "use no columns". Missing JSON is an error
+    so the analyzer cannot fall back to synonym inference.
+    """
+    if not confirm_column_map:
+        return column_map
+    if column_map is None:
+        raise ValueError(
+            "confirmColumnMap needs columnMapJson. Send the columns to use, "
+            "or an empty object to use none."
+        )
+    return column_map
 
 
 def _analyze_import_rows(
@@ -1337,9 +1365,10 @@ def preview_provider_import(
     saved_map: dict[str, str] | None = column_map
     saved_preset = preset_key
     # A confirmed map wins over a saved template so an unchecked guess
-    # cannot sneak back in through the template.
-    if confirm_column_map and column_map is not None:
-        saved_map = column_map
+    # cannot sneak back in through the template. A confirm with no map
+    # is an error, not a cue to infer headers.
+    if confirm_column_map:
+        saved_map = _map_for_confirm(True, column_map)
     elif mapping_uuid:
         mapping = ProviderImportMapping.objects.filter(
             tenant=access.tenant, provider=provider, uuid=mapping_uuid
@@ -1355,7 +1384,7 @@ def preview_provider_import(
         csv_text=csv_text,
         column_map=saved_map,
         preset_key=saved_preset,
-        confirm_column_map=confirm_column_map and saved_map is not None,
+        confirm_column_map=confirm_column_map,
     )
 
 
@@ -1696,8 +1725,8 @@ def commit_provider_import(
     mapping_obj: ProviderImportMapping | None = None
     effective_map = column_map
     effective_preset = preset_key
-    if confirm_column_map and column_map is not None:
-        effective_map = column_map
+    if confirm_column_map:
+        effective_map = _map_for_confirm(True, column_map)
     elif mapping_uuid:
         mapping_obj = ProviderImportMapping.objects.filter(
             tenant=access.tenant, provider=provider, uuid=mapping_uuid
@@ -1713,7 +1742,7 @@ def commit_provider_import(
         csv_text=csv_text,
         column_map=effective_map,
         preset_key=effective_preset,
-        confirm_column_map=confirm_column_map and effective_map is not None,
+        confirm_column_map=confirm_column_map,
     )
 
     if save_mapping_name:
