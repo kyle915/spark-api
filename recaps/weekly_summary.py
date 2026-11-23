@@ -413,15 +413,18 @@ def week_rows(start: date, end: date, period: str = PERIOD_WEEK) -> list[dict]:
         ).select_related("reviewed_by", "sent_by")
     }
     wanted = set(approved) | set(pending) | set(drafts)
+    tenants = list(Tenant.active().filter(id__in=wanted).order_by("name"))
+    # One TenantedUser query for the whole page — not N per brand.
+    suggested_by_tenant = _suggested_recipients_for_tenants(tenants)
     rows = []
-    for tenant in Tenant.active().filter(id__in=wanted).order_by("name"):
+    for tenant in tenants:
         rows.append(
             {
                 "tenant_id": tenant.id,
                 "tenant_name": tenant.name or "",
                 "approved_recaps": approved.get(tenant.id, 0),
                 "pending_recaps": pending.get(tenant.id, 0),
-                "suggested_recipients": _suggested_recipients(tenant),
+                "suggested_recipients": suggested_by_tenant.get(tenant.id, []),
                 "summary": drafts.get(tenant.id),
             }
         )
@@ -592,17 +595,61 @@ def _clean_recipients(raw: list[str] | None) -> tuple[list[str] | None, str | No
 
 
 def _suggested_recipients(tenant) -> list[str]:
-    """Brand contacts for the Send modal prefill."""
-    from recaps.weekly_digest import client_digest_recipients
+    """Brand contacts for the Send modal prefill (single-tenant path)."""
+    return _suggested_recipients_for_tenants([tenant]).get(
+        getattr(tenant, "id", None), []
+    )
+
+
+def _suggested_recipients_for_tenants(tenants: list) -> dict[int, list[str]]:
+    """Prefill emails per tenant: recap recipients + client-role users.
+
+    Batches the ``TenantedUser`` lookup so ``week_rows`` does one query for
+    the whole page instead of one per brand (same membership set as
+    :func:`recaps.weekly_digest.client_digest_recipients`).
+    """
+    from tenants.models import Role, TenantedUser
+
+    out: dict[int, list[str]] = {}
+    seen: dict[int, set[str]] = {}
+    if not tenants:
+        return out
+
+    def _push(tenant_id: int, email: str | None) -> None:
+        e = (email or "").strip()
+        if not e:
+            return
+        key = e.lower()
+        bucket = seen.setdefault(tenant_id, set())
+        if key in bucket:
+            return
+        bucket.add(key)
+        out.setdefault(tenant_id, []).append(e)
 
     try:
-        return client_digest_recipients(tenant)
+        for tenant in tenants:
+            tid = getattr(tenant, "id", None)
+            if tid is None:
+                continue
+            for e in tenant.scheduled_report_recipients():
+                _push(tid, e)
+        tenant_ids = [t.id for t in tenants if getattr(t, "id", None) is not None]
+        if tenant_ids:
+            rows = (
+                TenantedUser.objects.filter(
+                    tenant_id__in=tenant_ids,
+                    is_active=True,
+                    user__role__slug=Role.CLIENT_SLUG,
+                )
+                .exclude(user__email__in=["system@spark.local", "admin@spark.local"])
+                .values_list("tenant_id", "user__email")
+            )
+            for tid, email in rows:
+                _push(tid, email)
     except Exception:  # noqa: BLE001
-        logger.exception(
-            "weekly summary: suggested recipients failed tenant=%s",
-            getattr(tenant, "id", None),
-        )
-        return []
+        logger.exception("weekly summary: suggested recipients batch failed")
+        return {t.id: [] for t in tenants if getattr(t, "id", None) is not None}
+    return out
 
 
 @strawberry.type
@@ -897,7 +944,7 @@ class WeeklySummaryMutations:
             base = public_page_base()
             dashboard_url = f"{base}/" if base else None
 
-            sent = 0
+            delivered: list[str] = []
             for recipient in clean:
                 mailer = WeeklyClientSummaryMailer(
                     recipients=[recipient],
@@ -928,14 +975,15 @@ class WeeklySummaryMutations:
                     continue
                 if ok is None:
                     continue
-                sent += 1
-            if sent == 0:
+                delivered.append(recipient)
+            if not delivered:
                 return None, REASON_SEND_FAILED, 0
 
             now = timezone.now()
             row.sent_at = now
             row.sent_by_id = user.pk
-            row.sent_to = list(clean)
+            # Audit only addresses that actually got the mail.
+            row.sent_to = list(delivered)
             if row.status != TenantWeeklySummary.STATUS_REVIEWED:
                 row.status = TenantWeeklySummary.STATUS_REVIEWED
                 row.reviewed_by_id = user.pk
@@ -956,7 +1004,7 @@ class WeeklySummaryMutations:
                 .filter(id=rid)
                 .first()
             )
-            return _summary_type(row), None, sent
+            return _summary_type(row), None, len(delivered)
 
         try:
             summary, reason, sent_count = await sync_to_async(
