@@ -2341,37 +2341,46 @@ class RecapQueries:
 
             dismissed = DismissedLookup(ev.id for ev in events)
 
-            # High-confidence walk-up → request suggestions for 1-click
-            # attach chips. One dry-run per tenant in the page (usually 1).
-            from events.walkin_link import safe_attach_suggestions_for_tenant
-            from tenants.models import Tenant as TenantModel
-
+            # Walk-up attach chips are staff-only (mutations refuse non-
+            # staff). Bound matching to request ids already on this page
+            # and batch-precompute filed ids inside walkin_link — never
+            # run the full CLI matcher for every report read.
             suggest_by_request_uuid: dict[str, types.SuggestedWalkupAttachType] = {}
-            tenant_ids = {
-                tid
-                for tid in (getattr(ev, "tenant_id", None) for ev in events)
-                if tid is not None
-            }
-            for tid in tenant_ids:
-                tenant_obj = (
-                    TenantModel.objects.filter(pk=tid)
-                    .only("id", "slug", "request_url_name")
-                    .first()
-                )
-                if tenant_obj is None:
-                    continue
-                for sug in safe_attach_suggestions_for_tenant(
-                    tenant_obj, days_back=days
-                ):
-                    suggest_by_request_uuid[sug.request_uuid] = (
-                        types.SuggestedWalkupAttachType(
-                            orphan_event_uuid=strawberry.ID(sug.orphan_event_uuid),
-                            orphan_event_name=sug.orphan_event_name,
-                            orphan_address=sug.orphan_address,
-                            request_uuid=strawberry.ID(sug.request_uuid),
-                            confidence="safe",
-                        )
+            if is_admin and events:
+                from events.walkin_link import safe_attach_suggestions_for_tenant
+                from tenants.models import Tenant as TenantModel
+
+                by_tenant: dict[int, set[int]] = {}
+                for ev in events:
+                    tid = getattr(ev, "tenant_id", None)
+                    rid = getattr(ev, "request_id", None)
+                    if tid is None or rid is None:
+                        continue
+                    by_tenant.setdefault(int(tid), set()).add(int(rid))
+                for tid, request_ids in by_tenant.items():
+                    tenant_obj = (
+                        TenantModel.objects.filter(pk=tid)
+                        .only("id", "slug", "request_url_name")
+                        .first()
                     )
+                    if tenant_obj is None:
+                        continue
+                    for sug in safe_attach_suggestions_for_tenant(
+                        tenant_obj,
+                        days_back=days,
+                        only_request_ids=request_ids,
+                    ):
+                        suggest_by_request_uuid[sug.request_uuid] = (
+                            types.SuggestedWalkupAttachType(
+                                orphan_event_uuid=strawberry.ID(
+                                    sug.orphan_event_uuid
+                                ),
+                                orphan_event_name=sug.orphan_event_name,
+                                orphan_address=sug.orphan_address,
+                                request_uuid=strawberry.ID(sug.request_uuid),
+                                confidence="safe",
+                            )
+                        )
 
             rows: List[types.MissingRecapEventType] = []
             for ev in events:

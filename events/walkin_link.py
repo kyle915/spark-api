@@ -86,6 +86,39 @@ def has_filed_recap(event_id: int) -> bool:
     )
 
 
+def filed_event_id_set(event_ids: set[int] | frozenset[int]) -> set[int]:
+    """Batch which event ids have a filed legacy or custom recap.
+
+    Two queries total — avoids the N+1 ``has_filed_recap`` pattern inside
+    the orphan↔request matcher.
+    """
+    if not event_ids:
+        return set()
+    ids = list(event_ids)
+    custom = set(
+        CustomRecap.objects.filter(event_id__in=ids)
+        .filter(custom_filed_q())
+        .values_list("event_id", flat=True)
+        .distinct()
+    )
+    legacy = set(
+        Recap.objects.filter(event_id__in=ids)
+        .filter(legacy_filed_q())
+        .values_list("event_id", flat=True)
+        .distinct()
+    )
+    return custom | legacy
+
+
+def _parked_orphan_ids() -> frozenset[int]:
+    try:
+        from events.missing_recaps_gate import ACCEPTED_WALKUP_ORPHAN_EVENT_IDS
+
+        return ACCEPTED_WALKUP_ORPHAN_EVENT_IDS
+    except Exception:  # noqa: BLE001
+        return frozenset()
+
+
 @dataclass
 class WalkinLinkResult:
     tenant_slug: str
@@ -104,22 +137,30 @@ def link_walkin_recaps_for_tenant(
     days_back: int = 45,
     apply: bool = False,
     diagnose: bool = False,
+    only_request_ids: set[int] | frozenset[int] | None = None,
 ) -> WalkinLinkResult:
-    """Link filed request-less walk-up Events onto DUE Tracker Requests."""
+    """Link filed request-less walk-up Events onto DUE Tracker Requests.
+
+    ``only_request_ids`` (optional) limits which DUE requests are considered
+    as *link targets* — used by /recaps/missing to bound work to the rows
+    already on the page. Rival uniqueness still checks the full DUE set.
+    Parked accepted-debt orphans are never linked.
+    """
     now = djtz.now()
     lo = now - timedelta(days=max(1, int(days_back)))
+    parked = _parked_orphan_ids()
 
-    orphans = list(
+    orphan_candidates = list(
         Event.objects.filter(
             tenant=tenant,
             request__isnull=True,
             date__gte=lo,
             co_activation_host__isnull=True,
         )
+        .exclude(id__in=parked)
         .select_related("retailer")
         .order_by("id")
     )
-    orphans = [ev for ev in orphans if has_filed_recap(ev.id)]
 
     due_requests = list(
         Request.objects.filter(
@@ -132,16 +173,23 @@ def link_walkin_recaps_for_tenant(
         .order_by("id")
     )
 
-    linked = would_link = ambiguous = 0
-    report: list[dict] = []
-    claimed_orphan: set[int] = set()
-    claimed_request: set[int] = set()
+    shell_ids: set[int] = set()
+    for req in due_requests:
+        for ev in req.event_set.all():
+            shell_ids.add(ev.id)
+    filed_ids = filed_event_id_set(
+        {ev.id for ev in orphan_candidates} | shell_ids
+    )
+    orphans = [ev for ev in orphan_candidates if ev.id in filed_ids]
 
+    # Precompute open (no filed shell) due requests once — used for both
+    # the outer match loop and rival uniqueness.
+    open_dues: list[tuple[Request, list[Event], object]] = []
     for req in due_requests:
         events = list(req.event_set.all())
         if not events:
             continue
-        if any(has_filed_recap(ev.id) for ev in events):
+        if any(ev.id in filed_ids for ev in events):
             continue
         day = None
         for ev in events:
@@ -149,6 +197,22 @@ def link_walkin_recaps_for_tenant(
         if day is None and getattr(req, "date", None) is not None:
             rd = req.date
             day = rd.date() if hasattr(rd, "date") else rd
+        open_dues.append((req, events, day))
+
+    target_ids = (
+        {int(x) for x in only_request_ids}
+        if only_request_ids is not None
+        else None
+    )
+
+    linked = would_link = ambiguous = 0
+    report: list[dict] = []
+    claimed_orphan: set[int] = set()
+    claimed_request: set[int] = set()
+
+    for req, events, day in open_dues:
+        if target_ids is not None and req.id not in target_ids:
+            continue
 
         candidates = []
         for orphan in orphans:
@@ -176,17 +240,14 @@ def link_walkin_recaps_for_tenant(
         orphan = candidates[0]
         rival_requests = [
             r
-            for r in due_requests
+            for r, shells, rday in open_dues
             if r.id != req.id
             and r.id not in claimed_request
-            and not any(has_filed_recap(ev.id) for ev in r.event_set.all())
-            and _orphan_matches_request(orphan, r, list(r.event_set.all()))
+            and _orphan_matches_request(orphan, r, shells)
             and (
                 day is None
-                or any(
-                    event_calendar_date(shell) in (None, day)
-                    for shell in r.event_set.all()
-                )
+                or rday is None
+                or rday == day
             )
         ]
         if rival_requests:
@@ -220,7 +281,7 @@ def link_walkin_recaps_for_tenant(
 
     orphan_details = None
     if diagnose:
-        orphan_details = _diagnose_orphans(orphans, due_requests)
+        orphan_details = _diagnose_orphans(orphans, due_requests, filed_ids)
 
     return WalkinLinkResult(
         tenant_slug=getattr(tenant, "slug", "") or "",
@@ -235,14 +296,23 @@ def link_walkin_recaps_for_tenant(
 
 
 
-def _diagnose_orphans(orphans: list[Event], due_requests: list[Request]) -> list[dict]:
+def _diagnose_orphans(
+    orphans: list[Event],
+    due_requests: list[Request],
+    filed_ids: set[int] | None = None,
+) -> list[dict]:
     """Explain why each filed orphan did not auto-link (read-only)."""
+    if filed_ids is None:
+        shell_ids = {
+            ev.id for req in due_requests for ev in req.event_set.all()
+        }
+        filed_ids = filed_event_id_set(shell_ids | {o.id for o in orphans})
     due_open: list[tuple[Request, list[Event], object]] = []
     for req in due_requests:
         shells = list(req.event_set.all())
         if not shells:
             continue
-        if any(has_filed_recap(ev.id) for ev in shells):
+        if any(ev.id in filed_ids for ev in shells):
             continue
         day = None
         for ev in shells:
@@ -338,24 +408,22 @@ class WalkinAttachError(Exception):
     """Staff-facing attach failure (not found, ambiguous, already linked)."""
 
 
-def _parked_orphan_ids() -> frozenset[int]:
-    try:
-        from events.missing_recaps_gate import ACCEPTED_WALKUP_ORPHAN_EVENT_IDS
-
-        return ACCEPTED_WALKUP_ORPHAN_EVENT_IDS
-    except Exception:  # noqa: BLE001
-        return frozenset()
-
-
 def safe_attach_suggestions_for_tenant(
     tenant: Tenant,
     *,
     days_back: int = 45,
+    only_request_ids: set[int] | frozenset[int] | None = None,
 ) -> list[WalkinAttachSuggestion]:
-    """Dry-run unique matches, enriched for /recaps/missing chips."""
-    parked = _parked_orphan_ids()
+    """Dry-run unique matches, enriched for /recaps/missing chips.
+
+    Pass ``only_request_ids`` from the Missing Recaps page so matching
+    targets stay bounded to the already-loaded DUE rows.
+    """
     result = link_walkin_recaps_for_tenant(
-        tenant, days_back=days_back, apply=False
+        tenant,
+        days_back=days_back,
+        apply=False,
+        only_request_ids=only_request_ids,
     )
     pair_ids = [
         (int(row["orphan_id"]), int(row["request_id"]), row.get("day"))
@@ -363,7 +431,6 @@ def safe_attach_suggestions_for_tenant(
         if row.get("status") == "would-link"
         and row.get("orphan_id") is not None
         and row.get("request_id") is not None
-        and int(row["orphan_id"]) not in parked
     ]
     if not pair_ids:
         return []

@@ -160,6 +160,20 @@ class TestWalkinAttachHelpers(AmbassadorsGraphQLTestCase):
         orphan.refresh_from_db()
         assert orphan.request_id == req.id
 
+    def test_bulk_attach_skips_parked_orphans(self, monkeypatch):
+        req, _shell = self._due_request_with_shell(address=ADDR, name="Kroger")
+        orphan = self._filed_orphan(address=ADDR, name="Kroger walk-up")
+        monkeypatch.setattr(
+            "events.walkin_link._parked_orphan_ids",
+            lambda: frozenset({orphan.id}),
+        )
+
+        result = attach_all_safe_orphans(self.tenant, days_back=30)
+        assert result.linked == 0
+        orphan.refresh_from_db()
+        assert orphan.request_id is None
+        assert safe_attach_suggestions_for_tenant(self.tenant, days_back=30) == []
+
 
 @pytest.mark.django_db(transaction=True)
 class TestWalkinAttachGraphQL(AmbassadorsGraphQLTestCase):
