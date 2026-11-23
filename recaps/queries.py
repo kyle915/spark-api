@@ -2356,6 +2356,7 @@ class RecapQueries:
                     amb = getattr(ae, "ambassador", None)
                     user = getattr(amb, "user", None) if amb else None
                     name = _missing_recap_ba_name(user)
+                    nudged_at = getattr(ae, "recap_nudge_sent_at", None)
                     ambassadors.append(
                         types.MissingRecapAmbassadorInfo(
                             ambassador_event_uuid=strawberry.ID(str(ae.uuid)),
@@ -2365,6 +2366,11 @@ class RecapQueries:
                             name=name,
                             email=getattr(user, "email", None) if user else None,
                             is_approved=bool(getattr(ae, "is_approved", False)),
+                            last_nudged_at=(
+                                nudged_at.isoformat() if nudged_at else None
+                            ),
+                            # Cron + admin nudge mutation both push via Expo.
+                            last_nudge_channel="push" if nudged_at else None,
                         )
                     )
 
