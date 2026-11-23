@@ -863,9 +863,24 @@ def read_pending_receipts(
                 defaults[field] = reading[field]
         if defaults.get("raw") is None:
             defaults["raw"] = {}
-        ReceiptReading.objects.update_or_create(custom_recap_file=recap_file, defaults=defaults)
+        reading_row, _ = ReceiptReading.objects.update_or_create(
+            custom_recap_file=recap_file, defaults=defaults
+        )
         counts[status if status in counts else "unreadable"] += 1
         touched.add(recap_file.custom_recap_id)
+        if (
+            status == ReceiptReading.STATUS_READ
+            and reading_row.total is not None
+            and reading_row.total > 0
+        ):
+            try:
+                from pilot.finance import maybe_auto_match_receipt_reading
+
+                maybe_auto_match_receipt_reading(reading_row)
+            except Exception:  # noqa: BLE001 — OCR cron must not fail on finance heal
+                logger.exception(
+                    "auto-match receipt reading %s failed", reading_row.id
+                )
     report_extra["capped"] = budget < limit and pending.count() > 0
     return {**counts, **report_extra, "ai_unavailable": False, "recap_ids": sorted(touched)}
 

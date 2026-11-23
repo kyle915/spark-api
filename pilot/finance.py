@@ -16,6 +16,7 @@ from django.utils import timezone
 from billing.models import InvoiceLineItem
 from pilot.costs import (
     REIMBURSABLE_CATEGORIES,
+    attach_receipt_evidence_to_cost_line,
     link_receipt_evidence_to_cost_line,
     quantize_money,
     recompute_visit_cost_summary,
@@ -32,6 +33,175 @@ from pilot.models import (
 from pilot.permissions import ResolvedWorkspaceAccess, log_workspace_audit
 from recaps.models import ReceiptReading, RecapFlag
 from tenants.models import Tenant, User
+
+# Same band as recaps.receipt_reader.compare_spend_to_receipts: $1 or 5%.
+AUTO_MATCH_TOLERANCE_ABS = Decimal("1.00")
+AUTO_MATCH_TOLERANCE_PCT = Decimal("0.05")
+AUTO_MATCH_RECAP_SPEND_SOURCE_PREFIX = "recap-product-spend:"
+
+
+def amounts_within_auto_match_tolerance(
+    left: Decimal | None, right: Decimal | None
+) -> bool:
+    """True when two money amounts agree within $1 absolute or 5% of either."""
+    if left is None or right is None:
+        return False
+    a = quantize_money(left)
+    b = quantize_money(right)
+    if a <= Decimal("0.00") or b <= Decimal("0.00"):
+        return False
+    gap = abs(a - b)
+    allowed = max(
+        AUTO_MATCH_TOLERANCE_ABS,
+        (a * AUTO_MATCH_TOLERANCE_PCT).quantize(Decimal("0.01")),
+        (b * AUTO_MATCH_TOLERANCE_PCT).quantize(Decimal("0.01")),
+    )
+    return gap <= allowed
+
+
+@transaction.atomic
+def maybe_auto_match_receipt_reading(
+    reading: ReceiptReading,
+) -> CostEvidenceLink | None:
+    """Conservatively attach a successful OCR receipt to a visit product line.
+
+    Rules:
+    - status=read and total > 0 required; otherwise no-op.
+    - Already-linked readings return the existing CostEvidenceLink (idempotent).
+    - Same recap event → CanonicalVisit scope only.
+    - Prefer a single positive CAT_PRODUCT line whose amount matches within
+      tolerance and still needs evidence; never invent a link when multiple
+      product lines match.
+    - If no product line exists but the recap has a single positive typed
+      product-spend amount that matches OCR, create one SOURCE_EXPENSE_RECEIPT
+      product line then attach proof (Link Visit happy path, no double charge).
+    - Ambiguous / failed / zero OCR → leave unmatched for human review.
+    """
+    if reading is None or reading.pk is None:
+        return None
+
+    reading = (
+        ReceiptReading.objects.select_related(
+            "custom_recap_file",
+            "custom_recap_file__custom_recap",
+            "custom_recap_file__custom_recap__tenant",
+            "custom_recap_file__custom_recap__event",
+        )
+        .filter(pk=reading.pk)
+        .first()
+    )
+    if reading is None:
+        return None
+    if reading.status != ReceiptReading.STATUS_READ:
+        return None
+    if reading.total is None or reading.total <= Decimal("0.00"):
+        return None
+
+    existing = (
+        CostEvidenceLink.objects.select_related("cost_line")
+        .filter(receipt_reading_id=reading.id)
+        .order_by("id")
+        .first()
+    )
+    if existing is not None:
+        return existing
+
+    recap_file = reading.custom_recap_file
+    if recap_file is None:
+        return None
+    recap = recap_file.custom_recap
+    if recap is None:
+        return None
+    tenant = recap.tenant
+    if tenant is None:
+        return None
+
+    visit: CanonicalVisit | None = None
+    if recap.event_id:
+        visit = CanonicalVisit.objects.filter(
+            tenant=tenant, event_id=recap.event_id
+        ).first()
+
+    ocr_total = quantize_money(reading.total)
+    candidates: list[BrandCostLine] = []
+    if visit is not None:
+        product_lines = list(
+            BrandCostLine.objects.filter(
+                tenant=tenant,
+                canonical_visit=visit,
+                category=BrandCostLine.CAT_PRODUCT,
+                amount__isnull=False,
+                amount__gt=Decimal("0.00"),
+                evidence_status=BrandCostLine.EVIDENCE_MISSING,
+            ).order_by("id")
+        )
+        candidates = [
+            ln
+            for ln in product_lines
+            if amounts_within_auto_match_tolerance(ln.amount, ocr_total)
+        ]
+
+    if len(candidates) > 1:
+        return None
+
+    target_line: BrandCostLine | None = candidates[0] if candidates else None
+
+    if target_line is None:
+        # No matching product line: optionally book one from clear recap spend.
+        from recaps.receipt_gate import custom_recap_spend
+        from pilot.workspaces import ensure_canonical_visit_for_event
+
+        spend = custom_recap_spend(recap)
+        if not spend or spend <= 0:
+            return None
+        spend_amt = quantize_money(spend)
+        if not amounts_within_auto_match_tolerance(spend_amt, ocr_total):
+            return None
+        if recap.event_id is None:
+            return None
+        if visit is None:
+            visit = ensure_canonical_visit_for_event(recap.event)
+        source_ref = f"{AUTO_MATCH_RECAP_SPEND_SOURCE_PREFIX}{recap.id}"
+        target_line = BrandCostLine.objects.filter(
+            tenant=tenant,
+            canonical_visit=visit,
+            source_reference=source_ref,
+        ).first()
+        if target_line is None:
+            # Refuse if another product line already exists — creating would
+            # risk a second charge when amounts simply did not align.
+            if BrandCostLine.objects.filter(
+                tenant=tenant,
+                canonical_visit=visit,
+                category=BrandCostLine.CAT_PRODUCT,
+                amount__isnull=False,
+                amount__gt=Decimal("0.00"),
+            ).exists():
+                return None
+            target_line = BrandCostLine.objects.create(
+                tenant=tenant,
+                canonical_visit=visit,
+                provider=visit.primary_provider,
+                category=BrandCostLine.CAT_PRODUCT,
+                source_type=BrandCostLine.SOURCE_EXPENSE_RECEIPT,
+                description=(
+                    f"Product spend ({reading.merchant or 'receipt'})"
+                )[:300],
+                amount=spend_amt,
+                is_confirmed_zero=False,
+                settlement_status=BrandCostLine.SETTLEMENT_ESTIMATED,
+                evidence_status=BrandCostLine.EVIDENCE_MISSING,
+                source_reference=source_ref,
+            )
+
+    return attach_receipt_evidence_to_cost_line(
+        tenant=tenant,
+        cost_line=target_line,
+        recap_file=recap_file,
+        receipt_reading=reading,
+        label="Auto-matched recap receipt",
+        verified_amount=ocr_total,
+    )
 
 OPERATIONAL_ADVISORY_FLAG_KINDS = (
     RecapFlag.KIND_SHORT_CLOCK,
@@ -97,6 +267,24 @@ def evaluate_finance_exceptions(
         visits_qs = visits_qs.filter(pk=visit.pk)
     visits = list(visits_qs)
     visit_map = {v.id: v for v in visits}
+
+    # Heal clear OCR→product matches before detecting exceptions so
+    # missing_proof and unmatched_transaction both see linked evidence.
+    if visit is None:
+        already_linked = set(
+            CostEvidenceLink.objects.filter(
+                cost_line__tenant=tenant, receipt_reading__isnull=False
+            ).values_list("receipt_reading_id", flat=True)
+        )
+        heal_qs = ReceiptReading.objects.select_related(
+            "custom_recap_file", "custom_recap_file__custom_recap"
+        ).filter(
+            custom_recap_file__custom_recap__tenant=tenant,
+            status=ReceiptReading.STATUS_READ,
+            total__gt=Decimal("0.00"),
+        ).exclude(id__in=already_linked)
+        for reading in heal_qs.iterator(chunk_size=100):
+            maybe_auto_match_receipt_reading(reading)
 
     lines_qs = (
         BrandCostLine.objects.select_related("provider", "shared_source")
@@ -376,6 +564,9 @@ def evaluate_finance_exceptions(
         ).exclude(id__in=linked_reading_ids)
         for reading in unmatched_readings:
             if reading.total is None or reading.total <= Decimal("0.00"):
+                continue
+            # Heal clear cases before emitting unmatched_transaction.
+            if maybe_auto_match_receipt_reading(reading) is not None:
                 continue
             recap_obj = reading.custom_recap_file.custom_recap
             ev_id = recap_obj.event_id if recap_obj else None
