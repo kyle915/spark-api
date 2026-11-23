@@ -432,6 +432,13 @@ MAIL_DRIVER = env("MAIL_DRIVER", default="mailpit")  # mailpit, resend
 RESEND_API_KEY = env("RESEND_API_KEY", default="")
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="Spark <onboarding@resend.dev>")
 REQUEST_REVIEW_COPY_EMAILS = env.list("REQUEST_REVIEW_COPY_EMAILS", default=[])
+# Liquid Death RMM territory map as JSON object:
+#   {"rmm@brand.example": ["NY", "NJ"], ...}
+# Prefer Cloud Run / .env. When unset, events.routing uses a legacy map.
+LD_RMM_TERRITORY_JSON = env("LD_RMM_TERRITORY_JSON", default="")
+# Comma-separated Ignite ops addresses CC'd on spark-form routing mail.
+# When the env var is unset, events.routing.ignite_review_cc() uses legacy CC.
+IGNITE_REVIEW_CC = env.list("IGNITE_REVIEW_CC", default=[])
 RECAP_REVIEW_COPY_EMAILS = env.list("RECAP_REVIEW_COPY_EMAILS", default=[])
 # Recipients for the web CHECK-IN link's two notifications. These were ONE
 # list until Kyle split them by hand (2026-08-01): the recap alert is content

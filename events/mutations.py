@@ -41,7 +41,7 @@ from .envelopes import (
 from .routing import (
     assign_rmm_for_request,
     extract_state_code,
-    IGNITE_REVIEW_CC,
+    ignite_review_cc,
     ROUTED_TENANT_SLUGS,
     merge_always_include_internal,
     suppress_cc,
@@ -3446,7 +3446,7 @@ async def _notify_rmm_for_request_created(
         request=request,
         location=location,
         to_emails=to_emails,
-        cc_emails=cc_emails or list(IGNITE_REVIEW_CC),
+        cc_emails=cc_emails or ignite_review_cc(),
         rmm_first_name=rmm_first,
         state_code=state_code,
     )
@@ -3472,7 +3472,7 @@ async def _notify_ignite_for_unroutable_request(
     mailer = RmmAssignedRequestMailer(
         request=request,
         location=location,
-        to_emails=ignite_team or list(IGNITE_REVIEW_CC),
+        to_emails=ignite_team or ignite_review_cc(),
         cc_emails=[],
         rmm_first_name="team",
         state_code=None,
@@ -3525,9 +3525,8 @@ def _get_request_review_copy_emails(exclude_email: str | None = None) -> list[st
 def _get_spark_admin_emails() -> list[str]:
     """Every active Spark admin's email. Used so any new admin we add
     is automatically copied on every request approval — no settings
-    file edit, no code change. Hardcoded `IGNITE_REVIEW_CC` still
-    fronts the list (consistency for the historical ops team), this
-    just folds in anyone else with role=spark-admin.
+    file edit, no code change. `IGNITE_REVIEW_CC` (env) still fronts
+    the list; this folds in anyone else with role=spark-admin.
 
     The result is run through ``suppress_cc`` so a removed team member on
     CC_SUPPRESS_EMAILS is dropped even if their DB row still carries the
@@ -3596,7 +3595,7 @@ def _get_request_cc_emails(
     normalized_exclude = (exclude_email or "").strip().lower()
     combined = (
         list(_get_request_review_copy_emails(exclude_email=exclude_email))
-        + list(IGNITE_REVIEW_CC)
+        + ignite_review_cc()
         + _get_spark_admin_emails()
         + _get_ignite_domain_emails()
     )

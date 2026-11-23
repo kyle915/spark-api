@@ -7,8 +7,8 @@ the User row, its is_staff/is_superuser flags, every TenantedUser row
 
 Usage:
 
-    python manage.py dump_user_tenancy kyle@igniteproductions.co
-    python manage.py dump_user_tenancy kyle@igniteproductions.co ross@liquiddeath.com
+    python manage.py dump_user_tenancy admin@example.com
+    python manage.py dump_user_tenancy admin@example.com client@example.com
 """
 
 from __future__ import annotations

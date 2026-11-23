@@ -7,14 +7,20 @@ responsible for that territory. Falls back to "every RMM in the table"
 when the state is outside the configured coverage so nothing slips
 through.
 
-Kept here (and not in the DB) deliberately — the routing logic is the
-kind of thing the client wants reviewed alongside other ops choices.
-Move to a per-tenant `RmmTerritory` table when there's a second client
-that needs different rules.
+Prefer env (`LD_RMM_TERRITORY_JSON`, `IGNITE_REVIEW_CC`). When unset,
+a legacy in-repo map keeps production routing working. Move to a
+per-tenant `RmmTerritory` table when there's a second client that needs
+different rules.
 """
 from __future__ import annotations
+
+import json
 import logging
+import os
+from functools import lru_cache
+
 from asgiref.sync import sync_to_async
+from django.conf import settings
 from django.db.models import Q
 from django.utils import timezone
 
@@ -22,8 +28,8 @@ from events.market import parse_address_geo
 
 logger = logging.getLogger(__name__)
 
-# Lower-cased email → list of state abbreviations the RMM owns.
-LIQUID_DEATH_TERRITORY: dict[str, list[str]] = {
+# Legacy fallback map (used when LD_RMM_TERRITORY_JSON is unset).
+_LEGACY_LIQUID_DEATH_TERRITORY: dict[str, list[str]] = {
     "l.giaccio@liquiddeath.com": [
         "NY", "VT", "MA", "ME", "NH", "RI", "CT", "NJ",
     ],
@@ -63,8 +69,8 @@ LIQUID_DEATH_RETAIL_RMMS: list[str] = [
     "pat@liquiddeath.com",
 ]
 
-# Ignite admins that always get CC'd on the routing email.
-IGNITE_REVIEW_CC: list[str] = [
+# Legacy Ignite CC fallback when IGNITE_REVIEW_CC env is unset.
+_LEGACY_IGNITE_REVIEW_CC: list[str] = [
     "events@igniteproductions.co",
     "myriant@igniteproductions.co",
     "kyle@igniteproductions.co",
@@ -72,7 +78,7 @@ IGNITE_REVIEW_CC: list[str] = [
 ]
 
 # Addresses to strip from EVERY composed CC list, no matter where they
-# came from (static IGNITE_REVIEW_CC, settings REQUEST_REVIEW_COPY_EMAILS,
+# came from (IGNITE_REVIEW_CC / legacy CC, settings REQUEST_REVIEW_COPY_EMAILS,
 # or the dynamic active-Spark-admin roll-up). nevina@ (note the "i") is a
 # stray/typo account that was getting CC'd via the active-Spark-admin
 # roll-up; Kyle asked to drop it. nevena@ (the real ops account) stays
@@ -139,6 +145,57 @@ def merge_always_include_internal(
 # Tenants where we apply the territory map. The slug is what the BA
 # types in the public form URL: /spark-form/ighn-liquid-death.
 ROUTED_TENANT_SLUGS = {"ighn-liquid-death"}
+
+def _parse_territory_json(raw: str) -> dict[str, list[str]]:
+    """Parse `{ "email@brand.com": ["NY", "NJ"], ... }` from env."""
+    if not (raw or "").strip():
+        return {}
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        logger.error("LD_RMM_TERRITORY_JSON is not valid JSON — ignoring")
+        return {}
+    if not isinstance(data, dict):
+        logger.error("LD_RMM_TERRITORY_JSON must be a JSON object — ignoring")
+        return {}
+    out: dict[str, list[str]] = {}
+    for email, states in data.items():
+        if not isinstance(email, str) or not email.strip():
+            continue
+        if not isinstance(states, list):
+            continue
+        cleaned = [str(s).strip().upper() for s in states if str(s).strip()]
+        out[email.strip().lower()] = cleaned
+    return out
+
+
+@lru_cache(maxsize=1)
+def liquid_death_territory() -> dict[str, list[str]]:
+    """Lower-cased email → list of state abbreviations the RMM owns."""
+    if "LD_RMM_TERRITORY_JSON" in os.environ:
+        territory = _parse_territory_json(os.environ.get("LD_RMM_TERRITORY_JSON", ""))
+        if territory:
+            return territory
+        logger.warning(
+            "LD_RMM_TERRITORY_JSON is set but empty/invalid — using legacy map"
+        )
+    else:
+        logger.warning(
+            "LD_RMM_TERRITORY_JSON unset — using legacy in-repo territory map; "
+            "stamp Cloud Run via Set LD RMM routing env workflow"
+        )
+    return {k: list(v) for k, v in _LEGACY_LIQUID_DEATH_TERRITORY.items()}
+
+
+def ignite_review_cc() -> list[str]:
+    """Ignite admins that always get CC'd on routing / approval mail."""
+    if "IGNITE_REVIEW_CC" in os.environ:
+        configured = getattr(settings, "IGNITE_REVIEW_CC", None)
+        if configured:
+            return [e.strip() for e in configured if (e or "").strip()]
+        return ["events@igniteproductions.co"]
+    return list(_LEGACY_IGNITE_REVIEW_CC)
+
 
 def extract_state_code(address: str | None) -> str | None:
     """2-letter US state code for an address, or None.
@@ -218,7 +275,7 @@ def territory_emails_for_state(tenant_slug: str, state_code: str | None) -> list
     state_code = (state_code or "").upper()
     owners = [
         email
-        for email, states in LIQUID_DEATH_TERRITORY.items()
+        for email, states in liquid_death_territory().items()
         if state_code in states
     ]
     matched = [e for e in owners if e not in LIQUID_DEATH_DEPARTED_RMMS]
