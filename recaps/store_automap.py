@@ -155,32 +155,99 @@ def _catalog_rows(tenant) -> list[dict[str, Any]]:
     return rows
 
 
-def _resolve_catalog_name(
-    name: str, catalog: list[dict[str, Any]]
-) -> dict[str, Any] | None:
-    """Exact normalized name, else longest catalog name contained in ``name``."""
+def _name_candidates(name: str, catalog: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """All catalog rows whose name matches ``name`` (exact or contained).
+
+    Does not collapse same-name national vs location rows — callers pick.
+    """
     target = _norm(name)
     if not target:
-        return None
-    by_norm = {_norm(r["name"]): r for r in catalog if _norm(r["name"])}
-    if target in by_norm:
-        return by_norm[target]
-    # Prefer longer catalog names so "Total Wine & More" beats "Total".
+        return []
+    exact = [r for r in catalog if _norm(r.get("name")) == target]
+    if exact:
+        return exact
     contained = [
         r
         for r in catalog
-        if (n := _norm(r["name"])) and len(n) >= 4 and (n in target or target in n)
+        if (n := _norm(r.get("name"))) and len(n) >= 4 and (n in target or target in n)
     ]
     if not contained:
+        return []
+    # Keep the longest catalog banner(s); e.g. "Total Wine & More" over "Total".
+    best_len = max(len(_norm(r.get("name"))) for r in contained)
+    return [r for r in contained if len(_norm(r.get("name"))) == best_len]
+
+
+def _resolve_catalog_name(
+    name: str,
+    catalog: list[dict[str, Any]],
+    *,
+    typed_address: str = "",
+    preferred_kind: str | None = None,
+) -> dict[str, Any] | None:
+    """Pick one catalog row for ``name``, disambiguating same-name duplicates.
+
+    When several retailers share a banner (national chain + location rows):
+    1. Prefer a location whose address fuzzy-matches ``typed_address``.
+    2. Else honor ``preferred_kind`` (``chain`` → national / address-less;
+       ``store`` → a location row when one exists).
+    3. Else prefer national / chain over an arbitrary location UUID.
+    """
+    candidates = _name_candidates(name, catalog)
+    if not candidates:
         return None
-    contained.sort(key=lambda r: (-len(_norm(r["name"])), -int(r.get("isNational") or 0)))
-    return contained[0]
+    if len(candidates) == 1:
+        return candidates[0]
+
+    from ambassadors.checkin_web import addresses_fuzzy_match
+
+    addr = (typed_address or "").strip()
+    if addr:
+        street_hits = [
+            r
+            for r in candidates
+            if (r.get("address") or "").strip()
+            and addresses_fuzzy_match(addr, r["address"])
+        ]
+        if street_hits:
+            # Prefer a concrete store row over a national row that somehow
+            # also fuzzy-matched (unusual, but keep the address-bearing one).
+            street_hits.sort(
+                key=lambda r: (
+                    0 if (r.get("address") or "").strip() else 1,
+                    1 if r.get("isNational") else 0,
+                )
+            )
+            return street_hits[0]
+
+    kind = (preferred_kind or "").strip().lower()
+    nationals = [
+        r
+        for r in candidates
+        if r.get("isNational") or r.get("kind") == "chain" or not (r.get("address") or "").strip()
+    ]
+    stores = [
+        r
+        for r in candidates
+        if (r.get("address") or "").strip() and not r.get("isNational")
+    ]
+
+    if kind == "store" and stores:
+        return stores[0]
+    if kind == "chain" and nationals:
+        return nationals[0]
+    if nationals:
+        return nationals[0]
+    if stores:
+        return stores[0]
+    return candidates[0]
 
 
 def places_enrich(
     address: str, catalog: list[dict[str, Any]]
 ) -> list[dict]:
     """Google Places business at ``address``, mapped onto catalog rows."""
+    from ambassadors.checkin_web import addresses_fuzzy_match
     from recaps.retailer_proposals import places_lookup
 
     if not (address or "").strip() or len(address.strip()) < 8:
@@ -188,21 +255,37 @@ def places_enrich(
     suggestion = places_lookup(address)
     if suggestion is None or not suggestion.name:
         return []
-    matched = _resolve_catalog_name(suggestion.name, catalog)
-    if matched is None:
-        return []
-    from ambassadors.checkin_web import addresses_fuzzy_match
 
-    same_street = bool(
-        matched.get("address")
-        and addresses_fuzzy_match(address, matched["address"])
-    )
+    # Prefer a same-banner store at this street when one exists; otherwise the
+    # national / chain row — never an arbitrary same-name UUID.
+    candidates = _name_candidates(suggestion.name, catalog)
+    if not candidates:
+        return []
+    street_hits = [
+        r
+        for r in candidates
+        if (r.get("address") or "").strip()
+        and addresses_fuzzy_match(address, r["address"])
+    ]
+    if street_hits:
+        matched = street_hits[0]
+        same_street = True
+        preferred_kind = "store"
+    else:
+        matched = _resolve_catalog_name(
+            suggestion.name, catalog, typed_address=address, preferred_kind="chain"
+        )
+        if matched is None:
+            return []
+        same_street = False
+        preferred_kind = "chain"
+
     if same_street:
         score = 90
         reason = f"Maps lists {suggestion.name} here — matches this store"
         kind = "store"
         confidence = "high"
-    elif matched.get("isNational") or matched.get("kind") == "chain":
+    elif matched.get("isNational") or matched.get("kind") == "chain" or preferred_kind == "chain":
         score = 78
         reason = f"Maps lists {suggestion.name} here — maybe the national account"
         kind = "chain"
@@ -291,7 +374,15 @@ def ai_enrich(
         retailer_name = ((raw.get("retailer") or "") if raw else "").strip().strip("\"'")
         if not retailer_name or _norm(retailer_name) in _NON_ANSWERS:
             continue
-        matched = _resolve_catalog_name(retailer_name, catalog)
+        kind = (raw.get("kind") or "chain").strip().lower()
+        if kind not in ("chain", "store"):
+            kind = "chain"
+        matched = _resolve_catalog_name(
+            retailer_name,
+            catalog,
+            typed_address=address or "",
+            preferred_kind=kind,
+        )
         if matched is None:
             continue
         confidence = (raw.get("confidence") or "low").strip().lower()
@@ -300,9 +391,6 @@ def ai_enrich(
         # Model "high" alone is capped unless Places/heuristic also agree later.
         if confidence == "high":
             confidence = "medium"
-        kind = (raw.get("kind") or matched.get("kind") or "chain").strip().lower()
-        if kind not in ("chain", "store"):
-            kind = "chain"
         reason = ((raw.get("reason") or "") if raw else "").strip()[:300]
         if not reason:
             reason = "AI reading of the typed store / address"

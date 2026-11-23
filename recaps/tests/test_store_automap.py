@@ -182,6 +182,63 @@ class TestStoreAutomap(AmbassadorsGraphQLTestCase):
         # Model "high" is capped to medium unless Places also agrees.
         assert hits[0]["confidence"] == "medium"
 
+    def test_resolve_disambiguates_same_name_national_vs_store(self):
+        """Same banner name must not collapse to the last catalog UUID."""
+        store = Retailer.objects.create(
+            name="Total Wine & More",
+            address=self.event.address,
+            tenant=self.tenant,
+            created_by=self.system_user,
+        )
+        # A second location with the same banner in another city — must not win
+        # when the typed address matches the Kissimmee store.
+        Retailer.objects.create(
+            name="Total Wine & More",
+            address="100 Other St, Orlando, FL 32801",
+            tenant=self.tenant,
+            created_by=self.system_user,
+        )
+        catalog = sa._catalog_rows(self.tenant)
+        # Catalog order ends with later IDs; a naive by-name dict would pick the
+        # Orlando row. Address + kind must pick Kissimmee / national correctly.
+        by_addr = sa._resolve_catalog_name(
+            "Total Wine & More",
+            catalog,
+            typed_address=self.event.address,
+            preferred_kind="store",
+        )
+        assert by_addr is not None
+        assert by_addr["uuid"] == str(store.uuid)
+
+        by_chain = sa._resolve_catalog_name(
+            "Total Wine & More",
+            catalog,
+            typed_address="",
+            preferred_kind="chain",
+        )
+        assert by_chain is not None
+        assert by_chain["uuid"] == str(self.chain.uuid)
+
+        place = Suggestion(
+            name="Total Wine & More",
+            source="places",
+            confidence="medium",
+            reason="listed",
+        )
+        with mock.patch(
+            "recaps.retailer_proposals.places_lookup", return_value=place
+        ), mock.patch("recaps.store_automap.ai_enrich", return_value=[]):
+            hits = sa.enrich_store_suggestions(
+                self.tenant,
+                "Total Wine",
+                self.event.address,
+                use_network=True,
+            )
+        # Heuristic already strong on address — if network runs, Places must
+        # still land on the Kissimmee store UUID, not Orlando or last-id.
+        assert hits
+        assert hits[0]["uuid"] == str(store.uuid)
+
     def test_strong_heuristic_skips_network(self):
         Retailer.objects.create(
             name="Total Wine & More",
