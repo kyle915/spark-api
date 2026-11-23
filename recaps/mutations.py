@@ -19,6 +19,7 @@ from recaps import co_activation
 from recaps import types
 from recaps import models
 from recaps import inputs
+from recaps.signoff import SignoffIncomplete, assert_recap_signoff, stored_signoff_value
 from recaps.spend_amount import SpendAmountNeedsCents, guard_spend_amount
 from recaps import heic_conversion
 from recaps import metric_edits
@@ -1625,10 +1626,16 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
                                 f"Invalid custom field ID: {custom_field_value_input.custom_field_id}"
                             )
 
-                        custom_field = models.CustomField.objects.filter(
-                            id=custom_field_id,
-                            custom_recap_template_id=custom_recap_template.id,
-                        ).first()
+                        custom_field = (
+                            models.CustomField.objects.select_related(
+                                "custom_field_type", "recap_section"
+                            )
+                            .filter(
+                                id=custom_field_id,
+                                custom_recap_template_id=custom_recap_template.id,
+                            )
+                            .first()
+                        )
                         if not custom_field:
                             raise GraphQLError(
                                 "Custom field not found for the selected template."
@@ -1645,7 +1652,12 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
                                 or "",
                                 custom_field_value_input.value,
                             )
+                            stored_value = stored_signoff_value(
+                                custom_field, stored_value, enforce_required=True
+                            )
                         except SpendAmountNeedsCents as exc:
+                            raise GraphQLError(str(exc)) from exc
+                        except SignoffIncomplete as exc:
                             raise GraphQLError(str(exc)) from exc
 
                         models.CustomFieldValue.objects.create(
@@ -1680,6 +1692,11 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
                         custom_recap.save(
                             update_fields=["total_engagements", "updated_at"]
                         )
+
+                try:
+                    assert_recap_signoff(custom_recap_template, custom_recap)
+                except SignoffIncomplete as exc:
+                    raise GraphQLError(str(exc)) from exc
 
                 if self.input.product_samples is not None:
                     for sample in self.input.product_samples:
@@ -2101,10 +2118,16 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
                                     f"{custom_field_value_input.custom_field_id}"
                                 )
 
-                            custom_field = models.CustomField.objects.filter(
-                                id=custom_field_id,
-                                custom_recap_template_id=custom_recap_template.id,
-                            ).first()
+                            custom_field = (
+                                models.CustomField.objects.select_related(
+                                    "custom_field_type", "recap_section"
+                                )
+                                .filter(
+                                    id=custom_field_id,
+                                    custom_recap_template_id=custom_recap_template.id,
+                                )
+                                .first()
+                            )
                             if not custom_field:
                                 raise GraphQLError(
                                     "Custom field not found for the selected template."
@@ -2157,7 +2180,17 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
                                 custom_field_value_input.value,
                                 previous=previous_value,
                             )
+                            # Edits of recaps filed before the sign-off existed
+                            # may leave it blank. A drawn signature still has
+                            # to be a real stroke.
+                            stored_value = stored_signoff_value(
+                                custom_field,
+                                stored_value,
+                                enforce_required=False,
+                            )
                         except SpendAmountNeedsCents as exc:
+                            raise GraphQLError(str(exc)) from exc
+                        except SignoffIncomplete as exc:
                             raise GraphQLError(str(exc)) from exc
 
                         if custom_field_value:

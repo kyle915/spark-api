@@ -62,6 +62,7 @@ from recaps.shelf_coach import (
     pack_response as pack_shelf_coach_response,
     persist_shelf_reading,
 )
+from recaps.signoff import SignoffIncomplete
 from recaps.spend_amount import SpendAmountNeedsCents
 from recaps.voice_draft import structure_transcript
 from events.checkin_tokens import (
@@ -1974,6 +1975,11 @@ def _submit_recap_and_respond(
     except SpendAmountNeedsCents as exc:
         logger.warning("checkin recap refused, spend cents, code=%s: %s", code, exc)
         return _err(str(exc), status=400, code="spend_needs_cents")
+    except SignoffIncomplete as exc:
+        # The clerk sign-off is part of filing the recap. Clock-out is a
+        # different endpoint and does not hit this.
+        logger.warning("checkin recap refused, sign-off, code=%s: %s", code, exc)
+        return _err(str(exc), status=400, code="needs_signoff")
     except Exception:  # noqa: BLE001
         logger.exception("checkin recap submit failed code=%s", code)
         return _err("Couldn't submit your recap. Try again.", status=500, code="server")

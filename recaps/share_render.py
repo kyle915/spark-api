@@ -14,6 +14,7 @@ from django.db.models import Prefetch
 
 from recaps import models
 from recaps.heic_conversion import display_blob_name
+from recaps.signoff import is_signature_type_name, signature_data_url
 from recaps.pdf import (
     IMAGE_EXTENSIONS,
     build_recap_pdf,
@@ -258,6 +259,9 @@ def recap_to_public_dict(kind: str, recap) -> dict[str, Any]:
                 tok in type_name.lower()
                 for tok in ("image", "photo", "img")
             )
+            signature = (
+                signature_data_url(raw) if is_signature_type_name(type_name) else None
+            )
             fields.append(
                 {
                     "section": getattr(
@@ -265,8 +269,9 @@ def recap_to_public_dict(kind: str, recap) -> dict[str, Any]:
                     )
                     or "Details",
                     "name": cf.name,
-                    "value": None if is_image else raw,
-                    "imageUrl": _file_public_url(raw) if is_image and raw else None,
+                    "value": None if is_image or signature else raw,
+                    "imageUrl": signature
+                    or (_file_public_url(raw) if is_image and raw else None),
                 }
             )
         sold = sampled = spend = None
