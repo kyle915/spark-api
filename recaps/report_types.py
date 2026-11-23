@@ -37,6 +37,11 @@ from recaps.recap_review_checks import (
     flagged_review_checks_for_ids,
     recap_review_checks,
 )
+from recaps.review_triage import (
+    LABEL_CLEAN,
+    LABEL_NEEDS_EYES,
+    recap_review_triage_for_ids,
+)
 from recaps.report_tokens import make_report_token
 from recaps.tenant_ba_leaderboard import tenant_ba_leaderboard
 from recaps.scoped_ai import build_event_scope, build_recap_scope
@@ -75,6 +80,7 @@ from utils.ai_text import (
 from utils.graphql.inputs import SparkGraphQLInput
 from utils.graphql.mixins import SparkGraphQLMixin, resolve_id_to_int
 from utils.graphql.permissions import (
+    IsSparkAdminAccess,
     StrictIsAuthenticated,
     _is_admin_access,
     resolve_request_user_access,
@@ -1725,6 +1731,52 @@ class RecapReviewFlagsForRecap:
 
     recap_id: strawberry.ID
     flags: list[RecapReviewFlagSummary]
+
+
+@strawberry.type
+class RecapTriageReason:
+    """One reason a recap was labeled Needs Eyes (advisory)."""
+
+    code: str
+    label: str
+    source: str
+
+
+@strawberry.type
+class RecapReviewTriageForRecap:
+    """Clean vs Needs Eyes label for one recap in the admin queue.
+
+    Staff only. Never auto-approves. ``label`` is ``clean`` or
+    ``needs_eyes``; ``reasons`` lists the signals that tipped Needs Eyes.
+    """
+
+    recap_id: strawberry.ID
+    label: str
+    reasons: list[RecapTriageReason]
+
+
+def _build_recap_triage(result: dict) -> tuple[str, list[RecapTriageReason]]:
+    raw_label = (result or {}).get("label")
+    label = (
+        LABEL_NEEDS_EYES
+        if raw_label == LABEL_NEEDS_EYES
+        else LABEL_CLEAN
+    )
+    reasons: list[RecapTriageReason] = []
+    for item in (result or {}).get("reasons") or []:
+        if not isinstance(item, dict):
+            continue
+        code, lab, source = item.get("code"), item.get("label"), item.get("source")
+        if (
+            isinstance(code, str)
+            and code
+            and isinstance(lab, str)
+            and lab
+            and isinstance(source, str)
+            and source
+        ):
+            reasons.append(RecapTriageReason(code=code, label=lab, source=source))
+    return label, reasons
 
 
 def _build_recap_review_checks(result) -> list[RecapReviewCheck]:
@@ -3621,6 +3673,92 @@ class CampaignReportQueries:
             return [
                 RecapReviewFlagsForRecap(
                     recap_id=strawberry.ID(raw_id), flags=[]
+                )
+                for raw_id, _ in parsed
+            ]
+
+    @strawberry.field(permission_classes=[IsSparkAdminAccess])
+    async def recap_review_triage(
+        self,
+        info: strawberry.Info,
+        recap_ids: list[strawberry.ID],
+        is_custom: bool = False,
+    ) -> list[RecapReviewTriageForRecap]:
+        """Batched Clean / Needs Eyes labels for the admin Needs-review list.
+
+        Combines rule review flags, deterministic quality flags, photo
+        scores, and shelf readings into one advisory label per recap.
+        Ignite staff only (``IsSparkAdminAccess``) — brand clients must
+        never see this field. Cap :data:`MAX_REVIEW_FLAG_BATCH`. Never
+        auto-approves. Missing / out-of-scope ids return ``clean``.
+        """
+        service = _CampaignReportService()
+        scope_tenant_id = await service.resolve_scope_tenant_id(info)
+
+        parsed: list[tuple[str, int]] = []
+        for raw in (recap_ids or [])[:MAX_REVIEW_FLAG_BATCH]:
+            try:
+                rid = resolve_id_to_int(str(raw).strip())
+            except Exception:
+                continue
+            if rid is None:
+                continue
+            parsed.append((str(raw).strip() or str(rid), int(rid)))
+
+        if not parsed:
+            return []
+
+        def _build() -> list[RecapReviewTriageForRecap]:
+            from recaps.models import CustomRecap, Recap
+
+            ids = [rid for _, rid in parsed]
+            if is_custom:
+                scoped = {
+                    row["id"]: row["tenant_id"]
+                    for row in CustomRecap.objects.filter(id__in=ids).values(
+                        "id", "tenant_id"
+                    )
+                }
+            else:
+                scoped = {
+                    row["id"]: row["event__tenant_id"]
+                    for row in Recap.objects.filter(id__in=ids).values(
+                        "id", "event__tenant_id"
+                    )
+                }
+
+            allowed: list[int] = []
+            for _, rid in parsed:
+                row_tenant_id = scoped.get(rid)
+                if row_tenant_id is None:
+                    continue
+                if scope_tenant_id is not None and row_tenant_id != scope_tenant_id:
+                    continue
+                allowed.append(rid)
+
+            by_id = recap_review_triage_for_ids(allowed, is_custom=is_custom)
+            bundles: list[RecapReviewTriageForRecap] = []
+            for raw_id, rid in parsed:
+                label, reasons = _build_recap_triage(
+                    by_id.get(rid, {"label": LABEL_CLEAN, "reasons": []})
+                )
+                bundles.append(
+                    RecapReviewTriageForRecap(
+                        recap_id=strawberry.ID(raw_id),
+                        label=label,
+                        reasons=reasons,
+                    )
+                )
+            return bundles
+
+        try:
+            return await sync_to_async(_build, thread_sensitive=True)()
+        except Exception:
+            return [
+                RecapReviewTriageForRecap(
+                    recap_id=strawberry.ID(raw_id),
+                    label=LABEL_CLEAN,
+                    reasons=[],
                 )
                 for raw_id, _ in parsed
             ]
