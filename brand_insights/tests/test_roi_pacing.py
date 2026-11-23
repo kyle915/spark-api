@@ -419,7 +419,12 @@ class AttentionQueueTests(TransactionTestCase):
 
         res = _gql(ATTENTION_Q, user=self.brand_admin, tenant=self.brand)
         assert res.errors is None
-        data = res.data["todayAttentionQueue"]
+        assert res.data["todayAttentionQueue"] is None
+
+        res_staff = _gql(ATTENTION_Q, user=self.admin, tenant=self.brand)
+        assert res_staff.errors is None
+        data = res_staff.data["todayAttentionQueue"]
+        assert data is not None
         assert data["totalCount"] >= 3
         by_key = {b["key"]: b for b in data["buckets"]}
         assert by_key["rebooks"]["items"][0]["actionUrl"] == "/buyer-report"
