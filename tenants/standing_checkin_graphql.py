@@ -196,7 +196,7 @@ class StandingCheckinMutations:
             tenant = Tenant.objects.filter(id=tenant_pk).first()
             if tenant is None:
                 return None
-            return update_standing_checkin_config(
+            result = update_standing_checkin_config(
                 tenant,
                 location_mode=input.location_mode,
                 photo_buckets=photo_value,
@@ -205,6 +205,13 @@ class StandingCheckinMutations:
                 clear_resources=bool(input.clear_resources),
                 event_type_ids=event_ids,
             )
+            # Snapshot while still on the sync thread — `_program_types`
+            # hits the M2M and must not run under the async event loop.
+            snap = _snapshot(result["tenant"])
+            return {
+                "changed": result.get("changed") or [],
+                "snap": snap,
+            }
 
         try:
             result = await sync_to_async(_write, thread_sensitive=True)()
@@ -219,9 +226,8 @@ class StandingCheckinMutations:
         if result is None:
             return _fail("Brand not found.")
 
-        tenant = result["tenant"]
-        snap = _snapshot(tenant)
-        changed = result.get("changed") or []
+        snap = result["snap"]
+        changed = result["changed"]
         if changed:
             message = "Standing check-in updated."
         else:

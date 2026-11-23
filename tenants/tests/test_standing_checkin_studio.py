@@ -31,8 +31,14 @@ mutation U($input: UpdateStandingCheckinConfigInput!) {
 """
 
 
-@pytest.mark.django_db
-class TestStandingCheckinHelpers:
+@pytest.mark.django_db(transaction=True)
+class TestStandingCheckinHelpers(AmbassadorsGraphQLTestCase):
+    @pytest.fixture(autouse=True)
+    def setup(self, db):
+        self.roles = self.setup_default_roles()
+        self.schema = schema_clients
+        self.endpoint_path = "/api/v1/graphql/clients"
+
     def test_parse_flat_and_program_map(self):
         flat = parse_photo_buckets(
             [{"name": "Table Set Up", "helper": "wide", "min": 2}]
@@ -49,16 +55,16 @@ class TestStandingCheckinHelpers:
         assert mapped["Retail Sampling"][0]["name"] == "Table Set Up"
         assert mapped["Event Activation"][0]["min"] == 3
 
-    def test_parse_rejects_bad_url_shape_via_resources(self, db):
-        tenant = Tenant.objects.create(name="Studio Brand", slug="studio-brand")
+    def test_parse_rejects_bad_url_shape_via_resources(self):
+        tenant = self.create_tenant(name="Studio Brand", slug="studio-brand-helpers")
         with pytest.raises(ValueError, match="rejected"):
             update_standing_checkin_config(
                 tenant,
                 resources=[{"label": "Guide", "kind": "pdf", "url": "javascript:alert(1)"}],
             )
 
-    def test_reuses_exact_sentinel_categories_without_duplicating(self, db):
-        tenant = Tenant.objects.create(name="Sentinel Brand", slug="sentinel-brand")
+    def test_reuses_exact_sentinel_categories_without_duplicating(self):
+        tenant = self.create_tenant(name="Sentinel Brand", slug="sentinel-brand")
         sampling = FileRecapCategory.objects.create(
             name="Sampling photos", tenant=tenant
         )
@@ -88,8 +94,8 @@ class TestStandingCheckinHelpers:
             "Table Set Up",
         }
 
-    def test_refuses_to_rename_sentinel_into_another_bucket(self, db):
-        tenant = Tenant.objects.create(name="Sentinel Rename", slug="sentinel-rename")
+    def test_refuses_to_rename_sentinel_into_another_bucket(self):
+        tenant = self.create_tenant(name="Sentinel Rename", slug="sentinel-rename")
         sampling = FileRecapCategory.objects.create(
             name="Sampling photos", tenant=tenant
         )
