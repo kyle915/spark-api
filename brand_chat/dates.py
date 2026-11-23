@@ -4,7 +4,8 @@ Suggested questions such as "last month" and "which stores in December" were
 answered from 2022–2023 because the model treated that year as now. Tool
 calls then returned empty program KPIs while Home showed the current month.
 These helpers name the real windows and move a stale tool range onto the
-current calendar before the tool runs.
+current calendar before the tool runs. "Last year" means the previous
+calendar year, and a weekly summary date is always a Monday.
 """
 
 from __future__ import annotations
