@@ -77,7 +77,7 @@ mutation Refresh($tenantId: ID!, $startDate: String, $endDate: String) {
 
 SUMMARY_FIELDS = """
   id period weekStart weekEnd body editedBody text status generatedAt
-  reviewedByName reviewedAt
+  reviewedByName reviewedAt sentAt sentByName sentTo
 """
 
 WEEK = (
@@ -92,6 +92,7 @@ query Week($weekStart: String, $period: String! = "week") {
       tenantName
       approvedRecaps
       pendingRecaps
+      suggestedRecipients
       summary { %s }
     }
   }
@@ -127,6 +128,17 @@ REVIEWED = (
 mutation Reviewed($id: ID!, $reviewed: Boolean!) {
   setWeeklyClientSummaryReviewed(id: $id, reviewed: $reviewed) {
     ok reason summary { %s }
+  }
+}
+"""
+    % SUMMARY_FIELDS
+)
+
+SEND = (
+    """
+mutation Send($id: ID!, $recipients: [String!]!, $message: String) {
+  sendWeeklyClientSummary(id: $id, recipients: $recipients, message: $message) {
+    ok reason sentCount summary { %s }
   }
 }
 """
@@ -821,6 +833,79 @@ class TestSummaryAndThemes(AmbassadorsGraphQLTestCase):
         back = data["setWeeklyClientSummaryReviewed"]["summary"]
         assert back["status"] == "draft" and back["reviewedByName"] is None
         assert len(mail.outbox) == 0
+
+    @pytest.mark.asyncio
+    async def test_staff_can_send_branded_summary_and_stamp_sent(self):
+        from tenants.models import Tenant
+
+        await sync_to_async(Tenant.objects.filter(id=self.tenant.id).update)(
+            recap_recipient_emails="buyer@alpha.test, ops@alpha.test"
+        )
+        self._model_writes("Three events ran.\n\nShoppers liked the citrus.")
+        made = await self._generate(self.admin)
+        summary_id = made["summary"]["id"]
+
+        data = await self._run(WEEK, {"weekStart": self.start}, self.admin)
+        listed = {r["tenantName"]: r for r in data["weeklyClientSummaries"]["rows"]}
+        suggested = listed["Alpha Brand"]["suggestedRecipients"]
+        assert "buyer@alpha.test" in suggested
+        assert "themes-client@test.com" in suggested
+
+        data = await self._run(
+            SEND,
+            {
+                "id": summary_id,
+                "recipients": ["Buyer@Alpha.test", "buyer@alpha.test", "ops@alpha.test"],
+                "message": "Quick Monday note.",
+            },
+            self.admin,
+        )
+        payload = data["sendWeeklyClientSummary"]
+        assert payload["ok"] is True, payload
+        assert payload["sentCount"] == 2  # case-insensitive dedup
+        sent = payload["summary"]
+        assert sent["sentAt"]
+        assert sent["sentByName"] == "Sam Staff"
+        assert sent["sentTo"] == ["Buyer@Alpha.test", "ops@alpha.test"]
+        assert sent["status"] == "reviewed"
+        assert len(mail.outbox) == 2
+        bodies = " ".join(
+            (m.alternatives[0][0] if m.alternatives else m.body) for m in mail.outbox
+        )
+        assert "Three events ran." in bodies
+        assert "Quick Monday note." in bodies
+        assert "Spark by Ignite" in bodies or "spark-logo" in bodies.lower()
+
+        row = (await self._summaries())[0]
+        assert row.sent_at is not None
+        assert row.sent_by_id == self.admin.id
+        assert row.sent_to == ["Buyer@Alpha.test", "ops@alpha.test"]
+
+    @pytest.mark.asyncio
+    async def test_send_summary_rejects_bad_recipients_and_non_staff(self):
+        self._model_writes("Three events ran.")
+        made = await self._generate(self.admin)
+        summary_id = made["summary"]["id"]
+
+        data = await self._run(
+            SEND, {"id": summary_id, "recipients": []}, self.admin
+        )
+        assert data["sendWeeklyClientSummary"]["ok"] is False
+        data = await self._run(
+            SEND,
+            {"id": summary_id, "recipients": ["not-an-email"]},
+            self.admin,
+        )
+        assert data["sendWeeklyClientSummary"]["ok"] is False
+        data = await self._run(
+            SEND,
+            {"id": summary_id, "recipients": ["ok@brand.test"]},
+            self.client_user,
+        )
+        assert data["sendWeeklyClientSummary"]["ok"] is False
+        assert len(mail.outbox) == 0
+        row = (await self._summaries())[0]
+        assert row.sent_at is None
 
     @pytest.mark.asyncio
     async def test_dashboard_shows_a_brand_only_a_reviewed_summary(self):
