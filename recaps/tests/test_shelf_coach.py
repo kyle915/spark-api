@@ -64,40 +64,50 @@ def test_coach_unavailable_without_key():
 @override_settings(OPENAI_API_KEY="test-key")
 def test_coach_returns_nudges_from_vision():
     with patch(
-        "recaps.shelf_coach.generate_vision_json",
-        create=True,
-    ):
-        with patch(
-            "utils.ai_text.generate_vision_json",
-            return_value={
-                "isShelfPhoto": True,
-                "productOnShelf": "no",
-                "facings": 0,
-                "facingsCountClear": False,
-                "priceTagVisible": "no",
-                "price": "",
-                "priceLegible": False,
-                "outOfStockGap": "unclear",
-            },
-        ):
-            result = coach_shelf_photo(
-                b"jpeg-bytes", brand="Torch", product_names=["5MG"]
-            )
+        "utils.ai_text.generate_vision_json",
+        return_value={
+            "isShelfPhoto": True,
+            "productOnShelf": "no",
+            "facings": 0,
+            "facingsCountClear": False,
+            "priceTagVisible": "no",
+            "price": "",
+            "priceLegible": False,
+            "outOfStockGap": "unclear",
+        },
+    ) as vision:
+        result = coach_shelf_photo(
+            b"jpeg-bytes",
+            brand="Torch",
+            product_names=["5MG"],
+            content_type="image/png",
+        )
     assert result["available"] is True
     assert result["status"] == "read"
     assert result["answers"]["productOnShelf"] == "no"
     assert any(n["code"] == "product_missing" for n in result["nudges"])
+    assert vision.call_args.kwargs["content_type"] == "image/png"
     packed = pack_response(result, persisted=False)
     assert "_answer" not in packed
     assert packed["available"] is True
+
+
+@override_settings(OPENAI_API_KEY="test-key")
+def test_coach_treats_failed_vision_as_unavailable():
+    with patch("utils.ai_text.generate_vision_json", return_value=None):
+        result = coach_shelf_photo(b"jpeg-bytes", brand="Torch", product_names=["5MG"])
+    assert result["available"] is False
+    assert result.get("_answer") is None
+    assert result["status"] is None
 
 
 def test_persist_skipped_without_file():
     assert persist_shelf_reading(None, {"status": "read", "product_on_shelf": YES}) is False
 
 
-def test_persist_skips_unknown_status():
+def test_persist_skips_failed_and_unknown_status():
     class _File:
         id = 1
 
+    assert persist_shelf_reading(_File(), {"status": "failed"}) is False
     assert persist_shelf_reading(_File(), {"status": "weird"}) is False

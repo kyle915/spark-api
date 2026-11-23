@@ -39,7 +39,7 @@ def test_stock_risk_levels():
         },
     )
     assert high["level"] == "high"
-    watch = _stock_risk(
+    watch_no_tag = _stock_risk(
         None,
         {
             "eventDate": "2026-11-01",
@@ -47,7 +47,16 @@ def test_stock_risk_levels():
             "priceTagVisible": "no",
         },
     )
-    assert watch["level"] == "watch"
+    assert watch_no_tag["level"] == "watch"
+    watch_unclear_tag = _stock_risk(
+        None,
+        {
+            "eventDate": "2026-11-01",
+            "productOnShelf": "yes",
+            "priceTagVisible": "unclear",
+        },
+    )
+    assert watch_unclear_tag["level"] == "watch"
     ok = _stock_risk(
         None,
         {

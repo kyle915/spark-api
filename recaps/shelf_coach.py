@@ -169,12 +169,20 @@ def coach_shelf_photo(
     *,
     brand: str,
     product_names: list[str],
+    content_type: str = "image/jpeg",
 ) -> dict:
-    """One shelf photo → advisory payload. Never raises; never rejects."""
+    """One shelf photo → advisory payload. Never raises; never rejects.
+
+    Transient vision failures return ``available=False`` and do not include
+    an ``_answer`` so callers never persist ``status=failed`` (which would
+    burn cron ``MAX_ATTEMPTS``).
+    """
     if not image_bytes:
         return _unavailable()
+    mime = (content_type or "image/jpeg").strip() or "image/jpeg"
+    if not mime.startswith("image/"):
+        mime = "image/jpeg"
     try:
-        # Prefer the shared reader; fall back to interpret_shelf(None) on soft fail.
         from utils.ai_text import generate_vision_json
         from recaps.shelf_check import (
             SHELF_SCHEMA,
@@ -187,7 +195,7 @@ def coach_shelf_photo(
                 SHELF_SYSTEM,
                 compose_prompt(brand, product_names),
                 image_bytes=image_bytes,
-                content_type="image/jpeg",
+                content_type=mime,
                 schema=SHELF_SCHEMA,
                 max_tokens=COACH_MAX_TOKENS,
                 timeout=COACH_TIMEOUT,
@@ -201,6 +209,11 @@ def coach_shelf_photo(
         return _unavailable()
     except Exception as exc:  # noqa: BLE001
         logger.warning("shelf coach failed: %s", exc)
+        return _unavailable()
+
+    # Soft model/HTTP miss → unavailable (leave unread for cron). Never
+    # report available=true with status=failed.
+    if answer.get("status") == "failed":
         return _unavailable()
 
     nudges = coach_nudges(answer)
@@ -219,8 +232,9 @@ def coach_shelf_photo(
 def persist_shelf_reading(custom_recap_file, answer: dict) -> bool:
     """Upsert a ``ShelfReading`` for a filed photo. Returns True when saved.
 
-    Skips when the answer is a hard failure (leave for cron retry) or when a
-    staff correction already exists (never overwrite staff).
+    Only persists ``read`` / ``unreadable``. Never writes ``failed`` (leave
+    for cron retry without burning attempts). Never overwrites a staff
+    correction.
     """
     from recaps.models import ShelfReading, ShelfReadingCorrection
 
@@ -230,7 +244,6 @@ def persist_shelf_reading(custom_recap_file, answer: dict) -> bool:
     if status not in (
         ShelfReading.STATUS_READ,
         ShelfReading.STATUS_UNREADABLE,
-        ShelfReading.STATUS_FAILED,
     ):
         return False
     if ShelfReadingCorrection.objects.filter(custom_recap_file=custom_recap_file).exists():

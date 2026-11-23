@@ -130,7 +130,8 @@ def _stock_risk(event, last_shelf: dict | None) -> dict | None:
                 "Confirm stock before the demo."
             ),
         }
-    if on_shelf == UNCLEAR or tag == NO:
+    # Watch when product is unclear, or when a price tag was missing/unclear.
+    if on_shelf == UNCLEAR or tag == NO or tag == UNCLEAR:
         return {
             "level": "watch",
             "reason": (

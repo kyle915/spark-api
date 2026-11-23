@@ -1264,6 +1264,8 @@ def public_checkin_shelf_coach(request: HttpRequest, code: str) -> HttpResponse:
         return _rate_limited()
 
     content_type = str(data.get("contentType") or data.get("content_type") or "image/jpeg")
+    if not content_type.startswith("image/"):
+        content_type = "image/jpeg"
     image = _image_bytes(data.get("imageBase64") or data.get("image") or "")
     if len(image) > 4_000_000:
         image = b""
@@ -1276,17 +1278,26 @@ def public_checkin_shelf_coach(request: HttpRequest, code: str) -> HttpResponse:
         for p in (_event_products(event) or [])
         if (p.get("name") or "").strip()
     ]
-    result = coach_shelf_photo(image, brand=brand, product_names=product_names)
+    result = coach_shelf_photo(
+        image,
+        brand=brand,
+        product_names=product_names,
+        content_type=content_type,
+    )
     answer = result.pop("_answer", None) if isinstance(result, dict) else None
 
     persisted = False
     file_raw = data.get("fileId") or data.get("file_id") or data.get("customRecapFileId")
+    # Only persist real read/unreadable answers for THIS BA's shelf photo —
+    # never another ambassador's file on the same event, and never burn cron
+    # attempts on a transient vision failure (available=false / no _answer).
     if result.get("available") and answer is not None and file_raw not in (None, ""):
         try:
             file_id = int(str(file_raw).strip())
         except (TypeError, ValueError):
             file_id = None
-        if file_id is not None:
+        if file_id is not None and getattr(ambassador, "id", None) is not None:
+            from recaps.shelf_check import SHELF_CATEGORY_IREGEX, _image_q
             from recaps.models import CustomRecapFile
 
             recap_file = (
@@ -1295,7 +1306,10 @@ def public_checkin_shelf_coach(request: HttpRequest, code: str) -> HttpResponse:
                     id=file_id,
                     custom_recap__event_id=event.id,
                     custom_recap__tenant_id=event.tenant_id,
+                    custom_recap__ambassador_id=ambassador.id,
+                    file_recap_category__name__iregex=SHELF_CATEGORY_IREGEX,
                 )
+                .filter(_image_q())
                 .first()
             )
             if recap_file is not None:
