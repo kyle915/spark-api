@@ -41,6 +41,7 @@ from receipts.schema import ReceiptQueryClient, ReceiptMutationsClient
 from billing.schema import BillingQueryClient, BillingMutationsClient
 from ambassadors.schema import AmbassadorQueryClient, AmbassadorMutationsClient
 from tenants.schema import QueryClients, MutationClients
+from tenants.standing_checkin_graphql import StandingCheckinMutations
 from tenants.brand_groups import BrandGroupMutations, BrandGroupQueries
 from tenants.dashboard.schema import DashboardQueries
 from tenants.dashboard.mutations import DashboardMutations
@@ -145,6 +146,7 @@ MutationClients = merge_types(
         ReceiptAuditMutations,
         TenantGoalsMutations,
         ScheduledReportMutations,
+        StandingCheckinMutations,
         NotificationPreferenceMutations,
         FieldSamplingReportMutations,
         BestPhotoMutations,
