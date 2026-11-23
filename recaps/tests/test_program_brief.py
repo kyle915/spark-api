@@ -145,6 +145,15 @@ def test_grounding_rejects_invented_figures_percents_and_reach():
     assert not brief_is_grounded("Reach was strong across 6 events.", facts)
     assert not brief_is_grounded("Conversion was 12% on 40 consumers sampled.", facts)
     assert not brief_is_grounded("Samples handed out were 40.", facts)
+    assert not brief_is_grounded("2026 consumers were sampled.", facts)
+    assert not brief_is_grounded("40 events ran.", facts)
+    handed = {
+        **facts,
+        "samples_handed_out": 100,
+        "labels": "samples handed out is units given out.",
+    }
+    assert brief_is_grounded("100 samples handed out.", handed)
+    assert not brief_is_grounded("40 samples handed out.", handed)
     with_conversion = {
         **facts,
         "conversion": {
@@ -161,6 +170,16 @@ def test_quote_must_be_copied_from_the_facts():
     assert quote_in_facts("Loved the citrus flavor at the store.", facts)
     assert not quote_in_facts("People were obsessed with the flavor.", facts)
     assert not quote_in_facts("Loved", facts)
+    assert not quote_in_facts("Loved the citrus flavor", facts)
+    longer = {
+        "consumer_comments": [
+            {
+                "type": "general",
+                "text": "This product tastes terrible compared with Brand X.",
+            }
+        ]
+    }
+    assert not quote_in_facts("This product tastes terrible", longer)
 
 
 def test_compose_keeps_a_grounded_draft_and_drops_a_bad_quote():

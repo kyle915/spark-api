@@ -92,7 +92,8 @@ _SYSTEM = (
     "not call it reach or samples handed out. Mention samples handed out "
     "only when FACTS has samples_handed_out. Mention conversion only when "
     "FACTS has conversion, and keep the note that it is retail and "
-    "on-premise only. "
+    "on-premise only. Put each number immediately beside the words for that "
+    "figure. Do not use a year or a calendar date as a count. "
     "paragraph: one short paragraph on what ran and what worked. "
     "bullets: two or three short bullets. Use a feedback theme when FACTS "
     "has feedback_themes, and a watch-out when FACTS has a reason people "
@@ -204,19 +205,202 @@ def _comment_haystack(facts: dict) -> list[str]:
 
 
 def quote_in_facts(quote: str, facts: dict) -> bool:
-    """True when ``quote`` is a comment (or stored theme quote) copied across."""
+    """True when ``quote`` is one whole comment or stored quote, not a fragment."""
     needle = _norm_comment(quote)
     if len(needle) < 8:
         return False
-    return any(needle in _norm_comment(hay) for hay in _comment_haystack(facts) if hay)
+    return any(_norm_comment(hay) == needle for hay in _comment_haystack(facts) if hay)
+
+
+_ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+_WORD = re.compile(r"\d[\d,]*(?:\.\d+)?%?|[A-Za-z]+(?:'[A-Za-z]+)?")
+# A count sits just before its label ("40 consumers were sampled") or just
+# after a short lead-in ("sampled 40 consumers"). Two words before and four
+# after is wide enough for that label and narrow enough that "40 events" does
+# not borrow "consumers sampled" from the next clause.
+_WORDS_BEFORE = 2
+_WORDS_AFTER = 4
+
+
+def _word_matches(word: str, keyword: str) -> bool:
+    return word == keyword or word == f"{keyword}s" or word == f"{keyword}es"
+
+
+def _window_has(words: list[str], index: int, group: tuple[str, ...]) -> bool:
+    nearby = words[max(0, index - _WORDS_BEFORE) : index]
+    nearby += words[index + 1 : index + 1 + _WORDS_AFTER]
+    return all(any(_word_matches(word, keyword) for word in nearby) for keyword in group)
+
+
+def _add_figure(
+    figures: list[tuple[str, bool, tuple[tuple[str, ...], ...]]],
+    value,
+    *groups: tuple[str, ...],
+    percent: bool = False,
+) -> None:
+    if value is None or value is False or not groups:
+        return
+    raw = str(value).strip().replace(",", "")
+    if not raw or raw in {"0", "0.0", "0%"}:
+        return
+    is_percent = percent or raw.endswith("%")
+    token = raw[:-1] if raw.endswith("%") else raw
+    if token.endswith(".0"):
+        token = token[:-2]
+    if not token:
+        return
+    figures.append((token, is_percent, groups))
+
+
+def _name_groups(name: str, *extra: str) -> tuple[tuple[str, ...], ...]:
+    words = [word.lower() for word in re.findall(r"[A-Za-z0-9]+", name or "") if word]
+    if not words:
+        return ()
+    return tuple((*extra, word) for word in words[:3])
+
+
+def _metric_figures(facts: dict) -> list[tuple[str, bool, tuple[tuple[str, ...], ...]]]:
+    """Each allowed number, and the words that have to sit next to it."""
+    figures: list[tuple[str, bool, tuple[tuple[str, ...], ...]]] = []
+    _add_figure(figures, facts.get("events_run"), ("event",))
+    _add_figure(figures, facts.get("approved_recaps"), ("approved", "recap"))
+    _add_figure(
+        figures,
+        facts.get("consumers_sampled"),
+        ("consumer", "sampled"),
+        ("people", "sampled"),
+    )
+    _add_figure(
+        figures,
+        facts.get("samples_handed_out"),
+        ("sample", "handed"),
+        ("handed", "out"),
+    )
+    _add_figure(figures, facts.get("units_sold"), ("unit", "sold"), ("sold",))
+    _add_figure(figures, facts.get("first_time_consumers"), ("first",))
+    _add_figure(figures, facts.get("brand_aware_consumers"), ("aware",), ("awareness",))
+    _add_figure(
+        figures,
+        facts.get("consumers_willing_to_purchase"),
+        ("willing",),
+        ("purchase",),
+        ("buy",),
+    )
+    _add_figure(figures, facts.get("store_count"), ("store",))
+    conversion = facts.get("conversion") if isinstance(facts.get("conversion"), dict) else {}
+    _add_figure(figures, conversion.get("conversion_percent"), ("conversion",), percent=True)
+    _add_figure(figures, conversion.get("units_sold"), ("unit", "sold"), ("sold",))
+    _add_figure(
+        figures,
+        conversion.get("sampled_at_those_events"),
+        ("sampled", "those"),
+        ("sampled", "conversion"),
+    )
+    for store in facts.get("stores") or []:
+        if isinstance(store, dict):
+            _add_figure(
+                figures,
+                store.get("consumers_sampled"),
+                *_name_groups(str(store.get("store") or ""), "sampled"),
+            )
+    for state in facts.get("states") or []:
+        if isinstance(state, dict):
+            _add_figure(
+                figures,
+                state.get("consumers_sampled"),
+                *_name_groups(str(state.get("state") or ""), "sampled"),
+            )
+    for theme in facts.get("feedback_themes") or []:
+        if isinstance(theme, dict):
+            _add_figure(figures, theme.get("recaps_mentioning_it"), ("recap",))
+    for brand in facts.get("competitor_mentions") or []:
+        if isinstance(brand, dict):
+            _add_figure(figures, brand.get("recaps_mentioning_it"), ("recap",), ("mention",))
+            _add_figure(figures, brand.get("recaps_preferring_ours"), ("prefer",), ("ours",))
+            _add_figure(figures, brand.get("recaps_preferring_theirs"), ("prefer",), ("theirs",))
+    shelf = facts.get("shelf") if isinstance(facts.get("shelf"), dict) else {}
+    _add_figure(figures, shelf.get("retail_visits_with_a_shelf_answer"), ("visit",))
+    _add_figure(figures, shelf.get("product_on_shelf"), ("shelf",))
+    _add_figure(figures, shelf.get("product_not_on_shelf"), ("shelf",))
+    _add_figure(figures, shelf.get("price_tag_visible"), ("price",), ("tag",))
+    _add_figure(figures, shelf.get("shelf_photo_unclear"), ("unclear",), ("shelf",))
+    previous = facts.get("previous_period") if isinstance(facts.get("previous_period"), dict) else {}
+    _add_figure(
+        figures,
+        previous.get("events_run"),
+        ("previous", "event"),
+        ("prior", "event"),
+        ("earlier", "event"),
+    )
+    _add_figure(
+        figures,
+        previous.get("consumers_sampled"),
+        ("previous", "sampled"),
+        ("prior", "sampled"),
+        ("earlier", "sampled"),
+    )
+    return figures
+
+
+def _without_copied_dates(text: str, facts: dict) -> str:
+    blob = json.dumps(facts, ensure_ascii=False)
+    cleaned = text or ""
+    for stamp in set(_ISO_DATE.findall(cleaned)):
+        if stamp in blob:
+            cleaned = cleaned.replace(stamp, " ")
+    return cleaned
+
+
+def _without_exact_quotes(text: str, facts: dict) -> str:
+    """A copied comment may contain digits. Those are the shopper's words."""
+    cleaned = text or ""
+    for hay in _comment_haystack(facts):
+        plain = " ".join(str(hay or "").split())
+        if len(plain) < 8:
+            continue
+        cleaned = re.sub(re.escape(plain), " ", cleaned, flags=re.IGNORECASE)
+    return cleaned
+
+
+def figures_match_labels(text: str, facts: dict) -> bool:
+    """Every number sits next to the metric it actually is.
+
+    A year inside ``2026-10-24`` is not a count of consumers, and ``40`` from
+    consumers sampled cannot be written as ``40 events``.
+    """
+    figures = _metric_figures(facts)
+    words = _WORD.findall(_without_copied_dates(_without_exact_quotes(text, facts), facts))
+    lowered = [word.lower() for word in words]
+    for index, word in enumerate(lowered):
+        if not _NUM_TOKEN.match(word):
+            continue
+        is_percent = word.endswith("%")
+        token = word[:-1] if is_percent else word
+        token = token.replace(",", "")
+        if token.endswith(".0"):
+            token = token[:-2]
+        candidates = [
+            groups
+            for figure, percent, groups in figures
+            if figure == token and percent == is_percent
+        ]
+        if not candidates:
+            return False
+        if not any(_window_has(lowered, index, group) for groups in candidates for group in groups):
+            return False
+    return True
+
+
+_NUM_TOKEN = re.compile(r"^\d[\d,]*(?:\.\d+)?%?$")
 
 
 def brief_is_grounded(text: str, facts: dict) -> bool:
-    """Every figure is in the facts, and a percent was copied with its sign.
+    """Every figure is in the facts, beside the label it belongs to.
 
     ``numbers_are_grounded`` also refuses "conversion" and "samples handed
     out" unless the facts already use those words. "reach" is refused here
-    unless the facts say it, which they do not.
+    unless the facts say it, which they do not. A percent sign is kept only
+    when that exact percent is in the facts.
     """
     if not numbers_are_grounded(text, facts):
         return False
@@ -227,7 +411,7 @@ def brief_is_grounded(text: str, facts: dict) -> bool:
             return False
     if _REACH.search(text or "") and not _REACH.search(blob):
         return False
-    return True
+    return figures_match_labels(text, facts)
 
 
 def _ask_model(system: str, user: str):
@@ -488,7 +672,9 @@ def brief_facts(tenant_id: int, start: date, end: date) -> dict:
         "brand_aware_consumers and consumers_willing_to_purchase are counts of people who answered, not rates.",
     ]
     if "samples_handed_out" in facts:
-        notes.append("samples_handed_out is units given out, separate from people sampled.")
+        notes.append(
+            "samples handed out is units given out, separate from people sampled."
+        )
     if "conversion" in facts:
         notes.append(
             "conversion is Retail and On-Premise only, not Event or Event Activation."
