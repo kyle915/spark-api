@@ -7419,6 +7419,24 @@ class RecapMutations:
                 },
             )
 
+            # Stamp the same dedup field the hourly cron uses so
+            # /recaps/missing can show lastNudgedAt and "Nudge all
+            # overdue" can skip anyone nudged in the last 12h. Always
+            # stamp on a successful attempt (even 0 devices) so ops see
+            # they already tried — per-row Nudge still re-fires.
+            from django.utils import timezone as dj_tz
+
+            nudged_at = dj_tz.now()
+
+            @sync_to_async
+            def _stamp_nudge():
+                a_models.AmbassadorEvent.objects.filter(pk=ae.pk).update(
+                    recap_nudge_sent_at=nudged_at
+                )
+
+            await _stamp_nudge()
+            last_nudged_iso = nudged_at.isoformat()
+
             # Audit log: write a nudge_sent entry on the request that
             # spawned this event so the timeline panel picks it up.
             # Best-effort; the nudge itself is the important action.
@@ -7464,6 +7482,7 @@ class RecapMutations:
                             "ba_name": ba_name,
                             "devices_notified": devices_notified,
                             "event_uuid": str(getattr(event, "uuid", "")),
+                            "channel": "push",
                         },
                     )
             except Exception:
@@ -7480,6 +7499,8 @@ class RecapMutations:
                 ),
                 input_obj=input,
                 devices_notified=devices_notified,
+                last_nudged_at=last_nudged_iso,
+                last_nudge_channel="push",
             )
         except GraphQLError as e:
             return build_mutation_response(

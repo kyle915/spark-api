@@ -909,6 +909,15 @@ class MissingRecapAmbassadorInfo:
     # haven't formally said yes; the admin may want to nudge them
     # differently or skip nudging entirely.
     is_approved: bool
+    # ISO timestamp of the last recap nudge for this BA+event
+    # (AmbassadorEvent.recap_nudge_sent_at) — cron timely nudge or an
+    # admin click on /recaps/missing. Null when never nudged. Powers the
+    # "last nudged" chip and the 12h skip on Nudge all overdue.
+    last_nudged_at: str | None = None
+    # Channel of the last nudge. Today only "push" (Expo). Reserved so
+    # SMS/email fallbacks can surface a channel pill without another
+    # schema bump.
+    last_nudge_channel: str | None = None
 
 
 @strawberry.type
@@ -998,6 +1007,10 @@ class NudgeRecapResponse:
     # BA has no registered devices — UI surfaces a clearer hint than
     # a generic "failed".
     devices_notified: int | None = None
+    # ISO timestamp stamped on AmbassadorEvent.recap_nudge_sent_at after
+    # a successful nudge attempt (same field the hourly cron uses).
+    last_nudged_at: str | None = None
+    last_nudge_channel: str | None = None
 
 
 @strawberry.type

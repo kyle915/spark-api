@@ -35,6 +35,8 @@ query Missing($lookbackDays: Int!) {
       ambassadorEventUuid
       name
       isApproved
+      lastNudgedAt
+      lastNudgeChannel
     }
   }
 }
@@ -46,6 +48,8 @@ mutation Nudge($input: NudgeAmbassadorForRecapInput!) {
     success
     message
     devicesNotified
+    lastNudgedAt
+    lastNudgeChannel
   }
 }
 """
@@ -464,7 +468,25 @@ class TestNudgeAmbassadorForRecap(AmbassadorsGraphQLTestCase):
         payload = result.data["nudgeAmbassadorForRecap"]
         assert payload["success"] is True
         assert payload["devicesNotified"] == 2
+        assert payload["lastNudgedAt"] is not None
+        assert payload["lastNudgeChannel"] == "push"
         mock_push.assert_awaited_once()
+
+        # Stamp lands on AmbassadorEvent so /recaps/missing can show
+        # lastNudgedAt and bulk-overdue can skip recent nudges.
+        await sync_to_async(self.ambassador_event.refresh_from_db)()
+        assert self.ambassador_event.recap_nudge_sent_at is not None
+
+        listed = await self._execute_mutation(
+            MISSING_QUERY,
+            {"lookbackDays": 30},
+            self.endpoint_path,
+            user=self.admin,
+        )
+        assert listed.errors is None
+        ba_rows = listed.data["missingRecapEvents"][0]["assignedAmbassadors"]
+        assert ba_rows[0]["lastNudgedAt"] is not None
+        assert ba_rows[0]["lastNudgeChannel"] == "push"
 
     @pytest.mark.asyncio
     async def test_refuses_push_when_recap_already_filed(self):
@@ -497,6 +519,8 @@ class TestNudgeAmbassadorForRecap(AmbassadorsGraphQLTestCase):
         assert payload["success"] is False
         assert "already filed" in payload["message"].lower()
         mock_push.assert_not_awaited()
+        await sync_to_async(self.ambassador_event.refresh_from_db)()
+        assert self.ambassador_event.recap_nudge_sent_at is None
 
 
 @pytest.mark.django_db(transaction=True)
