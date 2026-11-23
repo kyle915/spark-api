@@ -430,10 +430,20 @@ def test_store_links_only_for_stores_named(world, fake):
     assert all(link["url"].startswith("/store/") for link in turn.links)
 
 
-def test_suggestions_come_from_the_brands_data(world):
+def test_suggestions_come_from_the_brands_data(world, monkeypatch):
+    from datetime import date
+
+    monkeypatch.setattr("spark_mcp.tools._ops_today", lambda: date(2026, 11, 22))
+    cache.clear()
     ideas = service.suggestions(world.tenant.id)
     assert ideas and len(ideas) <= 4
-    assert "Which stores converted best last month?" in ideas
+    assert "Which stores converted best in October 2026?" in ideas
+    assert "Which stores should we hit in December 2026?" in ideas
+    joined = " ".join(ideas)
+    assert "last month" not in joined.casefold()
+    assert "in December?" not in joined
+    for year in ("2022", "2023", "2024"):
+        assert year not in joined
 
 
 # ─── GraphQL ───────────────────────────────────────────────────────
@@ -531,3 +541,41 @@ def test_store_performance_names_walkin_venues_instead_of_no_store(monkeypatch):
         ("Costco", False, 100),
     }
     assert sum(r["consumers_sampled"] for r in payload["stores"]) == 5140
+
+
+def test_stale_tool_years_query_the_current_calendar(world, fake, monkeypatch):
+    """A model that still asks for October 2023 is given October 2026."""
+    from datetime import date
+
+    monkeypatch.setattr("spark_mcp.tools._ops_today", lambda: date(2026, 11, 22))
+    seen: dict = {}
+
+    def answer(payload):
+        data = last_tool(payload)
+        period = data["current_period"]
+        seen["start"] = period["start_date"]
+        seen["end"] = period["end_date"]
+        seen["note"] = data.get("date_note", "")
+        events = period["events_with_recaps"]
+        return final(
+            f"October had {events} events with recaps.",
+            ["get_program_kpis"],
+        )
+
+    model = fake(
+        calls(("get_program_kpis", {"start_date": "2023-10-01", "end_date": "2023-10-31"})),
+        answer,
+    )
+    turn = service.ask(
+        world.brand_user,
+        world.tenant,
+        "How did last month compare with the month before?",
+    )
+    assert seen["start"] == "2026-10-01"
+    assert seen["end"] == "2026-10-31"
+    assert "2023" not in seen["note"]
+    assert turn.status == BrandChatTurn.STATUS_ANSWERED
+    assert turn.sources[0]["detail"] == "2026-10-01 to 2026-10-31"
+    user = model.requests[0]["messages"][-1]["content"]
+    assert "2026-10-01 to 2026-10-31" in user
+    assert "2026-09-01 to 2026-09-30" in user
