@@ -17,6 +17,7 @@ Routes (mounted under ``/api/public/`` in ``events/urls.py``):
     POST checkin/<code>/clear-clock    → {cleared, clockedOut, clock}
     POST checkin/<code>/upload-url     → {uploadUrl, blobName}
     POST checkin/<code>/photo-check    → advisory bucket classification
+    POST checkin/<code>/shelf-coach    → aisle nudges; optional ShelfReading persist
     POST checkin/<code>/voice-draft    → proposals for every recap field
     POST checkin/<code>/voice-transcribe → audio → transcript + proposals
     POST checkin/<code>/tally-read     → numbers proposed from a tally photo
@@ -56,6 +57,11 @@ from jobboard.checkin import (
 from recaps.photo_check import classify_photo
 from recaps.receipt_gate import NEEDS_RECEIPT_CODE, RecapNeedsAReceipt
 from recaps.recap_precheck import precheck_recap
+from recaps.shelf_coach import (
+    coach_shelf_photo,
+    pack_response as pack_shelf_coach_response,
+    persist_shelf_reading,
+)
 from recaps.spend_amount import SpendAmountNeedsCents
 from recaps.voice_draft import structure_transcript
 from events.checkin_tokens import (
@@ -1224,6 +1230,95 @@ def public_checkin_photo_check(request: HttpRequest, code: str) -> HttpResponse:
             chosen_bucket_name=chosen_name,
         )
     )
+
+
+# --------------------------------------------------------------------------
+# POST shelf-coach  (aisle nudges from shelf vision; optional ShelfReading)
+# --------------------------------------------------------------------------
+SHELF_COACH_IP_LIMIT = 60  # per 5 minutes
+SHELF_COACH_SESSION_LIMIT = 24  # per hour, one BA on one shift
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def public_checkin_shelf_coach(request: HttpRequest, code: str) -> HttpResponse:
+    """Advisory shelf read for a walk-up photo. Never rejects the upload.
+
+    Optional ``fileId`` (CustomRecapFile id already filed on this event's
+    recap) upserts a ``ShelfReading`` so cron / staff review share one truth.
+    """
+    if _over_limit("shelf-coach-ip", _client_ip(request), limit=SHELF_COACH_IP_LIMIT, window=300):
+        return _rate_limited()
+    data = _body(request)
+    loaded, err = _load_session(code, data.get("session") or "")
+    if err is not None:
+        return err
+    event, ambassador = loaded
+    session_key = f"{getattr(event, 'id', '?')}:{getattr(ambassador, 'id', '?')}"
+    if _over_limit(
+        "shelf-coach-session",
+        session_key,
+        limit=SHELF_COACH_SESSION_LIMIT,
+        window=3600,
+    ):
+        return _rate_limited()
+
+    content_type = str(data.get("contentType") or data.get("content_type") or "image/jpeg")
+    if not content_type.startswith("image/"):
+        content_type = "image/jpeg"
+    image = _image_bytes(data.get("imageBase64") or data.get("image") or "")
+    if len(image) > 4_000_000:
+        image = b""
+
+    from ambassadors.checkin_web import _event_products
+
+    brand = (getattr(getattr(event, "tenant", None), "name", None) or "").strip()
+    product_names = [
+        (p.get("name") or "").strip()
+        for p in (_event_products(event) or [])
+        if (p.get("name") or "").strip()
+    ]
+    result = coach_shelf_photo(
+        image,
+        brand=brand,
+        product_names=product_names,
+        content_type=content_type,
+    )
+    answer = result.pop("_answer", None) if isinstance(result, dict) else None
+
+    persisted = False
+    file_raw = data.get("fileId") or data.get("file_id") or data.get("customRecapFileId")
+    # Only persist real read/unreadable answers for THIS BA's shelf photo —
+    # never another ambassador's file on the same event, and never burn cron
+    # attempts on a transient vision failure (available=false / no _answer).
+    if result.get("available") and answer is not None and file_raw not in (None, ""):
+        try:
+            file_id = int(str(file_raw).strip())
+        except (TypeError, ValueError):
+            file_id = None
+        if file_id is not None and getattr(ambassador, "id", None) is not None:
+            from recaps.shelf_check import SHELF_CATEGORY_IREGEX, _image_q
+            from recaps.models import CustomRecapFile
+
+            recap_file = (
+                CustomRecapFile.objects.select_related("custom_recap")
+                .filter(
+                    id=file_id,
+                    custom_recap__event_id=event.id,
+                    custom_recap__tenant_id=event.tenant_id,
+                    custom_recap__ambassador_id=ambassador.id,
+                    file_recap_category__name__iregex=SHELF_CATEGORY_IREGEX,
+                )
+                .filter(_image_q())
+                .first()
+            )
+            if recap_file is not None:
+                try:
+                    persisted = persist_shelf_reading(recap_file, answer)
+                except Exception:  # noqa: BLE001 — coaching still returns
+                    logger.exception("shelf coach persist failed file=%s", file_id)
+
+    return JsonResponse(pack_shelf_coach_response(result, persisted=persisted))
 
 
 # --------------------------------------------------------------------------

@@ -192,7 +192,7 @@ def _booked_shift_payload(
         confirmation=booking.confirmation,
         board_token=board.token,
     )
-    return {
+    payload = {
         "title": f"{config.brand_label} · {gig.type_label} — {gig.venue}",
         "brandLabel": config.brand_label,
         "typeLabel": gig.type_label,
@@ -208,7 +208,19 @@ def _booked_shift_payload(
         "trainingUrl": training_url_for(tenant),
         "releaseToken": release_token,
         "releaseUrl": release_url,
+        "skus": list(gig.skus or []),
     }
+    try:
+        from recaps.store_prep_kit import build_store_prep_kit, prep_kit_is_empty
+
+        kit = build_store_prep_kit(gig.event)
+        if not prep_kit_is_empty(kit):
+            payload["storePrepKit"] = kit
+            if not payload["skus"] and kit.get("skus"):
+                payload["skus"] = list(kit["skus"])
+    except Exception:  # noqa: BLE001 — booked card still works without prep kit
+        pass
+    return payload
 
 
 def _book_one(

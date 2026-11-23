@@ -96,6 +96,46 @@ class ShelfNotFoundStore:
 
 
 @strawberry.type
+class StorePrepKitResource:
+    label: str
+    kind: str
+    url: str
+    note: str = ""
+
+
+@strawberry.type
+class StorePrepKitLastShelf:
+    event_date: str
+    product_on_shelf: str
+    price_tag_visible: str
+    store_name: str = ""
+
+
+@strawberry.type
+class StorePrepKitStockRisk:
+    level: str  # "none" | "watch" | "high"
+    reason: str
+
+
+@strawberry.type
+class StorePrepKit:
+    """Pre-shift briefing for a BA shift card (logistics + last shelf + SKUs)."""
+
+    logistics_notes: str
+    skus: list[str]
+    resources: list[StorePrepKitResource]
+    last_shelf_visit: StorePrepKitLastShelf | None = None
+    stock_risk: StorePrepKitStockRisk | None = None
+
+
+@strawberry.type
+class StorePrepKitPayload:
+    allowed: bool
+    kit: StorePrepKit | None = None
+    message: str = ""
+
+
+@strawberry.type
 class ShelfSummary:
     # "ready" | "none" (no shelf photos with an answer) | "unavailable"
     status: str
@@ -281,6 +321,93 @@ class ShelfCheckQueries:
         except Exception:  # noqa: BLE001
             logger.exception("shelfSummary failed tenant=%s", target)
             return _empty_summary("unavailable")
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def store_prep_kit(
+        self, info: strawberry.Info, event_id: strawberry.ID
+    ) -> StorePrepKitPayload:
+        """Store Prep Kit for one event: logistics, last shelf, SKUs, resources.
+
+        Ignite staff for any tenant; brand users only for their own events.
+        Walk-up check-in also embeds this on the public context payload.
+        """
+        try:
+            eid = resolve_id_to_int(str(event_id).strip())
+        except Exception:  # noqa: BLE001
+            return StorePrepKitPayload(allowed=False, message="Event not found.")
+
+        def _build() -> StorePrepKitPayload:
+            from events.models import Event
+            from recaps.store_prep_kit import build_store_prep_kit
+
+            event = (
+                Event.objects.select_related("tenant", "request", "retailer")
+                .filter(id=eid)
+                .first()
+            )
+            if event is None:
+                return StorePrepKitPayload(allowed=False, message="Event not found.")
+            return StorePrepKitPayload(
+                allowed=True,
+                kit=_kit_type(build_store_prep_kit(event)),
+            )
+
+        is_admin, allowed = await _accessible_tenants(info.context.request.user)
+
+        def _tenant_id() -> int | None:
+            from events.models import Event
+
+            return Event.objects.filter(id=eid).values_list("tenant_id", flat=True).first()
+
+        tenant_id = await sync_to_async(_tenant_id, thread_sensitive=True)()
+        if tenant_id is None:
+            return StorePrepKitPayload(allowed=False, message="Event not found.")
+        if not is_admin and tenant_id not in (allowed or set()):
+            return StorePrepKitPayload(allowed=False, message="Not allowed.")
+
+        try:
+            return await sync_to_async(_build, thread_sensitive=True)()
+        except Exception:  # noqa: BLE001
+            logger.exception("storePrepKit failed event=%s", eid)
+            return StorePrepKitPayload(allowed=False, message="Unavailable.")
+
+
+def _kit_type(raw: dict) -> StorePrepKit:
+    last = raw.get("lastShelfVisit")
+    risk = raw.get("stockRisk")
+    resources = [
+        StorePrepKitResource(
+            label=str(row.get("label") or ""),
+            kind=str(row.get("kind") or "link"),
+            url=str(row.get("url") or ""),
+            note=str(row.get("note") or ""),
+        )
+        for row in (raw.get("resources") or [])
+        if isinstance(row, dict) and (row.get("url") or "").strip()
+    ]
+    return StorePrepKit(
+        logistics_notes=str(raw.get("logisticsNotes") or ""),
+        skus=[str(s) for s in (raw.get("skus") or []) if str(s).strip()],
+        resources=resources,
+        last_shelf_visit=(
+            StorePrepKitLastShelf(
+                event_date=str(last.get("eventDate") or ""),
+                product_on_shelf=str(last.get("productOnShelf") or "unclear"),
+                price_tag_visible=str(last.get("priceTagVisible") or "unclear"),
+                store_name=str(last.get("storeName") or ""),
+            )
+            if isinstance(last, dict)
+            else None
+        ),
+        stock_risk=(
+            StorePrepKitStockRisk(
+                level=str(risk.get("level") or "none"),
+                reason=str(risk.get("reason") or ""),
+            )
+            if isinstance(risk, dict)
+            else None
+        ),
+    )
 
 
 @strawberry.type
