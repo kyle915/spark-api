@@ -136,15 +136,60 @@ def test_system_prompt_pins_the_year_and_keeps_the_grounding_rule():
 
 
 def test_grounding_history_drops_stale_years():
-    earlier = "\n".join(
+    kept = grounding_history(
         [
             "October 2023: 0 events with recaps.",
             "October 2026 had 61 events with recaps.",
             "Shoppers liked the taste.",
-        ]
+        ],
+        TODAY,
     )
-    kept = grounding_history(earlier, TODAY)
     assert "2023" not in kept
     assert "0 events" not in kept
     assert "61 events" in kept
     assert "taste" in kept
+
+
+def test_grounding_history_drops_the_whole_stale_answer():
+    kept = grounding_history(
+        [
+            "October had 61 events with recaps.\nBased on program KPIs for 2023-10-01.",
+            "October 2026 had 12 events with recaps.",
+        ],
+        TODAY,
+    )
+    assert "61" not in kept
+    assert "2023" not in kept
+    assert "12 events" in kept
+
+
+def test_last_year_lands_on_the_previous_calendar_year():
+    aligned = align_tool_args(
+        {"start_date": "2023-01-01", "end_date": "2023-12-31"},
+        "How did last year go?",
+        TODAY,
+    )
+    assert aligned.refuse is False
+    assert aligned.args["start_date"] == "2025-01-01"
+    assert aligned.args["end_date"] == "2025-12-31"
+
+
+def test_last_year_asked_as_this_year_steps_back():
+    aligned = align_tool_args(
+        {"start_date": "2026-01-01", "end_date": "2026-12-31"},
+        "How did last year go?",
+        TODAY,
+    )
+    assert aligned.args["start_date"] == "2025-01-01"
+    assert aligned.args["end_date"] == "2025-12-31"
+
+
+def test_weekly_summary_date_stays_a_monday():
+    aligned = align_tool_args(
+        {"week_start": "2023-11-20"},
+        "What did last week's summary say?",
+        TODAY,
+    )
+    monday = date.fromisoformat(aligned.args["week_start"])
+    assert monday.weekday() == 0
+    assert monday == date(2026, 11, 16)

@@ -39,6 +39,15 @@ _PLANNING_RE = re.compile(
     r"\b(?:hit|should we|where should|where to go|go back|recommend)\b",
     re.IGNORECASE,
 )
+_LAST_YEAR_RE = re.compile(
+    r"\b(?:last year|previous year|prior year|a year ago|year ago)\b",
+    re.IGNORECASE,
+)
+_THIS_YEAR_RE = re.compile(r"\bthis year\b", re.IGNORECASE)
+_YEAR_BEFORE_LAST_RE = re.compile(
+    r"\b(?:year before last|two years ago)\b",
+    re.IGNORECASE,
+)
 _DATE_FIELDS = ("start_date", "end_date", "week_start")
 
 
@@ -106,6 +115,28 @@ def next_month_bounds(today: date) -> tuple[date, date]:
 
 def years_named(text: str) -> set[int]:
     return {int(match.group(0)) for match in _YEAR_RE.finditer(text or "")}
+
+
+def relative_years(question: str, today: date) -> set[int]:
+    """Years a relative phrase points at, when the question names no digits.
+
+    "Last year" is the previous calendar year, not whatever year a model
+    still thinks is current. Two phrases ("this year versus last year")
+    stay a set so a single shift is not guessed.
+    """
+    found: set[int] = set()
+    if _YEAR_BEFORE_LAST_RE.search(question or ""):
+        found.add(today.year - 2)
+    if _LAST_YEAR_RE.search(question or ""):
+        found.add(today.year - 1)
+    if _THIS_YEAR_RE.search(question or ""):
+        found.add(today.year)
+    return found
+
+
+def monday_of(day: date) -> date:
+    """Monday of the week containing ``day``. Weekly summaries key on Monday."""
+    return day - timedelta(days=day.weekday())
 
 
 def months_mentioned(question: str) -> list[tuple[int, int | None]]:
@@ -268,10 +299,12 @@ def align_tool_args(args: dict | None, question: str, today: date) -> AlignedArg
     """Move a tool's dates onto the calendar the question actually means.
 
     A year the question does not name, other than this year and last year, is
-    shifted so the latest year in the range lands on the question's year (or
-    this year). A window that still has not started moves back one year, which
-    is "that month last year" for a December planning question asked in
-    November. Ranges that are already on the calendar are left alone.
+    shifted so the latest year in the range lands on the year the question
+    means: a named year, "last year", or this year. A window that still has
+    not started moves back one year, which is "that month last year" for a
+    December planning question asked in November. A weekly summary date is
+    then the Monday of that week. Ranges that are already on the calendar
+    are left alone.
     """
     clean = dict(args or {})
     parsed = {key: _parse_day(clean.get(key)) for key in _DATE_FIELDS}
@@ -280,9 +313,11 @@ def align_tool_args(args: dict | None, question: str, today: date) -> AlignedArg
         return AlignedArgs(clean)
 
     named = years_named(question)
+    relative = relative_years(question, today)
     allowed = named | {today.year, today.year - 1}
     tool_years = {day.year for day in present.values()}
-    if not tool_years <= allowed and len(named) > 1:
+    ambiguous = len(named) > 1 or len(relative) > 1
+    if not tool_years <= allowed and ambiguous:
         return AlignedArgs(
             clean,
             note=(
@@ -296,8 +331,14 @@ def align_tool_args(args: dict | None, question: str, today: date) -> AlignedArg
 
     shifted = dict(present)
     changed = False
-    if not tool_years <= allowed:
-        target = next(iter(named)) if len(named) == 1 else today.year
+    target: int | None = None
+    if len(named) == 1:
+        target = next(iter(named))
+    elif len(relative) == 1:
+        target = next(iter(relative))
+    elif not tool_years <= allowed:
+        target = today.year
+    if target is not None and max(tool_years) != target:
         delta = target - max(tool_years)
         shifted = {key: add_years(day, delta) for key, day in present.items()}
         changed = True
@@ -310,6 +351,12 @@ def align_tool_args(args: dict | None, question: str, today: date) -> AlignedArg
         shifted = {key: add_years(day, -1) for key, day in shifted.items()}
         changed = True
         guard += 1
+
+    if "week_start" in shifted:
+        monday = monday_of(shifted["week_start"])
+        if monday != shifted["week_start"]:
+            shifted["week_start"] = monday
+            changed = True
 
     if not changed:
         return AlignedArgs(clean)
@@ -331,16 +378,17 @@ def align_tool_args(args: dict | None, question: str, today: date) -> AlignedArg
     )
 
 
-def grounding_history(earlier: str, today: date) -> str:
-    """Drop earlier-answer lines that cite a stale year.
+def grounding_history(answers: list[str], today: date) -> str:
+    """Drop a whole earlier answer when any line of it cites a stale year.
 
-    A previous turn that said October 2023 had 0 events would otherwise count
-    as support for the same figures on the next question.
+    A previous turn can put "October 2023" on its "Based on" line and the
+    figures on separate bullets. Dropping only the date line would leave
+    those figures able to ground the next answer.
     """
     kept: list[str] = []
-    for line in (earlier or "").splitlines():
-        years = years_named(line)
+    for answer in answers:
+        years = years_named(answer)
         if any(year < today.year - 1 for year in years):
             continue
-        kept.append(line)
+        kept.append(answer)
     return "\n".join(kept)

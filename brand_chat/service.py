@@ -347,9 +347,9 @@ def store_links(tenant_id: int, answer: str, runs: list[dict]) -> list[dict]:
 # ─── Asking ────────────────────────────────────────────────────────
 
 
-def _history_messages(user_id: int, tenant_id: int, conversation) -> tuple[list[dict], str]:
-    """Earlier answered turns of this chat as messages, and their answers
-    (already checked) as text the grounding check may accept."""
+def _history_messages(user_id: int, tenant_id: int, conversation) -> tuple[list[dict], list[str]]:
+    """Earlier answered turns of this chat as messages, and each answer
+    (already checked) as its own string so a stale year drops the whole turn."""
     from .models import BrandChatTurn
 
     rows = list(
@@ -366,7 +366,7 @@ def _history_messages(user_id: int, tenant_id: int, conversation) -> tuple[list[
     for row in rows:
         messages.append({"role": "user", "content": row.question})
         messages.append({"role": "assistant", "content": row.answer})
-    return messages, "\n".join(r.answer for r in rows)
+    return messages, [r.answer for r in rows]
 
 
 def _new_conversation_id(raw) -> uuid_lib.UUID:
