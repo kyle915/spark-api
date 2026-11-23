@@ -10,19 +10,17 @@ Usage:
 
     # See who would be affected (no DB writes)
     python manage.py reset_passwords_for_domain \
-        --domain @liquiddeath.com
+        --domain @example.com
 
-    # Actually reset every @liquiddeath.com user to "LD1"
-    # (will refuse without --allow-weak because LD1 fails the length check)
+    # Static password reset
     python manage.py reset_passwords_for_domain \
-        --domain @liquiddeath.com \
-        --password LD1 \
-        --allow-weak \
+        --domain @example.com \
+        --password 'replace-me-with-a-strong-password' \
         --apply
 
     # Safer alternative: clear the password and force a reset-on-next-login
     python manage.py reset_passwords_for_domain \
-        --domain @liquiddeath.com \
+        --domain @example.com \
         --mode unusable \
         --apply
 """
@@ -45,7 +43,7 @@ class Command(BaseCommand):
         parser.add_argument(
             "--domain",
             required=True,
-            help='Email suffix to match, e.g. "@liquiddeath.com". '
+            help='Email suffix to match, e.g. "@example.com". '
             "Match is case-insensitive and uses iendswith.",
         )
         parser.add_argument(
@@ -70,8 +68,7 @@ class Command(BaseCommand):
         parser.add_argument(
             "--allow-weak",
             action="store_true",
-            help=f"Permit passwords shorter than {MIN_PASSWORD_LEN} chars. "
-            "Required for anything like 'LD1'.",
+            help=f"Permit passwords shorter than {MIN_PASSWORD_LEN} chars.",
         )
         parser.add_argument(
             "--include-inactive",
@@ -83,7 +80,7 @@ class Command(BaseCommand):
         domain: str = opts["domain"].strip()
         if not domain.startswith("@"):
             raise CommandError(
-                "--domain must start with '@', e.g. --domain @liquiddeath.com"
+                "--domain must start with '@', e.g. --domain @example.com"
             )
 
         mode: str = opts["mode"]
