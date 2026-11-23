@@ -464,6 +464,9 @@ def resolve_deck_photos(
                 "state": meta["state"],
                 "eventDate": meta["event_date"],
                 "skus": meta["skus"],
+                # Used when drafting sell-story captions; stripped from public
+                # payloads that don't already omit internal keys.
+                "pin_note": meta.get("pin_note") or "",
             }
         )
     return validated_ids, photos_out
