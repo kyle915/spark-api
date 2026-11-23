@@ -522,6 +522,71 @@ class TestNudgeAmbassadorForRecap(AmbassadorsGraphQLTestCase):
         await sync_to_async(self.ambassador_event.refresh_from_db)()
         assert self.ambassador_event.recap_nudge_sent_at is None
 
+    @pytest.mark.asyncio
+    async def test_does_not_stamp_when_expo_relay_returns_zero(self):
+        # BA has a registered device but Expo swallows the error and
+        # returns 0 — must NOT stamp, so cron/admin can retry.
+        from ambassadors.models import PushDevice
+
+        await sync_to_async(PushDevice.objects.create)(
+            user=self.ba_user,
+            token="ExponentPushToken[nudge-relay-fail]",
+            platform="ios",
+        )
+        with patch(
+            "ambassadors.push.send_push_to_user",
+            new=AsyncMock(return_value=0),
+        ) as mock_push:
+            result = await self._execute_mutation(
+                NUDGE_MUTATION,
+                {
+                    "input": {
+                        "ambassadorEventUuid": str(self.ambassador_event.uuid),
+                    }
+                },
+                self.endpoint_path,
+                user=self.admin,
+            )
+
+        assert result.errors is None, f"errored: {result.errors}"
+        payload = result.data["nudgeAmbassadorForRecap"]
+        assert payload["success"] is False
+        assert payload["lastNudgedAt"] is None
+        assert "push failed" in payload["message"].lower()
+        mock_push.assert_awaited_once()
+        await sync_to_async(self.ambassador_event.refresh_from_db)()
+        assert self.ambassador_event.recap_nudge_sent_at is None
+
+    @pytest.mark.asyncio
+    async def test_stamps_intentional_no_device_zero(self):
+        # No PushDevice row — Expo returns 0 legitimately. Stamp so
+        # ops see lastNudgedAt and bulk overdue skips the 12h window;
+        # per-row Nudge still re-fires.
+        with patch(
+            "ambassadors.push.send_push_to_user",
+            new=AsyncMock(return_value=0),
+        ) as mock_push:
+            result = await self._execute_mutation(
+                NUDGE_MUTATION,
+                {
+                    "input": {
+                        "ambassadorEventUuid": str(self.ambassador_event.uuid),
+                    }
+                },
+                self.endpoint_path,
+                user=self.admin,
+            )
+
+        assert result.errors is None, f"errored: {result.errors}"
+        payload = result.data["nudgeAmbassadorForRecap"]
+        assert payload["success"] is True
+        assert payload["devicesNotified"] == 0
+        assert payload["lastNudgedAt"] is not None
+        assert payload["lastNudgeChannel"] == "push"
+        mock_push.assert_awaited_once()
+        await sync_to_async(self.ambassador_event.refresh_from_db)()
+        assert self.ambassador_event.recap_nudge_sent_at is not None
+
 
 @pytest.mark.django_db(transaction=True)
 class TestReassignRecapEvent(AmbassadorsGraphQLTestCase):

@@ -7409,6 +7409,20 @@ class RecapMutations:
                 or f"Submit your recap for {event_name}"
             )
 
+            # Preflight: Expo returns 0 for both "no devices" and
+            # "relay/ticket failure". We need the distinction so a
+            # temporary Expo outage does not stamp recap_nudge_sent_at
+            # and suppress the hourly cron / bulk overdue retry.
+            from ambassadors.models import PushDevice
+
+            @sync_to_async
+            def _has_active_devices() -> bool:
+                return PushDevice.objects.filter(
+                    user_id=user.pk, is_active=True
+                ).exists()
+
+            had_devices = await _has_active_devices()
+
             devices_notified = await send_push_to_user(
                 user,
                 title=title,
@@ -7419,74 +7433,102 @@ class RecapMutations:
                 },
             )
 
-            # Stamp the same dedup field the hourly cron uses so
-            # /recaps/missing can show lastNudgedAt and "Nudge all
-            # overdue" can skip anyone nudged in the last 12h. Always
-            # stamp on a successful attempt (even 0 devices) so ops see
-            # they already tried — per-row Nudge still re-fires.
-            from django.utils import timezone as dj_tz
+            push_delivered = devices_notified > 0
+            intentional_no_device = not had_devices and devices_notified == 0
+            # Stamp only when something was delivered, or when there
+            # truly were no registered devices (ops already "tried" —
+            # DM them). Relay / ticket failures stay unstamped so the
+            # next admin click or cron can retry.
+            should_stamp = push_delivered or intentional_no_device
 
-            nudged_at = dj_tz.now()
+            last_nudged_iso: str | None = None
+            last_nudge_channel: str | None = None
+            if should_stamp:
+                from django.utils import timezone as dj_tz
 
-            @sync_to_async
-            def _stamp_nudge():
-                a_models.AmbassadorEvent.objects.filter(pk=ae.pk).update(
-                    recap_nudge_sent_at=nudged_at
+                nudged_at = dj_tz.now()
+
+                @sync_to_async
+                def _stamp_nudge():
+                    a_models.AmbassadorEvent.objects.filter(pk=ae.pk).update(
+                        recap_nudge_sent_at=nudged_at
+                    )
+
+                await _stamp_nudge()
+                last_nudged_iso = nudged_at.isoformat()
+                last_nudge_channel = "push"
+
+            if had_devices and not push_delivered:
+                # Devices existed but Expo returned 0 — relay hiccup or
+                # every ticket failed. Do not pretend the nudge landed.
+                return build_mutation_response(
+                    types.NudgeRecapResponse,
+                    success=False,
+                    message=(
+                        "Push failed — Expo did not deliver to any device. "
+                        "Try again in a moment."
+                    ),
+                    input_obj=input,
+                    devices_notified=0,
+                    last_nudged_at=None,
+                    last_nudge_channel=None,
                 )
-
-            await _stamp_nudge()
-            last_nudged_iso = nudged_at.isoformat()
 
             # Audit log: write a nudge_sent entry on the request that
             # spawned this event so the timeline panel picks it up.
             # Best-effort; the nudge itself is the important action.
-            try:
-                req = None
-                if getattr(event, "request_id", None):
-                    req = await sync_to_async(
-                        lambda: e_models.Request.objects.filter(
-                            id=event.request_id
-                        ).first()
-                    )()
-                if req is not None:
-                    ambassador_obj = ae.ambassador
-                    ba_name = (
-                        " ".join(
-                            filter(
-                                None,
-                                [
-                                    getattr(ambassador_obj, "first_name", None),
-                                    getattr(ambassador_obj, "last_name", None),
-                                ],
+            # Only log when we stamped (delivered or intentional no-device).
+            if should_stamp:
+                try:
+                    req = None
+                    if getattr(event, "request_id", None):
+                        req = await sync_to_async(
+                            lambda: e_models.Request.objects.filter(
+                                id=event.request_id
+                            ).first()
+                        )()
+                    if req is not None:
+                        ambassador_obj = ae.ambassador
+                        ba_name = (
+                            " ".join(
+                                filter(
+                                    None,
+                                    [
+                                        getattr(ambassador_obj, "first_name", None),
+                                        getattr(ambassador_obj, "last_name", None),
+                                    ],
+                                )
                             )
+                            or getattr(ambassador_obj, "email", "")
+                            or "BA"
                         )
-                        or getattr(ambassador_obj, "email", "")
-                        or "BA"
-                    )
-                    # The user calling this mutation is the admin, not
-                    # the ambassador receiving the nudge. Pull from info.
-                    actor = None
-                    try:
-                        actor = info.context.request.user
-                    except Exception:
+                        # The user calling this mutation is the admin, not
+                        # the ambassador receiving the nudge. Pull from info.
                         actor = None
-                    await sync_to_async(
-                        e_models.RequestActivityLog.objects.create
-                    )(
-                        tenant=req.tenant,
-                        request=req,
-                        kind=e_models.RequestActivityLog.KIND_NUDGE_SENT,
-                        actor_user=actor if getattr(actor, "id", None) else None,
-                        summary=f"Nudged {ba_name} for recap",
-                        metadata={
-                            "ba_name": ba_name,
-                            "devices_notified": devices_notified,
-                            "event_uuid": str(getattr(event, "uuid", "")),
-                            "channel": "push",
-                        },
-                    )
-            except Exception:
-                pass
+                        try:
+                            actor = info.context.request.user
+                        except Exception:
+                            actor = None
+                        await sync_to_async(
+                            e_models.RequestActivityLog.objects.create
+                        )(
+                            tenant=req.tenant,
+                            request=req,
+                            kind=e_models.RequestActivityLog.KIND_NUDGE_SENT,
+                            actor_user=(
+                                actor if getattr(actor, "id", None) else None
+                            ),
+                            summary=f"Nudged {ba_name} for recap",
+                            metadata={
+                                "ba_name": ba_name,
+                                "devices_notified": devices_notified,
+                                "event_uuid": str(getattr(event, "uuid", "")),
+                                "channel": "push",
+                                "no_device": intentional_no_device,
+                            },
+                        )
+                except Exception:
+                    pass
 
             return build_mutation_response(
                 types.NudgeRecapResponse,
@@ -7494,13 +7536,13 @@ class RecapMutations:
                 message=(
                     f"Nudged on {devices_notified} device"
                     f"{'s' if devices_notified != 1 else ''}."
-                    if devices_notified > 0
+                    if push_delivered
                     else "Nudge attempted, but the BA has no registered devices."
                 ),
                 input_obj=input,
                 devices_notified=devices_notified,
                 last_nudged_at=last_nudged_iso,
-                last_nudge_channel="push",
+                last_nudge_channel=last_nudge_channel,
             )
         except GraphQLError as e:
             return build_mutation_response(
