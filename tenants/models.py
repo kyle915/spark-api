@@ -1407,6 +1407,63 @@ class TenantWeeklySummary(models.Model):
         return f"Weekly summary {self.week_start} for tenant {self.tenant_id}"
 
 
+class TenantProgramBrief(models.Model):
+    """A short program-report brief for one brand and date range.
+
+    ``paragraph``, ``bullets`` and ``quote`` are the generated draft and are
+    never changed by an edit. Staff edits live in the ``edited_*`` fields
+    when ``has_edit`` is set. ``facts`` is the packet the draft was checked
+    against: approved-recap counts, not model arithmetic. A 30- or 90-day
+    preset whose dates match that length can be published as soon as every
+    number checks out. Any other range stays a draft until Ignite staff mark
+    it reviewed. Nothing here is emailed.
+    """
+
+    STATUS_DRAFT = "draft"
+    STATUS_REVIEWED = "reviewed"
+
+    id = models.BigAutoField(primary_key=True)
+    tenant = models.ForeignKey(
+        Tenant, on_delete=models.CASCADE, related_name="program_briefs"
+    )
+    start_date = models.DateField()
+    end_date = models.DateField()
+    preset = models.CharField(max_length=16, default="custom")
+    paragraph = models.TextField()
+    bullets = models.JSONField(default=list)
+    quote = models.TextField(blank=True, default="")
+    has_edit = models.BooleanField(default=False)
+    edited_paragraph = models.TextField(blank=True, default="")
+    edited_bullets = models.JSONField(default=list)
+    edited_quote = models.TextField(blank=True, default="")
+    status = models.CharField(max_length=16, default=STATUS_DRAFT)
+    facts = models.JSONField(default=dict)
+    generated_at = models.DateTimeField()
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="program_briefs_reviewed",
+    )
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["tenant", "start_date", "end_date"],
+                name="tenants_program_brief_tenant_window_uniq",
+            )
+        ]
+
+    def __str__(self) -> str:
+        return (
+            f"Program brief {self.start_date} to {self.end_date} "
+            f"for tenant {self.tenant_id}"
+        )
+
+
 class TenantFeedbackThemes(models.Model):
     """Consumer comments grouped into themes, kept so a page load is a read.
 
