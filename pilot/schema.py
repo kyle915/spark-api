@@ -63,6 +63,7 @@ from pilot.ingest import (
 )
 from pilot.models import (
     CanonicalVisit,
+    FinanceException,
     ProviderAgreement,
     ProviderAssignment,
     ProviderImportJob,
@@ -1613,7 +1614,8 @@ class PilotQueries:
 
             exception_items: list[FinanceExceptionItem] = []
             for e in excs:
-                pack = finance_dispute_pack(e)
+                # Rules-only on the list path — never OpenAI per row (Codex P1).
+                pack = finance_dispute_pack(e, allow_model=False)
                 exception_items.append(
                     FinanceExceptionItem(
                         uuid=str(e.uuid),
@@ -1686,6 +1688,56 @@ class PilotQueries:
                     )
                     for n in notices
                 ],
+            )
+
+        return await sync_to_async(_run, thread_sensitive=True)()
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def finance_exception_dispute_pack(
+        self,
+        info: strawberry.Info,
+        exception_uuid: str,
+        polish: bool = False,
+    ) -> FinanceDisputePack | None:
+        """On-demand dispute pack for one exception.
+
+        Queue list rows use rules-only packs. Pass ``polish=true`` to allow a
+        single model rewrite when OCR / distinct money facts warrant it.
+        """
+
+        def _run():
+            access = _access_for_info(info)
+            if not access.can_view_brand_consolidated:
+                raise PermissionError(
+                    "Outside providers cannot view finance dispute packs."
+                )
+            require_plan_feature(
+                access.tenant,
+                "allows_finance_review_queue",
+                feature_label="Finance review queue",
+                required_plan="pro",
+            )
+            exc = (
+                FinanceException.objects.select_related(
+                    "canonical_visit",
+                    "cost_line",
+                    "recap_file",
+                )
+                .prefetch_related(
+                    "cost_line__evidence_links",
+                    "cost_line__evidence_links__receipt_reading",
+                )
+                .filter(tenant=access.tenant, uuid=(exception_uuid or "").strip())
+                .first()
+            )
+            if exc is None:
+                return None
+            pack = finance_dispute_pack(exc, allow_model=bool(polish))
+            return FinanceDisputePack(
+                summary=pack["summary"],
+                source=pack["source"],
+                facts=list(pack["facts"]),
+                suggested_next_step=pack["suggested_next_step"],
             )
 
         return await sync_to_async(_run, thread_sensitive=True)()

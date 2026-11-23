@@ -87,10 +87,43 @@ def _clean_caption(raw: Any) -> str:
     return text.rstrip(".")
 
 
+def _clean_sell_story(raw: Any) -> str:
+    """Normalize a model sell-story without the 140-char caption cap."""
+    text = " ".join(str(raw or "").split()).strip(" .\"'“”")
+    if not text or _PERSON_RE.search(text):
+        return ""
+    if len(text) > MAX_SELL_STORY_CHARS:
+        text = text[: MAX_SELL_STORY_CHARS - 1].rstrip() + "…"
+    text = text[:1].upper() + text[1:]
+    if not text.endswith((".", "!", "?")):
+        text += "."
+    return text
+
+
+# Keys that identify transport / DB rows — never treat their digits as
+# grounded caption facts (a photo id of 99 must not allow "99 facings").
+_TRANSPORT_NUMBER_KEYS = frozenset(
+    {"id", "file_id", "recap_id", "recapId", "photo_id", "photoId"}
+)
+
+
+def _strip_transport_ids(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            k: _strip_transport_ids(v)
+            for k, v in value.items()
+            if k not in _TRANSPORT_NUMBER_KEYS
+        }
+    if isinstance(value, list):
+        return [_strip_transport_ids(v) for v in value]
+    return value
+
+
 def _allowed_numbers(*parts: Any) -> set[str]:
     allowed: set[str] = set()
     for part in parts:
-        for found in _NUMBER_RE.findall(json.dumps(part, default=str)):
+        cleaned = _strip_transport_ids(part)
+        for found in _NUMBER_RE.findall(json.dumps(cleaned, default=str)):
             allowed.add(found)
             allowed.add(found.replace(",", ""))
     return allowed
@@ -309,10 +342,17 @@ def enrich_deck_photos(
     pin notes stay. Never raises.
     """
     if not photos:
-        sell = (intro_note or "").strip()
-        if sell:
-            return photos, sell[:MAX_SELL_STORY_CHARS], "staff"
-        return photos, "", "rules"
+        # Photo pins are optional — still draft a KPI leave-behind.
+        if (intro_note or "").strip():
+            return photos, intro_note.strip()[:MAX_SELL_STORY_CHARS], "staff"
+        sell = rules_sell_story(
+            brand_name=brand_name,
+            kpis=kpis,
+            mention_themes=[],
+            period_start=period_start,
+            period_end=period_end,
+        )
+        return photos, sell, "rules"
 
     photo_ids: list[int] = []
     for p in photos:
@@ -434,13 +474,9 @@ def enrich_deck_photos(
     sell_story = sell_rules
     if isinstance(raw, dict):
         allowed_sell = _allowed_numbers(sell_facts)
-        model_sell = _clean_caption(raw.get("sell_story"))
-        if (
-            model_sell
-            and _numbers_ok(model_sell, allowed_sell)
-            and len(model_sell) <= MAX_SELL_STORY_CHARS
-        ):
-            sell_story = model_sell if model_sell.endswith(".") else model_sell + "."
+        model_sell = _clean_sell_story(raw.get("sell_story"))
+        if model_sell and _numbers_ok(model_sell, allowed_sell):
+            sell_story = model_sell
             sell_source = "model"
 
         by_model_id = {}
@@ -457,9 +493,10 @@ def enrich_deck_photos(
             candidate = _clean_caption(by_model_id.get(cid))
             if not candidate:
                 continue
+            prompt_row = next((p for p in polish_inputs if p["id"] == cid), {})
             allowed = _allowed_numbers(
                 rules_captions.get(cid, ""),
-                next((p for p in polish_inputs if p["id"] == cid), {}),
+                prompt_row,
             )
             if _numbers_ok(candidate, allowed):
                 row["caption"] = candidate if candidate.endswith(".") else candidate + "."

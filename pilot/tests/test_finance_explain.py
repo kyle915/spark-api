@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from pilot.finance_explain import (
     _clean_model_line,
+    _should_ask_model,
     facts_as_lines,
     finance_dispute_pack,
     rules_summary,
@@ -59,16 +60,35 @@ def test_model_line_rejects_invented_amount():
     )
 
 
-def test_finance_dispute_pack_rules_only_without_ocr():
-    with patch("pilot.finance_explain._should_ask_model", return_value=False):
-        pack = finance_dispute_pack(_exc())
+def test_same_dollar_in_explanation_and_amount_does_not_force_model():
+    facts = [
+        {"code": "exception_type", "value": "missing_proof"},
+        {"code": "affected_amount", "value": "64.20"},
+        {"code": "explanation_amount", "value": "64.20"},
+    ]
+    assert _should_ask_model(facts) is False
+
+
+def test_ocr_facts_still_allow_model():
+    facts = [
+        {"code": "affected_amount", "value": "64.20"},
+        {"code": "ocr_merchant", "value": "H-E-B"},
+        {"code": "ocr_total", "value": "64.20"},
+    ]
+    assert _should_ask_model(facts) is True
+
+
+def test_finance_dispute_pack_queue_path_never_calls_model():
+    with patch("pilot.finance_explain._model_summary") as model:
+        pack = finance_dispute_pack(_exc(), allow_model=False)
+    model.assert_not_called()
     assert pack["source"] == "rules"
     assert "$64.20" in pack["summary"]
     assert pack["suggested_next_step"]
     assert any("Affected amount" in line for line in pack["facts"])
 
 
-def test_finance_dispute_pack_uses_model_when_grounded():
+def test_finance_dispute_pack_uses_model_when_allowed_and_grounded():
     exc = _exc(
         explanation="Receipt from H-E-B ($64.20) is not matched to a visit cost line.",
         exception_type="unmatched_transaction",
@@ -89,7 +109,7 @@ def test_finance_dispute_pack_uses_model_when_grounded():
             ),
         ),
     ):
-        pack = finance_dispute_pack(exc)
+        pack = finance_dispute_pack(exc, allow_model=True)
     assert pack["source"] == "model"
     assert "H-E-B" in pack["summary"]
     assert "$64.20" in pack["summary"]

@@ -192,6 +192,55 @@ def test_enrich_keeps_model_caption_when_numbers_grounded():
     assert "2 visit" in sell
 
 
+def test_enrich_kpi_sell_story_when_no_photos():
+    enriched, sell, source = enrich_deck_photos(
+        1,
+        [],
+        brand_name="Torch",
+        kpis={"totalVisits": 5, "storesActivated": 3, "totalSamplesDistributed": 100},
+        period_start="2026-11-01",
+        period_end="2026-11-22",
+        intro_note="",
+    )
+    assert enriched == []
+    assert source == "rules"
+    assert "Torch" in sell
+    assert "5 visit" in sell
+    assert "3 store" in sell
+
+
+def test_clean_sell_story_keeps_long_text_under_sell_limit():
+    from brand_insights.deck_captions import MAX_SELL_STORY_CHARS, _clean_sell_story
+
+    long = (
+        "Torch ran twelve visits across eight stores from 2026-11-01 to 2026-11-22, "
+        "handing out samples and matching POS lift in scope for the buyer leave-behind. "
+        "Consumers talked about taste and energy throughout the window of the program."
+    )
+    cleaned = _clean_sell_story(long)
+    assert cleaned
+    assert len(cleaned) <= MAX_SELL_STORY_CHARS
+    assert "…" not in cleaned or len(long) > MAX_SELL_STORY_CHARS
+    # Must not be clipped at the 140-char caption limit.
+    assert len(cleaned) > 140
+
+
+def test_transport_photo_id_not_in_allowed_caption_numbers():
+    from brand_insights.deck_captions import _allowed_numbers, _numbers_ok
+
+    prompt = {
+        "id": "99",
+        "store": "Sprouts",
+        "shelf": {"product_on_shelf": "yes", "facings": 3},
+        "rules_caption": "On shelf at Sprouts, 3 facings.",
+    }
+    allowed = _allowed_numbers(prompt)
+    assert "3" in allowed
+    assert "99" not in allowed
+    assert not _numbers_ok("On shelf at Sprouts with 99 facings.", allowed)
+    assert _numbers_ok("On shelf at Sprouts with 3 facings.", allowed)
+
+
 def test_enrich_drops_model_caption_with_invented_number():
     photos = [
         {

@@ -206,15 +206,25 @@ def _facts_hash(facts: list[dict[str, Any]]) -> str:
 
 
 def _should_ask_model(facts: list[dict[str, Any]]) -> bool:
-    """Model only when OCR / multiple money facts make a rewrite useful."""
+    """Model only when OCR / distinct money facts make a rewrite useful.
+
+    The same dollar in ``affected_amount`` and ``explanation_amount`` counts
+    once — otherwise every monetary exception would trigger a model call.
+    """
     codes = {f.get("code") for f in facts}
     has_ocr = bool(codes & {"ocr_merchant", "ocr_total", "ocr_line_items"})
-    money_facts = sum(
-        1
-        for f in facts
-        if f.get("code") in ("affected_amount", "ocr_total", "explanation_amount")
-    )
-    return has_ocr or money_facts >= 2
+    money_values: set[str] = set()
+    for fact in facts:
+        if fact.get("code") not in (
+            "affected_amount",
+            "ocr_total",
+            "explanation_amount",
+        ):
+            continue
+        raw = str(fact.get("value") or "").replace(",", "").strip()
+        if raw:
+            money_values.add(raw)
+    return has_ocr or len(money_values) >= 2
 
 
 def _prompt(exc, facts: list[dict[str, Any]]) -> str:
@@ -272,17 +282,21 @@ def _model_summary(exc, facts: list[dict[str, Any]]) -> str | None:
     return why
 
 
-def finance_dispute_pack(exc) -> dict[str, Any]:
+def finance_dispute_pack(exc, *, allow_model: bool = False) -> dict[str, Any]:
     """``{summary, source, facts, suggested_next_step}`` for one exception.
 
     Never raises. ``summary`` is always a non-empty rules or model line.
+
+    ``allow_model=False`` (default) is for the finance queue request path —
+    rules only, no OpenAI. Pass ``allow_model=True`` from a lazy/on-demand
+    query so polish runs outside the list resolver.
     """
     try:
         facts = gather_dispute_facts(exc)
         rules = rules_summary(exc, facts)
         source = "rules"
         summary = rules
-        if _should_ask_model(facts):
+        if allow_model and _should_ask_model(facts):
             polished = _model_summary(exc, facts)
             if polished:
                 summary = polished
