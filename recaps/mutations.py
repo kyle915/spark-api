@@ -4209,6 +4209,48 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
 
         return await map_store()
 
+    async def suggest_custom_recap_store(self) -> models.CustomRecap:
+        """Staff-only Places + OpenAI refresh of maybe-matches for a typed store.
+
+        Persists onto ``store_suggestions`` but never sets ``retailer`` or
+        ``store_mapping_status`` — admin confirms via map_custom_recap_store.
+        """
+        if not isinstance(self.input, inputs.SuggestCustomRecapStoreInput):
+            raise GraphQLError("Invalid input type.")
+
+        if not await self._caller_is_admin():
+            raise GraphQLError("Only Ignite staff can suggest store matches.")
+
+        try:
+            custom_recap_id = resolve_id_to_int(self.input.id)
+            custom_recap = await sync_to_async(
+                models.CustomRecap.objects.select_related("tenant", "event").get
+            )(id=custom_recap_id)
+        except (models.CustomRecap.DoesNotExist, TypeError, ValueError, GraphQLError):
+            raise GraphQLError("Custom recap not found.")
+
+        await self._assert_caller_authorized_for_recap_tenant(
+            custom_recap.tenant_id,
+            action="update",
+            block_ambassadors=True,
+            record_label="Custom recap",
+        )
+
+        if not custom_recap.is_third_party:
+            raise GraphQLError("Store suggestions are only for 3rd-party typed stores.")
+        if custom_recap.store_mapping_status == "mapped":
+            return custom_recap
+
+        from recaps.store_automap import refresh_custom_recap_suggestions
+
+        @sync_to_async
+        def refresh():
+            refresh_custom_recap_suggestions(custom_recap, use_network=True)
+            custom_recap.refresh_from_db()
+            return custom_recap
+
+        return await refresh()
+
     async def bulk_approve_recaps(self) -> tuple[int, list[str]]:
         """Approve/decline many recaps. Reuses the single-row path so
         hours-logging + notify stay identical.
@@ -6685,6 +6727,32 @@ class RecapMutations:
                 types.CustomRecapDetailResponse,
                 success=True,
                 message="Store mapped.",
+                input_obj=input,
+                custom_recap=custom_recap,
+            )
+        except GraphQLError as e:
+            return build_mutation_response(
+                types.CustomRecapDetailResponse,
+                success=False,
+                message=str(e),
+                input_obj=input,
+            )
+
+    @relay.mutation(permission_classes=[StrictIsAuthenticated])
+    async def suggest_custom_recap_store(
+        self,
+        info: strawberry.Info,
+        input: inputs.SuggestCustomRecapStoreInput,
+    ) -> types.CustomRecapDetailResponse:
+        """Ignite staff: refresh Places + OpenAI maybe-matches for a typed store."""
+        try:
+            service = RecapMutationService.with_input(input)
+            await service.set_user(info)
+            custom_recap = await service.suggest_custom_recap_store()
+            return build_mutation_response(
+                types.CustomRecapDetailResponse,
+                success=True,
+                message="Store suggestions updated.",
                 input_obj=input,
                 custom_recap=custom_recap,
             )
