@@ -9,6 +9,7 @@ import hashlib
 import io
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, time
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -25,10 +26,12 @@ from events.retailer_aliases import (
     resolve_store_name,
     split_store_number,
 )
+from pilot.column_guesses import FIELD_LABELS, describe_column_map, lock_column_map
 from pilot.entitlements import (
     require_plan_feature,
     require_provider_feed_capacity,
 )
+from pilot.store_match_why import plain_store_match_reason
 from pilot.models import (
     BrandCostLine,
     CanonicalVisit,
@@ -359,6 +362,32 @@ def resolve_products_from_cell(
     return matched, unmatched
 
 
+def _store_candidate(retailer: Retailer) -> dict[str, Any]:
+    city, state = _retailer_city_state(retailer)
+    where = ", ".join(part for part in (city, state) if part)
+    place = retailer.name + (f" ({where})" if where else "")
+    return {
+        "id": retailer.id,
+        "name": retailer.name,
+        "city": city,
+        "state": state,
+        "reason": (
+            f"{place} shares this banner. The row does not say which store, "
+            "so nothing is matched until you pick one."
+        ),
+    }
+
+
+def _ambiguous_store_message(raw_banner: str, candidates: list[dict]) -> str:
+    shown = "; ".join(item["name"] for item in candidates[:6])
+    extra = f" (+{len(candidates) - 6} more)" if len(candidates) > 6 else ""
+    return (
+        f"Ambiguous store '{raw_banner}': {len(candidates)} stores share this "
+        "banner and the row has no store number or address to pick one. "
+        f"Nothing is matched until you choose. Candidates: {shown}{extra}."
+    )
+
+
 def resolve_canonical_store(
     *,
     tenant: Tenant,
@@ -369,9 +398,13 @@ def resolve_canonical_store(
     city: str,
     state_code: str,
     aliases: dict[str, str],
-) -> tuple[dict[str, Any] | None, str | None, str | None]:
+) -> tuple[dict[str, Any] | None, str | None, str | None, list[dict]]:
     """Resolve store fields onto a canonical store identity and optional
-    events.Retailer row. Flags uncertain matches rather than guessing."""
+    events.Retailer row. Flags uncertain matches rather than guessing.
+
+    The fourth value is the candidate stores when the match is ambiguous.
+    It is empty otherwise. Callers must not treat a candidate as chosen.
+    """
     raw_banner = (retailer_name or "").strip()
     clean_num = (store_number or "").strip().lstrip("#").strip()
     clean_addr = (address or "").strip()
@@ -380,7 +413,7 @@ def resolve_canonical_store(
     ext_id = (external_store_id or "").strip()
 
     if not raw_banner and not clean_addr:
-        return None, "missing_store", "Store banner or address is required."
+        return None, "missing_store", "Store banner or address is required.", []
 
     # Resolve banner alias using existing Spark RetailerAlias table.
     resolved_banner = (
@@ -427,10 +460,12 @@ def resolve_canonical_store(
             if not clean_state and rstate:
                 clean_state = rstate
         elif len(exact_candidates) > 1 and not clean_addr and not effective_num:
+            candidates = [_store_candidate(row) for row in exact_candidates]
             return (
                 None,
                 "uncertain_store_match",
-                f"Ambiguous store '{raw_banner}': matches {len(exact_candidates)} stores; specify store #, address, or city.",
+                _ambiguous_store_message(raw_banner, candidates),
+                candidates,
             )
 
     if (
@@ -453,10 +488,12 @@ def resolve_canonical_store(
                 or _retailer_city_state(r)[0].strip().lower() == clean_city.lower()
             ]
         if len(chain_candidates) > 1:
+            candidates = [_store_candidate(row) for row in chain_candidates]
             return (
                 None,
                 "uncertain_store_match",
-                f"Uncertain store match for '{raw_banner}': {len(chain_candidates)} stores share this banner; confirm exact store before merging.",
+                _ambiguous_store_message(raw_banner, candidates),
+                candidates,
             )
         if len(chain_candidates) == 1:
             matched_retailer = chain_candidates[0]
@@ -477,6 +514,7 @@ def resolve_canonical_store(
             None,
             "uncertain_store_match",
             f"Could not build canonical store identity from '{raw_banner}' / '{clean_addr}'.",
+            [],
         )
 
     return (
@@ -494,6 +532,7 @@ def resolve_canonical_store(
         },
         None,
         None,
+        [],
     )
 
 
@@ -879,15 +918,41 @@ def _analyze_import_rows(
     csv_text: str,
     column_map: dict[str, str] | None = None,
     preset_key: str | None = None,
+    confirm_column_map: bool = False,
 ) -> dict[str, Any]:
     headers, raw_rows = _parse_csv_rows(csv_text)
     if not headers:
         raise ValueError("CSV file has no header row.")
 
-    resolved_map = infer_column_map_from_headers(
-        headers, explicit_map=column_map, preset_key=preset_key
-    )
+    # A confirmed map is the only map. Synonym fill and model guesses stay off.
+    if confirm_column_map and column_map is not None:
+        resolved_map = lock_column_map(headers, column_map, set(FIELD_LABELS))
+        guess_payload = describe_column_map(
+            headers,
+            resolved_map,
+            synonyms=_HEADER_SYNONYMS,
+            presets=IMPORT_PRESETS,
+            preset_key=preset_key,
+            explicit_map=column_map,
+            include_model=False,
+            confirmed=True,
+        )
+    else:
+        resolved_map = infer_column_map_from_headers(
+            headers, explicit_map=column_map, preset_key=preset_key
+        )
+        guess_payload = describe_column_map(
+            headers,
+            resolved_map,
+            synonyms=_HEADER_SYNONYMS,
+            presets=IMPORT_PRESETS,
+            preset_key=preset_key,
+            explicit_map=column_map,
+            include_model=True,
+            confirmed=False,
+        )
     aliases = accepted_alias_map(tenant.id)
+    store_ai_queue: list[tuple[dict, str, list[dict]]] = []
     product_lookup = build_product_lookup(tenant)
     event_types_by_name = {
         et.name.strip().lower(): et
@@ -1039,7 +1104,7 @@ def _analyze_import_rows(
             )
             continue
 
-        store_info, store_err_code, store_err_msg = resolve_canonical_store(
+        store_info, store_err_code, store_err_msg, store_candidates = resolve_canonical_store(
             tenant=tenant,
             retailer_name=_cell("retailer_name"),
             store_number=_cell("store_number"),
@@ -1109,6 +1174,16 @@ def _analyze_import_rows(
         }
 
         if store_err_code == "uncertain_store_match":
+            normalized["store_match"] = {
+                "needs_confirm": True,
+                "reason": store_err_msg or "",
+                "ai_reason": "",
+                "candidates": store_candidates,
+            }
+            if store_candidates and len(store_ai_queue) < 4:
+                store_ai_queue.append(
+                    (normalized, _cell("retailer_name"), store_candidates)
+                )
             analyzed_rows.append(
                 {
                     "row_number": idx,
@@ -1188,6 +1263,17 @@ def _analyze_import_rows(
             }
         )
 
+    if store_ai_queue:
+        def _reason(item: tuple) -> str:
+            return plain_store_match_reason(item[1], item[2])
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            reasons = list(pool.map(_reason, store_ai_queue))
+        for (row, _banner, _candidates), reason in zip(store_ai_queue, reasons):
+            match = row.get("store_match")
+            if isinstance(match, dict):
+                match["ai_reason"] = reason or ""
+
     counts = {
         "total_rows": len(analyzed_rows),
         "created_count": sum(
@@ -1219,6 +1305,7 @@ def _analyze_import_rows(
     return {
         "headers": headers,
         "resolved_map": resolved_map,
+        "column_guesses": guess_payload,
         "rows": analyzed_rows,
         **counts,
     }
@@ -1232,8 +1319,13 @@ def preview_provider_import(
     mapping_uuid: str | None = None,
     column_map: dict[str, str] | None = None,
     preset_key: str | None = None,
+    confirm_column_map: bool = False,
 ) -> dict[str, Any]:
-    """Preview a provider CSV upload with ZERO database writes."""
+    """Preview a provider CSV upload with ZERO database writes.
+
+    ``confirm_column_map`` uses ``column_map`` as the only map (the columns
+    a person turned on). It does not fill synonyms or apply model guesses.
+    """
     provider = ProviderOrganization.objects.filter(uuid=provider_uuid).first()
     if provider is None:
         raise ValueError("Provider organization not found.")
@@ -1244,7 +1336,11 @@ def preview_provider_import(
 
     saved_map: dict[str, str] | None = column_map
     saved_preset = preset_key
-    if mapping_uuid:
+    # A confirmed map wins over a saved template so an unchecked guess
+    # cannot sneak back in through the template.
+    if confirm_column_map and column_map is not None:
+        saved_map = column_map
+    elif mapping_uuid:
         mapping = ProviderImportMapping.objects.filter(
             tenant=access.tenant, provider=provider, uuid=mapping_uuid
         ).first()
@@ -1259,6 +1355,7 @@ def preview_provider_import(
         csv_text=csv_text,
         column_map=saved_map,
         preset_key=saved_preset,
+        confirm_column_map=confirm_column_map and saved_map is not None,
     )
 
 
@@ -1573,6 +1670,7 @@ def commit_provider_import(
     mapping_uuid: str | None = None,
     column_map: dict[str, str] | None = None,
     preset_key: str | None = None,
+    confirm_column_map: bool = False,
     save_mapping_name: str | None = None,
     idempotency_key: str | None = None,
     is_historical: bool = False,
@@ -1598,7 +1696,9 @@ def commit_provider_import(
     mapping_obj: ProviderImportMapping | None = None
     effective_map = column_map
     effective_preset = preset_key
-    if mapping_uuid:
+    if confirm_column_map and column_map is not None:
+        effective_map = column_map
+    elif mapping_uuid:
         mapping_obj = ProviderImportMapping.objects.filter(
             tenant=access.tenant, provider=provider, uuid=mapping_uuid
         ).first()
@@ -1613,6 +1713,7 @@ def commit_provider_import(
         csv_text=csv_text,
         column_map=effective_map,
         preset_key=effective_preset,
+        confirm_column_map=confirm_column_map and effective_map is not None,
     )
 
     if save_mapping_name:
@@ -1830,7 +1931,7 @@ def resolve_provider_import_row(
         }
     elif confirmed_store_number or confirmed_address or confirmed_city:
         aliases = accepted_alias_map(access.tenant.id)
-        store_info, err_code, err_msg = resolve_canonical_store(
+        store_info, err_code, err_msg, _store_candidates = resolve_canonical_store(
             tenant=access.tenant,
             retailer_name=norm.get("retailer_name") or "",
             store_number=confirmed_store_number or norm.get("store_number") or "",

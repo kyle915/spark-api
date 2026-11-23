@@ -365,6 +365,9 @@ class ImportRowPreviewItem:
 class ImportPreviewResult:
     headers: list[str]
     resolved_map_json: str
+    # Guess payload: rule matches (applied) and model suggestions (not applied).
+    # Confirming a map is a separate argument on preview/commit. Never writes.
+    column_guesses_json: str
     total_rows: int
     created_count: int
     updated_count: int
@@ -2468,7 +2471,11 @@ class PilotMutations:
         mapping_uuid: str | None = None,
         preset_key: str | None = None,
         column_map_json: str | None = None,
+        confirm_column_map: bool = False,
     ) -> ImportPreviewResult:
+        """Preview a provider CSV. ``confirmColumnMap`` uses only the map
+        sent in ``columnMapJson`` — model guesses stay off unless that map
+        includes them. Writes nothing."""
         def _run():
             access = _access_for_info(info)
             cmap = json.loads(column_map_json) if column_map_json else None
@@ -2479,10 +2486,12 @@ class PilotMutations:
                 mapping_uuid=mapping_uuid,
                 column_map=cmap,
                 preset_key=preset_key,
+                confirm_column_map=confirm_column_map,
             )
             return ImportPreviewResult(
                 headers=res["headers"],
                 resolved_map_json=json.dumps(res["resolved_map"]),
+                column_guesses_json=json.dumps(res.get("column_guesses") or {}),
                 total_rows=res["total_rows"],
                 created_count=res["created_count"],
                 updated_count=res["updated_count"],
@@ -2517,10 +2526,13 @@ class PilotMutations:
         mapping_uuid: str | None = None,
         preset_key: str | None = None,
         column_map_json: str | None = None,
+        confirm_column_map: bool = False,
         save_mapping_name: str | None = None,
         idempotency_key: str | None = None,
         is_historical: bool = False,
     ) -> PilotMutationOutcome:
+        """Commit rows. With ``confirmColumnMap``, only the confirmed column
+        map is used — unchecked guesses are not filled back in."""
         def _run():
             try:
                 access = _access_for_info(info)
@@ -2533,6 +2545,7 @@ class PilotMutations:
                     mapping_uuid=mapping_uuid,
                     column_map=cmap,
                     preset_key=preset_key,
+                    confirm_column_map=confirm_column_map,
                     save_mapping_name=save_mapping_name,
                     idempotency_key=idempotency_key,
                     is_historical=is_historical,
