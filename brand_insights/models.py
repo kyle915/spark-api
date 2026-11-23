@@ -265,3 +265,69 @@ class BuyerPitchDeck(models.Model):
 
     def __str__(self) -> str:  # pragma: no cover - admin/debug only
         return f"BuyerPitchDeck {self.uuid} ({self.tenant_id})"
+
+
+class AttentionDismissal(models.Model):
+    """Shared staff discard of one Today's attention notice.
+
+    Fingerprint is ``{bucket}:{ref_id}`` — the same key the strip uses for a
+    row. One active row per tenant fingerprint means every Ignite admin loses
+    that notice on refresh (not a per-user local hide). Restoring stamps
+    ``restored_at`` so audit stays on the row.
+    """
+
+    BUCKET_RECEIPT_CHECKS = "receipt_checks"
+    BUCKET_MISSING_RECAPS = "missing_recaps"
+    BUCKET_UNSTAFFED = "unstaffed"
+    BUCKET_REBOOKS = "rebooks"
+    BUCKET_CHOICES = [
+        (BUCKET_RECEIPT_CHECKS, "Receipt checks"),
+        (BUCKET_MISSING_RECAPS, "Missing recaps"),
+        (BUCKET_UNSTAFFED, "Unstaffed (48h)"),
+        (BUCKET_REBOOKS, "Rebook stores"),
+    ]
+
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    tenant = models.ForeignKey(
+        "tenants.Tenant",
+        on_delete=models.CASCADE,
+        related_name="attention_dismissals",
+    )
+    bucket = models.CharField(max_length=32, choices=BUCKET_CHOICES, db_index=True)
+    ref_id = models.CharField(max_length=64)
+    fingerprint = models.CharField(max_length=100)
+    dismissed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="attention_dismissals_made",
+    )
+    dismissed_at = models.DateTimeField(auto_now_add=True, editable=False)
+    restored_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="attention_dismissals_restored",
+    )
+    restored_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["tenant", "fingerprint"],
+                condition=models.Q(restored_at__isnull=True),
+                name="attention_dismissal_active_fp_uniq",
+            )
+        ]
+        indexes = [
+            models.Index(
+                fields=["tenant", "bucket", "restored_at"],
+                name="attention_dismissal_lookup_idx",
+            )
+        ]
+
+    def __str__(self) -> str:  # pragma: no cover - admin/debug only
+        return f"AttentionDismissal {self.fingerprint} ({self.tenant_id})"
