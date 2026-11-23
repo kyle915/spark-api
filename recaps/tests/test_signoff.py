@@ -61,6 +61,24 @@ def test_letter_and_name_normalize():
         stored_signoff_value(first, "", enforce_required=True)
 
 
+def _data_url(image: Image.Image) -> str:
+    buf = BytesIO()
+    image.save(buf, format="PNG")
+    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+
+
+def test_a_transparent_blank_canvas_is_not_ink():
+    blank = _data_url(Image.new("RGBA", (80, 40), (0, 0, 0, 0)))
+    stroke = Image.new("RGBA", (80, 40), (0, 0, 0, 0))
+    for x in range(10, 70):
+        stroke.putpixel((x, 20), (20, 20, 20, 255))
+    assert not signature_has_ink(blank)
+    assert signature_has_ink(_data_url(stroke))
+    field = _field("Signature", "signature")
+    with pytest.raises(SignoffIncomplete, match=SIGNATURE_UNREADABLE_MESSAGE):
+        stored_signoff_value(field, blank, enforce_required=True)
+
+
 def test_signature_must_be_an_inked_png():
     field = _field("Signature", "signature")
     inked = _png(dark=True)

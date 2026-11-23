@@ -919,7 +919,12 @@ class Command(BaseCommand):
             )
             layout = dict(template.layout or {})
             if brand.in_group:
-                layout[CO_BRAND_SECTIONS_KEY] = list(PER_BRAND_SECTIONS)
+                per_brand = list(PER_BRAND_SECTIONS)
+                # Famus clerk sign-off is per Famus recap, including a slice
+                # filed while Alcohol Armor or Wook Water is the host.
+                if brand.slug == "famus-energy":
+                    per_brand.append(STORE_SIGNOFF_SECTION)
+                layout[CO_BRAND_SECTIONS_KEY] = per_brand
             else:
                 layout.pop(CO_BRAND_SECTIONS_KEY, None)
             template.layout = layout

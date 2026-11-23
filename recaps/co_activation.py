@@ -33,6 +33,7 @@ from recaps.mutation_parts.file_categories import (
     _resolve_file_recap_category,
 )
 from recaps import types as recap_types
+from recaps.signoff import assert_recap_signoff, stored_signoff_value
 from recaps.spend_amount import guard_spend_amount
 from tenants.models import Tenant
 from utils.gcs import extract_blob_name_from_url
@@ -402,10 +403,14 @@ def _write_slice(
         if field is None or value is None or _section_key(field) not in per_brand:
             continue
         given[field_id] = str(
-            guard_spend_amount(
-                field.name,
-                getattr(field.custom_field_type, "name", "") or "",
-                value,
+            stored_signoff_value(
+                field,
+                guard_spend_amount(
+                    field.name,
+                    getattr(field.custom_field_type, "name", "") or "",
+                    value,
+                ),
+                enforce_required=True,
             )
         )
 
@@ -424,6 +429,10 @@ def _write_slice(
             created_by=actor,
         )
         pairs.append((field.name, value))
+
+    # Famus slices carry the clerk sign-off. A sibling template without those
+    # fields is unchanged.
+    assert_recap_signoff(template, slice_recap)
 
     sampled = recap_types._consumers_sampled_from_fields(pairs)
     if slice_recap.total_engagements != sampled:

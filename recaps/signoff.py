@@ -101,14 +101,21 @@ def signature_data_url(value) -> str | None:
 
 
 def signature_has_ink(data_url: str) -> bool:
-    """True when the PNG has a dark stroke, not a blank white pad."""
+    """True when the PNG has a dark stroke, not a blank pad.
+
+    A cleared canvas is often transparent black. ``convert("L")`` drops the
+    alpha and would read that as ink, so the drawing is composited onto white
+    first.
+    """
     raw = base64.b64decode(data_url.split(",", 1)[1], validate=True)
     try:
         with Image.open(BytesIO(raw)) as image:
             width, height = image.size
             if width > 2000 or height > 800 or width < 8 or height < 8:
                 return False
-            darkest, _lightest = image.convert("L").getextrema()
+            rgba = image.convert("RGBA")
+            paper = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
+            darkest, _lightest = Image.alpha_composite(paper, rgba).convert("L").getextrema()
     except Exception:
         return False
     return darkest < 200

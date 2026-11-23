@@ -7,10 +7,14 @@ write path and checks each brand only ever holds its own numbers.
 
 from __future__ import annotations
 
+import base64
+from io import BytesIO
+
 import pytest
 from django.core.management import call_command
 from django.utils import timezone
 from graphql import GraphQLError
+from PIL import Image
 
 from ambassadors import checkin_web
 from ambassadors.tests.base import AmbassadorsGraphQLTestCase
@@ -37,6 +41,15 @@ def _field(template, name_part: str) -> CustomField:
     return CustomField.objects.get(
         custom_recap_template=template, name__icontains=name_part
     )
+
+
+def _inked_signature() -> str:
+    image = Image.new("L", (80, 40), 255)
+    for x in range(8, 72):
+        image.putpixel((x, 18), 15)
+    buf = BytesIO()
+    image.save(buf, format="PNG")
+    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
 
 
 class _CoActivationBase(AmbassadorsGraphQLTestCase):
@@ -101,6 +114,9 @@ class _CoActivationBase(AmbassadorsGraphQLTestCase):
                 {"customFieldId": str(_field(self.fm_tpl, "single cans").id), "value": "3"},
                 # A shared-section id is ignored on a brand entry.
                 {"customFieldId": str(_field(self.fm_tpl, "foot traffic").id), "value": "9999"},
+                {"customFieldId": str(_field(self.fm_tpl, "First name").id), "value": "Alex"},
+                {"customFieldId": str(_field(self.fm_tpl, "Last initial").id), "value": "m"},
+                {"customFieldId": str(_field(self.fm_tpl, "Signature").id), "value": _inked_signature()},
             ],
             "productSamples": [{"productId": str(product.id), "quantity": 25}],
             "files": [{"blobName": self._blob("famus")}],
@@ -159,6 +175,10 @@ class TestCoActivation(_CoActivationBase):
         slice_values = self._values(slice_recap)
         assert host_values["Total number of consumers sampled"] == "60"
         assert slice_values["Total number of consumers sampled"] == "25"
+        assert slice_values["First name"] == "Alex"
+        assert slice_values["Last initial"] == "M"
+        assert slice_values["Signature"].startswith("data:image/png;base64,")
+        assert "Signature" not in host_values
         assert slice_values["Estimated store foot traffic"] == "400"
         assert host.total_engagements == 60
         assert slice_recap.total_engagements == 25
@@ -169,6 +189,18 @@ class TestCoActivation(_CoActivationBase):
 
         assert co_activation.co_activation_brand_names(host) == ["FAMUS Energy"]
         assert co_activation.co_activation_brand_names(slice_recap) == ["Wook Water"]
+
+    def test_a_famus_slice_without_a_signature_is_refused(self):
+        from recaps.signoff import SignoffIncomplete
+
+        entry = self._famus_entry()
+        signature_id = str(_field(self.fm_tpl, "Signature").id)
+        entry["fieldValues"] = [
+            row for row in entry["fieldValues"] if row["customFieldId"] != signature_id
+        ]
+        with pytest.raises(SignoffIncomplete):
+            self._submit([entry])
+        assert not CustomRecap.objects.filter(ambassador=self.ba).exists()
 
     def test_dropping_co_brand_removes_slice_and_copy_event(self):
         host = self._submit([self._famus_entry()])
@@ -273,7 +305,13 @@ class TestCoActivation(_CoActivationBase):
         options = checkin_web.serialize_co_brand_options(self.event)
         assert [b["name"] for b in options["brands"]] == ["Alcohol Armor", "FAMUS Energy"]
         famus = options["brands"][1]
-        assert {s["name"] for s in famus["sections"]} == {"Brand Results", "Brand Feedback"}
+        assert {s["name"] for s in famus["sections"]} == {
+            "Brand Results",
+            "Brand Feedback",
+            "Store sign-off",
+        }
+        armor = options["brands"][0]
+        assert "Store sign-off" not in {s["name"] for s in armor["sections"]}
         assert len(famus["products"]) == Product.objects.filter(tenant=self.famus).count()
 
     def test_request_co_brand_validation(self):

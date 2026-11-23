@@ -201,8 +201,11 @@ class TestBrandGroupCatalog(AmbassadorsGraphQLTestCase):
                 assert follow.recap_section.order > notes.recap_section.order
                 co_brand = (template.layout or {}).get(CO_BRAND_SECTIONS_KEY) or []
                 assert "Follow-up" not in co_brand
-                assert STORE_SIGNOFF_SECTION not in co_brand
                 assert "Brand Feedback" in co_brand
+                if tenant.slug == "famus-energy":
+                    assert STORE_SIGNOFF_SECTION in co_brand
+                else:
+                    assert STORE_SIGNOFF_SECTION not in co_brand
                 if tenant.slug == "famus-energy":
                     signoff = fields[-3:]
                     assert [f.name for f in signoff] == [
