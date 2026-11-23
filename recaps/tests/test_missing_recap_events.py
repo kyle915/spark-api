@@ -397,6 +397,64 @@ class TestMissingRecapEvents(AmbassadorsGraphQLTestCase):
         assert result.errors is None
         assert result.data["missingRecapEvents"] == []
 
+    @pytest.mark.asyncio
+    async def test_excludes_upcoming_even_with_stale_past_end_time(self):
+        """Reschedule / import can leave end_time in the past while the
+        activation date/start is still upcoming. Those must not inflate
+        missingRecapEvents or the sidebar recapsDue badge (Famus)."""
+        from events.admin_payloads import (
+            compute_sidebar_request_counts,
+            scoped_requests,
+        )
+        from recaps.filed import missing_recap_events_queryset
+
+        def seed():
+            now = datetime.now(_tz.utc)
+            future_start = now + timedelta(days=5)
+            # Stale wrap timestamp from before the row was moved forward.
+            stale_end = now - timedelta(days=2)
+            upcoming = self.create_event(
+                name="Upcoming stale end",
+                tenant=self.tenant,
+                date=future_start,
+                start_time=future_start,
+                end_time=stale_end,
+            )
+            self._ba_event(upcoming)
+            # Control: a real past wrap still counts.
+            past = self._past_event(hours_ago=6, name="Really past")
+            self._ba_event(past)
+            return upcoming, past
+
+        upcoming, past = await sync_to_async(seed)()
+
+        result = await self._execute_mutation(
+            MISSING_QUERY,
+            {"lookbackDays": 30},
+            self.endpoint_path,
+            user=self.admin,
+        )
+        assert result.errors is None, result.errors
+        names = [r["eventName"] for r in result.data["missingRecapEvents"]]
+        assert "Really past" in names
+        assert "Upcoming stale end" not in names
+
+        def check_qs_and_badge():
+            ids = set(
+                missing_recap_events_queryset(tenant_id=self.tenant.id).values_list(
+                    "id", flat=True
+                )
+            )
+            assert past.id in ids
+            assert upcoming.id not in ids
+            badge = compute_sidebar_request_counts(
+                scoped_requests(self.tenant.id), tenant_id=self.tenant.id
+            ).recaps_due
+            assert badge == len(ids)
+            assert badge >= 1
+
+        await sync_to_async(check_qs_and_badge)()
+
 
 @pytest.mark.django_db(transaction=True)
 class TestNudgeAmbassadorForRecap(AmbassadorsGraphQLTestCase):
