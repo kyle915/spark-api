@@ -24,6 +24,7 @@ Guarantees:
 
 from __future__ import annotations
 
+import base64
 import io
 import json
 import logging
@@ -70,6 +71,12 @@ from recaps.models import (
 )
 from recaps.mutations import _stamp_recap_approval
 from recaps.products_sampled import PRODUCTS_SAMPLED_FIELD
+from recaps.signoff import (
+    CLERK_FIRST_NAME,
+    CLERK_LAST_INITIAL,
+    CLERK_SIGNATURE,
+    STORE_SIGNOFF_SECTION,
+)
 from recaps.recap_tokens import make_recap_token
 from tenants.brand_group_demo_data import SCENARIOS, BrandResult, Scenario, BRAND_SLUGS
 from tenants.models import Role, Tenant
@@ -183,7 +190,39 @@ def _brand_plan(
             "value": json.dumps(sampled_labels),
         }
     )
+    values.extend(_signoff_values(template))
     return BrandPlan(tenant, template, values, samples, products)
+
+
+def _signoff_values(template: CustomRecapTemplate) -> list[dict]:
+    """Clerk sign-off answers when this template asks for them.
+
+    Famus requires them on the host recap and on a co-brand slice. Other
+    brands have no such fields, so this returns nothing.
+    """
+    fields = {
+        field.name: field
+        for field in CustomField.objects.filter(
+            custom_recap_template=template,
+            recap_section__name=STORE_SIGNOFF_SECTION,
+        )
+    }
+    if not fields:
+        return []
+    return [
+        {"customFieldId": str(fields[CLERK_FIRST_NAME].id), "value": "Alex"},
+        {"customFieldId": str(fields[CLERK_LAST_INITIAL].id), "value": "M"},
+        {"customFieldId": str(fields[CLERK_SIGNATURE].id), "value": _demo_signature()},
+    ]
+
+
+def _demo_signature() -> str:
+    image = Image.new("L", (80, 40), 255)
+    draw = ImageDraw.Draw(image)
+    draw.line((8, 28, 36, 12, 72, 30), fill=20, width=3)
+    buf = io.BytesIO()
+    image.save(buf, format="PNG")
+    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
 
 
 def _timezone_row(iana: str) -> TimeZone | None:
