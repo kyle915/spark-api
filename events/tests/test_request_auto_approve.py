@@ -18,7 +18,7 @@ from events.request_auto_approve import (
     auto_approved_request_lists,
     omit_famus_event_submission_skips,
 )
-from events.routing import ALWAYS_INCLUDE_INTERNAL_EMAILS, IGNITE_REVIEW_CC
+from events.routing import ALWAYS_INCLUDE_INTERNAL_EMAILS, ignite_review_cc
 from events.tests.base import EventsGraphQLTestCase
 from tenants.models import Tenant, TenantTheme
 
@@ -383,7 +383,7 @@ class TestRequestAutoApprove(EventsGraphQLTestCase):
         emails = {e.lower() for e in _get_request_cc_emails(tenant=self.other)}
         for standing in ALWAYS_INCLUDE_INTERNAL_EMAILS:
             assert standing in emails
-        for existing in IGNITE_REVIEW_CC:
+        for existing in ignite_review_cc():
             assert existing.lower() in emails
 
     @pytest.mark.asyncio

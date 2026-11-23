@@ -83,9 +83,9 @@ def _resolve_ignite_recipients() -> list[str]:
         _get_spark_admin_emails,
     )
     from events.outbound_policy import apply_outbound_policy
-    from events.routing import IGNITE_REVIEW_CC
+    from events.routing import ignite_review_cc
 
-    composed = list(IGNITE_REVIEW_CC)
+    composed = list(ignite_review_cc())
     composed += _get_spark_admin_emails()
     composed += _get_request_review_copy_emails()
     # Dedupe case-insensitively, preserve first-seen order.
