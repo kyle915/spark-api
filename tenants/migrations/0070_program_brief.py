@@ -8,7 +8,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("tenants", "0068_checkin_timesheet_only"),
+        ("tenants", "0069_weekly_summary_sent"),
     ]
 
     operations = [
