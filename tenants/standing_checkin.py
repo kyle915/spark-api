@@ -168,10 +168,17 @@ def ensure_bucket_categories(
                     if alias_hit is not None:
                         match = alias_hit
                         break
-            if match is not None and any(
-                _norm(match.name) == _norm(n) for n in SENTINEL_CATEGORY_NAMES
+            # Same rules as setup_tenant_checkin: reuse a sentinel when the
+            # wanted name already IS that sentinel (exact label). Only refuse
+            # when we would rename "Sampling photos" / "Receipts" into a
+            # different bucket — that would orphan the upload sentinel path.
+            if (
+                match is not None
+                and match.name != name
+                and any(
+                    _norm(match.name) == _norm(n) for n in SENTINEL_CATEGORY_NAMES
+                )
             ):
-                # Never rename a sentinel out from under the upload path.
                 match = None
             plan[key] = {**spec, "category": match}
 

@@ -6,10 +6,11 @@ import pytest
 from asgiref.sync import sync_to_async
 
 from ambassadors.tests.base import AmbassadorsGraphQLTestCase
-from config.schema_client import schema as schema_clients
+from config.schema_client import schema_clients
 from recaps.models import FileRecapCategory
 from tenants.models import Tenant, normalize_checkin_resources
 from tenants.standing_checkin import (
+    ensure_bucket_categories,
     parse_photo_buckets,
     update_standing_checkin_config,
 )
@@ -55,6 +56,52 @@ class TestStandingCheckinHelpers:
                 tenant,
                 resources=[{"label": "Guide", "kind": "pdf", "url": "javascript:alert(1)"}],
             )
+
+    def test_reuses_exact_sentinel_categories_without_duplicating(self, db):
+        tenant = Tenant.objects.create(name="Sentinel Brand", slug="sentinel-brand")
+        sampling = FileRecapCategory.objects.create(
+            name="Sampling photos", tenant=tenant
+        )
+        receipts = FileRecapCategory.objects.create(name="Receipts", tenant=tenant)
+
+        ensure_bucket_categories(
+            tenant,
+            [
+                {"name": "Sampling photos"},
+                {"name": "Receipts"},
+                {"name": "Table Set Up"},
+            ],
+        )
+
+        names = list(
+            FileRecapCategory.objects.filter(tenant_id=tenant.id)
+            .order_by("id")
+            .values_list("id", "name")
+        )
+        assert (sampling.id, "Sampling photos") in names
+        assert (receipts.id, "Receipts") in names
+        # One new row for Table Set Up — not a second Sampling photos / Receipts.
+        assert len(names) == 3
+        assert {n for _, n in names} == {
+            "Sampling photos",
+            "Receipts",
+            "Table Set Up",
+        }
+
+    def test_refuses_to_rename_sentinel_into_another_bucket(self, db):
+        tenant = Tenant.objects.create(name="Sentinel Rename", slug="sentinel-rename")
+        sampling = FileRecapCategory.objects.create(
+            name="Sampling photos", tenant=tenant
+        )
+
+        ensure_bucket_categories(tenant, [{"name": "Consumer Sampling Pictures"}])
+
+        sampling.refresh_from_db()
+        assert sampling.name == "Sampling photos"
+        assert FileRecapCategory.objects.filter(tenant_id=tenant.id).count() == 2
+        assert FileRecapCategory.objects.filter(
+            tenant_id=tenant.id, name="Consumer Sampling Pictures"
+        ).exists()
 
 
 @pytest.mark.django_db(transaction=True)
