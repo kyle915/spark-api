@@ -45,7 +45,9 @@ class TestRecapReviewTriage(AmbassadorsGraphQLTestCase):
             role=self.roles["client"],
         )
         self.create_tenanted_user(self.client_user, self.tenant)
-        start = timezone.now().replace(hour=10, minute=0, second=0, microsecond=0)
+        start = (timezone.now() - timedelta(hours=3)).replace(
+            minute=0, second=0, microsecond=0
+        )
         self.event = self.create_event(
             name="Store Demo",
             tenant=self.tenant,
@@ -78,8 +80,21 @@ class TestRecapReviewTriage(AmbassadorsGraphQLTestCase):
             tenant=self.tenant,
             created_by=self.system_user,
         )
+        self.field_type = recap_models.CustomRecapFieldType.objects.create(
+            name="text", created_by=self.system_user
+        )
+        self.section = recap_models.RecapSection.objects.create(
+            name="Feedback", tenant=self.tenant, created_by=self.system_user
+        )
+        self.feedback_field = recap_models.CustomField.objects.create(
+            name="Consumer Feedback",
+            custom_recap_template=self.template,
+            custom_field_type=self.field_type,
+            recap_section=self.section,
+            created_by=self.system_user,
+        )
 
-    def _recap(self, **kw):
+    def _recap(self, with_feedback: bool = True, **kw):
         defaults = dict(
             name="custom",
             event=self.event,
@@ -90,7 +105,15 @@ class TestRecapReviewTriage(AmbassadorsGraphQLTestCase):
             total_engagements=100,
         )
         defaults.update(kw)
-        return recap_models.CustomRecap.objects.create(**defaults)
+        recap = recap_models.CustomRecap.objects.create(**defaults)
+        if with_feedback:
+            recap_models.CustomFieldValue.objects.create(
+                custom_recap=recap,
+                custom_field=self.feedback_field,
+                value="Customers loved the crisp citrus taste and bought 2 packs.",
+                created_by=self.system_user,
+            )
+        return recap
 
     def _file(self, recap, blob, cat=None):
         return recap_models.CustomRecapFile.objects.create(
