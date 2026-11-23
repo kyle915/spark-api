@@ -906,6 +906,96 @@ class ClientWeeklyDigestMailer(Mailer):
         )
 
 
+class WeeklyClientSummaryMailer(Mailer):
+    """Branded HTML for a staff-sent weekly / monthly client summary.
+
+    Backs ``sendWeeklyClientSummary`` on Client summaries. One message per
+    recipient (same posture as RecapShareLinkMailer) so Resend failures are
+    isolated and ``sent_count`` is honest.
+    """
+
+    def __init__(
+        self,
+        *,
+        recipients: _Iterable[str],
+        tenant_name: str,
+        period: str,
+        period_label: str,
+        body: str,
+        sender_name: str | None = None,
+        message: str | None = None,
+        dashboard_url: str | None = None,
+        reply_to_email: str | None = None,
+    ) -> None:
+        seen: set[str] = set()
+        clean: list[str] = []
+        for r in recipients:
+            norm = (r or "").strip()
+            if not norm:
+                continue
+            key = norm.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            clean.append(norm)
+        self.recipients = clean
+        self.tenant_name = (tenant_name or "").strip() or "Your brand"
+        self.period = (period or "week").strip().lower()
+        self.period_label = (period_label or "").strip() or "this period"
+        self.body = (body or "").strip()
+        self.sender_name = (sender_name or "").strip() or "The Ignite team"
+        self.message = (message or "").strip() or None
+        self.dashboard_url = (dashboard_url or "").strip() or None
+        self.reply_to_email = (
+            (reply_to_email or "").strip() or "events@igniteproductions.co"
+        )
+
+    def _paragraphs(self) -> list[str]:
+        out: list[str] = []
+        for block in self.body.replace("\r", "").split("\n\n"):
+            line = " ".join(block.split()).strip()
+            if line:
+                out.append(line)
+        return out or ([self.body] if self.body else [])
+
+    def _eyebrow(self) -> str:
+        return "MONTHLY SUMMARY" if self.period == "month" else "WEEKLY SUMMARY"
+
+    def _headline(self) -> str:
+        if self.period == "month":
+            return f"{self.tenant_name} in {self.period_label}."
+        return f"This week with {self.tenant_name}."
+
+    def _subject_line(self) -> str:
+        return f"{self.tenant_name}: {self.period_label} summary"
+
+    def _context(self) -> dict:
+        return {
+            "subject_label": self._subject_line(),
+            "eyebrow": self._eyebrow(),
+            "period_label": self.period_label,
+            "headline": self._headline(),
+            "note": self.message,
+            "paragraphs": self._paragraphs(),
+            "dashboard_url": self.dashboard_url,
+            "sender_name": self.sender_name,
+        }
+
+    def envelope(self) -> Envelope:
+        return Envelope(
+            subject=self._subject_line(),
+            template="recaps.templates.emails.weekly_client_summary",
+            from_email=getattr(
+                settings,
+                "DEFAULT_FROM_EMAIL",
+                "Spark by Ignite <no-reply@igniteproductions.co>",
+            ),
+            to_emails=self.recipients,
+            headers={"Reply-To": self.reply_to_email},
+            context=self._context(),
+        )
+
+
 def _fmt_int(value: int | None) -> str:
     return "—" if value is None else f"{int(value):,}"
 

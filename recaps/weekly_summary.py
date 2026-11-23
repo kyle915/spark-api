@@ -3,8 +3,9 @@
 Each brand gets a few short paragraphs about the last finished week,
 Monday to Sunday by event date: what ran, the headline numbers, what
 consumers said, and anything the brand should look at. Staff read the
-draft, edit it, copy it and mark it reviewed. Nothing in this module sends
-anything to anyone.
+draft, edit it, mark it reviewed, and can email the branded HTML to brand
+recipients via ``send_weekly_client_summary`` (stamps ``sent_at`` /
+``sent_by`` / ``sent_to``).
 
 How it differs from :mod:`recaps.weekly_narration` (the ops paragraph on the
 dashboard): that one is written for Ignite, about FILED recaps, from the
@@ -30,6 +31,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import date, timedelta
 
 import strawberry
@@ -77,6 +79,13 @@ REASON_UNGROUNDED = (
     "The draft used a number that is not in the approved recaps, so it was not kept."
 )
 REASON_NOT_FOUND = "Summary not found."
+REASON_NO_RECIPIENTS = "Add at least one recipient email."
+REASON_BAD_EMAIL = "One of the recipient emails does not look valid."
+REASON_TOO_MANY = "Send to up to 20 recipients at a time."
+REASON_EMPTY_BODY = "Write or save the summary before sending."
+REASON_SEND_FAILED = "Could not send the summary email. Try again."
+MAX_SEND_RECIPIENTS = 20
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 _SYSTEM = (
     "You write a short summary of one week of a brand's in-store sampling "
@@ -401,9 +410,7 @@ def week_rows(start: date, end: date, period: str = PERIOD_WEEK) -> list[dict]:
         row.tenant_id: row
         for row in TenantWeeklySummary.objects.filter(
             period=period, week_start=start
-        ).select_related(
-            "reviewed_by"
-        )
+        ).select_related("reviewed_by", "sent_by")
     }
     wanted = set(approved) | set(pending) | set(drafts)
     rows = []
@@ -414,6 +421,7 @@ def week_rows(start: date, end: date, period: str = PERIOD_WEEK) -> list[dict]:
                 "tenant_name": tenant.name or "",
                 "approved_recaps": approved.get(tenant.id, 0),
                 "pending_recaps": pending.get(tenant.id, 0),
+                "suggested_recipients": _suggested_recipients(tenant),
                 "summary": drafts.get(tenant.id),
             }
         )
@@ -490,6 +498,9 @@ class WeeklyClientSummary:
     generated_at: str
     reviewed_by_name: str | None
     reviewed_at: str | None
+    sent_at: str | None
+    sent_by_name: str | None
+    sent_to: list[str]
 
 
 @strawberry.type
@@ -499,6 +510,8 @@ class WeeklyClientSummaryRow:
     approved_recaps: int
     # Filed that week and still waiting for review: not in the draft.
     pending_recaps: int
+    # Brand contacts staff usually email (recap recipients + client users).
+    suggested_recipients: list[str]
     summary: WeeklyClientSummary | None
 
 
@@ -517,6 +530,7 @@ class WeeklyClientSummaryResult:
     ok: bool
     reason: str | None
     summary: WeeklyClientSummary | None
+    sent_count: int | None = None
 
 
 def _person(user) -> str | None:
@@ -526,6 +540,14 @@ def _person(user) -> str | None:
         part for part in (getattr(user, "first_name", ""), getattr(user, "last_name", "")) if part
     ).strip()
     return name or (getattr(user, "email", None) or None)
+
+
+def _sent_to_list(raw) -> list[str]:
+    if not raw:
+        return []
+    if isinstance(raw, list):
+        return [str(e).strip() for e in raw if str(e).strip()]
+    return []
 
 
 def _summary_type(row) -> WeeklyClientSummary:
@@ -541,7 +563,46 @@ def _summary_type(row) -> WeeklyClientSummary:
         generated_at=row.generated_at.isoformat(),
         reviewed_by_name=_person(row.reviewed_by),
         reviewed_at=row.reviewed_at.isoformat() if row.reviewed_at else None,
+        sent_at=row.sent_at.isoformat() if getattr(row, "sent_at", None) else None,
+        sent_by_name=_person(getattr(row, "sent_by", None)),
+        sent_to=_sent_to_list(getattr(row, "sent_to", None)),
     )
+
+
+def _clean_recipients(raw: list[str] | None) -> tuple[list[str] | None, str | None]:
+    """Deduped emails, or ``(None, reason)`` when the list is unusable."""
+    clean: list[str] = []
+    seen: set[str] = set()
+    for item in list(raw or []):
+        email = (item or "").strip()
+        if not email:
+            continue
+        if not _EMAIL_RE.match(email):
+            return None, REASON_BAD_EMAIL
+        key = email.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        clean.append(email)
+    if not clean:
+        return None, REASON_NO_RECIPIENTS
+    if len(clean) > MAX_SEND_RECIPIENTS:
+        return None, REASON_TOO_MANY
+    return clean, None
+
+
+def _suggested_recipients(tenant) -> list[str]:
+    """Brand contacts for the Send modal prefill."""
+    from recaps.weekly_digest import client_digest_recipients
+
+    try:
+        return client_digest_recipients(tenant)
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "weekly summary: suggested recipients failed tenant=%s",
+            getattr(tenant, "id", None),
+        )
+        return []
 
 
 @strawberry.type
@@ -657,6 +718,7 @@ class WeeklySummaryQueries:
                     tenant_name=r["tenant_name"],
                     approved_recaps=r["approved_recaps"],
                     pending_recaps=r["pending_recaps"],
+                    suggested_recipients=list(r.get("suggested_recipients") or []),
                     summary=_summary_type(r["summary"]) if r["summary"] else None,
                 )
                 for r in week_rows(start, end, period)
@@ -730,7 +792,7 @@ class WeeklySummaryMutations:
             from tenants.models import TenantWeeklySummary
 
             row = (
-                TenantWeeklySummary.objects.select_related("reviewed_by")
+                TenantWeeklySummary.objects.select_related("reviewed_by", "sent_by")
                 .filter(id=rid)
                 .first()
             )
@@ -776,7 +838,7 @@ class WeeklySummaryMutations:
                 update_fields=["status", "reviewed_by", "reviewed_at", "updated_at"]
             )
             row = (
-                TenantWeeklySummary.objects.select_related("reviewed_by")
+                TenantWeeklySummary.objects.select_related("reviewed_by", "sent_by")
                 .filter(id=rid)
                 .first()
             )
@@ -786,3 +848,125 @@ class WeeklySummaryMutations:
         if summary is None:
             return _fail(REASON_NOT_FOUND)
         return WeeklyClientSummaryResult(ok=True, reason=None, summary=summary)
+
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def send_weekly_client_summary(
+        self,
+        info: strawberry.Info,
+        id: strawberry.ID,
+        recipients: list[str],
+        message: str | None = None,
+    ) -> WeeklyClientSummaryResult:
+        """Email the branded summary HTML to brand recipients. Staff only.
+
+        Stamps ``sent_at`` / ``sent_by`` / ``sent_to`` on a successful send
+        and marks the row reviewed so the brand dashboard also shows it.
+        Re-sends are allowed (audit fields update to the latest send).
+        """
+        user = await _staff_user(info)
+        if user is None:
+            return _fail("Not available.")
+        rid = _row_id(id)
+        if rid is None:
+            return _fail(REASON_NOT_FOUND)
+        clean, bad = _clean_recipients(recipients)
+        if clean is None:
+            return _fail(bad or REASON_NO_RECIPIENTS)
+        note = (message or "").strip()[:1000] or None
+
+        def _send():
+            from events.event_confirmations import public_page_base
+            from recaps.envelopes import WeeklyClientSummaryMailer
+            from tenants.models import TenantWeeklySummary
+
+            row = (
+                TenantWeeklySummary.objects.select_related(
+                    "tenant", "reviewed_by", "sent_by"
+                )
+                .filter(id=rid)
+                .first()
+            )
+            if row is None:
+                return None, REASON_NOT_FOUND, 0
+            text = (row.edited_body.strip() or row.body or "").strip()
+            if not text:
+                return None, REASON_EMPTY_BODY, 0
+
+            sender_name = _person(user) or getattr(user, "email", "") or "Ignite"
+            period_label = _period_label(row.period, row.week_start, row.week_end)
+            base = public_page_base()
+            dashboard_url = f"{base}/" if base else None
+
+            sent = 0
+            for recipient in clean:
+                mailer = WeeklyClientSummaryMailer(
+                    recipients=[recipient],
+                    tenant_name=getattr(row.tenant, "name", "") or "Your brand",
+                    period=row.period,
+                    period_label=period_label,
+                    body=text,
+                    sender_name=sender_name,
+                    message=note,
+                    dashboard_url=dashboard_url,
+                )
+                try:
+                    ok = mailer.send()
+                except Exception:  # noqa: BLE001
+                    logger.exception(
+                        "send_weekly_client_summary failed to=%s id=%s",
+                        recipient,
+                        rid,
+                    )
+                    continue
+                # False = provider rejected; None = nothing to send (skip).
+                if ok is False:
+                    logger.error(
+                        "send_weekly_client_summary provider rejected to=%s id=%s",
+                        recipient,
+                        rid,
+                    )
+                    continue
+                if ok is None:
+                    continue
+                sent += 1
+            if sent == 0:
+                return None, REASON_SEND_FAILED, 0
+
+            now = timezone.now()
+            row.sent_at = now
+            row.sent_by_id = user.pk
+            row.sent_to = list(clean)
+            if row.status != TenantWeeklySummary.STATUS_REVIEWED:
+                row.status = TenantWeeklySummary.STATUS_REVIEWED
+                row.reviewed_by_id = user.pk
+                row.reviewed_at = now
+            row.save(
+                update_fields=[
+                    "sent_at",
+                    "sent_by",
+                    "sent_to",
+                    "status",
+                    "reviewed_by",
+                    "reviewed_at",
+                    "updated_at",
+                ]
+            )
+            row = (
+                TenantWeeklySummary.objects.select_related("reviewed_by", "sent_by")
+                .filter(id=rid)
+                .first()
+            )
+            return _summary_type(row), None, sent
+
+        try:
+            summary, reason, sent_count = await sync_to_async(
+                _send, thread_sensitive=True
+            )()
+        except Exception:  # noqa: BLE001
+            logger.exception("sendWeeklyClientSummary failed id=%s", rid)
+            return _fail(REASON_SEND_FAILED)
+        if summary is None:
+            return _fail(reason or REASON_SEND_FAILED)
+        return WeeklyClientSummaryResult(
+            ok=True, reason=None, summary=summary, sent_count=sent_count
+        )
