@@ -1351,7 +1351,8 @@ class TenantWeeklySummary(models.Model):
     never changed by an edit; ``edited_body`` holds what staff changed it
     to (blank when untouched). ``facts`` is the packet of numbers and
     comments the draft was written from, all of it from approved recaps.
-    Nothing here is sent to anyone: staff read, edit and copy the text.
+    Staff can email the finished text via ``sendWeeklyClientSummary``, which
+    stamps ``sent_at`` / ``sent_by`` / ``sent_to``.
     """
 
     STATUS_DRAFT = "draft"
@@ -1381,6 +1382,17 @@ class TenantWeeklySummary(models.Model):
         related_name="weekly_summaries_reviewed",
     )
     reviewed_at = models.DateTimeField(null=True, blank=True)
+    # Set when staff email the branded summary to brand recipients.
+    sent_at = models.DateTimeField(null=True, blank=True)
+    sent_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="weekly_summaries_sent",
+    )
+    # Deduped recipient list from the last send (audit; empty until sent).
+    sent_to = models.JSONField(default=list, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:

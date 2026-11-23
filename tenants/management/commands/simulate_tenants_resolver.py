@@ -7,8 +7,8 @@ user (by email). Reproduces the exact filter logic so we can confirm:
     - Are any TenantedUser rows is_active=False that would explain a miss?
 
 Usage:
-    python manage.py simulate_tenants_resolver kyle@igniteproductions.co
-    python manage.py simulate_tenants_resolver ross@liquiddeath.com
+    python manage.py simulate_tenants_resolver admin@example.com
+    python manage.py simulate_tenants_resolver client@example.com
 """
 
 from __future__ import annotations

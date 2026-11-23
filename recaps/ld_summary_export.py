@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 
 from googleapiclient.errors import HttpError
 
-from events.routing import LIQUID_DEATH_TERRITORY
+from events.routing import liquid_death_territory
 from recaps.models import CustomRecap
 from recaps.pdf import _event_date, _event_state
 from recaps.recap_sheet_export import SERVICE_ACCOUNT_EMAIL, _tab_titles
@@ -61,16 +61,17 @@ UNASSIGNED = "Unassigned"
 
 
 def _build_state_to_rmm() -> dict[str, str]:
-    """Invert LIQUID_DEATH_TERRITORY → {STATE: rmm_name}, first-wins so each
+    """Invert liquid_death_territory() → {STATE: rmm_name}, first-wins so each
     demo is counted under exactly one RMM (so % of total sums to 100). DE is
     listed under both Manuela and Pat in the sheet; first-wins by RMM_ORDER
     assigns it to Manuela for counting (it has 0 demos today either way)."""
+    territory = liquid_death_territory()
     state_to_rmm: dict[str, str] = {}
     # Iterate in RMM_ORDER so ties resolve deterministically.
     name_to_email = {v: k for k, v in RMM_EMAIL_TO_NAME.items()}
     for name in RMM_ORDER:
         email = name_to_email.get(name)
-        for code in LIQUID_DEATH_TERRITORY.get(email, []):
+        for code in territory.get(email, []):
             state_to_rmm.setdefault(code.upper(), name)
     return state_to_rmm
 
@@ -78,8 +79,9 @@ def _build_state_to_rmm() -> dict[str, str]:
 STATE_TO_RMM = _build_state_to_rmm()
 # Display string of each RMM's mapped states (full territory, so DE shows under
 # both, matching the sheet). Counting still uses STATE_TO_RMM (once).
+_TERRITORY_FOR_DISPLAY = liquid_death_territory()
 RMM_MAPPED_STATES = {
-    name: ", ".join(LIQUID_DEATH_TERRITORY.get(email, []))
+    name: ", ".join(_TERRITORY_FOR_DISPLAY.get(email, []))
     for email, name in RMM_EMAIL_TO_NAME.items()
 }
 # Poli isn't in the territory map (no routing change); display her territory as

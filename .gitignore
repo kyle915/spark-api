@@ -209,3 +209,17 @@ __marimo__/
 
 #schemas
 *.graphql
+
+# Local overrides that may contain client routing / PII
+.env.*
+!.env.example
+.env.from-prod
+events/data/*.local.json
+*.pem
+*serviceAccount*.json
+*credentials*.json
+*-adminsdk*.json
+*.sql
+*.sql.gz
+*.dump
+*.sqlite3

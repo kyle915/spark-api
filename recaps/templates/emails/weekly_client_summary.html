@@ -1,0 +1,109 @@
+{% load static %}<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{{ subject_label }}</title>
+    <style type="text/css">
+      @media only screen and (max-width: 600px) {
+        .shell { width: 100% !important; }
+        .pad   { padding-left: 24px !important; padding-right: 24px !important; }
+        .hero  { font-size: 28px !important; line-height: 32px !important; }
+      }
+      a.cta:hover { filter: brightness(1.05); }
+    </style>
+  </head>
+  <body
+    style="margin:0;padding:0;background:#f4f4f0;
+           font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,
+                       'Helvetica Neue',Arial,sans-serif;
+           color:#0a0d09;">
+    <table role="presentation" cellspacing="0" cellpadding="0" border="0"
+           width="100%" style="background:#f4f4f0;">
+      <tr>
+        <td align="center" style="padding:24px 12px;">
+          <table role="presentation" cellspacing="0" cellpadding="0" border="0"
+                 width="600" class="shell"
+                 style="width:600px;max-width:600px;
+                        background:#ffffff;border-radius:18px;
+                        overflow:hidden;
+                        box-shadow:0 1px 2px rgba(10,13,9,0.04);">
+
+            <tr>
+              <td class="pad" style="padding:24px 40px;background:#0a0d09;">
+                <img src="https://admin.igniteproductions.co/legal/spark-logo-full.png"
+                     alt="Spark by Ignite"
+                     width="180" height="auto"
+                     style="display:block;height:auto;border:0;outline:none;
+                            text-decoration:none;" />
+              </td>
+            </tr>
+
+            <tr>
+              <td class="pad" style="padding:36px 40px 8px 40px;">
+                <p style="margin:0 0 4px 0;
+                          font-family:'Courier New',Courier,monospace;
+                          font-size:10px;letter-spacing:0.22em;
+                          color:#5a6354;">
+                  {{ eyebrow }} · {{ period_label }}
+                </p>
+                <h1 class="hero"
+                    style="margin:0;
+                           font-family:Georgia,'Times New Roman',serif;
+                           font-weight:700;font-size:34px;line-height:38px;
+                           letter-spacing:-0.02em;color:#0a0d09;">
+                  {{ headline }}
+                </h1>
+              </td>
+            </tr>
+
+            {% if note %}
+            <tr>
+              <td class="pad" style="padding:18px 40px 4px 40px;">
+                <p style="margin:0;padding:12px 14px;background:#f5f5f0;
+                          border-left:3px solid #c5f546;border-radius:6px;
+                          font-size:14px;line-height:21px;color:#3b4034;">
+                  {{ note }}
+                </p>
+              </td>
+            </tr>
+            {% endif %}
+
+            <tr>
+              <td class="pad" style="padding:22px 40px 8px 40px;">
+                {% for paragraph in paragraphs %}
+                <p style="margin:0 0 16px 0;font-size:15px;line-height:24px;color:#3b4034;">
+                  {{ paragraph }}
+                </p>
+                {% endfor %}
+              </td>
+            </tr>
+
+            {% if dashboard_url %}
+            <tr>
+              <td class="pad" style="padding:8px 40px 28px 40px;">
+                <a class="cta" href="{{ dashboard_url }}"
+                   style="display:inline-block;background:#c5f546;color:#0a0d09;
+                          font-weight:700;text-decoration:none;padding:12px 22px;
+                          border-radius:8px;font-size:14px;">
+                  Open Spark
+                </a>
+              </td>
+            </tr>
+            {% endif %}
+
+            <tr>
+              <td class="pad"
+                  style="padding:18px 40px 28px 40px;border-top:1px solid #ecece6;">
+                <p style="margin:0;font-size:12px;line-height:18px;color:#8a9182;">
+                  Sent by {{ sender_name }} via Spark by Ignite Productions.
+                  Reply to this email to reach the Ignite team.
+                </p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>

@@ -44,6 +44,10 @@ organization first.
 | `get_consumer_breakdown` | Consumers sampled by store, state or week; units sold and sampled by product |
 | `list_upcoming_events` | Next 1-30 days of events and not-yet-scheduled requests, with a count of booked brand ambassadors |
 | `get_weekly_summary` | The latest published weekly summary (or a given week) |
+| `get_shelf_compliance_summary` | On-shelf / OSA from stored shelf readings: visits, on shelf, not found, price tag, unread, sample not-found stores |
+| `get_demo_cost_summary` | Brand-paid demo cost rollups by store / program / provider / month (brand-consolidated; plan may gate) |
+| `get_store_velocity_and_roi` | Retailer POS velocity, lift and ROI with withheld reasons when incomplete (brand-consolidated; plan may gate) |
+| `get_competitor_mentions` | Other brands named in approved recap comments from stored mention tags |
 | `get_connection_info` | Which brand this is and how many calls are left today |
 
 It cannot change anything, see other brands, or see brand ambassadors'

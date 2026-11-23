@@ -417,6 +417,32 @@ class ReassignRecapEventInput(SparkGraphQLInput):
 
 
 @strawberry.input
+class AttachWalkupOrphanInput(SparkGraphQLInput):
+    """1-click attach a filed walk-up Event onto a MasterTracker request.
+
+    Same high-confidence rules as ``link_walkin_recaps_to_requests``:
+    unique same-day place match only. Staff-only; powers the chip on
+    /recaps/missing.
+    """
+
+    orphan_event_uuid: strawberry.ID
+    request_uuid: strawberry.ID
+    lookback_days: int = 45
+
+
+@strawberry.input
+class AttachSafeWalkupOrphansInput(SparkGraphQLInput):
+    """Bulk-apply every safe orphan → DUE request link for a tenant.
+
+    Dry-run is never exposed here — this is the admin "Attach all safe
+    matches" action. Staff-only.
+    """
+
+    tenant_id: strawberry.ID | None = None
+    lookback_days: int = 45
+
+
+@strawberry.input
 class DismissMissingRecapsInput(SparkGraphQLInput):
     """Mark Missing Recaps rows as owing no recap. Staff only.
 
