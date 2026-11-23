@@ -2,9 +2,12 @@ import django.contrib.sites.requests
 import strawberry
 import strawberry_django
 from asgiref.sync import sync_to_async
-from utils.gcs import extract_blob_name_from_url, public_url
-from .models import ARCHIVED_NAME_PREFIX, Tenant, Role, User, TenantTheme, SupportTicket
 from strawberry.relay import Node
+from strawberry.scalars import JSON
+
+from utils.gcs import extract_blob_name_from_url, public_url
+
+from .models import ARCHIVED_NAME_PREFIX, Role, SupportTicket, Tenant, TenantTheme, User
 
 
 def _checkin_bucket_labels(raw) -> list[str]:
@@ -121,6 +124,26 @@ class RoleType(Node):
     name: strawberry.auto
 
 
+@strawberry.type
+class StandingCheckinResourceGql:
+    """One BA resource button on the standing check-in page."""
+
+    label: str
+    kind: str
+    url: str
+    note: str | None = None
+    hide_on_recap_only: bool = False
+
+
+@strawberry.type
+class StandingCheckinProgramGql:
+    """One program offered on the standing check-in link."""
+
+    id: strawberry.ID
+    name: str
+    is_default: bool
+
+
 @strawberry_django.type(Tenant)
 class TenantType(Node):
     uuid: strawberry.auto
@@ -163,6 +186,65 @@ class TenantType(Node):
         Names only — helpers and minimums stay on the check-in page.
         """
         return _checkin_bucket_labels(getattr(self, "checkin_photo_buckets", None))
+
+    @strawberry.field(name="checkinLocationMode")
+    def checkin_location_mode_value(self) -> str:
+        """How the standing link asks where the BA is working: address | market."""
+        return getattr(self, "checkin_location_mode", None) or "address"
+
+    @strawberry.field(name="checkinPhotoBucketsConfig")
+    def checkin_photo_buckets_config(self) -> JSON | None:
+        """Full photo-bucket config (list or program map) for Check-In Studio."""
+        return getattr(self, "checkin_photo_buckets", None)
+
+    @strawberry.field(name="checkinResources")
+    def checkin_resources_list(self) -> list[StandingCheckinResourceGql]:
+        """BA resource buttons (PDFs / links / images) on the standing link."""
+        from tenants.models import normalize_checkin_resources
+
+        rows = normalize_checkin_resources(getattr(self, "checkin_resources", None))
+        return [
+            StandingCheckinResourceGql(
+                label=row["label"],
+                kind=row["kind"],
+                url=row["url"],
+                note=row.get("note"),
+                hide_on_recap_only=bool(row.get("hideOnRecapOnly")),
+            )
+            for row in rows
+        ]
+
+    @strawberry.field(name="checkinPrograms")
+    async def checkin_programs(self) -> list[StandingCheckinProgramGql]:
+        """Programs on the standing link (default first) with ids for Studio."""
+
+        def _rows():
+            default_id = getattr(self, "checkin_event_type_id", None)
+            rows = list(self.checkin_event_types.all())
+            rows.sort(
+                key=lambda row: (
+                    0 if row.id == default_id else 1,
+                    (row.name or "").lower(),
+                )
+            )
+            if not rows and getattr(self, "checkin_event_type", None) is not None:
+                rows = [self.checkin_event_type]
+            out: list[StandingCheckinProgramGql] = []
+            seen: set[int] = set()
+            for row in rows:
+                if row.id in seen:
+                    continue
+                seen.add(row.id)
+                out.append(
+                    StandingCheckinProgramGql(
+                        id=strawberry.ID(str(row.id)),
+                        name=row.name or "",
+                        is_default=row.id == default_id,
+                    )
+                )
+            return out
+
+        return await sync_to_async(_rows)()
 
     @strawberry.field(
         description="Brand group this tenant belongs to (multi-brand activations)."

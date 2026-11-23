@@ -65,11 +65,8 @@ class TerritoryFromEnvTests(SimpleTestCase):
             ["rmm.west@example.com"],
         )
 
-    def test_unknown_state_stays_with_ignite(self):
-        """An uncovered state stays Ignite-only, even when the env map is set.
-
-        Fan-out used to mail every RMM for a state nobody owns.
-        """
+    def test_unknown_state_with_env_map_still_ignite_only(self):
+        """Env-backed territory map does not restore pre-PR-564 fan-out."""
         os.environ["LD_RMM_TERRITORY_JSON"] = (
             '{"rmm.west@example.com": ["CA"], '
             '"rmm.east@example.com": ["NY"]}'
