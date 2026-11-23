@@ -7,11 +7,12 @@ content inside Liquid Death's switcher, public link and sidebar counts.
 Two halves, both pinned here:
 
 * LIST links (``/walkups``, ``/recaps/list``, digest lists) carry
-  ``?tenant=<tenant uuid>`` — ``utils.deep_links.with_tenant``.
-* RECORD links (``/recap/view-custom/:uuid`` …) carry nothing; the page
-  reads the record's own tenant and switches to it. That only works if the
-  real clients schema hands back the tenant on each record, with the SAME
-  id/uuid the switcher's ``tenants`` list uses — the schema test below.
+  ``?t=<tenant uuid>`` — ``utils.deep_links.with_tenant``.
+* RECORD links (``/recap/view-custom/:uuid`` …) also stamp ``?t=`` as a
+  first-paint hint; the page still reads the record's own tenant and
+  switches to it. That only works if the real clients schema hands back
+  the tenant on each record, with the SAME id/uuid the switcher's
+  ``tenants`` list uses — the schema test below.
 """
 
 from __future__ import annotations
@@ -41,18 +42,18 @@ class TestWithTenant:
         tenant = SimpleNamespace(uuid=UUID)
         assert (
             with_tenant("https://admin.x/walkups", tenant)
-            == f"https://admin.x/walkups?tenant={UUID}"
+            == f"https://admin.x/walkups?t={UUID}"
         )
 
     def test_keeps_existing_query_and_fragment(self):
         tenant = SimpleNamespace(uuid=UUID)
         assert (
             with_tenant("https://c.x/recaps/list?activation=retail#top", tenant)
-            == f"https://c.x/recaps/list?activation=retail&tenant={UUID}#top"
+            == f"https://c.x/recaps/list?activation=retail&t={UUID}#top"
         )
         assert (
             with_tenant("https://a.x/approvals?request=12", tenant)
-            == f"https://a.x/approvals?request=12&tenant={UUID}"
+            == f"https://a.x/approvals?request=12&t={UUID}"
         )
 
     def test_unchanged_without_a_tenant_or_a_url(self):
@@ -65,8 +66,17 @@ class TestWithTenant:
         assert with_tenant(None, SimpleNamespace(uuid=UUID)) == ""
 
     def test_never_doubles_the_param(self):
-        url = "https://a.x/walkups?tenant=already"
-        assert with_tenant(url, SimpleNamespace(uuid=UUID)) == url
+        assert (
+            with_tenant("https://a.x/walkups?t=already", SimpleNamespace(uuid=UUID))
+            == "https://a.x/walkups?t=already"
+        )
+        # Legacy ``?tenant=`` emails must not also get ``?t=``.
+        assert (
+            with_tenant(
+                "https://a.x/walkups?tenant=already", SimpleNamespace(uuid=UUID)
+            )
+            == "https://a.x/walkups?tenant=already"
+        )
 
 
 RECORD_TENANT_QUERY = """
@@ -137,7 +147,7 @@ class TestEmailLinksNameTheirTenant(AmbassadorsGraphQLTestCase):
     def test_tenant_id_resolves_to_the_uuid(self):
         assert (
             with_tenant("https://a.x/recaps/list", tenant_id=self.tenant.id)
-            == f"https://a.x/recaps/list?tenant={self.tenant.uuid}"
+            == f"https://a.x/recaps/list?t={self.tenant.uuid}"
         )
         assert (
             with_tenant("https://a.x/recaps/list", tenant_id=10**9)
@@ -158,7 +168,7 @@ class TestEmailLinksNameTheirTenant(AmbassadorsGraphQLTestCase):
         recap.uuid = None
         assert checkin_recap_open_url(recap) == (
             "https://client.igniteproductions.co/recaps/list"
-            f"?tenant={self.tenant.uuid}"
+            f"?t={self.tenant.uuid}"
         )
 
     @override_settings(
@@ -178,7 +188,7 @@ class TestEmailLinksNameTheirTenant(AmbassadorsGraphQLTestCase):
         assert len(captured) == 2
         href = (
             "href='https://admin.igniteproductions.co/walkups"
-            f"?tenant={self.tenant.uuid}'"
+            f"?t={self.tenant.uuid}'"
         )
         for env in captured:
             assert href in env.html
@@ -191,7 +201,7 @@ class TestEmailLinksNameTheirTenant(AmbassadorsGraphQLTestCase):
         mailer = AdminDigestMailer.__new__(AdminDigestMailer)
         mailer.digest = SimpleNamespace(tenant_id=self.tenant.id)
         mailer.web_app_base_url = "https://admin.igniteproductions.co"
-        suffix = f"?tenant={self.tenant.uuid}"
+        suffix = f"?t={self.tenant.uuid}"
         assert mailer._link("/recaps/list") == (
             f"https://admin.igniteproductions.co/recaps/list{suffix}"
         )
@@ -211,7 +221,7 @@ class TestEmailLinksNameTheirTenant(AmbassadorsGraphQLTestCase):
             payload,
         ) == (
             "https://client.igniteproductions.co/recaps/list"
-            f"?activation=retail&tenant={self.tenant.uuid}"
+            f"?activation=retail&t={self.tenant.uuid}"
         )
 
     # ── record links: the page switches to the record's own tenant ────

@@ -6,21 +6,27 @@ is for. An emailed "Open Walk-ups" button therefore opened whatever client
 the staff member last had selected — a Breakaway alert showing Liquid
 Death's queue.
 
-``with_tenant`` stamps ``?tenant=<tenant uuid>`` onto such a link. The front
+``with_tenant`` stamps ``?t=<tenant uuid>`` onto such a link. The front
 end (TenantGuard) resolves it before the page renders and only ever against
 the tenants the signed-in user can already switch to, so the parameter is a
 hint, not an access grant: every query stays server-scoped as before.
 
+Legacy emails may still carry ``?tenant=``; the front accepts both, and
+``with_tenant`` treats either as already stamped.
+
 Record permalinks (``/recap/view-custom/:uuid``, ``/request/view/:uuid``,
-``/event/view/:uuid``) do not need it — those pages switch to the record's
-own tenant when they load.
+``/event/view/:uuid``) also get ``?t=`` as a belt-and-suspenders hint for
+multi-workspace users whose record-tenant adopt path races the first paint.
 """
 
 from __future__ import annotations
 
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-TENANT_LINK_PARAM = "tenant"
+# Short portal param (audit #9). Legacy ``tenant`` kept readable on the front.
+TENANT_LINK_PARAM = "t"
+LEGACY_TENANT_LINK_PARAM = "tenant"
+_TENANT_LINK_KEYS = frozenset({TENANT_LINK_PARAM, LEGACY_TENANT_LINK_PARAM})
 
 
 def _tenant_uuid(tenant=None, tenant_id=None) -> str:
@@ -40,11 +46,11 @@ def _tenant_uuid(tenant=None, tenant_id=None) -> str:
 
 
 def with_tenant(url: str | None, tenant=None, *, tenant_id=None) -> str:
-    """``url`` with ``tenant=<uuid>`` added to its query string.
+    """``url`` with ``t=<uuid>`` added to its query string.
 
     Returns ``url`` unchanged when it is empty, when no tenant can be
-    resolved, or when it already carries a ``tenant`` parameter. Existing
-    query parameters and the fragment are preserved.
+    resolved, or when it already carries a ``t`` / ``tenant`` parameter.
+    Existing query parameters and the fragment are preserved.
     """
     url = url or ""
     if not url:
@@ -54,7 +60,7 @@ def with_tenant(url: str | None, tenant=None, *, tenant_id=None) -> str:
         return url
     parts = urlsplit(url)
     query = parse_qsl(parts.query, keep_blank_values=True)
-    if any(key == TENANT_LINK_PARAM for key, _ in query):
+    if any(key in _TENANT_LINK_KEYS for key, _ in query):
         return url
     query.append((TENANT_LINK_PARAM, uuid))
     return urlunsplit(parts._replace(query=urlencode(query)))
