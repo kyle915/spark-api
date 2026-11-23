@@ -102,6 +102,27 @@ def test_impossible_rates_are_held_and_units_stay():
     assert draft.template == "Fridays and midday shifts sell the most per hour."
 
 
+def test_headline_does_not_call_a_samples_shift_a_sales_leader():
+    from recaps.field_efficiency import efficiency_headline
+
+    out = summarize_efficiency(
+        [
+            # Friday morning sells at a rate the clock can support.
+            _row(20, 8, 4.0, weekday=4, hour=10, store="Kroger"),
+            _row(20, 8, 4.0, weekday=4, hour=10, store="HEB"),
+            # The same morning on Monday is impossible, so the morning
+            # slice's per-hour figures are held.
+            _row(5500, 2400, 1.0, weekday=0, hour=10, store="Chevron"),
+            # Midday has samples and no sales.
+            _row(80, 0, 4.0, weekday=2, hour=12, store="Costco"),
+            _row(40, 0, 4.0, weekday=2, hour=12, store="Sprouts"),
+        ]
+    )
+    assert efficiency_headline(out) == (
+        "Fridays sell the most per hour. Midday shifts sample the most per hour."
+    )
+
+
 def test_empty_window():
     out = summarize_efficiency([])
     assert out["total"]["recaps"] == 0

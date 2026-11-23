@@ -167,6 +167,27 @@ def strip_brand_suffix(label: str) -> str:
     return cut.strip()
 
 
+def _sentence_names(sentence_norm: str, name_norm: str) -> bool:
+    """Whether a sentence spells a brand, including a plural the brand key folds.
+
+    "I prefer Red Bulls" spells Red Bull. A different name does not.
+    """
+    if written_in(sentence_norm, name_norm):
+        return True
+    target = brand_key(name_norm)
+    if not target:
+        return False
+    words = sentence_norm.split()
+    width = max(len(name_norm.split()), 1)
+    for size in range(1, width + 2):
+        if size > len(words):
+            break
+        for start in range(len(words) - size + 1):
+            if brand_key(" ".join(words[start : start + size])) == target:
+                return True
+    return False
+
+
 def spelling_sentence(text: str, name_norm: str) -> str:
     """The shortest whole sentence in ``text`` that spells ``name_norm``.
 
@@ -178,9 +199,27 @@ def spelling_sentence(text: str, name_norm: str) -> str:
     if not raw or not name_norm:
         return ""
     parts = [part.strip() for part in _SENTENCE_SPLIT_RE.split(str(text or "")) if part.strip()]
-    hits = [part for part in parts if written_in(normalise(part), name_norm)]
+    hits = [part for part in parts if _sentence_names(normalise(part), name_norm)]
     if not hits:
-        return raw if written_in(normalise(raw), name_norm) else ""
+        return raw if _sentence_names(normalise(raw), name_norm) else ""
+    return min(hits, key=len)
+
+
+def quote_for_names(text: str, names: list[str]) -> str:
+    """The sentence that spells any of ``names`` (the proper name and the
+    spellings people actually wrote)."""
+    hits = []
+    seen: set[str] = set()
+    for name in names:
+        norm = normalise(name)
+        if not norm or norm in seen:
+            continue
+        seen.add(norm)
+        sentence = spelling_sentence(text, norm)
+        if sentence:
+            hits.append(sentence)
+    if not hits:
+        return ""
     return min(hits, key=len)
 
 
@@ -422,7 +461,10 @@ def count_mentions(
                 # The sentence that spells the brand, not the rest of a
                 # pasted comment.
                 "quote": _short_quote(
-                    spelling_sentence(comments[quote_index].text, normalise(shown))
+                    quote_for_names(
+                        comments[quote_index].text,
+                        [shown, *entry["spellings"]],
+                    )
                 ),
             }
         )

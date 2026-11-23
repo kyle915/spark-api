@@ -697,6 +697,25 @@ def test_a_brand_quote_is_the_sentence_that_spells_it():
     assert "Peanut" not in brand["quote"]
 
 
+def test_a_proper_name_still_quotes_the_plural_spelling():
+    comments = [_c("L1", "I prefer Red Bulls.")]
+    raw = {
+        "mentions": [
+            {
+                "comment": 1,
+                "brand": "Red Bulls",
+                "name": "Red Bull",
+                "stance": "prefers_theirs",
+            }
+        ]
+    }
+    out = count_mentions(raw, comments, "Liquid Death", [])
+    (brand,) = out["brands"]
+    assert brand["brand"] == "Red Bull"
+    assert brand["recap_count"] == 1
+    assert brand["quote"] == "I prefer Red Bulls."
+
+
 def test_a_product_is_named_by_its_distinctive_words_only():
     assert names_product(normalise("the blue razz was great"), "Torch Blue Razz 10mg", "Torch")
     assert not names_product(normalise("just blue"), "Torch Blue Razz 10mg", "Torch")

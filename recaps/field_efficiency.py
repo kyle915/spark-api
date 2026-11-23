@@ -171,27 +171,37 @@ def _best_slice(rows: list[dict], min_recaps: int = 2) -> dict | None:
     return max(pool, key=key)
 
 
+def _slice_sold(row: dict | None) -> bool:
+    return row is not None and (row["units_per_hour"] or 0) > 0
+
+
+def _slice_line(row: dict, *, sold: bool) -> str:
+    verb = "sell the most per hour" if sold else "sample the most per hour"
+    if row["label"] in _DAY_NAMES:
+        return f"{_DAY_NAMES[row['label']]} {verb}."
+    return f"{row['label']} shifts {verb}."
+
+
 def efficiency_headline(summary: dict) -> str:
-    """The day and shift line, from rows whose per-hour figures were kept."""
+    """The day and shift line, from rows whose per-hour figures were kept.
+
+    A day picked by units sold and a shift picked by samples are two
+    sentences. One verb would call the samples shift a sales leader.
+    """
     day = _best_slice(summary["by_weekday"])
     part = _best_slice(summary["by_daypart"])
-
-    def _sold(row: dict | None) -> bool:
-        return row is not None and (row["units_per_hour"] or 0) > 0
-
-    verb = (
-        "sell the most per hour"
-        if _sold(day) or _sold(part)
-        else "sample the most per hour"
-    )
+    day_sold = _slice_sold(day)
+    part_sold = _slice_sold(part)
+    if day and part and day_sold != part_sold:
+        return f"{_slice_line(day, sold=day_sold)} {_slice_line(part, sold=part_sold)}"
+    verb = "sell the most per hour" if day_sold or part_sold else "sample the most per hour"
     if day and part:
         name = _DAY_NAMES.get(day["label"], day["label"])
         return f"{name} and {part['label'].lower()} shifts {verb}."
     if day:
-        name = _DAY_NAMES.get(day["label"], day["label"])
-        return f"{name} {verb}."
+        return _slice_line(day, sold=day_sold)
     if part:
-        return f"{part['label']} shifts {verb}."
+        return _slice_line(part, sold=part_sold)
     return ""
 
 
