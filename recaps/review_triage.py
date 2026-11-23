@@ -9,8 +9,9 @@ ops can approve clean packs in one pass and only open anomalous visits:
   at high/medium severity — missing photos, blank feedback, KPI typos
 * Filed photo scores (:class:`recaps.models.RecapPhotoScore`) — blur /
   dark / unreadable / screenshot (non-receipt)
-* Shelf readings (:class:`recaps.models.ShelfReading`) — out-of-stock gap
-  or missing price tag on a read shelf photo
+* Shelf readings — out-of-stock gap or missing price tag, via
+  :func:`recaps.shelf_check.effective_answers` so staff
+  :class:`~recaps.models.ShelfReadingCorrection` rows always win
 
 Prefer rules over new model calls. Never auto-approves, rejects, or
 mutates a recap. Staff-only GraphQL surface; clients must not see this
@@ -123,30 +124,46 @@ def _photo_score_reasons(recap_id: int, is_custom: bool) -> list[dict]:
 
 
 def _shelf_reasons(recap_id: int, is_custom: bool) -> list[dict]:
-    """Needs-eyes signals from persisted ShelfReading rows (custom only)."""
+    """Needs-eyes signals from shelf answers (custom only).
+
+    Uses :func:`recaps.shelf_check.effective_answers` so a staff
+    :class:`~recaps.models.ShelfReadingCorrection` always wins over the
+    raw :class:`~recaps.models.ShelfReading` — same rule as brand shelf
+    summaries and the staff review page.
+    """
     if not is_custom:
         return []
     try:
-        from recaps.models import ShelfReading
+        from recaps.models import CustomRecapFile, ShelfReading
+        from recaps.shelf_check import YES, NO, effective_answers
     except Exception:
         return []
 
     out: list[dict] = []
     seen: set[str] = set()
     try:
-        rows = ShelfReading.objects.filter(
-            custom_recap_file__custom_recap_id=recap_id,
-            status=ShelfReading.STATUS_READ,
-        ).values_list(
-            "out_of_stock_gap",
-            "price_tag_visible",
-            "product_on_shelf",
+        files = CustomRecapFile.objects.filter(custom_recap_id=recap_id).select_related(
+            "shelf_reading",
+            "shelf_correction",
         )
     except Exception:
         return []
 
-    for gap, tag, on_shelf in rows:
-        if gap == ShelfReading.YES and "shelf_oos_gap" not in seen:
+    for recap_file in files:
+        reading = getattr(recap_file, "shelf_reading", None)
+        correction = getattr(recap_file, "shelf_correction", None)
+        # Skip unread / failed readings unless staff already corrected.
+        if correction is None and (
+            reading is None or reading.status != ShelfReading.STATUS_READ
+        ):
+            continue
+        answers = effective_answers(reading, correction)
+        if not answers:
+            continue
+        gap = answers.get("out_of_stock_gap")
+        tag = answers.get("price_tag_visible")
+        on_shelf = answers.get("product_on_shelf")
+        if gap == YES and "shelf_oos_gap" not in seen:
             seen.add("shelf_oos_gap")
             out.append(
                 _reason(
@@ -155,7 +172,7 @@ def _shelf_reasons(recap_id: int, is_custom: bool) -> list[dict]:
                     "shelf_reading",
                 )
             )
-        if tag == ShelfReading.NO and "shelf_missing_price_tag" not in seen:
+        if tag == NO and "shelf_missing_price_tag" not in seen:
             seen.add("shelf_missing_price_tag")
             out.append(
                 _reason(
@@ -164,7 +181,7 @@ def _shelf_reasons(recap_id: int, is_custom: bool) -> list[dict]:
                     "shelf_reading",
                 )
             )
-        if on_shelf == ShelfReading.NO and "shelf_product_missing" not in seen:
+        if on_shelf == NO and "shelf_product_missing" not in seen:
             seen.add("shelf_product_missing")
             out.append(
                 _reason(

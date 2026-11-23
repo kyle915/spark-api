@@ -157,6 +157,31 @@ class TestRecapReviewTriage(AmbassadorsGraphQLTestCase):
         assert result["label"] == LABEL_NEEDS_EYES
         assert any(r["code"] == "shelf_oos_gap" for r in result["reasons"])
 
+    def test_shelf_staff_correction_clears_oos_needs_eyes(self):
+        """Staff ShelfReadingCorrection wins over the raw model reading."""
+        recap = self._recap(total_engagements=40)
+        sampling = self._file(recap, "recap_files/shelf.jpg", self.sampling_cat)
+        self._file(recap, "recap_files/spend.jpg", self.spend_cat)
+        recap_models.ShelfReading.objects.create(
+            custom_recap_file=sampling,
+            status=recap_models.ShelfReading.STATUS_READ,
+            product_on_shelf=recap_models.ShelfReading.YES,
+            out_of_stock_gap=recap_models.ShelfReading.YES,
+            price_tag_visible=recap_models.ShelfReading.YES,
+        )
+        # Model said OOS gap; staff corrected to no gap.
+        recap_models.ShelfReadingCorrection.objects.create(
+            custom_recap_file=sampling,
+            product_on_shelf=recap_models.ShelfReading.YES,
+            out_of_stock_gap=recap_models.ShelfReading.NO,
+            price_tag_visible=recap_models.ShelfReading.YES,
+            corrected_by=self.admin,
+        )
+        result = recap_review_triage(recap.id, is_custom=True)
+        codes = {r["code"] for r in result["reasons"]}
+        assert "shelf_oos_gap" not in codes
+        assert result["label"] == LABEL_CLEAN
+
     def test_batch_helper_and_invalid_id(self):
         clean = self._recap(total_engagements=40)
         self._file(clean, "recap_files/a.jpg", self.sampling_cat)
