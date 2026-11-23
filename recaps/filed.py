@@ -133,6 +133,13 @@ def missing_recap_events_queryset(
     code — has NO ``end_time``; it counts as wrapped once its LAST clock
     punch is ``WALKIN_WRAP_GRACE_HOURS`` back, so nobody is chased mid-shift.
 
+    Still-upcoming schedules are never due. ``end_time`` alone is not enough:
+    a reschedule / import can leave a stale past ``end_time`` on a row whose
+    ``start_time`` / ``date`` is still in the future (Famus "65 recaps due"
+    on upcoming demos). Drop those so the badge, /recaps/missing, and the
+    client Needs-you strip stay aligned with the frontend ``isRecapDue``
+    rule (upcoming must not light up as due).
+
     Left out: events with a filed recap in either family (an empty clock-out
     stub is not one, see ``events_missing_filed_recap``), events whose
     request was soft-deleted — a deleted gig owes nothing — and events staff
@@ -151,6 +158,7 @@ def missing_recap_events_queryset(
     now = now or timezone.now()
     days = max(1, min(int(lookback_days or 30), MISSING_RECAPS_MAX_LOOKBACK_DAYS))
     cutoff = now - timedelta(days=days)
+    still_upcoming = Q(start_time__gt=now) | Q(date__gt=now)
     qs = (
         Event.objects.exclude(request__deleted_at__isnull=False)
         .annotate(last_punch=Max("attendance__clock_time"))
@@ -162,6 +170,8 @@ def missing_recap_events_queryset(
                 last_punch__gte=cutoff,
             )
         )
+        # Future start/date wins over a stale past end_time.
+        .exclude(still_upcoming)
     )
     qs = events_missing_filed_recap(qs)
     if tenant_id is not None:

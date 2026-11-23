@@ -47,28 +47,17 @@ class TestMissingRecapWalkins(AmbassadorsGraphQLTestCase):
         )
 
     def _missing_event_ids(self, days=30):
-        """Run the resolver's queryset the way the resolver does."""
-        from django.db.models import Max, Q
+        """Same queryset the resolver / sidebar badge use."""
         from django.db.models.functions import Coalesce
-        from recaps.filed import events_missing_filed_recap
+        from recaps.filed import missing_recap_events_queryset
 
-        now = dj_tz.now()
-        cutoff = now - _dt.timedelta(days=days)
         qs = (
-            Event.objects.annotate(last_punch=Max("attendance__clock_time"))
-            .filter(
-                Q(end_time__lt=now, end_time__gte=cutoff)
-                | Q(
-                    end_time__isnull=True,
-                    last_punch__lt=now - _dt.timedelta(hours=WALKIN_WRAP_GRACE_HOURS),
-                    last_punch__gte=cutoff,
-                )
+            missing_recap_events_queryset(
+                lookback_days=days, tenant_id=self.tenant.id
             )
-            .filter(tenant_id=self.tenant.id)
+            .annotate(wrapped_at=Coalesce("end_time", "last_punch"))
+            .order_by("-wrapped_at")
         )
-        qs = events_missing_filed_recap(qs).annotate(
-            wrapped_at=Coalesce("end_time", "last_punch")
-        ).order_by("-wrapped_at")
         return set(qs.values_list("id", flat=True))
 
     def test_a_finished_walkin_with_no_recap_is_surfaced(self):
@@ -105,9 +94,18 @@ class TestMissingRecapWalkins(AmbassadorsGraphQLTestCase):
             start_time=now + _dt.timedelta(hours=3),
             end_time=now + _dt.timedelta(hours=5),
         )
+        # Upcoming by date/start even when end_time is a stale past stamp.
+        stale_upcoming = Event.objects.create(
+            tenant=self.tenant, name="upcoming, stale end",
+            created_by=self.system_user,
+            date=now + _dt.timedelta(days=4),
+            start_time=now + _dt.timedelta(days=4),
+            end_time=now - _dt.timedelta(days=1),
+        )
         ids = self._missing_event_ids()
         assert wrapped.id in ids
         assert future.id not in ids
+        assert stale_upcoming.id not in ids
 
     def test_an_old_walkin_falls_out_of_the_lookback(self):
         ev = self._walkin_event()
