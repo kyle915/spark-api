@@ -33,6 +33,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
+from datetime import date
 
 
 from spark_mcp import tools as mcp
@@ -319,8 +320,10 @@ CHAT_TOOLS: dict[str, ChatTool] = {
             "last 30 days): approved recaps, consumers sampled, units sold and "
             "conversion %, ranked by sort_by (conversion, consumers, units_sold or "
             "recaps). Use min_recaps to leave out stores with few visits. Up to 25 "
-            "stores. Use this for 'which stores did best/worst' and for planning "
-            "where to go, e.g. the same month last year.",
+            "stores. Use this for which stores did best or worst, and for planning "
+            "where to go. For a month that has not started, use that month last "
+            "year (the previous calendar year) and the last 90 days, not an "
+            "older year from model training.",
             {
                 "type": "object",
                 "properties": {
@@ -405,8 +408,12 @@ def openai_tools() -> list[dict]:
     ]
 
 
+def today_date() -> date:
+    return mcp._ops_today()
+
+
 def today_iso() -> str:
-    return mcp._ops_today().isoformat()
+    return today_date().isoformat()
 
 
 def run(ctx: mcp.ToolContext, name: str, args: dict) -> tuple[dict, int, bool]:

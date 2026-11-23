@@ -1144,11 +1144,18 @@ def get_competitor_mentions(ctx: ToolContext, args: dict) -> tuple[dict, int]:
 _DATE_PROPS = {
     "start_date": {
         "type": "string",
-        "description": "First day, YYYY-MM-DD (inclusive). Defaults to 29 days before end_date.",
+        "description": (
+            "First day, YYYY-MM-DD (inclusive). Defaults to 29 days before end_date. "
+            "For last month, this month, or a named month, use the current calendar "
+            "year, not a year from model training."
+        ),
     },
     "end_date": {
         "type": "string",
-        "description": "Last day, YYYY-MM-DD (inclusive). Defaults to today (Pacific).",
+        "description": (
+            "Last day, YYYY-MM-DD (inclusive). Defaults to today (Pacific). "
+            "For a relative range, use the current calendar year, not an older one."
+        ),
     },
 }
 
