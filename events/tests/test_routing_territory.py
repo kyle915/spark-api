@@ -65,16 +65,17 @@ class TerritoryFromEnvTests(SimpleTestCase):
             ["rmm.west@example.com"],
         )
 
-    def test_unknown_state_fans_out_from_env(self):
+    def test_unknown_state_stays_with_ignite(self):
+        # An uncovered state used to fan out to every RMM. It now returns
+        # nobody so the mailer can route to Ignite for a person to place it.
         os.environ["LD_RMM_TERRITORY_JSON"] = (
             '{"rmm.west@example.com": ["CA"], '
             '"rmm.east@example.com": ["NY"]}'
         )
         liquid_death_territory.cache_clear()
-        emails = territory_emails_for_state("ighn-liquid-death", "TX")
-        self.assertCountEqual(
-            emails,
-            ["rmm.west@example.com", "rmm.east@example.com"],
+        self.assertEqual(
+            territory_emails_for_state("ighn-liquid-death", "TX"),
+            [],
         )
 
     def test_other_tenant_slug_ignored(self):

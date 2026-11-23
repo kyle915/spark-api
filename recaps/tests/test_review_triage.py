@@ -244,6 +244,8 @@ class TestRecapReviewTriage(AmbassadorsGraphQLTestCase):
               recapReviewTriage(recapIds: $ids, isCustom: $isCustom) {
                 recapId
                 label
+                why
+                whySource
                 reasons { code label source }
               }
             }
@@ -252,16 +254,23 @@ class TestRecapReviewTriage(AmbassadorsGraphQLTestCase):
             "ids": [str(clean.id), str(flagged.id)],
             "isCustom": True,
         }
-        admin_result = await self._execute_query_authenticated(
-            query, vars, self.admin, self.endpoint_path
-        )
+        from django.test.utils import override_settings
+
+        with override_settings(OPENAI_API_KEY=""):
+            admin_result = await self._execute_query_authenticated(
+                query, vars, self.admin, self.endpoint_path
+            )
         assert admin_result.errors is None, admin_result.errors
         by_id = {
             str(row["recapId"]): row
             for row in admin_result.data["recapReviewTriage"]
         }
         assert by_id[str(clean.id)]["label"] == LABEL_CLEAN
+        assert by_id[str(clean.id)]["why"] is None
+        assert by_id[str(clean.id)]["whySource"] == ""
         assert by_id[str(flagged.id)]["label"] == LABEL_NEEDS_EYES
+        assert by_id[str(flagged.id)]["why"]
+        assert by_id[str(flagged.id)]["whySource"] == "rules"
         assert any(
             r["code"] == "engagements_rate"
             for r in by_id[str(flagged.id)]["reasons"]
