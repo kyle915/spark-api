@@ -317,6 +317,14 @@ class MapCustomRecapStoreInput(SparkGraphQLInput):
 
 
 @strawberry.input
+class SuggestCustomRecapStoreInput(SparkGraphQLInput):
+    """Staff-only: re-run Places + OpenAI store/chain suggestions for a
+    3rd-party typed address. Never auto-maps — admin still confirms."""
+
+    id: strawberry.ID
+
+
+@strawberry.input
 class BulkApproveRecapsInput(SparkGraphQLInput):
     recap_ids: List[strawberry.ID] | None = None
     custom_recap_ids: List[strawberry.ID] | None = None

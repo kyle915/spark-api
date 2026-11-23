@@ -1654,6 +1654,7 @@ def submit_checkin_recap(
     Returns the created recap."""
     from recaps import heic_conversion
     from recaps import models as rmodels
+    from recaps.store_automap import enrich_store_suggestions
     from recaps.mutations import (
         _resolve_explicit_file_recap_category,
         _resolve_file_recap_category,
@@ -1808,8 +1809,13 @@ def submit_checkin_recap(
                 typed_store_address=typed_addr if third_party else "",
                 store_mapping_status="unmatched" if third_party else "",
                 store_suggestions=(
-                    suggest_store_matches(
-                        getattr(event, "tenant", None), typed_name, typed_addr
+                    # Offline heuristics only at filing — staff Map-this-store
+                    # refreshes with Places + OpenAI via suggestCustomRecapStore.
+                    enrich_store_suggestions(
+                        getattr(event, "tenant", None),
+                        typed_name,
+                        typed_addr,
+                        use_network=False,
                     )
                     if third_party
                     else []
