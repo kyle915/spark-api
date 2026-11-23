@@ -10,11 +10,18 @@ from django.utils import timezone
 from gqlauth.models import UserStatus
 
 from events.models import Event, EventType, Location, Retailer, State
-from pilot.costs import compute_visit_cost_summary, upsert_brand_cost_line
+from pilot.costs import (
+    attach_receipt_evidence_to_cost_line,
+    compute_visit_cost_summary,
+    upsert_brand_cost_line,
+)
 from pilot.finance import (
+    AUTO_MATCH_LINK_LABEL,
+    AUTO_MATCH_RECAP_SPEND_SOURCE_PREFIX,
     evaluate_finance_exceptions,
     list_finance_exceptions,
     maybe_auto_match_receipt_reading,
+    sync_auto_match_after_ocr,
 )
 from pilot.models import (
     BrandCostLine,
@@ -169,6 +176,14 @@ class AutoMatchReceiptProductSpendTests(TestCase):
         return upsert_brand_cost_line(self.access, **defaults)
 
     def _set_product_spend(self, amount: str):
+        existing = CustomFieldValue.objects.filter(
+            custom_recap=self.recap,
+            custom_field__name="Product Spend",
+        ).first()
+        if existing is not None:
+            existing.value = amount
+            existing.save(update_fields=["value"])
+            return existing
         field_type = CustomRecapFieldType.objects.create(
             name="number", created_by=self.admin
         )
@@ -182,7 +197,7 @@ class AutoMatchReceiptProductSpendTests(TestCase):
             recap_section=section,
             created_by=self.admin,
         )
-        CustomFieldValue.objects.create(
+        return CustomFieldValue.objects.create(
             custom_recap=self.recap,
             custom_field=field,
             value=amount,
@@ -306,5 +321,91 @@ class AutoMatchReceiptProductSpendTests(TestCase):
         self.assertEqual(line.amount, Decimal("40.00"))
         self.assertEqual(line.source_type, BrandCostLine.SOURCE_EXPENSE_RECEIPT)
         self.assertEqual(line.evidence_status, BrandCostLine.EVIDENCE_SUPPORTED)
+        self.assertEqual(
+            line.source_reference,
+            f"{AUTO_MATCH_RECAP_SPEND_SOURCE_PREFIX}{self.recap.id}",
+        )
         summary = compute_visit_cost_summary(self.visit)
         self.assertEqual(summary.total_cost, Decimal("40.00"))
+
+    def test_refreshes_amount_on_reused_recap_spend_source_line(self):
+        self._set_product_spend("40.00")
+        reading = self._reading(total="40.00")
+        first = maybe_auto_match_receipt_reading(reading)
+        self.assertIsNotNone(first)
+        line = BrandCostLine.objects.get(pk=first.cost_line_id)
+        self.assertEqual(line.amount, Decimal("40.00"))
+
+        # BA corrects spend after the auto line was booked. Leave a stale
+        # amount that is outside OCR tolerance so matching must reuse the
+        # source-reference line and refresh it (not the candidate path).
+        CostEvidenceLink.objects.filter(pk=first.pk).delete()
+        line.evidence_status = BrandCostLine.EVIDENCE_MISSING
+        line.amount = Decimal("20.00")
+        line.save(update_fields=["evidence_status", "amount", "updated_at"])
+        self._set_product_spend("42.00")
+        reading.total = Decimal("42.00")
+        reading.save(update_fields=["total"])
+
+        second = maybe_auto_match_receipt_reading(reading)
+        self.assertIsNotNone(second)
+        line.refresh_from_db()
+        self.assertEqual(line.pk, first.cost_line_id)
+        self.assertEqual(line.amount, Decimal("42.00"))
+        self.assertEqual(second.verified_amount, Decimal("42.00"))
+        summary = compute_visit_cost_summary(self.visit)
+        self.assertEqual(summary.total_cost, Decimal("42.00"))
+
+    def test_withdraws_auto_link_when_ocr_reread_fails_or_drifts(self):
+        prod = self._product_line("40.00")
+        reading = self._reading(total="40.00")
+        link = maybe_auto_match_receipt_reading(reading)
+        self.assertIsNotNone(link)
+        self.assertEqual(link.label, AUTO_MATCH_LINK_LABEL)
+
+        # Total drifts beyond tolerance → withdraw auto-link.
+        reading.total = Decimal("55.00")
+        reading.save(update_fields=["total"])
+        self.assertIsNone(sync_auto_match_after_ocr(reading))
+        self.assertFalse(
+            CostEvidenceLink.objects.filter(receipt_reading=reading).exists()
+        )
+        prod.refresh_from_db()
+        self.assertEqual(prod.evidence_status, BrandCostLine.EVIDENCE_MISSING)
+
+        # Rematch at $40, then OCR fails → withdraw again.
+        reading.total = Decimal("40.00")
+        reading.status = ReceiptReading.STATUS_READ
+        reading.save(update_fields=["total", "status"])
+        self.assertIsNotNone(maybe_auto_match_receipt_reading(reading))
+        reading.status = ReceiptReading.STATUS_FAILED
+        reading.save(update_fields=["status"])
+        self.assertIsNone(sync_auto_match_after_ocr(reading))
+        self.assertFalse(
+            CostEvidenceLink.objects.filter(receipt_reading=reading).exists()
+        )
+
+    def test_preserves_manual_link_when_ocr_reread_fails(self):
+        prod = self._product_line("40.00")
+        reading = self._reading(total="40.00")
+        manual = attach_receipt_evidence_to_cost_line(
+            tenant=self.brand,
+            cost_line=prod,
+            recap_file=self.recap_file,
+            receipt_reading=reading,
+            label="Matched receipt proof",
+            verified_amount=Decimal("40.00"),
+            linked_by=self.admin,
+        )
+        reading.status = ReceiptReading.STATUS_UNREADABLE
+        reading.total = Decimal("99.00")
+        reading.save(update_fields=["status", "total"])
+
+        self.assertIsNone(sync_auto_match_after_ocr(reading))
+        manual.refresh_from_db()
+        self.assertEqual(
+            CostEvidenceLink.objects.filter(receipt_reading=reading).count(), 1
+        )
+        self.assertEqual(manual.id, CostEvidenceLink.objects.get().id)
+        prod.refresh_from_db()
+        self.assertEqual(prod.evidence_status, BrandCostLine.EVIDENCE_SUPPORTED)

@@ -1202,6 +1202,17 @@ class BrandCostLine(models.Model):
                 name="pilot_cost_ten_visit_idx",
             )
         ]
+        constraints = [
+            # Auto-booked recap product-spend lines must be unique per tenant
+            # so concurrent OCR + evaluate cannot create duplicate charges.
+            models.UniqueConstraint(
+                fields=["tenant", "source_reference"],
+                condition=models.Q(
+                    source_reference__startswith="recap-product-spend:"
+                ),
+                name="pilot_cost_recap_spend_src_uniq",
+            ),
+        ]
 
 
 class CostEvidenceLink(models.Model):
@@ -1243,6 +1254,15 @@ class CostEvidenceLink(models.Model):
         related_name="pilot_cost_evidence_linked",
     )
     created_at = models.DateTimeField(auto_now_add=True, editable=False)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["receipt_reading"],
+                condition=models.Q(receipt_reading__isnull=False),
+                name="pilot_cost_evidence_reading_uniq",
+            ),
+        ]
 
 
 class FinanceException(models.Model):
