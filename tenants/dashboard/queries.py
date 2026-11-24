@@ -33,6 +33,21 @@ from recaps.aggregates import client_counted_q, exclude_non_aggregate_recaps
 from tenants import models as tenant_models
 
 
+def _narrowed(filters) -> bool:
+    """True when the dashboard is filtered below "one brand, one window"
+    (RMM, distributor, state or retailer) — the shared per-tenant consumer
+    rollup doesn't take those filters, so such views keep their own sum."""
+    if not filters:
+        return False
+    return any(
+        getattr(filters, name, None)
+        for name in (
+            "rmm_asigned_id", "distributor_id", "distributor_ids",
+            "state_id", "state_ids", "retailer_id", "retailer_ids",
+        )
+    )
+
+
 async def insights_model_to_graphql(insights_model) -> types.Insights:
     """
     Build GraphQL Insights type from an ORM Insights instance.
@@ -460,7 +475,9 @@ class DashboardQueries:
             # Program-KPIs sections below the hero already use, so
             # the client Home page can't disagree with itself. Ignite staff
             # (allowed_tenant_ids is None) keep every recap, as before.
-            client_only = allowed_tenant_ids is not None
+            client_only = allowed_tenant_ids is not None or bool(
+                getattr(filters, "client_view", None)
+            )
 
             def _visible(prefix: str) -> Q:
                 return client_counted_q(prefix) if client_only else Q()
@@ -698,6 +715,22 @@ class DashboardQueries:
 
                 consumers_sampled = (
                     consumer_data['total_consumers'] or 0) + custom_consumers
+
+                # A brand's own dashboard (one tenant, a date window, no
+                # store/state/distributor/RMM narrowing) prints its consumers
+                # sampled from the SAME rows as the weekly chart under it and
+                # Program KPIs (recaps.consumer_breakdown.consumers_sampled_total):
+                # event-date window, approved only, events kept off the
+                # dashboard left out. The fold-in above windows on any of
+                # date/start_time/request date and kept those events, so Liquid
+                # Death's Home read 10,765 over 10,641 for the same 30 days.
+                single_tenant_id = service._resolve_filter_tenant_id(filters)
+                if client_only and single_tenant_id and not _narrowed(filters):
+                    from recaps.consumer_breakdown import consumers_sampled_total
+
+                    consumers_sampled = await sync_to_async(
+                        consumers_sampled_total
+                    )(single_tenant_id, start_date, end_date)
                 total_brand_aware = (
                     consumer_data['total_brand_aware'] or 0) + custom_brand_aware_n
                 total_willing_to_purchase = (

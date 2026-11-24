@@ -499,6 +499,8 @@ class DashboardQueriesService(SparkGraphQLMixin):
             filter_dict['tenant_id'] = str(tenant_id)
         if getattr(filters, 'year', None) is not None:
             filter_dict['year'] = str(filters.year)
+        if getattr(filters, 'client_view', None):
+            filter_dict['client_view'] = '1'
         sections = getattr(filters, "sections", None)
         if sections:
             normalized = sorted(
