@@ -364,23 +364,136 @@ def template_mapping(template_id: int) -> dict | None:
             }
         )
 
-    missing = []
-    for key, label, covers in _WARN_METRICS:
-        if effective & covers:
-            continue
-        if key == SAMPLES_GIVEN and (
-            CONSUMERS_SAMPLED in effective or template.product_samples
-        ):
-            # Samples fall back to consumers sampled, or to the product
-            # rows this template tracks: there is a number to show.
-            continue
-        missing.append({"key": key, "label": label})
+    missing = missing_metrics(effective, product_samples=template.product_samples)
 
     return {
         "template_id": template.id,
         "tenant_id": template.tenant_id,
         "fields": out_fields,
         "missing": missing,
+    }
+
+
+def missing_metrics(effective: set[str], *, product_samples: bool = False) -> list[dict]:
+    """The standard numbers a client sees that no field feeds.
+
+    ``effective`` is the set of metrics a template's fields count as
+    (confirmed, else by wording). Shared by the staff mapping card and the
+    KPI tiles' "Not tracked on this form" state, so both say the same thing.
+    """
+    missing = []
+    for key, label, covers in _WARN_METRICS:
+        if effective & covers:
+            continue
+        if key == SAMPLES_GIVEN and (CONSUMERS_SAMPLED in effective or product_samples):
+            # Samples fall back to consumers sampled, or to the product
+            # rows this template tracks: there is a number to show.
+            continue
+        missing.append({"key": key, "label": label})
+    return missing
+
+
+def effective_metrics_by_template(tenant_id: int) -> dict[int, dict]:
+    """``{template_id: {"name", "effective", "product_samples"}}`` for a tenant.
+
+    What each template's fields count as today — the staff confirmation when
+    there is one, else the wording match — from field NAMES alone (no answer
+    is read), so it is cheap enough for a dashboard tile.
+    """
+    from recaps.models import CustomField, CustomRecapTemplate
+
+    templates = {
+        tid: {"name": name or "", "effective": set(), "product_samples": bool(ps)}
+        for tid, name, ps in CustomRecapTemplate.objects.filter(
+            tenant_id=tenant_id
+        ).values_list("id", "name", "product_samples")
+    }
+    if not templates:
+        return {}
+    confirmed = confirmed_metrics(tenant_id=tenant_id)
+    names_by_template: dict[int, list[tuple[int, str]]] = {}
+    for field_id, template_id, name in CustomField.objects.filter(
+        custom_recap_template_id__in=list(templates)
+    ).values_list("id", "custom_recap_template_id", "name"):
+        names_by_template.setdefault(template_id, []).append((field_id, name))
+    for template_id, rows in names_by_template.items():
+        by_wording = vocabulary_metrics(name for _fid, name in rows)
+        effective = templates[template_id]["effective"]
+        for field_id, name in rows:
+            hit = confirmed.get(field_id)
+            counted_as = hit[0] if hit is not None else by_wording.get(name)
+            if counted_as and counted_as != NONE:
+                effective.add(counted_as)
+    return templates
+
+
+# A number field whose label reads like a count of people or product. When
+# nothing counts it, the template editor asks before saving: the American Ice
+# "How many shoppers took the 4-for-$6 upgrade?" line sat uncounted this way.
+_LOOKS_COUNTABLE_RE = re.compile(
+    r"\bhow many\b|\b(?:shoppers?|customers?|consumers?|people|units?|bottles?|"
+    r"tins?|cans?|packs?|cases?|bags?|boxes?|sold|bought|purchase[ds]?|upgrades?)\b",
+    re.IGNORECASE,
+)
+
+
+def preview_coverage(
+    template_id: int | None, drafts: list[dict], *, product_samples: bool = False
+) -> dict:
+    """What a template would count once a draft of its fields is saved.
+
+    ``drafts`` are ``{"field_id": int | None, "name", "field_type"}`` in form
+    order — the editor's unsaved state. A field that already exists keeps
+    its staff confirmation (it travels with the field, not the label); every
+    other field is judged by its wording, exactly as the dashboards will.
+
+    Returns ``{"missing": [{key, label}], "uncounted": [label]}``: standard
+    numbers no field feeds, and number fields that read like a count but
+    that nothing counts and nobody has marked "not a standard number".
+    Field labels only; no recap answer is read.
+    """
+    from recaps.models import CustomField, RecapFieldMetricMapping
+
+    known: set[int] = set()
+    if template_id is not None:
+        known = set(
+            CustomField.objects.filter(custom_recap_template_id=template_id).values_list(
+                "id", flat=True
+            )
+        )
+    ids = [d.get("field_id") for d in drafts if d.get("field_id") in known]
+    decided = {
+        fid: metric
+        for fid, metric in RecapFieldMetricMapping.objects.filter(
+            custom_field_id__in=ids, confirmed_at__isnull=False, metric__isnull=False
+        ).values_list("custom_field_id", "metric")
+        if metric in METRIC_KEYS
+    }
+    undecided_names = [
+        (d.get("name") or "").strip()
+        for d in drafts
+        if d.get("field_id") not in decided
+    ]
+    by_wording = vocabulary_metrics(undecided_names)
+
+    effective: set[str] = set()
+    uncounted: list[str] = []
+    for d in drafts:
+        name = (d.get("name") or "").strip()
+        if not name:
+            continue
+        fid = d.get("field_id")
+        counted_as = decided[fid] if fid in decided else by_wording.get(name)
+        if counted_as and counted_as != NONE:
+            effective.add(counted_as)
+            continue
+        if fid in decided:
+            continue  # staff said what it is
+        if _field_kind(d.get("field_type")) == "number" and _LOOKS_COUNTABLE_RE.search(name):
+            uncounted.append(name)
+    return {
+        "missing": missing_metrics(effective, product_samples=product_samples),
+        "uncounted": uncounted,
     }
 
 

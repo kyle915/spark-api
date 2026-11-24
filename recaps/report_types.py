@@ -527,6 +527,147 @@ class TenantKpis:
     program: TenantProgramMetrics | None = None
 
 
+@strawberry.type
+class TenantKpiExplanationField:
+    """One form field feeding a KPI tile.
+
+    ``how`` is ``"confirmed"`` (Ignite confirmed what this field counts),
+    ``"wording"`` (picked up from the field's wording) or ``"standard"`` (a
+    built-in number on every recap). ``value`` is null for a sales program,
+    whose tile counts a subset of recaps.
+    """
+
+    label: str
+    how: str
+    value: int | None
+
+
+@strawberry.type
+class TenantKpiExplanationSource:
+    """One recap form's share of a KPI tile. ``template_id`` is null for
+    recaps filed on the standard (non-custom) form."""
+
+    template_id: strawberry.ID | None
+    template_uuid: str | None
+    template_name: str
+    recaps: int
+    value: int | None
+    fields: list[TenantKpiExplanationField]
+
+
+@strawberry.type
+class TenantKpiExcludedBucket:
+    """Recaps a tile leaves out, and what they would add (null when the sum
+    would not be what the tile adds — sales programs count a subset)."""
+
+    key: str
+    label: str
+    recaps: int
+    would_add: int | None
+
+
+@strawberry.type
+class TenantKpiTemplateRef:
+    template_id: strawberry.ID
+    template_uuid: str | None
+    template_name: str
+
+
+@strawberry.type
+class TenantKpiExplanation:
+    """Why one Program KPI tile shows its number (:mod:`recaps.kpi_explain`).
+
+    ``total`` is computed by the tile's own aggregation, so it always equals
+    the tile. ``recaps_without_value`` counts approved recaps in the window
+    that had no answer for this number. ``can_fix_mapping`` is true for
+    Ignite staff only.
+    """
+
+    metric: str
+    label: str
+    total: int
+    program: bool
+    summary: str
+    recaps_counted: int
+    recaps_in_scope: int
+    recaps_without_value: int
+    sources: list[TenantKpiExplanationSource]
+    excluded: list[TenantKpiExcludedBucket]
+    not_tracked: bool
+    not_tracked_templates: list[TenantKpiTemplateRef]
+    note: str | None
+    can_fix_mapping: bool
+
+
+@strawberry.type
+class TenantKpiPending:
+    metric: str
+    recaps: int
+    would_add: int | None
+
+
+@strawberry.type
+class TenantKpiStatus:
+    """What the KPI tiles show beside their numbers. Loaded after the tiles,
+    never as part of ``tenantKpis``."""
+
+    untracked_metrics: list[str]
+    pending: list[TenantKpiPending]
+
+
+def _explanation_type(data: dict, can_fix: bool) -> TenantKpiExplanation:
+    return TenantKpiExplanation(
+        metric=data["metric"],
+        label=data["label"],
+        total=int(data["total"]),
+        program=bool(data["program"]),
+        summary=data["summary"],
+        recaps_counted=int(data["recaps_counted"]),
+        recaps_in_scope=int(data["recaps_in_scope"]),
+        recaps_without_value=int(data["recaps_without_value"]),
+        sources=[
+            TenantKpiExplanationSource(
+                template_id=(
+                    strawberry.ID(str(src["template_id"]))
+                    if src["template_id"] is not None
+                    else None
+                ),
+                template_uuid=src.get("template_uuid"),
+                template_name=src["template_name"],
+                recaps=int(src["recaps"]),
+                value=src["value"],
+                fields=[
+                    TenantKpiExplanationField(
+                        label=f["label"], how=f["how"], value=f["value"]
+                    )
+                    for f in src["fields"]
+                ],
+            )
+            for src in data["sources"]
+        ],
+        excluded=[
+            TenantKpiExcludedBucket(
+                key=b["key"],
+                label=b["label"],
+                recaps=int(b["recaps"]),
+                would_add=b["would_add"],
+            )
+            for b in data["excluded"]
+        ],
+        not_tracked=bool(data["not_tracked"]),
+        not_tracked_templates=[
+            TenantKpiTemplateRef(
+                template_id=strawberry.ID(str(t["template_id"])),
+                template_uuid=t.get("template_uuid"),
+                template_name=t["template_name"],
+            )
+            for t in data["not_tracked_templates"]
+        ],
+        note=data["note"],
+        can_fix_mapping=can_fix,
+    )
+
+
 def _zeroed_tenant_kpis() -> TenantKpis:
     """An all-zero :class:`TenantKpis` with an empty trend.
 
@@ -2536,6 +2677,95 @@ class CampaignReportQueries:
 
         return TenantAiAnswer(
             ok=True, answer=answer, reason=None, chart=_build_ai_chart(chart)
+        )
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def tenant_kpi_explanation(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID,
+        metric: str,
+        year: int | None = None,
+    ) -> TenantKpiExplanation | None:
+        """Why one ``tenantKpis`` tile shows its number. Lazy: the dashboard
+        asks only when a tile is opened.
+
+        Same tenant scoping as ``tenantKpis``. ``metric`` is the snake_case
+        tile key (``products_sold``, ``consumers_reached``, …). Null for an
+        unknown metric, an out-of-scope tenant, or any error.
+        """
+        from recaps import kpi_explain
+        from recaps.metric_mapping_schema import _is_staff
+
+        service = _CampaignReportService()
+        target_tenant_id = await service.resolve_target_tenant_id(info, tenant_id)
+        if target_tenant_id is None or metric not in kpi_explain.METRICS:
+            return None
+        can_fix = await _is_staff(info)
+
+        def _build():
+            from tenants.models import Tenant
+
+            if not Tenant.objects.filter(id=target_tenant_id).exists():
+                return None
+            return kpi_explain.explain_tenant_kpi(target_tenant_id, metric, year)
+
+        try:
+            data = await sync_to_async(_build, thread_sensitive=True)()
+        except Exception:
+            logger.warning(
+                "tenant_kpi_explanation failed tenant=%s metric=%s",
+                target_tenant_id,
+                metric,
+                exc_info=True,
+            )
+            return None
+        return _explanation_type(data, can_fix) if data else None
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def tenant_kpi_status(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID,
+        year: int | None = None,
+    ) -> TenantKpiStatus:
+        """Untracked metrics and recaps waiting for approval, per tile.
+
+        Fetched separately from ``tenantKpis`` so it never slows the tiles.
+        Same tenant scoping; never raises (an empty status on any error).
+        """
+        from recaps import kpi_explain
+
+        empty = TenantKpiStatus(untracked_metrics=[], pending=[])
+        service = _CampaignReportService()
+        target_tenant_id = await service.resolve_target_tenant_id(info, tenant_id)
+        if target_tenant_id is None:
+            return empty
+
+        def _build():
+            from tenants.models import Tenant
+
+            if not Tenant.objects.filter(id=target_tenant_id).exists():
+                return None
+            return kpi_explain.tenant_kpi_status(target_tenant_id, year)
+
+        try:
+            data = await sync_to_async(_build, thread_sensitive=True)()
+        except Exception:
+            logger.warning(
+                "tenant_kpi_status failed tenant=%s", target_tenant_id, exc_info=True
+            )
+            return empty
+        if not data:
+            return empty
+        return TenantKpiStatus(
+            untracked_metrics=list(data["untracked"]),
+            pending=[
+                TenantKpiPending(
+                    metric=p["metric"], recaps=int(p["recaps"]), would_add=p["would_add"]
+                )
+                for p in data["pending"]
+            ],
         )
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
