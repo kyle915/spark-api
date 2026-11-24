@@ -38,6 +38,7 @@ single entry point :func:`build_tenant_overview` in ``sync_to_async``.
 
 from __future__ import annotations
 
+from utils.text_clip import clip_words
 import json
 import re
 from dataclasses import dataclass, fields as dataclass_fields
@@ -263,7 +264,9 @@ def _event_date_expr(prefix: str):
     )
 
 
-def _filter_event_window(queryset, prefix: str, window: tuple | None):
+def _filter_event_window(
+    queryset, prefix: str, window: tuple | None, *, include_non_aggregate: bool = False
+):
     """Narrow ``queryset`` to rows whose effective EVENT date is in ``window``.
 
     ``window`` is a half-open ``(start, end)`` pair of tz-aware datetimes (or
@@ -297,7 +300,10 @@ def _filter_event_window(queryset, prefix: str, window: tuple | None):
     )
     # 3rd-party / agency recaps (exclude_from_aggregates) stay in Recaps but
     # never roll into a total — every Insights path funnels through here.
-    queryset = exclude_non_aggregate_recaps(queryset, prefix)
+    # ``include_non_aggregate`` is only for the KPI explanation
+    # (:mod:`recaps.kpi_explain`), which reports what those recaps WOULD add.
+    if not include_non_aggregate:
+        queryset = exclude_non_aggregate_recaps(queryset, prefix)
     if window is None:
         return queryset
     start, end = window
@@ -321,6 +327,41 @@ def _approved_only(queryset, approved_prefix: str):
     return queryset.filter(client_counted_q(approved_prefix))
 
 
+# Which recaps a KPI read covers. "counted" is the only scope any tile uses;
+# the other two exist so the KPI explanation (recaps.kpi_explain) can say what
+# the recaps a tile leaves out would add, through the SAME aggregation code.
+SCOPE_COUNTED = "counted"
+SCOPE_PENDING = "pending"
+SCOPE_NON_AGGREGATE = "non_aggregate"
+
+
+def _scoped_rows(queryset, prefix: str, window: tuple | None, recap_prefix: str, scope: str):
+    """Window + recap-scope filter for one KPI source queryset.
+
+    ``SCOPE_COUNTED`` is exactly ``_approved_only(_filter_event_window(...))``
+    — the tile path, unchanged SQL. ``SCOPE_PENDING`` keeps recaps waiting
+    for approval (not approved, not archived). ``SCOPE_NON_AGGREGATE`` keeps
+    custom recaps flagged ``exclude_from_aggregates`` (not archived); legacy
+    recaps have no such flag, so callers skip them for that scope.
+    """
+    if scope == SCOPE_COUNTED:
+        return _approved_only(_filter_event_window(queryset, prefix, window), recap_prefix)
+    if scope == SCOPE_PENDING:
+        return _filter_event_window(queryset, prefix, window).filter(
+            **{f"{recap_prefix}approved": False, f"{recap_prefix}archived_at__isnull": True}
+        )
+    if scope == SCOPE_NON_AGGREGATE:
+        return _filter_event_window(
+            queryset, prefix, window, include_non_aggregate=True
+        ).filter(
+            **{
+                f"{recap_prefix}exclude_from_aggregates": True,
+                f"{recap_prefix}archived_at__isnull": True,
+            }
+        )
+    raise ValueError(f"unknown KPI scope {scope!r}")
+
+
 def _filter_event_year(queryset, prefix: str, year: int | None):
     """Narrow ``queryset`` to rows whose effective EVENT date is in ``year``.
 
@@ -335,7 +376,9 @@ def _filter_event_year(queryset, prefix: str, year: int | None):
     return _filter_event_window(queryset, prefix, window)
 
 
-def _legacy_kpis_window(tenant_id: int, window: tuple | None) -> dict[str, int]:
+def _legacy_kpis_window(
+    tenant_id: int, window: tuple | None, *, scope: str = SCOPE_COUNTED
+) -> dict[str, int]:
     """Sum the legacy :class:`recaps.models.Recap` KPIs over a ``[start, end)``.
 
     The window-based core of :func:`_legacy_kpis`. Recap has no direct
@@ -352,27 +395,25 @@ def _legacy_kpis_window(tenant_id: int, window: tuple | None) -> dict[str, int]:
     quarter / year window here so its figures reconcile with
     :func:`tenant_kpi_totals` for the matching window.
     """
-    recaps = _approved_only(
-        _filter_event_window(
-            Recap.objects.filter(event__tenant_id=tenant_id), "event__", window
-        ),
-        "",
+    if scope == SCOPE_NON_AGGREGATE:
+        # Legacy recaps carry no exclude_from_aggregates flag.
+        return {key: 0 for key in _LEGACY_KPI_KEYS}
+    recaps = _scoped_rows(
+        Recap.objects.filter(event__tenant_id=tenant_id), "event__", window, "", scope
     )
-    engagements = _approved_only(
-        _filter_event_window(
-            ConsumerEngagements.objects.filter(recap__event__tenant_id=tenant_id),
-            "recap__event__",
-            window,
-        ),
+    engagements = _scoped_rows(
+        ConsumerEngagements.objects.filter(recap__event__tenant_id=tenant_id),
+        "recap__event__",
+        window,
         "recap__",
+        scope,
     )
-    samples = _approved_only(
-        _filter_event_window(
-            ProductSamples.objects.filter(recap__event__tenant_id=tenant_id),
-            "recap__event__",
-            window,
-        ),
+    samples = _scoped_rows(
+        ProductSamples.objects.filter(recap__event__tenant_id=tenant_id),
+        "recap__event__",
+        window,
         "recap__",
+        scope,
     )
     consumers_reached = _sum(engagements, "total_consumer")
     return {
@@ -389,6 +430,19 @@ def _legacy_kpis_window(tenant_id: int, window: tuple | None) -> dict[str, int]:
         # only for a tenant that logs no consumer count.
         "samples_distributed": consumers_reached or _sum(samples, "quantity"),
     }
+
+
+_LEGACY_KPI_KEYS = (
+    "total_engagements",
+    "products_sold",
+    "cans_sold",
+    "packs_sold",
+    "consumers_reached",
+    "first_time_consumers",
+    "brand_aware_consumers",
+    "willing_to_purchase",
+    "samples_distributed",
+)
 
 
 def _legacy_kpis(tenant_id: int, year: int | None = None) -> dict[str, int]:
@@ -499,7 +553,13 @@ def _add_audience_from_pairs(
             out["willing_to_purchase"] += val
 
 
-def _custom_kpis_window(tenant_id: int, window: tuple | None) -> dict[str, int]:
+def _custom_kpis_window(
+    tenant_id: int,
+    window: tuple | None,
+    *,
+    scope: str = SCOPE_COUNTED,
+    trace: dict | None = None,
+) -> dict[str, int]:
     """Sum the custom-template :class:`recaps.models.CustomRecap` KPIs over a window.
 
     The window-based core of :func:`_custom_kpis`. ``total_engagements`` is
@@ -521,13 +581,12 @@ def _custom_kpis_window(tenant_id: int, window: tuple | None) -> dict[str, int]:
     """
     out = {
         "total_engagements": _sum(
-            _approved_only(
-                _filter_event_window(
-                    CustomRecap.objects.filter(tenant_id=tenant_id),
-                    "event__",
-                    window,
-                ),
+            _scoped_rows(
+                CustomRecap.objects.filter(tenant_id=tenant_id),
+                "event__",
+                window,
                 "",
+                scope,
             ),
             "total_engagements",
         ),
@@ -543,15 +602,12 @@ def _custom_kpis_window(tenant_id: int, window: tuple | None) -> dict[str, int]:
 
     # Structured custom samples sum cleanly in SQL.
     structured_samples = _sum(
-        _approved_only(
-            _filter_event_window(
-                CustomRecapProductSample.objects.filter(
-                    custom_recap__tenant_id=tenant_id
-                ),
-                "custom_recap__event__",
-                window,
-            ),
+        _scoped_rows(
+            CustomRecapProductSample.objects.filter(custom_recap__tenant_id=tenant_id),
+            "custom_recap__event__",
+            window,
             "custom_recap__",
+            scope,
         ),
         "quantity",
     )
@@ -561,15 +617,12 @@ def _custom_kpis_window(tenant_id: int, window: tuple | None) -> dict[str, int]:
     # matches the campaign report's per-recap accumulation.
     gate, confirmed = _kpi_gate(tenant_id)
     rows = (
-        _approved_only(
-            _filter_event_window(
-                CustomFieldValue.objects.filter(
-                    gate, custom_recap__tenant_id=tenant_id
-                ),
-                "custom_recap__event__",
-                window,
-            ),
+        _scoped_rows(
+            CustomFieldValue.objects.filter(gate, custom_recap__tenant_id=tenant_id),
+            "custom_recap__event__",
+            window,
             "custom_recap__",
+            scope,
         )
         .values_list("custom_recap_id", "custom_field_id", "custom_field__name", "value")
         .order_by("custom_recap_id")
@@ -624,6 +677,12 @@ def _custom_kpis_window(tenant_id: int, window: tuple | None) -> dict[str, int]:
     out["samples_distributed"] = (
         out["consumers_reached"] or samples_given_total or structured_samples
     )
+    if trace is not None:
+        # The explanation re-reads each recap's (name, value) pairs with the
+        # same matchers; it never re-queries or re-gates the rows.
+        trace["per_recap"] = per_recap
+        trace["structured_samples"] = structured_samples
+        trace["samples_given_total"] = samples_given_total
     return out
 
 
@@ -2931,7 +2990,7 @@ def _clean_quote(text: str | None) -> str | None:
     if not cleaned:
         return None
     if len(cleaned) > MAX_QUOTE_CHARS:
-        cleaned = cleaned[: MAX_QUOTE_CHARS - 1].rstrip() + "…"
+        cleaned = clip_words(cleaned, MAX_QUOTE_CHARS)
     return cleaned
 
 

@@ -481,6 +481,18 @@ def consumer_rows(
     return rows
 
 
+def consumers_sampled_total(
+    tenant_id: int, start: date | None, end: date | None
+) -> int:
+    """Consumers sampled for one tenant over ``[start, end]`` (inclusive dates)
+    — the ``total`` the weekly / store / state charts add up to, from the very
+    same rows. Any surface that prints a brand's consumers-sampled headline
+    for a date range should read this, so it can't disagree with the chart
+    printed under it.
+    """
+    return sum(int(r["consumers"]) for r in consumer_rows(tenant_id, start, end))
+
+
 def tenant_consumer_breakdown(
     tenant_id: int, start: date | None, end: date | None
 ) -> dict:

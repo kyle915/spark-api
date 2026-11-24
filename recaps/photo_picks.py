@@ -32,6 +32,7 @@ changes no recap.
 
 from __future__ import annotations
 
+from utils.text_clip import clip_words
 import logging
 import re
 import time
@@ -182,7 +183,7 @@ def clean_caption(raw, kind: str, names: list[str] | None = None) -> str:
     if _PERSON_RE.search(text):
         return fallback
     if len(text) > MAX_CAPTION_CHARS:
-        text = text[: MAX_CAPTION_CHARS - 1].rstrip() + "…"
+        text = clip_words(text, MAX_CAPTION_CHARS)
     return text[0].upper() + text[1:]
 
 

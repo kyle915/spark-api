@@ -33,6 +33,7 @@ from events.models import Event
 from recaps.models import CustomFieldValue, CustomRecap, CustomRecapProductSample
 from recaps.tenant_overview import _filter_event_window
 from utils.ai_text import generate_summary
+from utils.text_clip import clip_words
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +65,7 @@ _FEEDBACK_NAME_RE_IREGEX = (
 _PRODUCT_CHOICE_NAME_RE = re.compile(r"which.*product|product.*sampl", re.IGNORECASE)
 
 MAX_CALLOUTS = 20
+MAX_CALLOUT_CHARS = 1000
 MAX_LOCATIONS = 100
 MAX_UPCOMING = 20
 
@@ -97,6 +99,78 @@ def _ytd_window() -> tuple[datetime, datetime]:
     return start, now
 
 
+def _windowed_recaps(
+    tenant_id: int,
+    start: datetime,
+    end: datetime,
+    event_type_id: int | None = None,
+    market: str | None = None,
+):
+    """The ONE recap set every count on this report is built from — the SKU
+    rows and the headline samples figure both read it, so the headline can
+    never disagree with the rows printed under it.
+
+    Event-date window + the shared dashboard exclusions
+    (:func:`recaps.tenant_overview._filter_event_window`), optionally one
+    event type, optionally one metro label. Unlike the metro breakdown, an
+    event whose name doesn't follow the "<Market> — <Corridor>" convention is
+    KEPT when no market filter is set: it has no metro, but its samples still
+    happened.
+    """
+    base = CustomRecap.objects.filter(tenant_id=tenant_id)
+    if event_type_id is not None:
+        base = base.filter(event__event_type_id=event_type_id)
+    windowed = _filter_event_window(base, "event__", (start, end))
+
+    if market is not None:
+        recap_ids = [
+            rid
+            for rid, name in windowed.values_list("id", "event__name")
+            if _parse_event_name(name)[0] == market
+        ]
+        windowed = CustomRecap.objects.filter(id__in=recap_ids)
+    return windowed
+
+
+def _free_text_samples(tenant_id: int, recaps) -> tuple[int, str]:
+    """``(total, basis)`` from free-text recap fields, for templates with no
+    structured per-SKU quantity rows. Per recap, a "samples given/
+    distributed/handed out" count wins (it is the same unit as the SKU
+    rows); otherwise the consumers-sampled count. ``basis`` is
+    ``"samples_given"``, ``"consumers"`` or ``"none"`` (the most-used basis
+    when recaps mix them).
+    """
+    from recaps import metric_mapping
+    from recaps.tenant_overview import _kpi_gate
+    from recaps.types import _consumers_sampled_from_fields, _samples_given_from_fields
+
+    gate, confirmed = _kpi_gate(tenant_id)
+    per_recap: dict[int, list[tuple[object, str]]] = {}
+    for recap_id, field_id, cf_name, value in CustomFieldValue.objects.filter(
+        gate, custom_recap__in=recaps
+    ).values_list("custom_recap_id", "custom_field_id", "custom_field__name", "value"):
+        per_recap.setdefault(recap_id, []).append(
+            (metric_mapping.tag_name(cf_name, field_id, confirmed), value)
+        )
+
+    total = 0
+    given_hits = 0
+    consumer_hits = 0
+    for pairs in per_recap.values():
+        given = _samples_given_from_fields(pairs)
+        if given is not None:
+            total += int(given)
+            given_hits += 1
+            continue
+        sampled = _consumers_sampled_from_fields(pairs)
+        if sampled is not None:
+            total += int(sampled)
+            consumer_hits += 1
+    if not given_hits and not consumer_hits:
+        return 0, "none"
+    return total, "samples_given" if given_hits >= consumer_hits else "consumers"
+
+
 def sku_breakdown(
     tenant_id: int,
     start: datetime,
@@ -124,18 +198,7 @@ def sku_breakdown(
     ``market`` optionally restricts to one metro label (parsed the same
     way :func:`recaps.tenant_overview.tenant_metro_breakdown` does).
     """
-    base = CustomRecap.objects.filter(tenant_id=tenant_id)
-    if event_type_id is not None:
-        base = base.filter(event__event_type_id=event_type_id)
-    windowed = _filter_event_window(base, "event__", (start, end))
-
-    if market is not None:
-        recap_ids = [
-            rid
-            for rid, name in windowed.values_list("id", "event__name")
-            if _parse_event_name(name)[0] == market
-        ]
-        windowed = CustomRecap.objects.filter(id__in=recap_ids)
+    windowed = _windowed_recaps(tenant_id, start, end, event_type_id, market)
 
     structured = (
         CustomRecapProductSample.objects.filter(custom_recap__in=windowed)
@@ -193,10 +256,17 @@ def samples_per_hour(
 ) -> dict:
     """Total samples ÷ total labor hours for one tenant/window.
 
-    Samples reuse :func:`recaps.tenant_overview.tenant_metro_breakdown`'s
-    already-computed per-(metro, week) ``consumers_reached`` cells (summed
-    across the window / market filter) rather than re-deriving the KPI
-    parse rules a third time. Hours reuse
+    Samples are counted on the SAME basis as the SKU rows the page prints
+    under this headline (:func:`sku_breakdown` over :func:`_windowed_recaps`):
+    when the window has structured per-SKU quantities, the headline IS the
+    sum of those rows (``basis="units"``). Only when there are none does it
+    fall back to free-text recap counts (:func:`_free_text_samples`).
+
+    This used to read the metro breakdown's ``consumers_reached`` — a
+    different metric (people, from a free-text "consumers sampled" field) on
+    a narrower recap set (only events named "<Market> — <Corridor>"). A
+    template that logs per-SKU quantities and no consumers-sampled field
+    showed ``0`` samples above 40+ SKU rows. Hours reuse
     :func:`events.pnl.event_pnl_rows` VERBATIM — the same clock-in/clock-
     out-with-scheduled-duration-fallback logic the P&L lens uses — scoped
     down to this window's qualifying event ids afterward (that function
@@ -204,20 +274,21 @@ def samples_per_hour(
     want to fork or modify for this one caller).
 
     Returns ``{"samples": int, "hours": float, "per_hour": float | None,
-    "estimated": bool}`` — ``estimated`` is True when ANY contributing
-    event had no real clock pair and fell back to its scheduled duration
-    (rolled up from ``event_pnl_rows``' per-event flag).
+    "estimated": bool, "basis": str}`` — ``estimated`` is True when ANY
+    contributing event had no real clock pair and fell back to its
+    scheduled duration (rolled up from ``event_pnl_rows``' per-event flag).
+    ``basis`` is ``"units"`` (sum of the SKU rows), ``"samples_given"``,
+    ``"consumers"`` or ``"none"``, so the page can label what was counted.
     """
     from events.pnl import event_pnl_rows
-    from recaps.tenant_overview import tenant_metro_breakdown
 
-    breakdown = tenant_metro_breakdown(tenant_id, start, end, event_type_id)
-    samples = 0
-    for week in breakdown["weeks"]:
-        for metro, cell in week["cells"].items():
-            if market is not None and metro != market:
-                continue
-            samples += cell["consumers_reached"]
+    windowed = _windowed_recaps(tenant_id, start, end, event_type_id, market)
+    sku = sku_breakdown(tenant_id, start, end, event_type_id, market)
+    if sku["mode"] == "quantity":
+        samples = sum(item["total"] for item in sku["items"])
+        basis = "units"
+    else:
+        samples, basis = _free_text_samples(tenant_id, windowed)
 
     events_qs = Event.objects.filter(tenant_id=tenant_id)
     if event_type_id is not None:
@@ -246,6 +317,7 @@ def samples_per_hour(
         "hours": round(hours, 2),
         "per_hour": per_hour,
         "estimated": estimated,
+        "basis": basis,
     }
 
 
@@ -387,7 +459,10 @@ def field_callouts(
                 "market": m,
                 "corridor": corridor,
                 "date": evtdate.date().isoformat() if evtdate else None,
-                "text": text[:280],
+                # Word-boundary clip, long enough to show the whole note; the
+                # page folds anything long behind "Show more" (was text[:280],
+                # which cut a BA's quote mid-word with no ellipsis).
+                "text": clip_words(text, MAX_CALLOUT_CHARS),
             }
         )
 

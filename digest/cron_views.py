@@ -12475,6 +12475,57 @@ class GeocodeEventsView(View):
         return JsonResponse({"ok": True, "endpoint": "geocode-events"})
 
 
+@method_decorator(csrf_exempt, name="dispatch")
+class GeocodeAccountMapView(View):
+    """POST `/internal/cron/geocode-account-map`.
+
+    Fires `geocode_account_map` — looks up a position for requests the
+    Account Map cannot draw (an address, but no coordinates and no placed
+    event). Stores into `RequestMapPoint`; never writes `Request.coordinates`.
+
+    DRY RUN unless `execute=true` is passed: the command only counts.
+    Params: execute ("1"/"true"/"yes"), tenant (int id), limit (int).
+    """
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        def _param(name: str) -> str:
+            return (request.GET.get(name) or request.POST.get(name) or "").strip()
+
+        execute = _param("execute").lower() in ("1", "true", "yes", "on")
+        args: list[str] = ["--apply"] if execute else []
+        for name in ("tenant", "limit"):
+            raw = _param(name)
+            if not raw:
+                continue
+            try:
+                args += [f"--{name}", str(int(raw))]
+            except ValueError:
+                return JsonResponse(
+                    {"ok": False, "error": f"invalid-{name}"}, status=400
+                )
+        out = io.StringIO()
+        try:
+            call_command("geocode_account_map", *args, stdout=out)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Geocode account map cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc),
+                 "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse({"ok": True, "executed": execute, "log": out.getvalue()})
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        return JsonResponse({"ok": True, "endpoint": "geocode-account-map"})
+
+
 def _registered_views() -> dict[str, Any]:
     """Map URL path → view class. Lets `digest/urls.py` mount these
     without each one being re-exported explicitly.
@@ -12500,6 +12551,7 @@ def _registered_views() -> dict[str, Any]:
         "propose-recap-retailers": ProposeRecapRetailersView,
         "propose-retailer-aliases": ProposeRetailerAliasesView,
         "geocode-events": GeocodeEventsView,
+        "geocode-account-map": GeocodeAccountMapView,
         "prebuild-feedback-themes": PrebuildFeedbackThemesView,
         "send-payment-notifications": SendPaymentNotificationsView,
         "send-document-expiry-reminders": SendDocumentExpiryRemindersView,

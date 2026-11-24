@@ -81,6 +81,24 @@ class SaveRecapMetricMappingResultType:
     mapping: RecapTemplateMetricMappingType | None
 
 
+@strawberry.type(name="RecapTemplateMetricPreview")
+class RecapTemplateMetricPreviewType:
+    """What a template would count once the editor's draft is saved."""
+
+    # Standard numbers no field would feed: a client would see "not tracked".
+    missing_metrics: list[RecapStandardMetricType]
+    # Number fields that read like a count but that nothing would count.
+    uncounted_fields: list[str]
+
+
+@strawberry.input
+class RecapFieldPreviewInput:
+    # Null for a field not saved yet.
+    field_id: strawberry.ID | None = None
+    name: str = ""
+    field_type: str | None = None
+
+
 @strawberry.input
 class RecapFieldMetricInput:
     field_id: strawberry.ID
@@ -159,6 +177,39 @@ class RecapMetricMappingQueries:
             metric_mapping.template_mapping, thread_sensitive=True
         )(pk)
         return _mapping_type(payload) if payload else None
+
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def recap_template_metric_preview(
+        self,
+        info: strawberry.Info,
+        fields: list[RecapFieldPreviewInput],
+        template_id: strawberry.ID | None = None,
+        product_samples: bool = False,
+    ) -> RecapTemplateMetricPreviewType | None:
+        """Check an unsaved template draft before it goes live. Staff only;
+        stores nothing. ``template_id`` is null for a new template."""
+        if not await _is_staff(info):
+            return None
+        pk = _template_pk(template_id) if template_id is not None else None
+        drafts = [
+            {
+                "field_id": _field_pk(f.field_id) if f.field_id else None,
+                "name": f.name or "",
+                "field_type": f.field_type,
+            }
+            for f in fields
+        ]
+        result = await sync_to_async(
+            metric_mapping.preview_coverage, thread_sensitive=True
+        )(pk, drafts, product_samples=bool(product_samples))
+        return RecapTemplateMetricPreviewType(
+            missing_metrics=[
+                RecapStandardMetricType(key=m["key"], label=m["label"])
+                for m in result["missing"]
+            ],
+            uncounted_fields=list(result["uncounted"]),
+        )
 
 
 @strawberry.type
