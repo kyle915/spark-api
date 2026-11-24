@@ -295,8 +295,11 @@ class AccountMapPinData:
     # Rows with the same store_key are one physical store (one pin).
     store_key: str = ""
     # "request" = the request's own coordinates, "event" = its event's
-    # coordinates, "geocoded" = looked up from the event's address.
+    # coordinates, "geocoded" = looked up from the event's (or, failing that,
+    # the request's own) address.
     location_source: str = "request"
+    # Date of the store's newest filed visit (an event with a filed recap).
+    last_visit_date: str | None = None
 
 
 LOCATION_REQUEST = "request"
@@ -313,7 +316,17 @@ def _account_map_pin_queryset(qs: QuerySet[Request]) -> QuerySet[Request]:
     event_position = Event.objects.filter(request_id=OuterRef("pk")).filter(
         _has_coordinates_q() | Q(map_point__status="ok")
     )
-    return qs.filter(_has_coordinates_q() | Exists(event_position))
+    from events.models import RequestMapPoint
+
+    # Failing both: the request's own address, looked up by geocode_account_map.
+    own_address_position = RequestMapPoint.objects.filter(
+        request_id=OuterRef("pk"), status=RequestMapPoint.STATUS_OK
+    )
+    return qs.filter(
+        _has_coordinates_q()
+        | Exists(event_position)
+        | Exists(own_address_position)
+    )
 
 
 def count_account_map_pins(qs: QuerySet[Request]) -> int:
@@ -366,6 +379,7 @@ def list_account_map_pins(
     """
     from events.account_stores import build_store_index
     from events.map_points import own_point
+    from events.store_labels import clean_store_label, is_date_only
 
     start = max(0, offset)
     rows = list(
@@ -399,6 +413,11 @@ def list_account_map_pins(
     from_events = _event_positions(
         [row.pk for row in rows if own_point(row) is None]
     )
+    from events.map_points import SOURCE_GEOCODED, request_map_points
+
+    from_request_address = request_map_points(
+        [row for row in rows if own_point(row) is None and row.pk not in from_events]
+    )
     pins: list[AccountMapPinData] = []
     for row in rows:
         own = own_point(row)
@@ -406,6 +425,9 @@ def list_account_map_pins(
             lat, lng, source = own[0], own[1], LOCATION_REQUEST
         elif row.pk in from_events:
             lat, lng, source = from_events[row.pk]
+        elif row.pk in from_request_address:
+            lat, lng = from_request_address[row.pk]
+            source = SOURCE_GEOCODED
         else:
             continue
         if not is_plottable_lat_lng(lat, lng):
@@ -416,10 +438,18 @@ def list_account_map_pins(
         loc = (retailer.location if retailer else None) or row.location
         state = (loc.state if loc else None) or row.state
         aliases = alias_maps.get(row.tenant_id)
-        retailer_label = (
-            resolve_store_name(retailer.name, aliases) if retailer else ""
-        ) or ""
-        name = retailer_label or row.name or "—"
+        # Request names are usually "<store> · <date>"; a date is not a
+        # store, and it put one retailer-menu entry per visit on the map.
+        retailer_label = clean_store_label(
+            (resolve_store_name(retailer.name, aliases) if retailer else "") or ""
+        )
+        if is_date_only(retailer_label):
+            retailer_label = ""
+        request_label = clean_store_label(row.name)
+        if is_date_only(request_label):
+            request_label = ""
+        street = (row.address or "").split(",")[0].strip()
+        name = retailer_label or request_label or street or "—"
         store_key = stores.store_for_request(row.pk)
         visit_count = stores.visit_count(store_key)
         pins.append(
@@ -439,6 +469,9 @@ def list_account_map_pins(
                 planned=stores.is_planned(store_key),
                 store_key=store_key,
                 location_source=source,
+                last_visit_date=_serialize_dt(
+                    stores.last_visit(store_key), offset_minutes=0
+                ),
             )
         )
     return pins

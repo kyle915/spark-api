@@ -1875,6 +1875,39 @@ class EventMapPoint(models.Model):
         return f"EventMapPoint(event={self.event_id}, {self.status})"
 
 
+class RequestMapPoint(models.Model):
+    """Where to draw a REQUEST on the Account Map when neither the request
+    nor any of its events has a position — looked up from the request's own
+    address.
+
+    Same rules as :class:`EventMapPoint`: kept apart from
+    ``Request.coordinates`` (other code reads that column), only the maps
+    read it, ``address_hash`` ties the answer to the address text it was
+    looked up for, and a ``not_found`` row stops a bad address being asked
+    again until its text changes. Written only by the ``geocode_account_map``
+    command.
+    """
+
+    SOURCE_GEOCODED = "geocoded"
+    STATUS_OK = "ok"
+    STATUS_NOT_FOUND = "not_found"
+
+    id = models.BigAutoField(primary_key=True)
+    request = models.OneToOneField(
+        Request, on_delete=models.CASCADE, related_name="map_point"
+    )
+    lat = models.FloatField(null=True, blank=True)
+    lng = models.FloatField(null=True, blank=True)
+    source = models.CharField(max_length=16, default=SOURCE_GEOCODED)
+    address_hash = models.CharField(max_length=64, db_index=True)
+    status = models.CharField(max_length=12, default=STATUS_OK)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self) -> str:
+        return f"RequestMapPoint(request={self.request_id}, {self.status})"
+
+
 class AccountListEntry(models.Model):
     """One store on a brand's uploaded account list (Account Map).
 

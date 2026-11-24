@@ -47,6 +47,7 @@ query AccountMapQuery($tenantId: ID, $first: Int, $offset: Int) {
     planned
     storeKey
     locationSource
+    lastVisitDate
   }
   accountMapCoverage(tenantId: $tenantId) {
     rosterTotal
@@ -402,3 +403,81 @@ class TestAccountMapStores(EventsGraphQLTestCase):
         assert by_address[TUCSON[0]]["locationSource"] == "geocoded"
         assert by_address[TUCSON[0]]["lat"] == TUCSON[1][0]
         assert result.data["accountMapCoverage"]["rosterTotal"] == 1
+        assert by_address[TEMPE[0]]["lastVisitDate"] is not None
+        assert by_address[PHOENIX[0]]["lastVisitDate"] is None
+
+    # ── a request placed from its own looked-up address ───────────────
+
+    def test_a_request_with_no_event_is_drawn_from_its_own_looked_up_address(self):
+        req = self._request(TEMPE, coords=[])
+        qs = scoped_requests(self.tenant.id)
+        assert self._pins() == []
+        em.RequestMapPoint.objects.create(
+            request=req,
+            lat=TEMPE[1][0],
+            lng=TEMPE[1][1],
+            address_hash=address_hash(TEMPE[0]),
+            status=em.RequestMapPoint.STATUS_OK,
+        )
+        assert count_account_map_pins(qs) == 1
+        pin = self._pins()[0]
+        assert (pin.lat, pin.lng, pin.location_source) == (
+            TEMPE[1][0],
+            TEMPE[1][1],
+            "geocoded",
+        )
+
+    def test_a_request_point_for_an_old_address_or_not_found_is_not_drawn(self):
+        stale = self._request(TEMPE, coords=[])
+        em.RequestMapPoint.objects.create(
+            request=stale,
+            lat=33.0,
+            lng=-111.0,
+            address_hash=address_hash("12 somewhere else entirely"),
+            status=em.RequestMapPoint.STATUS_OK,
+        )
+        missing = self._request(PHOENIX, coords=[])
+        em.RequestMapPoint.objects.create(
+            request=missing,
+            address_hash=address_hash(PHOENIX[0]),
+            status=em.RequestMapPoint.STATUS_NOT_FOUND,
+        )
+        assert self._pins() == []
+
+    def test_an_events_position_beats_the_requests_looked_up_address(self):
+        req = self._request(TEMPE, coords=[])
+        ev = self.create_event(
+            name="shift", tenant=self.tenant, request=req, date=self.now, address=TEMPE[0]
+        )
+        em.Event.objects.filter(pk=ev.pk).update(coordinates=TEMPE[1])
+        em.RequestMapPoint.objects.create(
+            request=req,
+            lat=33.0,
+            lng=-111.0,
+            address_hash=address_hash(TEMPE[0]),
+            status=em.RequestMapPoint.STATUS_OK,
+        )
+        pin = self._pins()[0]
+        assert (pin.lat, pin.location_source) == (TEMPE[1][0], "event")
+
+    # ── store names without the visit's date ──────────────────────────
+
+    def test_a_request_named_store_and_date_is_labelled_by_the_store(self):
+        self._request(TEMPE, retailer=None, name="BP · 2027-01-11")
+        self._request(PHOENIX, retailer=None, name="05/17/2026")
+        by_address = {p.address: p for p in self._pins()}
+        assert by_address[TEMPE[0]].name == "BP"
+        assert by_address[TEMPE[0]].retailer_name == ""
+        # Nothing but a date: named by its street instead.
+        assert by_address[PHOENIX[0]].name == "1670 W Bethany Home Rd"
+
+    def test_last_visit_is_the_newest_filed_visit_at_the_store(self):
+        older = self.now - timedelta(days=40)
+        newer = self.now - timedelta(days=3)
+        req = self._request(TEMPE)
+        self._filed_event(req, when=older)
+        self._filed_event(req, when=newer)
+        pin = self._pins()[0]
+        assert pin.visit_count == 2
+        assert pin.last_visit_date is not None
+        assert pin.last_visit_date.startswith(newer.date().isoformat())

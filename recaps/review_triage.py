@@ -55,7 +55,11 @@ def _reason(code: str, label: str, source: str) -> dict:
 
 def _review_reasons(recap_id: int, is_custom: bool) -> list[dict]:
     out: list[dict] = []
-    for item in flagged_review_checks(recap_id, is_custom=is_custom):
+    # Triage is served only to Ignite staff (``IsSparkAdminAccess`` on
+    # recapReviewTriage), so it includes the BA's submit-time findings.
+    for item in flagged_review_checks(
+        recap_id, is_custom=is_custom, include_staff_only=True
+    ):
         code, label = item.get("code"), item.get("label")
         if isinstance(code, str) and code and isinstance(label, str) and label:
             out.append(_reason(code, label, "review_check"))

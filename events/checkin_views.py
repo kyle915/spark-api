@@ -56,7 +56,7 @@ from jobboard.checkin import (
 )
 from recaps.photo_check import classify_photo
 from recaps.receipt_gate import NEEDS_RECEIPT_CODE, RecapNeedsAReceipt
-from recaps.recap_precheck import precheck_recap
+from recaps.recap_precheck import precheck_recap, public_items, record_submit_checks
 from recaps.shelf_coach import (
     coach_shelf_photo,
     pack_response as pack_shelf_coach_response,
@@ -1694,13 +1694,7 @@ def public_checkin_recap_check(request: HttpRequest, code: str) -> HttpResponse:
         photo_count = 0
 
     try:
-        template = checkin_web.serialize_template(event) or {}
-        fields = [
-            field
-            for section in template.get("sections") or []
-            for field in section.get("fields") or []
-            if isinstance(field, dict)
-        ]
+        fields = _template_fields_for_check(event)
         # The model step has its own, lower budget per network. Past it the
         # rule checks still run.
         use_model = not _over_limit("recap-check-model-ip", ip, limit=15, window=300)
@@ -1712,11 +1706,36 @@ def public_checkin_recap_check(request: HttpRequest, code: str) -> HttpResponse:
             event=event,
             ambassador=ambassador,
             use_model=use_model,
+            receipt_spend=_receipt_spend(data),
         )
+        result = {**result, "items": public_items(result.get("items") or [])}
     except Exception:  # noqa: BLE001 — advisory: a fault here means "no notes"
         logger.exception("checkin recap check failed code=%s", code)
         result = {"items": [], "modelChecked": False}
     return JsonResponse(result)
+
+
+def _template_fields_for_check(event) -> list[dict]:
+    template = checkin_web.serialize_template(event) or {}
+    return [
+        field
+        for section in template.get("sections") or []
+        for field in section.get("fields") or []
+        if isinstance(field, dict)
+    ]
+
+
+def _receipt_spend(data: dict) -> dict | None:
+    """The brand total the page read off this recap's receipt photos
+    (``receipt-read``), sent back with the answers. Advisory input only: it
+    can add a "receipts don't match" note, nothing else."""
+    raw = data.get("receiptSpend")
+    if not isinstance(raw, dict):
+        return None
+    total = raw.get("total")
+    if not isinstance(total, (str, int, float)) or isinstance(total, bool):
+        return None
+    return {"total": str(total)[:16]}
 
 
 # --------------------------------------------------------------------------
@@ -1987,6 +2006,11 @@ def _submit_recap_and_respond(
         if claim.recap_id != recap.pk:
             claim.recap = recap
             claim.save(update_fields=["recap"])
+    _record_submit_checks(
+        recap, data, event, ambassador,
+        field_values=field_values, files=files,
+        total_engagements=total_engagements,
+    )
     return JsonResponse(
         {
             "success": True,
@@ -1994,6 +2018,29 @@ def _submit_recap_and_respond(
             "pendingReview": not bool(getattr(ambassador, "is_active", False)),
         }
     )
+
+
+def _record_submit_checks(
+    recap, data, event, ambassador, *, field_values, files, total_engagements
+) -> None:
+    """Keep what the answer check finds on the filed recap, with the codes
+    the ambassador confirmed ("This is correct") and the ones on screen when
+    they submitted. A note for the reviewer: never changes the response."""
+    try:
+        record_submit_checks(
+            recap,
+            template_fields=_template_fields_for_check(event),
+            field_values=field_values,
+            total_engagements=total_engagements,
+            photo_count=len(files) if isinstance(files, list) else 0,
+            event=event,
+            ambassador=ambassador,
+            receipt_spend=_receipt_spend(data),
+            confirmed_codes=data.get("checkConfirmed"),
+            shown_codes=data.get("checkShown"),
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("checkin submit checks failed")
 
 
 # --------------------------------------------------------------------------
