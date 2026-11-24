@@ -93,3 +93,23 @@ def event_map_point(event) -> tuple[float, float, str] | None:
     """``(lat, lng, source)`` for one event, or None when it has no position.
     For a list of events use :func:`event_map_points` (one query, not N)."""
     return event_map_points([event]).get(event.id)
+
+
+def request_map_points(requests) -> dict[int, tuple[float, float]]:
+    """``{request_id: (lat, lng)}`` looked up from each request's own address
+    (``RequestMapPoint``), for requests whose stored answer still matches the
+    address text. One query for the whole list."""
+    from events.models import RequestMapPoint
+
+    by_id = {req.pk: req for req in requests}
+    if not by_id:
+        return {}
+    out: dict[int, tuple[float, float]] = {}
+    rows = RequestMapPoint.objects.filter(
+        request_id__in=list(by_id), status=RequestMapPoint.STATUS_OK
+    )
+    for row in rows:
+        point = _stored_point(by_id[row.request_id], row)
+        if point is not None:
+            out[row.request_id] = point
+    return out

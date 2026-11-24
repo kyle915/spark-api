@@ -1654,6 +1654,8 @@ class AccountMapPin:
     store_key: str = ""
     # "request" | "event" | "geocoded" — where lat/lng came from.
     location_source: str = "request"
+    # The store's newest filed visit (ISO datetime), None when never visited.
+    last_visit_date: str | None = None
 
 
 @strawberry.type
