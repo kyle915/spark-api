@@ -1,0 +1,67 @@
+name: Geocode Account Map requests (dry run by default)
+
+# Manually fires `/internal/cron/geocode-account-map` on Cloud Run, which runs
+# `geocode_account_map`: a looked-up position (RequestMapPoint) for requests
+# that have a street address but no coordinates and no placed event, so the
+# Account Map can draw them. Never writes Request.coordinates.
+#
+# Run AFTER the code (and migration 0073) is deployed.
+#
+# SAFE: DRY RUN IS THE DEFAULT. dry_run=true sends execute=false, and the
+# command only counts what it would do (no Google calls, no writes). Re-run
+# with dry_run=false to look up and store. `limit` caps Google lookups per run.
+#
+# Secret travels in the X-Cron-Secret header, never in the URL.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (count only, no lookups, no writes). Set false to apply."
+        required: true
+        default: true
+        type: boolean
+      tenant:
+        description: "Numeric tenant id. Empty = all tenants."
+        required: false
+        default: ""
+        type: string
+      limit:
+        description: "Most Google lookups in one run."
+        required: false
+        default: "300"
+        type: string
+
+jobs:
+  fire-geocode-account-map:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire geocode-account-map cron endpoint
+        env:
+          CRON_URL: https://spark-api-new-490085168610.us-central1.run.app/internal/cron/geocode-account-map
+          CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+          TENANT: ${{ github.event.inputs.tenant || '' }}
+          LIMIT: ${{ github.event.inputs.limit || '300' }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
+            exit 1
+          fi
+          if [ "$DRY_RUN" = "false" ]; then EXECUTE="true"; else EXECUTE="false"; fi
+          echo "dry_run=$DRY_RUN -> execute=$EXECUTE"
+          QS="execute=$EXECUTE&limit=$LIMIT"
+          if [ -n "$TENANT" ]; then QS="$QS&tenant=$TENANT"; fi
+          STATUS=$(curl -sS -o /tmp/cron-response.json -w '%{http_code}' \
+            --max-time 900 \
+            -X POST "$CRON_URL?$QS" \
+            -H "X-Cron-Secret: $CRON_SECRET")
+          echo "HTTP $STATUS"
+          echo "----- response body -----"
+          cat /tmp/cron-response.json
+          echo
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned $STATUS — see body above."
+            exit 1
+          fi

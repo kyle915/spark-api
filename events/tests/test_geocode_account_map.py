@@ -167,3 +167,32 @@ class TestGeocodeAccountMap(EventsGraphQLTestCase):
         assert lookup.call_count == 1
         assert em.RequestMapPoint.objects.count() == 0
         assert "stopped: no Google key" in out
+
+    def test_cron_endpoint_needs_the_secret_and_is_dry_unless_execute(self):
+        from django.test import Client, override_settings
+
+        from digest.cron_views import GeocodeAccountMapView, _registered_views
+
+        assert _registered_views()["geocode-account-map"] is GeocodeAccountMapView
+        secret = "test-cron-secret-value-only-for-tests"
+        url = "/internal/cron/geocode-account-map"
+        req = self._request(TEMPE)
+        http = Client()
+        with override_settings(INTERNAL_CRON_SECRET=secret):
+            assert http.post(url).status_code in (401, 403)
+            with mock.patch(STATUS, return_value="geocoding: test"), mock.patch(
+                LOOKUP, return_value=("ok", (33.334, -111.912), "")
+            ) as lookup:
+                dry = http.post(f"{url}?tenant={self.tenant.id}", HTTP_X_CRON_SECRET=secret)
+                assert dry.status_code == 200
+                assert dry.json()["executed"] is False
+                lookup.assert_not_called()
+                assert not em.RequestMapPoint.objects.exists()
+
+                real = http.post(
+                    f"{url}?execute=true&tenant={self.tenant.id}&limit=5",
+                    HTTP_X_CRON_SECRET=secret,
+                )
+                assert real.status_code == 200
+                assert real.json()["executed"] is True
+                assert em.RequestMapPoint.objects.get(request=req).status == "ok"
