@@ -600,8 +600,16 @@ def _submit_check_rows(facts: _Facts) -> list[dict]:
     return rows
 
 
-def recap_review_checks(recap_id, is_custom: bool = False) -> list[dict]:
-    """The rule-based review checks for one recap. Never raises."""
+def recap_review_checks(
+    recap_id, is_custom: bool = False, *, include_staff_only: bool = False
+) -> list[dict]:
+    """The rule-based review checks for one recap. Never raises.
+
+    ``include_staff_only`` adds the ambassador's submit-time findings
+    (:func:`_submit_check_rows`). Those are Ignite staff only: callers pass
+    True only after a DB-backed admin check (``_is_admin_access``), never
+    for a brand user or an ambassador. Off by default so a new caller can't
+    leak them."""
     try:
         rid = int(recap_id)
     except (TypeError, ValueError):
@@ -621,12 +629,14 @@ def recap_review_checks(recap_id, is_custom: bool = False) -> list[dict]:
             _check_duplicates(facts),
             _check_spend(facts, buckets),
             _check_receipt_total(rid, is_custom, facts),
-        ] + _submit_check_rows(facts)
+        ] + (_submit_check_rows(facts) if include_staff_only else [])
     except Exception:
         return _all_na()
 
 
-def flagged_review_checks(recap_id, is_custom: bool = False) -> list[dict]:
+def flagged_review_checks(
+    recap_id, is_custom: bool = False, *, include_staff_only: bool = False
+) -> list[dict]:
     """Flagged checks only — slim ``{code, label}`` for Needs-review list badges.
 
     Advisory only: never approves, rejects, or mutates. Missing / broken
@@ -634,7 +644,9 @@ def flagged_review_checks(recap_id, is_custom: bool = False) -> list[dict]:
     check list).
     """
     out: list[dict] = []
-    for item in recap_review_checks(recap_id, is_custom=is_custom):
+    for item in recap_review_checks(
+        recap_id, is_custom=is_custom, include_staff_only=include_staff_only
+    ):
         if not isinstance(item, dict):
             continue
         if item.get("status") != "flag":
@@ -650,7 +662,10 @@ MAX_REVIEW_FLAG_BATCH = 50
 
 
 def flagged_review_checks_for_ids(
-    recap_ids: list[int], is_custom: bool = False
+    recap_ids: list[int],
+    is_custom: bool = False,
+    *,
+    include_staff_only: bool = False,
 ) -> dict[int, list[dict]]:
     """Map each id → flagged ``{code, label}`` summaries (empty when clean).
 
@@ -660,7 +675,9 @@ def flagged_review_checks_for_ids(
     out: dict[int, list[dict]] = {}
     for rid in recap_ids[:MAX_REVIEW_FLAG_BATCH]:
         try:
-            out[int(rid)] = flagged_review_checks(int(rid), is_custom=is_custom)
+            out[int(rid)] = flagged_review_checks(
+                int(rid), is_custom=is_custom, include_staff_only=include_staff_only
+            )
         except (TypeError, ValueError):
             continue
     return out

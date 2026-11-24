@@ -871,7 +871,12 @@ class TestRecapContradictions(_RecapCheckForm):
         assert stored["first_time_exceeds_sampled"]["shown"] is True
         assert stored["first_time_exceeds_sampled"]["severity"] == "error"
 
-        checks = {c["code"]: c for c in recap_review_checks(recap.id, is_custom=True)}
+        checks = {
+            c["code"]: c
+            for c in recap_review_checks(
+                recap.id, is_custom=True, include_staff_only=True
+            )
+        }
         confirmed = checks["ba_check_sold_exceeds_sampled"]
         assert confirmed["status"] == "flag"
         assert confirmed["label"] == "BA confirmed: 55 cans sold, 40 sampled"
@@ -900,7 +905,9 @@ class TestRecapContradictions(_RecapCheckForm):
         assert recap.submit_checks["items"] == []
         assert not any(
             c["code"].startswith("ba_check_")
-            for c in recap_review_checks(recap.id, is_custom=True)
+            for c in recap_review_checks(
+                recap.id, is_custom=True, include_staff_only=True
+            )
         )
 
     def test_a_broken_check_never_fails_the_submit(self, monkeypatch):

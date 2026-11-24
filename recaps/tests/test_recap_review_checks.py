@@ -388,9 +388,101 @@ class TestRecapReviewChecksResolver(AmbassadorsGraphQLTestCase):
         codes = {f["code"] for f in flags.data["recapReviewFlags"][0]["flags"]}
         assert {"ba_check_sold_line_zero", "ba_check_clock_out_before_in"} <= codes
 
+        # A brand user of the SAME tenant never gets them, by either field.
+        client = await sync_to_async(self.create_user, thread_sensitive=True)(
+            username="review-client", email="review-client@brand-example.com",
+            role=self.roles["client"])
+        await sync_to_async(self.create_tenanted_user, thread_sensitive=True)(
+            client, self.tenant)
+        as_client = await self._execute_query_authenticated(
+            """
+            query Q($recapId: ID!, $isCustom: Boolean) {
+              recapReviewChecks(recapId: $recapId, isCustom: $isCustom) {
+                code label status detail
+              }
+            }
+            """,
+            {"recapId": str(self.recap.id), "isCustom": True},
+            client, self.endpoint_path)
+        assert as_client.errors is None, f"errored: {as_client.errors}"
+        client_codes = [c["code"] for c in as_client.data["recapReviewChecks"]]
+        # Same tenant, so the ordinary checks still come back...
+        assert "engagements_rate" in client_codes
+        # ...but nothing the BA was asked at submit.
+        assert not any(code.startswith("ba_check_") for code in client_codes)
+        assert "BA confirmed" not in str(as_client.data)
+
+        client_flags = await self._execute_query_authenticated(
+            """
+            query Q($ids: [ID!]!, $isCustom: Boolean!) {
+              recapReviewFlags(recapIds: $ids, isCustom: $isCustom) {
+                recapId
+                flags { code label }
+              }
+            }
+            """,
+            {"ids": [str(self.recap.id)], "isCustom": True},
+            client, self.endpoint_path)
+        assert client_flags.errors is None, f"errored: {client_flags.errors}"
+        flag_codes = {
+            f["code"] for f in client_flags.data["recapReviewFlags"][0]["flags"]
+        }
+        assert "engagements_rate" in flag_codes
+        assert not any(code.startswith("ba_check_") for code in flag_codes)
+
+        # Needs-eyes triage is staff only as a whole; staff see the reason.
+        triage_q = """
+            query Q($ids: [ID!]!, $isCustom: Boolean!) {
+              recapReviewTriage(recapIds: $ids, isCustom: $isCustom) {
+                recapId label reasons { code label source }
+              }
+            }
+            """
+        staff_triage = await self._execute_query_authenticated(
+            triage_q, {"ids": [str(self.recap.id)], "isCustom": True},
+            self.admin, self.endpoint_path)
+        assert staff_triage.errors is None, f"errored: {staff_triage.errors}"
+        reasons = {
+            r["code"] for r in staff_triage.data["recapReviewTriage"][0]["reasons"]
+        }
+        assert "ba_check_sold_line_zero" in reasons
+        client_triage = await self._execute_query_authenticated(
+            triage_q, {"ids": [str(self.recap.id)], "isCustom": True},
+            client, self.endpoint_path)
+        assert client_triage.errors is not None or not client_triage.data
+
+    def test_staff_only_rows_are_off_unless_asked_for(self):
+        recap_models.CustomRecap.objects.filter(id=self.recap.id).update(
+            submit_checks={"items": [{
+                "code": "sold_total_zero", "severity": "error",
+                "message": "m", "staff": "s", "confirmed": True, "shown": True,
+            }]}
+        )
+        plain = [c["code"] for c in recap_review_checks(self.recap.id, is_custom=True)]
+        staff = [
+            c["code"]
+            for c in recap_review_checks(
+                self.recap.id, is_custom=True, include_staff_only=True
+            )
+        ]
+        assert "ba_check_sold_total_zero" not in plain
+        assert "ba_check_sold_total_zero" in staff
+        assert flagged_review_checks_for_ids([self.recap.id], is_custom=True)[
+            self.recap.id
+        ] == [f for f in flagged_review_checks(self.recap.id, is_custom=True)]
+        assert not any(
+            f["code"].startswith("ba_check_")
+            for f in flagged_review_checks(self.recap.id, is_custom=True)
+        )
+
     def test_old_recaps_without_submit_checks_are_unchanged(self):
         recap_models.CustomRecap.objects.filter(id=self.recap.id).update(
             submit_checks=None
         )
-        codes = [c["code"] for c in recap_review_checks(self.recap.id, is_custom=True)]
+        codes = [
+            c["code"]
+            for c in recap_review_checks(
+                self.recap.id, is_custom=True, include_staff_only=True
+            )
+        ]
         assert not any(code.startswith("ba_check_") for code in codes)

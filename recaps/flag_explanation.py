@@ -271,7 +271,10 @@ def gather_signals(recap_id: int, is_custom: bool) -> list[dict]:
     except Exception:
         pass
 
-    for check in recap_review_checks(recap_id, is_custom=is_custom):
+    # recapFlagExplanation answers Ignite staff only (null for brand users).
+    for check in recap_review_checks(
+        recap_id, is_custom=is_custom, include_staff_only=True
+    ):
         if not isinstance(check, dict) or check.get("status") != "flag":
             continue
         code = str(check.get("code") or "")

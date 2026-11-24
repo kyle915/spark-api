@@ -1792,6 +1792,25 @@ def _build_recap_triage(
     return label, reasons, why.strip(), why_source
 
 
+async def _viewer_is_ignite_staff(info) -> bool:
+    """DB-backed Spark admin check for the request user. The JWT user's role
+    does not hydrate inside async resolvers, so ``user.role`` is never read
+    here; ``resolve_request_user_access`` re-reads it. Any failure is
+    "not staff"."""
+    from utils.graphql.permissions import (
+        _is_admin_access,
+        resolve_request_user_access,
+    )
+
+    try:
+        user = info.context.request.user
+        if not user or not user.is_authenticated:
+            return False
+        return bool(_is_admin_access(*await resolve_request_user_access(user)))
+    except Exception:
+        return False
+
+
 def _build_recap_review_checks(result) -> list[RecapReviewCheck]:
     checks: list[RecapReviewCheck] = []
     for item in result or []:
@@ -3576,6 +3595,7 @@ class CampaignReportQueries:
         """
         service = _CampaignReportService()
         scope_tenant_id = await service.resolve_scope_tenant_id(info)
+        staff = await _viewer_is_ignite_staff(info)
         try:
             rid = resolve_id_to_int(str(recap_id).strip())
         except Exception:
@@ -3601,7 +3621,9 @@ class CampaignReportQueries:
             if scope_tenant_id is not None and row_tenant_id != scope_tenant_id:
                 return _build_recap_review_checks(recap_review_checks(0))
             return _build_recap_review_checks(
-                recap_review_checks(rid, is_custom=is_custom)
+                recap_review_checks(
+                    rid, is_custom=is_custom, include_staff_only=staff
+                )
             )
 
         try:
@@ -3622,9 +3644,11 @@ class CampaignReportQueries:
         :data:`MAX_REVIEW_FLAG_BATCH`). Returns only ``flag`` checks —
         advisory badges so ops can skip opening every row. Never
         auto-approves. Out-of-scope / missing ids return empty ``flags``.
+        The BA's submit-time findings (``ba_check_*``) are Ignite staff only.
         """
         service = _CampaignReportService()
         scope_tenant_id = await service.resolve_scope_tenant_id(info)
+        staff = await _viewer_is_ignite_staff(info)
 
         parsed: list[tuple[str, int]] = []
         for raw in (recap_ids or [])[:MAX_REVIEW_FLAG_BATCH]:
@@ -3667,7 +3691,9 @@ class CampaignReportQueries:
                     continue
                 allowed.append(rid)
 
-            by_id = flagged_review_checks_for_ids(allowed, is_custom=is_custom)
+            by_id = flagged_review_checks_for_ids(
+                allowed, is_custom=is_custom, include_staff_only=staff
+            )
             bundles: list[RecapReviewFlagsForRecap] = []
             for raw_id, rid in parsed:
                 bundles.append(
