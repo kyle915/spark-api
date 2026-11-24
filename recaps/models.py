@@ -602,6 +602,13 @@ class CustomRecap(models.Model):
     # state that is NOT listed here was set by someone else (staff, an
     # import), and the normalizer never overwrites it.
     location_fill = models.JSONField(blank=True, default=dict)
+    # What the web check-in's answer check found when this recap was filed
+    # (recaps.recap_precheck.record_submit_checks): each contradiction, its
+    # severity, and whether the ambassador confirmed it as correct. Empty
+    # for recaps filed any other way. Reviewers read it beside Approve.
+    # Nullable so a revision that predates the column can still insert
+    # recaps while a deploy rolls over.
+    submit_checks = models.JSONField(blank=True, null=True, default=dict)
 
     tenant = models.ForeignKey(
         Tenant, on_delete=models.RESTRICT, null=False, related_name="custom_recap"

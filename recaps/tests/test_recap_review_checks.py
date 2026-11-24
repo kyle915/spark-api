@@ -314,3 +314,83 @@ class TestRecapReviewChecksResolver(AmbassadorsGraphQLTestCase):
             [self.recap.id], is_custom=True
         )
         assert batched[self.recap.id] == flags
+
+    @pytest.mark.asyncio
+    async def test_ba_submit_checks_reach_the_reviewer(self):
+        """What the check-in found at submit, through the real schema, in
+        the detail checks and the Needs-review flags."""
+        from asgiref.sync import sync_to_async
+
+        payload = {
+            "version": 1,
+            "checkedAt": "2026-11-24T17:00:00+00:00",
+            "items": [
+                {
+                    "code": "sold_line_zero",
+                    "severity": "warning",
+                    "message": "You entered 15 for “4-for-$6 upgrades” but 0 "
+                    "for “$1 tins sold”. Is that right?",
+                    "staff": "15 “4-for-$6 upgrades”, 0 “$1 tins sold”",
+                    "fieldIds": ["11", "12"],
+                    "confirmed": True,
+                    "shown": True,
+                },
+                {
+                    "code": "clock_out_before_in",
+                    "severity": "error",
+                    "message": "Your clock-out is earlier than your clock-in.",
+                    "staff": "Clock-out recorded before clock-in",
+                    "fieldIds": [],
+                    "confirmed": False,
+                    "shown": False,
+                },
+            ],
+        }
+        await sync_to_async(
+            recap_models.CustomRecap.objects.filter(id=self.recap.id).update,
+            thread_sensitive=True,
+        )(submit_checks=payload)
+
+        result = await self._execute_query_authenticated(
+            """
+            query Q($recapId: ID!, $isCustom: Boolean) {
+              recapReviewChecks(recapId: $recapId, isCustom: $isCustom) {
+                code label status detail
+              }
+            }
+            """,
+            {"recapId": str(self.recap.id), "isCustom": True},
+            self.admin, self.endpoint_path)
+        assert result.errors is None, f"errored: {result.errors}"
+        checks = {c["code"]: c for c in result.data["recapReviewChecks"]}
+        upgrades = checks["ba_check_sold_line_zero"]
+        assert upgrades["status"] == "flag"
+        assert upgrades["label"] == (
+            "BA confirmed: 15 “4-for-$6 upgrades”, 0 “$1 tins sold”"
+        )
+        assert upgrades["detail"].startswith("Worth a look. The BA was asked:")
+        clock = checks["ba_check_clock_out_before_in"]
+        assert clock["label"] == "Found at submit: Clock-out recorded before clock-in"
+        assert clock["detail"].startswith("Likely error.")
+
+        flags = await self._execute_query_authenticated(
+            """
+            query Q($ids: [ID!]!, $isCustom: Boolean!) {
+              recapReviewFlags(recapIds: $ids, isCustom: $isCustom) {
+                recapId
+                flags { code label }
+              }
+            }
+            """,
+            {"ids": [str(self.recap.id)], "isCustom": True},
+            self.admin, self.endpoint_path)
+        assert flags.errors is None, f"errored: {flags.errors}"
+        codes = {f["code"] for f in flags.data["recapReviewFlags"][0]["flags"]}
+        assert {"ba_check_sold_line_zero", "ba_check_clock_out_before_in"} <= codes
+
+    def test_old_recaps_without_submit_checks_are_unchanged(self):
+        recap_models.CustomRecap.objects.filter(id=self.recap.id).update(
+            submit_checks=None
+        )
+        codes = [c["code"] for c in recap_review_checks(self.recap.id, is_custom=True)]
+        assert not any(code.startswith("ba_check_") for code in codes)

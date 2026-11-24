@@ -145,6 +145,10 @@ def _fragment(code: str, n: dict) -> str:
             return f"there {_plural(photos, 'is', 'are')} only {photos} {_plural(photos, 'photo', 'photos')}"
     except (KeyError, TypeError):
         pass
+    if code.startswith("ba_check_"):
+        # recap_review_checks.SUBMIT_CHECK_PREFIX: answers that disagreed
+        # when the ambassador filed (see the check's own label for which).
+        return "answers on the recap disagree (found when the ambassador filed it)"
     return _BARE.get(code, "a check was flagged")
 
 

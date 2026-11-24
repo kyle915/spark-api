@@ -122,7 +122,7 @@ def _fmt_hours(hours: float) -> str:
 class _Facts:
     __slots__ = (
         "exists", "event", "tenant", "ambassador_id", "engagements",
-        "samples", "files", "field_pairs", "account_spend",
+        "samples", "files", "field_pairs", "account_spend", "submit_checks",
     )
 
     def __init__(self):
@@ -137,6 +137,9 @@ class _Facts:
         # (field_name, value, field_type_name) per custom field value.
         self.field_pairs: list[tuple[str, str, str]] = []
         self.account_spend: float | None = None
+        # CustomRecap.submit_checks: what the check-in's answer check found
+        # at submit and what the ambassador confirmed.
+        self.submit_checks: dict | None = None
 
 
 def _file_rows(qs, blob_attr: str) -> list[tuple[str, str]]:
@@ -173,6 +176,7 @@ def _gather(recap_id: int, is_custom: bool) -> _Facts:
         facts.event = recap.event
         facts.tenant = recap.tenant
         facts.ambassador_id = recap.ambassador_id
+        facts.submit_checks = getattr(recap, "submit_checks", None)
         base = _gather_custom_facts(recap)
         facts.engagements = base.total_engagements
         facts.samples = base.samples_distributed
@@ -550,6 +554,52 @@ def _check_receipt_total(recap_id: int, is_custom: bool, facts: _Facts) -> dict:
     )
 
 
+# Codes of the ambassador's submit-time findings carry this prefix so they
+# never collide with the fixed checks above (or with the quality flags of the
+# same name) in the Needs-review triage.
+SUBMIT_CHECK_PREFIX = "ba_check_"
+
+
+def _submit_check_rows(facts: _Facts) -> list[dict]:
+    """One flagged row per contradiction the web check-in found when the
+    ambassador submitted, saying what they did about it:
+
+    * "BA confirmed: 15 upgrades, 0 tins sold" — they tapped "This is
+      correct";
+    * "BA submitted anyway: …" — it was on screen and they filed as is;
+    * "Found at submit: …" — the check could not reach them (offline, slow
+      network), so nobody asked.
+    """
+    payload = facts.submit_checks
+    if not isinstance(payload, dict):
+        return []
+    rows: list[dict] = []
+    seen: set[str] = set()
+    for item in payload.get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        code = item.get("code")
+        staff = str(item.get("staff") or item.get("message") or "").strip()
+        if not isinstance(code, str) or not code or not staff or code in seen:
+            continue
+        seen.add(code)
+        if item.get("confirmed"):
+            lead = "BA confirmed"
+        elif item.get("shown"):
+            lead = "BA submitted anyway"
+        else:
+            lead = "Found at submit"
+        severity = (
+            "Likely error" if item.get("severity") == "error" else "Worth a look"
+        )
+        message = str(item.get("message") or "").strip()
+        detail = f"{severity}. The BA was asked: {message}" if message else severity
+        rows.append(
+            _check(SUBMIT_CHECK_PREFIX + code, f"{lead}: {staff}", "flag", detail)
+        )
+    return rows
+
+
 def recap_review_checks(recap_id, is_custom: bool = False) -> list[dict]:
     """The rule-based review checks for one recap. Never raises."""
     try:
@@ -571,7 +621,7 @@ def recap_review_checks(recap_id, is_custom: bool = False) -> list[dict]:
             _check_duplicates(facts),
             _check_spend(facts, buckets),
             _check_receipt_total(rid, is_custom, facts),
-        ]
+        ] + _submit_check_rows(facts)
     except Exception:
         return _all_na()
 
