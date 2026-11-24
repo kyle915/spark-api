@@ -81,6 +81,8 @@ class StoreIndex:
     by_retailer: dict[int, set[str]] = field(default_factory=dict)
     # store key -> distinct events with a filed recap
     visits: dict[str, set[int]] = field(default_factory=dict)
+    # store key -> date of its newest filed visit
+    last_visits: dict[str, object] = field(default_factory=dict)
     planned: set[str] = field(default_factory=set)
 
     def store_for_request(self, request_id: int) -> str:
@@ -88,6 +90,10 @@ class StoreIndex:
 
     def visit_count(self, store_key: str) -> int:
         return len(self.visits.get(store_key, ()))
+
+    def last_visit(self, store_key: str):
+        """When this store's newest filed visit happened; None when never."""
+        return self.last_visits.get(store_key)
 
     def is_planned(self, store_key: str) -> bool:
         return store_key in self.planned
@@ -206,6 +212,7 @@ def build_store_index(tenant_id: int | None = None, *, now=None) -> StoreIndex:
         "event__request__retailer_id",
         "event__address",
         "event__coordinates",
+        "event__date",
     )
     legacy = Recap.objects.filter(legacy_filed_q(), archived_at__isnull=True)
     custom = CustomRecap.objects.filter(custom_filed_q(), archived_at__isnull=True)
@@ -222,6 +229,7 @@ def build_store_index(tenant_id: int | None = None, *, now=None) -> StoreIndex:
             request_retailer,
             address,
             coordinates,
+            event_date,
         ) in qs.values_list(*event_fields).iterator():
             if not event_id:
                 continue
@@ -234,6 +242,10 @@ def build_store_index(tenant_id: int | None = None, *, now=None) -> StoreIndex:
             )
             if store:
                 index.visits.setdefault(store, set()).add(int(event_id))
+                if event_date is not None:
+                    held = index.last_visits.get(store)
+                    if held is None or event_date > held:
+                        index.last_visits[store] = event_date
 
     future_events = Event.objects.filter(start_time__gte=now).exclude(
         request__deleted_at__isnull=False

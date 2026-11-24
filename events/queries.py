@@ -1982,6 +1982,7 @@ class RequestQueries:
                     planned=pin.planned,
                     store_key=pin.store_key,
                     location_source=pin.location_source,
+                    last_visit_date=pin.last_visit_date,
                 )
                 for pin in admin_payloads.list_account_map_pins(
                     qs, limit=limit, offset=start, tenant_id=resolved_tenant_id
