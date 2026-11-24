@@ -70,6 +70,56 @@ def _resolve_filter_id(value: strawberry.ID | None, label: str) -> int | None:
         raise GraphQLError(f"Invalid {label} ID.") from exc
 
 
+async def _ambassador_event_scope(info: strawberry.Info):
+    """For a non-admin ambassador: a Q limiting events to the brands they're
+    an active member of plus the shifts they're booked on. None for anyone
+    else (their tenant scoping is already done by resolve_tenant_id).
+
+    Ambassadors are "unrestricted" in resolve_tenant_id so the BA apps can
+    open any shift they're on across brands; without this the `events`
+    list handed a BA every brand's events. Role read from the DB
+    (resolve_request_user_access), not the JWT user."""
+    from utils.graphql.permissions import (
+        _is_admin_access,
+        resolve_request_user_access,
+    )
+
+    user = getattr(info.context.request, "user", None)
+    if not user or not getattr(user, "is_authenticated", False):
+        return None
+    access = await resolve_request_user_access(user)
+    if _is_admin_access(*access) or (access[0] or "") != "ambassador":
+        return None
+
+    def _scope():
+        from ambassadors.models import AmbassadorEvent
+
+        member = list(
+            TenantedUser.objects.filter(user_id=user.pk, is_active=True)
+            .values_list("tenant_id", flat=True)
+        )
+        booked = AmbassadorEvent.objects.filter(
+            ambassador__user_id=user.pk
+        ).values("event_id")
+        return Q(tenant_id__in=member) | Q(id__in=booked)
+
+    return await sync_to_async(_scope)()
+
+
+class _StaffOnlyCrossTenantMixin:
+    """For a brand's own business data (requests / the Master Tracker,
+    store-manager contacts, client contacts, billing entities): only staff
+    and spark-admins read across brands. Ambassadors stay unrestricted on
+    events (the BA apps open shifts across brands) but NOT here — a BA is
+    scoped to the brands they're a member of, like a client. None of these
+    queries is on the mobile or ambassador schema."""
+
+    def has_unrestricted_tenant_access(self, user) -> bool:
+        if getattr(user, "is_staff", False) or getattr(user, "is_superuser", False):
+            return True
+        return self.get_role_slug(user) == "spark-admin"
+
+
 class BaseEventQueriesService(SparkGraphQLMixin):
     """Service for event queries."""
 
@@ -620,6 +670,9 @@ class EventQueries:
         )
 
         queryset = service.get_ordered_queryset(tenant_id=resolved_tenant_id, q=q)
+        ba_scope = await _ambassador_event_scope(info)
+        if ba_scope is not None:
+            queryset = queryset.filter(ba_scope)
 
         if filters:
             if filters.rmm_asigned:
@@ -1362,7 +1415,7 @@ class EventStatusQueries:
             return None
 
 
-class RequestQueriesService(BaseEventQueriesService):
+class RequestQueriesService(_StaffOnlyCrossTenantMixin, BaseEventQueriesService):
     """Service for request queries."""
 
     # When True, get_queryset() returns the lightweight LIST queryset used by
@@ -1496,7 +1549,7 @@ class RequestQueriesService(BaseEventQueriesService):
         )
 
 
-class RequestStoreManagerQueriesService(BaseEventQueriesService):
+class RequestStoreManagerQueriesService(_StaffOnlyCrossTenantMixin, BaseEventQueriesService):
     """Service for request store manager queries."""
 
     def get_model(self) -> Model:
@@ -2155,7 +2208,7 @@ class RequestStoreManagerQueries:
             return None
 
 
-class ClientQueriesService(BaseEventQueriesService):
+class ClientQueriesService(_StaffOnlyCrossTenantMixin, BaseEventQueriesService):
     """Service for client queries."""
 
     def get_model(self) -> Model:
@@ -2842,7 +2895,7 @@ class RequestTypeQueries:
             return None
 
 
-class BillingEntityQueriesService(BaseEventQueriesService):
+class BillingEntityQueriesService(_StaffOnlyCrossTenantMixin, BaseEventQueriesService):
     """Service for billing entity queries."""
 
     def get_model(self) -> Model:

@@ -37,6 +37,32 @@ class Ambassador(Node):
     updated_at: str
 
     @strawberry.field
+    def last_worked_market(self) -> str | None:
+        """"City, ST" of this BA's most recent approved shift on or before
+        today, e.g. "Austin, TX" — the roster's market line for BAs whose
+        only contact is a phone (walk-up stub identities have a synthetic
+        email that must never be shown).
+
+        Read ONLY from the ``_lw_location`` / ``_lw_state`` annotations the
+        ambassadors list adds when this field is selected
+        (:func:`ambassadors.services.annotate_last_worked`); never queries,
+        so selecting it can't N+1. None when not annotated or never worked.
+        """
+        city = self.__dict__.get("_lw_location") or ""
+        state = self.__dict__.get("_lw_state") or ""
+        label = ", ".join(p for p in (city.strip(), state.strip()) if p)
+        return label or None
+
+    @strawberry.field
+    def last_worked_tenant(self) -> str | None:
+        """Brand name of that same most recent shift. Annotation-only, like
+        :meth:`last_worked_market`; for a brand caller the annotation is
+        scoped to the caller's own tenant, so it never names another brand.
+        """
+        name = self.__dict__.get("_lw_tenant")
+        return (name or "").strip() or None
+
+    @strawberry.field
     def headshot_url(self) -> str | None:
         """Public (non-signed) URL for the BA headshot blob, or None."""
         blob = self.__dict__.get("headshot")

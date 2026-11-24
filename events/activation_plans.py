@@ -225,6 +225,42 @@ def _serialize_plan(plan: models.ActivationPlan) -> ActivationPlanType:
     )
 
 
+def _member_tenant_ids(user_id) -> set[int]:
+    from tenants.models import TenantedUser
+
+    return set(
+        TenantedUser.objects.filter(user_id=user_id, is_active=True).values_list(
+            "tenant_id", flat=True
+        )
+    )
+
+
+def _writable_plan(plan_id: int, user_id, is_admin: bool) -> models.ActivationPlan:
+    """The plan, if the caller may change it: admins any brand, everyone
+    else only a brand they're an active member of. A plan in another brand
+    answers "not found", so a probe can't confirm it exists."""
+    plan = models.ActivationPlan.objects.filter(id=plan_id).first()
+    if plan is None or (
+        not is_admin and plan.tenant_id not in _member_tenant_ids(user_id)
+    ):
+        raise GraphQLError("Plan not found.")
+    return plan
+
+
+def _check_owner(owner_id: int | None, tenant_id: int, is_admin: bool) -> None:
+    """A non-admin may only name an owner from the plan's own brand (the
+    owner's name and email are echoed back, so an arbitrary user id would
+    read out any account's contact details)."""
+    if owner_id is None or is_admin:
+        return
+    from tenants.models import TenantedUser
+
+    if not TenantedUser.objects.filter(
+        user_id=owner_id, tenant_id=tenant_id, is_active=True
+    ).exists():
+        raise GraphQLError("Owner must be a member of this brand.")
+
+
 class ActivationPlanService(SparkGraphQLMixin):
     async def resolve_tenant_for_user(self, info, tenant_id: strawberry.ID | None):
         user = await self.get_user(info)
@@ -318,8 +354,10 @@ class ActivationPlanMutations:
             owner_id = None
             if input.owner_id:
                 owner_id = resolve_id_to_int(input.owner_id)
+            is_admin = await service.is_admin_request(info, user=user)
 
             def _create() -> models.ActivationPlan:
+                _check_owner(owner_id, tenant.id, is_admin)
                 return models.ActivationPlan.objects.create(
                     name=name,
                     concept_brief=(input.concept_brief or "").strip(),
@@ -366,11 +404,10 @@ class ActivationPlanMutations:
         try:
             user = await service.get_user(info)
             pk = resolve_id_to_int(input.id)
+            is_admin = await service.is_admin_request(info, user=user)
 
             def _update() -> models.ActivationPlan:
-                plan = models.ActivationPlan.objects.filter(id=pk).first()
-                if plan is None:
-                    raise GraphQLError("Plan not found.")
+                plan = _writable_plan(pk, user.id, is_admin)
                 if input.name is not None:
                     name = input.name.strip()
                     if not name:
@@ -391,7 +428,9 @@ class ActivationPlanMutations:
                 if input.clear_owner:
                     plan.owner_id = None
                 elif input.owner_id:
-                    plan.owner_id = resolve_id_to_int(input.owner_id)
+                    owner_id = resolve_id_to_int(input.owner_id)
+                    _check_owner(owner_id, plan.tenant_id, is_admin)
+                    plan.owner_id = owner_id
                 plan.updated_by = user
                 plan.save()
                 return plan
@@ -429,13 +468,12 @@ class ActivationPlanMutations:
         """Detach requests then delete the plan row (requests stay live)."""
         service = ActivationPlanService()
         try:
-            await service.get_user(info)
+            user = await service.get_user(info)
             pk = resolve_id_to_int(input.id)
+            is_admin = await service.is_admin_request(info, user=user)
 
             def _delete() -> None:
-                plan = models.ActivationPlan.objects.filter(id=pk).first()
-                if plan is None:
-                    raise GraphQLError("Plan not found.")
+                plan = _writable_plan(pk, user.id, is_admin)
                 models.Request.objects.filter(activation_plan_id=pk).update(
                     activation_plan_id=None
                 )
@@ -477,10 +515,10 @@ class ActivationPlanMutations:
             if not req_ids:
                 raise GraphQLError("Provide at least one request id.")
 
+            is_admin = await service.is_admin_request(info, user=user)
+
             def _attach() -> tuple[models.ActivationPlan, int]:
-                plan = models.ActivationPlan.objects.filter(id=plan_id).first()
-                if plan is None:
-                    raise GraphQLError("Plan not found.")
+                plan = _writable_plan(plan_id, user.id, is_admin)
                 updated = models.Request.objects.filter(
                     id__in=req_ids,
                     tenant_id=plan.tenant_id,
@@ -523,15 +561,20 @@ class ActivationPlanMutations:
     ) -> AttachRequestsToPlanResponse:
         service = ActivationPlanService()
         try:
-            await service.get_user(info)
+            user = await service.get_user(info)
             req_ids = [resolve_id_to_int(rid) for rid in (input.request_ids or [])]
             if not req_ids:
                 raise GraphQLError("Provide at least one request id.")
+            is_admin = await service.is_admin_request(info, user=user)
 
             def _detach() -> int:
-                return models.Request.objects.filter(
+                qs = models.Request.objects.filter(
                     id__in=req_ids, deleted_at__isnull=True
-                ).update(activation_plan_id=None)
+                )
+                if not is_admin:
+                    # Only requests in the caller's own brands.
+                    qs = qs.filter(tenant_id__in=_member_tenant_ids(user.id))
+                return qs.update(activation_plan_id=None)
 
             updated = await sync_to_async(_detach)()
             return build_mutation_response(
