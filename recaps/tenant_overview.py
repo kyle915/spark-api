@@ -38,6 +38,7 @@ single entry point :func:`build_tenant_overview` in ``sync_to_async``.
 
 from __future__ import annotations
 
+from utils.text_clip import clip_words
 import json
 import re
 from dataclasses import dataclass, fields as dataclass_fields
@@ -2989,7 +2990,7 @@ def _clean_quote(text: str | None) -> str | None:
     if not cleaned:
         return None
     if len(cleaned) > MAX_QUOTE_CHARS:
-        cleaned = cleaned[: MAX_QUOTE_CHARS - 1].rstrip() + "…"
+        cleaned = clip_words(cleaned, MAX_QUOTE_CHARS)
     return cleaned
 
 

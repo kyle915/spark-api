@@ -25,6 +25,7 @@ staff ask for a refresh.
 
 from __future__ import annotations
 
+from utils.text_clip import clip_words
 import hashlib
 import json
 import logging
@@ -235,7 +236,7 @@ def clean_comment(raw, names: list[str]) -> str | None:
     text = _EMAIL_RE.sub(_REMOVED, text)
     text = _PHONE_RE.sub(_REMOVED, text)
     if len(text) > MAX_COMMENT_CHARS:
-        text = text[: MAX_COMMENT_CHARS - 1].rstrip() + "…"
+        text = clip_words(text, MAX_COMMENT_CHARS)
     return text
 
 
@@ -398,7 +399,7 @@ def _clean_label(raw) -> str:
 def _short_quote(text: str) -> str:
     if len(text) <= MAX_QUOTE_CHARS:
         return text
-    return text[: MAX_QUOTE_CHARS - 1].rstrip() + "…"
+    return clip_words(text, MAX_QUOTE_CHARS)
 
 
 def count_themes(raw: dict | None, comments: list[Comment]) -> list[dict]:

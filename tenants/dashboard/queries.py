@@ -33,6 +33,21 @@ from recaps.aggregates import client_counted_q, exclude_non_aggregate_recaps
 from tenants import models as tenant_models
 
 
+def _narrowed(filters) -> bool:
+    """True when the dashboard is filtered below "one brand, one window"
+    (RMM, distributor, state or retailer) — the shared per-tenant consumer
+    rollup doesn't take those filters, so such views keep their own sum."""
+    if not filters:
+        return False
+    return any(
+        getattr(filters, name, None)
+        for name in (
+            "rmm_asigned_id", "distributor_id", "distributor_ids",
+            "state_id", "state_ids", "retailer_id", "retailer_ids",
+        )
+    )
+
+
 async def insights_model_to_graphql(insights_model) -> types.Insights:
     """
     Build GraphQL Insights type from an ORM Insights instance.
@@ -460,7 +475,9 @@ class DashboardQueries:
             # Program-KPIs sections below the hero already use, so
             # the client Home page can't disagree with itself. Ignite staff
             # (allowed_tenant_ids is None) keep every recap, as before.
-            client_only = allowed_tenant_ids is not None
+            client_only = allowed_tenant_ids is not None or bool(
+                getattr(filters, "client_view", None)
+            )
 
             def _visible(prefix: str) -> Q:
                 return client_counted_q(prefix) if client_only else Q()
@@ -698,6 +715,22 @@ class DashboardQueries:
 
                 consumers_sampled = (
                     consumer_data['total_consumers'] or 0) + custom_consumers
+
+                # A brand's own dashboard (one tenant, a date window, no
+                # store/state/distributor/RMM narrowing) prints its consumers
+                # sampled from the SAME rows as the weekly chart under it and
+                # Program KPIs (recaps.consumer_breakdown.consumers_sampled_total):
+                # event-date window, approved only, events kept off the
+                # dashboard left out. The fold-in above windows on any of
+                # date/start_time/request date and kept those events, so Liquid
+                # Death's Home read 10,765 over 10,641 for the same 30 days.
+                single_tenant_id = service._resolve_filter_tenant_id(filters)
+                if client_only and single_tenant_id and not _narrowed(filters):
+                    from recaps.consumer_breakdown import consumers_sampled_total
+
+                    consumers_sampled = await sync_to_async(
+                        consumers_sampled_total
+                    )(single_tenant_id, start_date, end_date)
                 total_brand_aware = (
                     consumer_data['total_brand_aware'] or 0) + custom_brand_aware_n
                 total_willing_to_purchase = (
@@ -956,10 +989,28 @@ class DashboardQueries:
                 )
 
             if want_recent:
-                # Recent Events (upcoming events)
-                now = timezone.now()
-                recent_events_qs = base_queryset.filter(
-                    Q(start_time__gt=now) | Q(date__gt=now)
+                # Timeline: the events IN the selected range, newest first.
+                #
+                # This used to be base_queryset (already narrowed to the
+                # range) filtered to start_time/date > now. Every range the
+                # page offers (7d / 30d / 90d / YTD) ENDS today, so that
+                # intersection was "events later today" — the Timeline said
+                # "No data yet" for tenants with a full calendar of demos.
+                # Ordered on the same effective event date the KPI windows
+                # use (date → start_time → request.date); "today" is the ops
+                # calendar day, not the UTC date (TIME_ZONE=UTC flips to
+                # tomorrow at 4-5pm Pacific). Soft-deleted requests are
+                # already excluded from base_queryset.
+                from zoneinfo import ZoneInfo
+
+                from recaps.tenant_overview import _event_date_expr
+
+                ops_tz = ZoneInfo("America/Los_Angeles")
+                ops_today = timezone.now().astimezone(ops_tz).date()
+                recent_events_qs = base_queryset.annotate(
+                    _timeline_at=_event_date_expr("")
+                ).filter(
+                    _timeline_at__isnull=False
                 ).select_related(
                     'request__retailer'
                 ).prefetch_related(
@@ -969,7 +1020,16 @@ class DashboardQueries:
                             _visible("")
                         ).prefetch_related('consumer_engagements'),
                     )
-                )[:10]
+                ).annotate(
+                    _timeline_recapped=Count(
+                        'custom_recap',
+                        distinct=True,
+                        **(
+                            {"filter": _visible("custom_recap__")}
+                            if client_only else {}
+                        ),
+                    ),
+                ).order_by('-_timeline_at', '-id')[:10]
 
                 recent_events_list = await sync_to_async(list)(recent_events_qs)
 
@@ -983,7 +1043,8 @@ class DashboardQueries:
                     # Get consumers and intent rate from recaps
                     event_consumers = 0
                     event_willing = 0
-                    for recap in event.recaps.all():
+                    legacy_recaps = list(event.recaps.all())
+                    for recap in legacy_recaps:
                         for ce in recap.consumer_engagements.all():
                             event_consumers += ce.total_consumer or 0
                             event_willing += ce.willing_to_purchase_consumers or 0
@@ -993,20 +1054,30 @@ class DashboardQueries:
                         if event_consumers > 0 else 0.0
                     )
 
-                    # Event date
-                    event_date = event.date or event.start_time or event.request.date if event.request else None
-                    date_str = event_date.strftime(
-                        '%Y-%m-%d') if event_date else ''
+                    # The ops-calendar day the event happens on.
+                    when = event._timeline_at
+                    if timezone.is_aware(when):
+                        when = when.astimezone(ops_tz)
+                    event_day = when.date()
+                    recapped = bool(legacy_recaps) or event._timeline_recapped > 0
+                    if event_day > ops_today:
+                        status = "Upcoming"
+                    elif event_day == ops_today:
+                        status = "Today"
+                    elif recapped:
+                        status = "Recapped"
+                    else:
+                        status = "Recap pending"
 
                     recent_events.append(
                         types.RecentEvent(
                             id=str(event.id),
                             name=event.name,
-                            date=date_str,
+                            date=event_day.isoformat(),
                             location=retailer_name or '',
                             consumers=event_consumers,
                             intent_rate=round(intent_rate, 1),
-                            status="Upcoming"
+                            status=status,
                         )
                     )
                 if not recent_events:

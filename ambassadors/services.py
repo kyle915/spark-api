@@ -1878,6 +1878,11 @@ class AmbassadorQueriesService(SparkGraphQLMixin):
             q=q,
         )
 
+        if _selects_last_worked(info):
+            queryset = annotate_last_worked(
+                queryset, tenant_id=None if is_spark_request else tenant_id
+            )
+
         from utils.graphql.relay import connection_from_queryset_async
 
         return await connection_from_queryset_async(
@@ -1955,7 +1960,8 @@ class AmbassadorQueriesService(SparkGraphQLMixin):
                 # and college.
                 if filters.search:
                     queryset = queryset.filter(
-                        Q(user__email__icontains=filters.search)
+                        Q(phone__icontains=filters.search)
+                        | Q(user__email__icontains=filters.search)
                         | Q(user__first_name__icontains=filters.search)
                         | Q(user__last_name__icontains=filters.search)
                         | Q(address__icontains=filters.search)
@@ -4548,3 +4554,61 @@ def reset_ba_welcome_and_email(email: str) -> str:
 
     AmbassadorGeneratedPasswordMailer(user, password).send()
     return f"Welcome email sent to {user.email} (temp password, change forced)."
+
+
+_LAST_WORKED_FIELDS = frozenset({"lastWorkedMarket", "lastWorkedTenant"})
+
+
+def _selects_last_worked(info) -> bool:
+    """True when the request selects ``lastWorkedMarket`` / ``lastWorkedTenant``
+    anywhere under this field — the list only pays for the annotation when a
+    surface (the /talent roster) asks for it."""
+
+    def walk(selections) -> bool:
+        for sel in selections or ():
+            if getattr(sel, "name", None) in _LAST_WORKED_FIELDS:
+                return True
+            if walk(getattr(sel, "selections", None)):
+                return True
+        return False
+
+    try:
+        return walk(info.selected_fields)
+    except Exception:
+        return False
+
+
+def annotate_last_worked(queryset, tenant_id: int | None = None):
+    """Annotate each ambassador with its most recent approved shift on or
+    before now: ``_lw_location`` (market/city name), ``_lw_state`` (state
+    code) and ``_lw_tenant`` (brand name). Three correlated subqueries over
+    one page of rows — no per-row Python queries.
+
+    ``tenant_id`` scopes the shifts to one brand (a brand caller must never
+    learn which other brand a BA last worked for); None = every brand
+    (Ignite staff).
+    """
+    from django.db.models import OuterRef, Subquery
+    from django.db.models.functions import Coalesce
+
+    from .models import AmbassadorEvent
+
+    shifts = AmbassadorEvent.objects.filter(
+        ambassador_id=OuterRef("pk"), is_approved=True
+    ).annotate(
+        _when=Coalesce("event__date", "event__start_time")
+    ).filter(_when__lte=timezone.now())
+    if tenant_id is not None:
+        shifts = shifts.filter(tenant_id=tenant_id)
+    shifts = shifts.order_by("-_when", "-id")
+
+    def latest(path: str):
+        return Subquery(shifts.values(path)[:1])
+
+    return queryset.annotate(
+        _lw_location=latest("event__location__name"),
+        _lw_state=Coalesce(
+            latest("event__state__code"), latest("event__location__state__code")
+        ),
+        _lw_tenant=latest("tenant__name"),
+    )

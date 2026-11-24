@@ -48,6 +48,12 @@ class EventDashboardFiltersInput(BaseTenantInput):
     # recentEvents, goals. None/empty → full dashboard (current behavior).
     sections: list[str] | None = None
 
+    # Count the way a brand user is counted (approved recaps only) even when
+    # the caller is Ignite staff — set by the web app in Client view, so the
+    # preview shows the client's numbers instead of staff's (which include
+    # recaps still awaiting review). Never widens what a brand user sees.
+    client_view: bool | None = None
+
 
 @strawberry.input
 class RecapDashboardFiltersInput(BaseTenantInput):

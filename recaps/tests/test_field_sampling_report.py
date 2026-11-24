@@ -315,7 +315,62 @@ class TestSamplesPerHour(FieldSamplingReportTestBase):
             "hours": 0.0,
             "per_hour": None,
             "estimated": False,
+            "basis": "none",
         }
+
+    def test_headline_equals_sku_rows_when_only_per_sku_quantities_logged(self):
+        # The live bug: a template that logs per-SKU quantities and has NO
+        # "consumers sampled" field read 0 samples above a list of SKUs.
+        template = self._template("Per-SKU only")
+        e1 = self._event("Miami — Wynwood · 6/10", end_time=WHEN + timedelta(hours=4))
+        e2 = self._event(
+            "Austin — South Congress · 6/11", when=WHEN + timedelta(days=1)
+        )
+        r1 = self._custom_recap(e1, template)
+        r2 = self._custom_recap(e2, template)
+        cola, lemon = self._product("Cola"), self._product("Lemon Lime")
+        self._product_sample(r1, cola, 30)
+        self._product_sample(r1, lemon, 10)
+        self._product_sample(r2, cola, 25)
+        self._staff(e1, hours=4)
+
+        result = samples_per_hour(self.tenant.id, WINDOW_START, WINDOW_END)
+        rows = sku_breakdown(self.tenant.id, WINDOW_START, WINDOW_END)
+        assert rows["mode"] == "quantity"
+        assert result["samples"] == sum(i["total"] for i in rows["items"]) == 65
+        assert result["basis"] == "units"
+
+    def test_units_win_over_consumers_sampled(self):
+        # Consumers sampled (people) and SKU quantities (units) are different
+        # metrics; the headline follows the SKU rows' basis.
+        template = self._template("Both")
+        event = self._event("Miami — Wynwood · 6/10")
+        recap = self._custom_recap(event, template)
+        self._field_value(recap, "Consumers Sampled", "50")
+        self._product_sample(recap, self._product("Cola"), 80)
+        result = samples_per_hour(self.tenant.id, WINDOW_START, WINDOW_END)
+        assert result["samples"] == 80
+        assert result["basis"] == "units"
+
+    def test_event_without_metro_name_still_counts(self):
+        # Events not named "<Market> — <Corridor>" have no metro, but their
+        # samples happened — the SKU rows count them, so must the headline.
+        template = self._template("Plain names")
+        event = self._event("Vons Sparks")
+        recap = self._custom_recap(event, template)
+        self._product_sample(recap, self._product("Cola"), 12)
+        result = samples_per_hour(self.tenant.id, WINDOW_START, WINDOW_END)
+        assert result["samples"] == 12
+
+    def test_free_text_samples_given_fallback(self):
+        template = self._template("Free text")
+        event = self._event("Miami — Wynwood · 6/10")
+        recap = self._custom_recap(event, template)
+        self._field_value(recap, "Total Samples Given Out", "120")
+        self._field_value(recap, "Consumers Sampled", "40")
+        result = samples_per_hour(self.tenant.id, WINDOW_START, WINDOW_END)
+        assert result["samples"] == 120
+        assert result["basis"] == "samples_given"
 
 
 class TestLocationsHit(FieldSamplingReportTestBase):
@@ -514,3 +569,59 @@ class TestGenerateAiCalloutSummary:
         ):
             result = generate_ai_callout_summary("Feel Free", callouts, {"samples": 50})
         assert result is None
+
+
+# The full field set the web client requests (TenantFieldSamplingReportQuery),
+# run through the real client schema — SamplesPerHour(**data) would raise on
+# a field the type lacks, and the resolver swallows that into an all-zero
+# report, so only a schema-level test catches the drift.
+REPORT_Q = """
+query R($tenantId: ID!, $startDate: String!, $endDate: String!, $eventTypeId: ID, $market: String) {
+  tenantFieldSamplingReport(tenantId: $tenantId, startDate: $startDate, endDate: $endDate,
+                            eventTypeId: $eventTypeId, market: $market) {
+    samplesPerHour { samples hours perHour estimated basis }
+    ytdSkuBreakdown { mode items { product total } }
+    weekSkuBreakdown { mode items { product total } }
+    locationsHit { market corridor date address }
+    upcoming { total items { market corridor name startTime address } }
+    callouts { market corridor date text }
+  }
+}
+"""
+
+
+class TestFieldSamplingReportSchema(FieldSamplingReportTestBase):
+    @pytest.mark.asyncio
+    async def test_headline_matches_week_sku_rows_through_the_schema(self):
+        from asgiref.sync import sync_to_async
+
+        from config.schema_client import schema_clients
+
+        self.schema = schema_clients
+
+        def _seed():
+            template = self._template("Schema Tmpl")
+            event = self._event("Miami — Wynwood · 6/10")
+            recap = self._custom_recap(event, template)
+            self._product_sample(recap, self._product("Cola"), 30)
+            self._product_sample(recap, self._product("Lemon Lime"), 12)
+
+        await sync_to_async(_seed)()
+        res = await self._execute_mutation(
+            REPORT_Q,
+            {
+                "tenantId": str(self.tenant.id),
+                "startDate": "2026-06-08",
+                "endDate": "2026-06-14",
+            },
+            "/api/v1/graphql/clients",
+            user=self.admin,
+        )
+        assert res.errors is None
+        report = res.data["tenantFieldSamplingReport"]
+        week = report["weekSkuBreakdown"]
+        assert week["mode"] == "quantity"
+        assert report["samplesPerHour"]["samples"] == sum(
+            i["total"] for i in week["items"]
+        ) == 42
+        assert report["samplesPerHour"]["basis"] == "units"

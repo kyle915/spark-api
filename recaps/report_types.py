@@ -2224,6 +2224,10 @@ class SamplesPerHour:
     hours: float
     per_hour: float | None
     estimated: bool
+    # What ``samples`` counted: "units" (the sum of the SKU rows below it),
+    # "samples_given" / "consumers" (free-text recap counts, when the window
+    # has no per-SKU quantities) or "none".
+    basis: str = "none"
 
 
 @strawberry.type

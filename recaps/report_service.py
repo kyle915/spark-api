@@ -33,6 +33,7 @@ the call in ``sync_to_async``.
 
 from __future__ import annotations
 
+from utils.text_clip import clip_words
 import re
 import uuid
 from dataclasses import dataclass, field
@@ -463,7 +464,7 @@ def _clean_quote(text: str | None) -> str | None:
     if not cleaned:
         return None
     if len(cleaned) > MAX_QUOTE_CHARS:
-        cleaned = cleaned[: MAX_QUOTE_CHARS - 1].rstrip() + "…"
+        cleaned = clip_words(cleaned, MAX_QUOTE_CHARS)
     return cleaned
 
 
