@@ -48,6 +48,7 @@ wraps the snapshot front door in ``sync_to_async``.
 
 from __future__ import annotations
 
+from utils.text_clip import clip_words
 import re
 from datetime import datetime
 
@@ -201,7 +202,7 @@ def _clean_snippet(text: str | None) -> str | None:
     if not cleaned:
         return None
     if len(cleaned) > MAX_SNIPPET_CHARS:
-        cleaned = cleaned[: MAX_SNIPPET_CHARS - 1].rstrip() + "…"
+        cleaned = clip_words(cleaned, MAX_SNIPPET_CHARS)
     return cleaned
 
 

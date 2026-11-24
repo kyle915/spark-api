@@ -33,6 +33,7 @@ from events.models import Event
 from recaps.models import CustomFieldValue, CustomRecap, CustomRecapProductSample
 from recaps.tenant_overview import _filter_event_window
 from utils.ai_text import generate_summary
+from utils.text_clip import clip_words
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +65,7 @@ _FEEDBACK_NAME_RE_IREGEX = (
 _PRODUCT_CHOICE_NAME_RE = re.compile(r"which.*product|product.*sampl", re.IGNORECASE)
 
 MAX_CALLOUTS = 20
+MAX_CALLOUT_CHARS = 1000
 MAX_LOCATIONS = 100
 MAX_UPCOMING = 20
 
@@ -457,7 +459,10 @@ def field_callouts(
                 "market": m,
                 "corridor": corridor,
                 "date": evtdate.date().isoformat() if evtdate else None,
-                "text": text[:280],
+                # Word-boundary clip, long enough to show the whole note; the
+                # page folds anything long behind "Show more" (was text[:280],
+                # which cut a BA's quote mid-word with no ellipsis).
+                "text": clip_words(text, MAX_CALLOUT_CHARS),
             }
         )
 
