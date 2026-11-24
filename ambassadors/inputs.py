@@ -183,6 +183,12 @@ class AmbassadorFiltersInput:
     in_college: bool | None = None
     about_me: str | None = None  # Search by about_me (partial match)
     search: str | None = None  # General search across email, name, address
+    # Talent roster search, run server-side across every BA in scope (the
+    # page loads 50 at a time). Every word must match a first/last name or a
+    # real email; a query that reads as a phone number (3+ digits, phone
+    # punctuation only) matches phone digits in any format. Never matches a
+    # walk-up identity's synthetic checkin-<phone>@walkup.spark address.
+    talent_search: str | None = None
 
 
 @strawberry.input

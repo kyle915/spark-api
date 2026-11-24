@@ -1970,6 +1970,10 @@ class AmbassadorQueriesService(SparkGraphQLMixin):
                         | Q(college__icontains=filters.search)
                     )
 
+            talent_search = getattr(filters, "talent_search", None) if filters else None
+            if talent_search and talent_search.strip():
+                queryset = apply_talent_search(queryset, talent_search)
+
             if q:
                 queryset = queryset.filter(
                     Q(user__email__icontains=q)
@@ -1979,7 +1983,9 @@ class AmbassadorQueriesService(SparkGraphQLMixin):
                     | Q(about_me__icontains=q)
                 )
 
-            return queryset.order_by("-created_at")
+            # "-id" breaks created_at ties so offset cursors page without
+            # repeating or skipping a BA ("Load more" on /talent).
+            return queryset.order_by("-created_at", "-id")
 
         return await get_queryset()
 
@@ -4612,3 +4618,65 @@ def annotate_last_worked(queryset, tenant_id: int | None = None):
         ),
         _lw_tenant=latest("tenant__name"),
     )
+
+
+WALKUP_EMAIL_SUFFIX = "@walkup.spark"
+# A query made only of digits and phone punctuation reads as a phone number.
+_PHONE_QUERY_PATTERN = r"^[\d\s()+.\-]+$"
+
+
+def _phone_digits_expr():
+    """Digits of a BA's phone, as a DB expression: ``Ambassador.phone`` with
+    every non-digit removed, or — for a walk-up identity with no phone on
+    file — the digits of its ``checkin-<phone>@walkup.spark`` key. Only the
+    digits are ever compared, so the placeholder text itself never matches."""
+    from django.db.models import Case, CharField, F, Func, Value, When
+    from django.db.models.functions import Coalesce, NullIf
+
+    source = Coalesce(
+        NullIf(F("phone"), Value("")),
+        Case(
+            When(
+                user__email__iendswith=WALKUP_EMAIL_SUFFIX,
+                then=F("user__email"),
+            ),
+            default=Value(""),
+            output_field=CharField(),
+        ),
+        output_field=CharField(),
+    )
+    return Func(
+        source, Value(r"\D"), Value(""), Value("g"),
+        function="REGEXP_REPLACE", output_field=CharField(),
+    )
+
+
+def apply_talent_search(queryset, text: str):
+    """Narrow ``queryset`` (Ambassadors) to the /talent roster search.
+
+    * A phone-shaped query ("312-771", "(312) 771-9621", "+1 312 771 9621")
+      matches phone digits in any stored format; a leading US "1" is ignored.
+    * Otherwise every word must match a first name, last name or a real
+      email — synthetic walk-up addresses are excluded, so "walkup" or
+      "checkin" never match everyone who checked in by phone.
+
+    One SQL filter; no rows are loaded into Python.
+    """
+    import re
+
+    text = (text or "").strip()
+    digits = re.sub(r"\D", "", text)
+    if len(digits) >= 3 and re.match(_PHONE_QUERY_PATTERN, text):
+        if len(digits) == 11 and digits.startswith("1"):
+            digits = digits[1:]
+        return queryset.annotate(_phone_digits=_phone_digits_expr()).filter(
+            _phone_digits__contains=digits
+        )
+    real_email = ~Q(user__email__iendswith=WALKUP_EMAIL_SUFFIX)
+    for word in text.split():
+        queryset = queryset.filter(
+            Q(user__first_name__icontains=word)
+            | Q(user__last_name__icontains=word)
+            | (Q(user__email__icontains=word) & real_email)
+        )
+    return queryset
