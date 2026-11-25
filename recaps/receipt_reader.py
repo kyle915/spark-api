@@ -120,20 +120,26 @@ RECEIPT_SYSTEM_V3 = (
     "checks its own expense receipts. Report only what is printed in the "
     "image; use an empty string for anything not printed or not legible. If "
     "the image shows more than one paper receipt, read the one most fully in "
-    "frame. Never report a full card or account number: only the last four "
+    "frame, and count every separate paper receipt you can see in "
+    "receiptCount. Never report a full card or account number: only the last four "
     "digits of a card when they are printed. Never report cashier names or "
     "anything else about people. If you cannot clearly read the amounts, say so."
 )
 RECEIPT_USER_V3 = (
-    "Read this image. Give the final total paid (after tax), the store name, "
+    "Read this image. Give the final total paid (after tax): the balance "
+    "or amount charged (for example BALANCE, AMOUNT DUE, or the card / cash "
+    "tender line), never a savings, coupon or rewards figure such as TOTAL "
+    "SAVINGS, TOTAL COUPONS or Annual Card Savings. Give the store name, "
     "the store number if one is printed (for example 614 from 'H-E-B #614', "
     "'Store: 903' or '903-Total Wine'; never a register, ticket or phone "
     "number), the store's street address, city and 2-letter state if "
     "printed, the ticket / transaction / receipt number, the register "
-    "number, the purchase date (YYYY-MM-DD) and time (24-hour HH:MM).\n"
+    "number, the purchase date (YYYY-MM-DD; a two-digit year such as "
+    "11/24/26 means 2026) and time (24-hour HH:MM).\n"
     "List every purchased item in `items` with its name as printed, "
     "quantity, unit price and line amount (a discount or coupon is a "
-    "negative amount). Put bag fees, bottle deposits, CRV and similar fees "
+    "negative amount, including store savings and loyalty-card lines such as "
+    "'KROGER SAVINGS 0.29' printed without a minus sign). Put bag fees, bottle deposits, CRV and similar fees "
     "in `fees` (their sum), not in items. Give the printed subtotal and "
     "sales tax. Set isBrandProduct on an item when it is one of the brand's "
     "products listed below. Give cardLast4 only if exactly four card digits "
@@ -143,7 +149,10 @@ RECEIPT_USER_V3 = (
     "totalLegible false when the total is cut off or not in this photo (for "
     "example the top half of a long receipt). Give your confidence from 0 to "
     "1 that the total, store number and ticket number are read correctly. "
-    "If this is neither a receipt nor card activity, set isReceipt false."
+    "If this is neither a receipt nor card activity, set isReceipt false. "
+    "Set receiptCount to how many separate paper receipts appear in the "
+    "photo, even partly (1 for a single receipt or a card-activity "
+    "screenshot)."
 )
 _STR = {"type": "string"}
 _RECEIPT_SCHEMA_V3 = {
@@ -153,6 +162,7 @@ _RECEIPT_SCHEMA_V3 = {
         "isReceipt", "totalLegible", "total", "merchant", "storeNumber", "date",
         "lines", "address", "city", "state", "ticketNumber", "register", "time",
         "items", "subtotal", "fees", "tax", "cardLast4", "confidence",
+        "receiptCount",
     ],
     "properties": {
         **_RECEIPT_SCHEMA["properties"],
@@ -182,6 +192,7 @@ _RECEIPT_SCHEMA_V3 = {
         "tax": _STR,
         "cardLast4": _STR,
         "confidence": {"type": "number"},
+        "receiptCount": {"type": "integer"},
     },
 }
 
@@ -477,6 +488,22 @@ def check_arithmetic(
     )
 
 
+def parse_receipt_count(parsed: dict | None) -> int:
+    """How many separate paper receipts the model saw in the photo (≥ 1).
+
+    Readings stored before the model was asked report nothing and count as 1."""
+    if not isinstance(parsed, dict):
+        return 1
+    raw = parsed.get("receiptCount")
+    if isinstance(raw, bool):
+        return 1
+    try:
+        count = int(raw)
+    except (TypeError, ValueError):
+        return 1
+    return max(1, min(count, 20))
+
+
 def interpret_detail(parsed: dict | None, tokens: set[str] | None = None) -> dict:
     """Model output → the v3 fields (address, ticket, items, fees, tax,
     card last four, confidence, arithmetic, duplicate keys). Pure."""
@@ -486,7 +513,7 @@ def interpret_detail(parsed: dict | None, tokens: set[str] | None = None) -> dic
         "register": "", "purchase_time": "", "line_items": [], "subtotal": None,
         "fees": None, "tax": None, "card_last4": "", "confidence": None,
         "arithmetic_ok": None, "arithmetic_note": "",
-        "fingerprint": "", "ticket_key": "", "loose_key": "",
+        "fingerprint": "", "ticket_key": "", "loose_key": "", "receipt_count": 1,
     }
     if not isinstance(parsed, dict) or parsed.get("isReceipt") is not True:
         return empty
@@ -565,6 +592,7 @@ def interpret_detail(parsed: dict | None, tokens: set[str] | None = None) -> dic
         "confidence": confidence,
         "arithmetic_ok": ok,
         "arithmetic_note": note[:200],
+        "receipt_count": parse_receipt_count(parsed),
         **keys,
     }
 

@@ -1273,6 +1273,7 @@ class RecapFlag(models.Model):
     KIND_LATE_STAFF_FILING = "late_staff_filing"
     KIND_DUPLICATE_PHOTO = "duplicate_photo"
     KIND_RECEIPT_MATH = "receipt_math"
+    KIND_MULTIPLE_RECEIPTS = "multiple_receipts"
     KIND_CHOICES = [
         (KIND_DUPLICATE_RECEIPT, "Duplicate receipt"),
         (KIND_STORE_MISMATCH, "Receipt from another store"),
@@ -1280,6 +1281,7 @@ class RecapFlag(models.Model):
         (KIND_LATE_STAFF_FILING, "Filed late by staff"),
         (KIND_DUPLICATE_PHOTO, "Duplicate photo"),
         (KIND_RECEIPT_MATH, "Receipt doesn't add up"),
+        (KIND_MULTIPLE_RECEIPTS, "Several receipts in one photo"),
     ]
     SEVERITY_HIGH = "high"
     SEVERITY_MEDIUM = "medium"

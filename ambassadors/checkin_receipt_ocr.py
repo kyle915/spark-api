@@ -12,6 +12,7 @@ calls :func:`read_checkin_receipt`:
 2. **Non-blocking pre-submit advisories** — checks:
    * ``store_mismatch``: receipt merchant / store # vs shift venue;
    * ``date_mismatch``: printed receipt date vs shift calendar date;
+   * ``multiple_receipts``: more than one paper receipt in a single photo;
    * ``duplicate_receipt``: image SHA-256 or OCR duplicate hashes
      (``fingerprint``, ``ticket_key``, ``loose_key``) against prior submissions.
 
@@ -665,6 +666,25 @@ def check_date_mismatch(reading: dict, *, event) -> dict | None:
     }
 
 
+def check_multiple_receipts(reading: dict) -> dict | None:
+    """Several paper receipts in one photo: only one of them gets read, so ask
+    for one photo per receipt."""
+    try:
+        count = int((reading or {}).get("receipt_count") or 1)
+    except (TypeError, ValueError):
+        count = 1
+    if count < 2:
+        return None
+    return {
+        "kind": "multiple_receipts",
+        "message": (
+            f"This photo shows {count} receipts. Spark can only read one per "
+            "photo, so take a separate photo of each receipt."
+        ),
+        "receiptCount": count,
+    }
+
+
 def _own_shift_recap_ids(event, ambassador) -> tuple[set[int], set[int]]:
     """``(custom_recap_ids, legacy_recap_ids)`` already attached to this BA's
     current shift (plus co-activation slices), so re-uploads never self-flag."""
@@ -853,6 +873,10 @@ def read_checkin_receipt(
 
         if not isinstance(reading, dict) or reading.get("status") == "not_a_receipt":
             return _unreadable_payload(advisories=advisories, sha256=image_sha)
+
+        multi_adv = check_multiple_receipts(reading)
+        if multi_adv is not None:
+            advisories.append(multi_adv)
 
         store_adv = check_store_mismatch(
             reading,

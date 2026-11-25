@@ -28,6 +28,8 @@ Rules (kinds):
   inside one recap are ``low``.
 * ``receipt_math`` — a receipt's items, fees and tax do not add up to its
   printed total.
+* ``multiple_receipts`` — one photo shows several paper receipts; only one of
+  them was read, so the others are missing from spend and duplicate checks.
 
 Co-activation slices share photos and receipts on purpose and are never
 compared with each other.
@@ -62,6 +64,7 @@ KIND_LABELS = {
     "late_staff_filing": "Filed late by staff",
     "duplicate_photo": "Duplicate photo",
     "receipt_math": "Receipt doesn't add up",
+    "multiple_receipts": "Several receipts in one photo",
 }
 
 _ACTIVITY_FIELD_WORDS = (
@@ -429,6 +432,28 @@ def receipt_math_flags(readings) -> list[dict]:
     return flags
 
 
+def multiple_receipt_flags(readings) -> list[dict]:
+    from recaps.receipt_reader import parse_receipt_count
+
+    flags = []
+    for r in readings:
+        count = parse_receipt_count(r.raw if isinstance(r.raw, dict) else None)
+        if count < 2:
+            continue
+        flags.append(
+            _flag(
+                "multiple_receipts",
+                "low",
+                f"One photo shows {count} receipts, but only one was read. "
+                "Crop or re-upload the others so their spend is counted.",
+                f"file:{r.custom_recap_file_id}",
+                fileId=r.custom_recap_file_id,
+                receiptCount=count,
+            )
+        )
+    return flags
+
+
 def recap_activity(recap) -> list[str]:
     """What the recap reports doing: "120 engagements", "Consumers sampled
     40". Empty when it reports nothing."""
@@ -767,6 +792,7 @@ def compute_recap_flags(recap_id: int) -> tuple[list[dict], set[int]]:
         if f["details"].get("fileId") not in copy_flagged
     )
     flags.extend(receipt_math_flags(readings))
+    flags.extend(multiple_receipt_flags(readings))
     flags.extend(short_clock_flags(recap))
     flags.extend(late_staff_filing_flags(recap))
     flags.extend(duplicate_photo_flags(recap, family, skip_other_receipts=others))
