@@ -15,6 +15,8 @@ name: Read recap receipts
 # to do it for real. Use tenant_id + date_from/date_to (event dates) to
 # backfill one program; reread_older re-reads receipts read before reader v3
 # so they get ticket numbers and line items.
+# To correct one misread: run find_merchant (+ dates) to get the photo's
+# file id, then run file_ids with dry_run unticked.
 #
 # Secret-gated via `X-Cron-Secret` (shared INTERNAL_CRON_SECRET).
 
@@ -53,6 +55,14 @@ on:
         required: false
         default: false
         type: boolean
+      file_ids:
+        description: "Re-read exactly these receipt photo ids (comma-separated), even if already read"
+        required: false
+        default: ""
+      find_merchant:
+        description: "Read-only lookup: list photos already read whose store contains this text (use with dates); reads nothing"
+        required: false
+        default: ""
       flags:
         description: "Flag check: on (when RECEIPT_FLAGS_ENABLED), off, or force (dry runs only: preview flags even while switched off)"
         required: false
@@ -82,13 +92,15 @@ jobs:
           LIMIT: ${{ github.event.inputs.limit || '40' }}
           REREAD_OLDER: ${{ github.event.inputs.reread_older || 'false' }}
           FLAGS: ${{ github.event.inputs.flags || 'on' }}
+          FILE_IDS: ${{ github.event.inputs.file_ids || '' }}
+          FIND_MERCHANT: ${{ github.event.inputs.find_merchant || '' }}
         run: |
           set -euo pipefail
           if [ -z "$CRON_SECRET" ]; then
             echo "::error::INTERNAL_CRON_SECRET is not set in repo secrets."
             exit 1
           fi
-          echo "dry_run=$DRY_RUN tenant_id=${TENANT_ID:-all} dates=${DATE_FROM:-}..${DATE_TO:-} since_days=$SINCE_DAYS limit=$LIMIT reread_older=$REREAD_OLDER flags=$FLAGS"
+          echo "dry_run=$DRY_RUN tenant_id=${TENANT_ID:-all} dates=${DATE_FROM:-}..${DATE_TO:-} since_days=$SINCE_DAYS limit=$LIMIT reread_older=$REREAD_OLDER flags=$FLAGS file_ids=${FILE_IDS:-} find_merchant=${FIND_MERCHANT:-}"
           STATUS=$(curl -sS -o /tmp/resp.json -w '%{http_code}' \
             --max-time 900 \
             -X POST "$CRON_URL" \
@@ -100,7 +112,9 @@ jobs:
             --data-urlencode "since_days=$SINCE_DAYS" \
             --data-urlencode "limit=$LIMIT" \
             --data-urlencode "reread_older=$REREAD_OLDER" \
-            --data-urlencode "flags=$FLAGS")
+            --data-urlencode "flags=$FLAGS" \
+            --data-urlencode "file_ids=$FILE_IDS" \
+            --data-urlencode "find_merchant=$FIND_MERCHANT")
           echo "HTTP $STATUS"
           cat /tmp/resp.json
           echo
