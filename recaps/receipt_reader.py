@@ -695,6 +695,7 @@ def pending_receipt_files(
     reread_older: bool = False,
     date_from: date | None = None,
     date_to: date | None = None,
+    file_ids: list[int] | None = None,
 ):
     """Receipt-bucket image files on custom recaps that still need a read,
     newest first: no reading yet, queued (``pending``), or ``failed`` with
@@ -703,6 +704,16 @@ def pending_receipt_files(
     from django.db.models import Q
 
     from recaps.models import CustomRecapFile, ReceiptReading
+
+    if file_ids:
+        # Named photos are read again whatever their status or date: the
+        # caller is correcting a reading by hand.
+        qs = CustomRecapFile.objects.filter(
+            _receipt_file_q(), id__in=list(file_ids), custom_recap__isnull=False
+        ).select_related("custom_recap")
+        if tenant_id:
+            qs = qs.filter(custom_recap__tenant_id=tenant_id)
+        return qs.order_by("-id")
 
     unread = (
         Q(receipt_reading__isnull=True)
@@ -729,6 +740,47 @@ def pending_receipt_files(
     if tenant_id:
         qs = qs.filter(custom_recap__tenant_id=tenant_id)
     return qs.order_by("-id")
+
+
+def _file_summary(recap_file) -> dict:
+    """One receipt photo and its current reading, for a dry run. No images,
+    no people: ids, store, date and amounts only."""
+    reading = getattr(recap_file, "receipt_reading", None)
+    return {
+        "fileId": recap_file.id,
+        "recapId": recap_file.custom_recap_id,
+        "tenantId": recap_file.custom_recap.tenant_id,
+        "status": getattr(reading, "status", None),
+        "merchant": getattr(reading, "merchant", ""),
+        "receiptDate": getattr(reading, "receipt_date", ""),
+        "total": str(reading.total) if reading is not None and reading.total is not None else None,
+        "subtotal": str(reading.subtotal) if reading is not None and reading.subtotal is not None else None,
+    }
+
+
+def find_read_receipts(
+    *,
+    merchant: str,
+    tenant_id: int | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    limit: int = 40,
+) -> list[dict]:
+    """Receipt photos already read whose store name contains ``merchant``,
+    within an event-date window. Read-only: finds the file id to pass to
+    ``file_ids`` when a reading needs correcting."""
+    from recaps.models import CustomRecapFile
+
+    qs = CustomRecapFile.objects.filter(
+        _receipt_file_q(),
+        custom_recap__isnull=False,
+        receipt_reading__merchant__icontains=merchant,
+    ).select_related("custom_recap", "receipt_reading")
+    if date_from or date_to:
+        qs = qs.filter(_event_window_q("custom_recap__", date_from, date_to))
+    if tenant_id:
+        qs = qs.filter(custom_recap__tenant_id=tenant_id)
+    return [_file_summary(f) for f in qs.order_by("-id")[:limit]]
 
 
 def daily_cap() -> int:
@@ -799,8 +851,13 @@ def read_pending_receipts(
     dry_run: bool = False,
     date_from: date | None = None,
     date_to: date | None = None,
+    file_ids: list[int] | None = None,
 ) -> dict:
     """Read up to ``limit`` unread receipt images and store the results.
+
+    ``file_ids`` reads exactly those receipt photos again, even ones already
+    read (to correct a misread); the dry run then lists them with their
+    current reading.
 
     Stops at the daily cap (``RECEIPT_READER_DAILY_MAX_READS`` model calls
     per UTC day). ``dry_run`` reads nothing and reports what would be read.
@@ -817,7 +874,7 @@ def read_pending_receipts(
     }
     pending = pending_receipt_files(
         tenant_id=tenant_id, since_days=since_days, reread_older=reread_older,
-        date_from=date_from, date_to=date_to,
+        date_from=date_from, date_to=date_to, file_ids=file_ids,
     )
     cap = daily_cap()
     used = model_calls_today()
@@ -828,10 +885,13 @@ def read_pending_receipts(
     }
     if dry_run:
         waiting = pending.count()
-        return {
+        out = {
             **counts, **report_extra, "ai_unavailable": False,
             "would_read": min(waiting, limit, remaining), "waiting": waiting,
         }
+        if file_ids:
+            out["files"] = [_file_summary(f) for f in pending[:limit]]
+        return out
     budget = min(limit, remaining)
     if budget <= 0:
         return {**counts, **report_extra, "capped": True, "ai_unavailable": False}
