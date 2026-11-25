@@ -386,6 +386,24 @@ class TestCheckinReceiptOcr(AmbassadorsGraphQLTestCase):
         assert "Oct 12, 2026" in date_msg
         assert "Oct 16, 2026" in date_msg
 
+    def test_asks_for_one_photo_per_receipt_when_several_are_in_frame(
+        self, monkeypatch
+    ):
+        self._mock_vision(monkeypatch, {**_vision_receipt(), "receiptCount": 2})
+        body = self._post().json()
+        assert body["available"] is True
+        assert body["proposedSpend"] == "42.80"
+        multi = [a for a in body["advisories"] if a["kind"] == "multiple_receipts"]
+        assert len(multi) == 1
+        assert multi[0]["receiptCount"] == 2
+        assert "2 receipts" in multi[0]["message"]
+        assert "separate photo" in multi[0]["message"]
+
+    def test_single_receipt_count_adds_no_advisory(self, monkeypatch):
+        self._mock_vision(monkeypatch, {**_vision_receipt(), "receiptCount": 1})
+        body = self._post().json()
+        assert body["advisories"] == []
+
     def test_flags_store_number_mismatch_on_same_chain(self, monkeypatch):
         self._mock_vision(
             monkeypatch,

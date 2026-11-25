@@ -25,6 +25,7 @@ from recaps.receipt_reader import (
     check_arithmetic,
     interpret_detail,
     parse_card_last4,
+    parse_receipt_count,
     parse_time,
     queue_recap_receipts,
     read_pending_receipts,
@@ -122,6 +123,15 @@ def test_card_numbers_are_never_kept():
     assert parse_card_last4("4111111111111111") == ""
     scrubbed = scrub_card_numbers({"x": "card 4111 1111 1111 1111 ok", "upc": "850060125413"})
     assert scrubbed == {"x": "card [card] ok", "upc": "850060125413"}
+
+
+def test_receipt_count_defaults_to_one():
+    assert parse_receipt_count(None) == 1
+    assert parse_receipt_count(receipt()) == 1
+    assert parse_receipt_count({**receipt(), "receiptCount": 3}) == 3
+    assert parse_receipt_count({**receipt(), "receiptCount": 0}) == 1
+    assert parse_receipt_count({**receipt(), "receiptCount": "x"}) == 1
+    assert interpret_detail({**receipt(), "receiptCount": 2}, TOKENS)["receipt_count"] == 2
 
 
 def test_parse_time():
@@ -325,6 +335,20 @@ class TestReceiptAudit(AmbassadorsGraphQLTestCase):
         self.read_all({"m.jpg": receipt(total="72.70", subtotal="")})
         flags, _ = compute_recap_flags(r.id)
         assert [f["severity"] for f in flags if f["kind"] == "receipt_math"] == ["low"]
+
+    def test_multiple_receipts_flag(self):
+        r = self.recap("Total Wine #903 Palm Beach Gardens", store_number="903")
+        self.file(r, "two.jpg")
+        self.file(r, "one.jpg")
+        self.read_all({
+            "two.jpg": {**receipt(), "receiptCount": 2},
+            "one.jpg": {**receipt(ticket="318281"), "receiptCount": 1},
+        })
+        flags, _ = compute_recap_flags(r.id)
+        multi = [f for f in flags if f["kind"] == "multiple_receipts"]
+        assert len(multi) == 1
+        assert multi[0]["severity"] == "low"
+        assert "2 receipts" in multi[0]["explanation"]
 
     def test_short_clock_only_when_the_recap_reports_activity(self):
         user = self.create_user(username="ba-1", email="ba-1@test.com", role=self.roles["ambassador"])
