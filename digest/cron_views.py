@@ -3510,7 +3510,10 @@ class ReadRecapReceiptsView(View):
     to skip the flag check, `force` to check even when RECEIPT_FLAGS_ENABLED
     is off), flag_hours (recaps filed or updated in the last N hours, default
     2; a date range replaces it), flag_limit (default 300). The daily cost
-    cap is RECEIPT_READER_DAILY_MAX_READS.
+    cap is RECEIPT_READER_DAILY_MAX_READS. file_ids (comma-separated
+    CustomRecapFile ids) reads exactly those photos again, even if already
+    read, to correct a misread. find_merchant (read-only) lists photos already
+    read whose store contains the text, with their file ids, and reads nothing.
     """
 
     def _run(self, request: HttpRequest) -> HttpResponse:
@@ -3550,6 +3553,28 @@ class ReadRecapReceiptsView(View):
         date_from, date_to = _date("date_from"), _date("date_to")
         if (_param("date_from") and date_from is None) or (_param("date_to") and date_to is None):
             return JsonResponse({"ok": False, "error": "bad-date", "detail": "Use YYYY-MM-DD."}, status=400)
+        file_ids: list[int] = []
+        for part in _param("file_ids").replace(" ", "").split(","):
+            if not part:
+                continue
+            if not part.isdigit():
+                return JsonResponse(
+                    {"ok": False, "error": "bad-file-ids", "detail": "Comma-separated file ids."},
+                    status=400,
+                )
+            file_ids.append(int(part))
+        find_merchant = _param("find_merchant")
+        if find_merchant:
+            from recaps.receipt_reader import find_read_receipts
+
+            return JsonResponse({
+                "ok": True,
+                "found": find_read_receipts(
+                    merchant=find_merchant[:60], tenant_id=tenant_id,
+                    date_from=date_from, date_to=date_to,
+                    limit=max(1, min(_int("limit", 40) or 40, 200)),
+                ),
+            })
         try:
             report = read_pending_receipts(
                 tenant_id=tenant_id,
@@ -3559,6 +3584,7 @@ class ReadRecapReceiptsView(View):
                 dry_run=dry_run,
                 date_from=date_from,
                 date_to=date_to,
+                file_ids=file_ids or None,
             )
         except Exception as exc:  # noqa: BLE001 — surface to caller
             logger.exception("Read recap receipts cron failed")

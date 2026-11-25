@@ -336,6 +336,28 @@ class TestReceiptAudit(AmbassadorsGraphQLTestCase):
         flags, _ = compute_recap_flags(r.id)
         assert [f["severity"] for f in flags if f["kind"] == "receipt_math"] == ["low"]
 
+    def test_file_ids_rereads_a_photo_that_was_already_read(self):
+        from recaps.receipt_reader import find_read_receipts
+
+        r = self.recap("Total Wine #903 Palm Beach Gardens", store_number="903")
+        f = self.file(r, "misread.jpg")
+        other = self.file(r, "other.jpg")
+        self.read_all({"misread.jpg": receipt(total="3.48"), "other.jpg": receipt(ticket="9")})
+        assert recap_models.ReceiptReading.objects.get(custom_recap_file=f).total == Decimal("3.48")
+
+        found = find_read_receipts(merchant="total wine")
+        assert {row["fileId"] for row in found} == {f.id, other.id}
+
+        # Nothing is unread, so a normal run reads nothing.
+        assert self.read_all({})["read"] == 0
+        dry = self.read_all({}, file_ids=[f.id], dry_run=True)
+        assert [row["fileId"] for row in dry["files"]] == [f.id]
+        assert dry["files"][0]["total"] == "3.48"
+
+        report = self.read_all({"misread.jpg": receipt(total="62.70")}, file_ids=[f.id])
+        assert report["read"] == 1
+        assert recap_models.ReceiptReading.objects.get(custom_recap_file=f).total == Decimal("62.70")
+
     def test_multiple_receipts_flag(self):
         r = self.recap("Total Wine #903 Palm Beach Gardens", store_number="903")
         self.file(r, "two.jpg")
