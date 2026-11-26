@@ -155,6 +155,8 @@ class _RecapFacts:
         "products_sold",
         "cans_sold",
         "packs_sold",
+        "max_audience_subcount",
+        "audience_pair_max",
     )
 
     def __init__(self):
@@ -168,6 +170,8 @@ class _RecapFacts:
         self.products_sold: int | None = None
         self.cans_sold: int | None = None
         self.packs_sold: int | None = None
+        self.max_audience_subcount: int | None = None
+        self.audience_pair_max: int | None = None
 
     def numeric_values(self) -> list[int]:
         """The present (non-None) numeric KPI values, for the all-zero check."""
@@ -255,10 +259,29 @@ def _gather_legacy_facts(recap) -> _RecapFacts:
     # consumers_reached: sum of the engagement rows' total_consumer (a recap can
     # have several ConsumerEngagements rows). None when there are no rows at all
     # so "no engagement data" reads as missing rather than a real zero.
-    consumers = ConsumerEngagements.objects.filter(recap=recap).aggregate(
-        total=Sum("total_consumer")
-    )["total"]
-    facts.consumers_reached = consumers
+    eng_agg = ConsumerEngagements.objects.filter(recap=recap).aggregate(
+        total=Sum("total_consumer"),
+        first_time=Sum("first_time_consumers"),
+        brand_aware=Sum("brand_aware_consumers"),
+        willing=Sum("willing_to_purchase_consumers"),
+        not_willing=Sum("not_willing_consumers"),
+    )
+    facts.consumers_reached = eng_agg["total"]
+    sub_vals = [
+        v
+        for v in (
+            eng_agg["first_time"],
+            eng_agg["brand_aware"],
+            eng_agg["willing"],
+            eng_agg["not_willing"],
+        )
+        if v is not None
+    ]
+    if sub_vals:
+        facts.max_audience_subcount = max(sub_vals)
+        ft_ba = (eng_agg["first_time"] or 0) + (eng_agg["brand_aware"] or 0)
+        w_nw = (eng_agg["willing"] or 0) + (eng_agg["not_willing"] or 0)
+        facts.audience_pair_max = max(ft_ba, w_nw)
 
     samples = ProductSamples.objects.filter(recap=recap).aggregate(
         total=Sum("quantity")
@@ -320,6 +343,11 @@ def _gather_custom_facts(custom_recap) -> _RecapFacts:
     products_sold = 0
     cans_sold = 0
     packs_sold = 0
+    first_time_sum = 0
+    brand_aware_sum = 0
+    willing_sum = 0
+    not_willing_sum = 0
+    saw_audience_sub = False
     saw_consumers = False
     saw_sold = False
     for name, value in pairs:
@@ -327,6 +355,21 @@ def _gather_custom_facts(custom_recap) -> _RecapFacts:
         # Feedback snippet: field NAME reads like feedback and value is text.
         if _CUSTOM_FEEDBACK_NAME_RE.search(label) and not _is_blank(value):
             texts.append(value.strip())
+        low_all = label.lower()
+        sub_parsed = _leading_int(value)
+        if sub_parsed is not None and sub_parsed >= 0:
+            if "not" in low_all and "willing" in low_all and "purchase" in low_all:
+                not_willing_sum += sub_parsed
+                saw_audience_sub = True
+            elif "willing" in low_all and "purchase" in low_all:
+                willing_sum += sub_parsed
+                saw_audience_sub = True
+            elif "first time" in low_all or "first-time" in low_all:
+                first_time_sum += sub_parsed
+                saw_audience_sub = True
+            elif "knew about" in low_all or "brand aware" in low_all or "already aware" in low_all:
+                brand_aware_sum += sub_parsed
+                saw_audience_sub = True
         decided = metric_mapping.confirmed_metric_of(name)
         if decided is not None:
             # Staff confirmed this field: read it by that, not by wording.
@@ -365,6 +408,14 @@ def _gather_custom_facts(custom_recap) -> _RecapFacts:
     facts.feedback_texts = texts
 
     facts.consumers_reached = consumers_reached if saw_consumers else None
+    if saw_audience_sub:
+        facts.max_audience_subcount = max(
+            first_time_sum, brand_aware_sum, willing_sum, not_willing_sum
+        )
+        facts.audience_pair_max = max(
+            first_time_sum + brand_aware_sum,
+            willing_sum + not_willing_sum,
+        )
     # products_sold for custom recaps is approximated by the cans+packs the
     # report rolls into products_sold (there is no separate sold-units field in
     # the minimal custom shape); None when no sold-ish field was present.
@@ -519,6 +570,24 @@ def _check_negative(facts: _RecapFacts) -> dict | None:
     return None
 
 
+def _check_audience_exceeds_sampled(facts: _RecapFacts) -> dict | None:
+    """Audience sub-counts (willing / not-willing, first-time / brand-aware)
+    exceeding total consumers sampled -> medium contradiction flag."""
+    sampled = facts.consumers_reached
+    if sampled is None or sampled <= 0:
+        return None
+    sub_max = facts.max_audience_subcount
+    pair_max = facts.audience_pair_max
+    offending = max(sub_max or 0, pair_max or 0)
+    if offending > sampled:
+        return _flag(
+            "audience_exceeds_sampled",
+            f"Audience breakdown ({offending}) exceeds consumers sampled ({sampled}).",
+            "medium",
+        )
+    return None
+
+
 # The deterministic check pipeline, run in order. Each is a pure
 # ``_RecapFacts -> dict | None``.
 _DETERMINISTIC_CHECKS = (
@@ -527,6 +596,7 @@ _DETERMINISTIC_CHECKS = (
     _check_all_numbers_missing,
     _check_all_zero,
     _check_sold_exceeds_sampled,
+    _check_audience_exceeds_sampled,
     _check_implausible,
     _check_negative,
 )

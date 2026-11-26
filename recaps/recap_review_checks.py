@@ -153,7 +153,10 @@ def _file_rows(qs, blob_attr: str) -> list[tuple[str, str]]:
         except Exception:
             blob = str(field_file)
         category = getattr(f, "file_recap_category", None)
-        rows.append((blob, (getattr(category, "name", "") or "")))
+        cat_name = (getattr(category, "name", "") or "").strip()
+        if not cat_name:
+            cat_name = (getattr(f, "name", "") or "").strip()
+        rows.append((blob, cat_name))
     return rows
 
 
@@ -414,9 +417,28 @@ def _check_photo_buckets(facts: _Facts, buckets: list[dict]) -> dict:
     if not required:
         return _na("photo_buckets", label)
     counts: Counter = Counter()
+    req_norms = {_norm(name) for name, _ in required}
     for blob, category in facts.files:
         if blob and _IMAGE_EXT_RE.search(blob) and category:
-            counts[_norm(category)] += 1
+            norm_cat = _norm(category)
+            counts[norm_cat] += 1
+            if norm_cat not in req_norms:
+                for req_norm in req_norms:
+                    if req_norm and req_norm in norm_cat:
+                        counts[req_norm] += 1
+    # Also count photos stored inside custom-template image/photo fields whose
+    # field name matches a required bucket (e.g. "Consumer Sampling Pictures").
+    for field_name, field_val, field_type in facts.field_pairs:
+        norm_field = _norm(field_name)
+        if not norm_field or norm_field not in req_norms or not field_val:
+            continue
+        low_type = (field_type or "").lower()
+        parts = [p.strip() for p in re.split(r"[\n,;]+", str(field_val)) if p.strip()]
+        img_hits = [p for p in parts if _IMAGE_EXT_RE.search(p)]
+        if img_hits:
+            counts[norm_field] = max(counts[norm_field], len(img_hits))
+        elif ("image" in low_type or "photo" in low_type) and parts:
+            counts[norm_field] = max(counts[norm_field], len(parts))
     missing = [
         name for name, minimum in required if counts.get(_norm(name), 0) < minimum
     ]
