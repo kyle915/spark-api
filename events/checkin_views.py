@@ -1272,6 +1272,7 @@ def public_checkin_shelf_coach(request: HttpRequest, code: str) -> HttpResponse:
         image = b""
 
     from ambassadors.checkin_web import _event_products
+    from recaps.shelf_coach import MODE_SHELF, detect_coach_mode
 
     brand = (getattr(getattr(event, "tenant", None), "name", None) or "").strip()
     product_names = [
@@ -1279,11 +1280,16 @@ def public_checkin_shelf_coach(request: HttpRequest, code: str) -> HttpResponse:
         for p in (_event_products(event) or [])
         if (p.get("name") or "").strip()
     ]
+    coach_mode = detect_coach_mode(
+        data.get("mode"),
+        data.get("bucketName") or data.get("bucket_name"),
+    )
     result = coach_shelf_photo(
         image,
         brand=brand,
         product_names=product_names,
         content_type=content_type,
+        mode=coach_mode,
     )
     answer = result.pop("_answer", None) if isinstance(result, dict) else None
 
@@ -1292,7 +1298,12 @@ def public_checkin_shelf_coach(request: HttpRequest, code: str) -> HttpResponse:
     # Only persist real read/unreadable answers for THIS BA's shelf photo —
     # never another ambassador's file on the same event, and never burn cron
     # attempts on a transient vision failure (available=false / no _answer).
-    if result.get("available") and answer is not None and file_raw not in (None, ""):
+    if (
+        coach_mode == MODE_SHELF
+        and result.get("available")
+        and answer is not None
+        and file_raw not in (None, "")
+    ):
         try:
             file_id = int(str(file_raw).strip())
         except (TypeError, ValueError):

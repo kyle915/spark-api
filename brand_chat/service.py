@@ -294,7 +294,22 @@ def build_sources(runs: list[dict], used_names: list[str]) -> list[dict]:
     out: dict[str, dict] = {}
     for run in chosen:
         tool = CHAT_TOOLS[run["name"]]
-        span = _span(run["args"], run["payload"])
+        payload = run["payload"] if isinstance(run.get("payload"), dict) else {}
+        if (
+            tool.name == "propose_demo_wave"
+            and payload.get("wave_url")
+            and int(payload.get("proposed_count") or 0) > 0
+        ):
+            n = int(payload["proposed_count"])
+            out[tool.name] = {
+                "tool": tool.name,
+                "label": f"Create {n}-store wave",
+                "detail": str(payload.get("wave_summary") or ""),
+                "link": str(payload["wave_url"]),
+                "link_label": tool.link_label,
+            }
+            continue
+        span = _span(run["args"], payload)
         held = out.setdefault(
             tool.name,
             {
@@ -312,6 +327,7 @@ def build_sources(runs: list[dict], used_names: list[str]) -> list[dict]:
 
 _STORE_TOOLS = {
     "get_store_performance",
+    "propose_demo_wave",
     "list_recaps",
     "get_consumer_breakdown",
     "get_store_recommendations",
