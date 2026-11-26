@@ -1794,6 +1794,14 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
         await sync_to_async(kick_recap_feedback_extract, thread_sensitive=True)(
             custom_recap.id, True
         )
+        try:
+            from recaps.store_signals import extract_and_save_recap_store_signals
+
+            await sync_to_async(extract_and_save_recap_store_signals, thread_sensitive=True)(
+                custom_recap.id
+            )
+        except Exception:  # noqa: BLE001
+            pass
         return custom_recap
 
     async def update_custom_recap(self) -> models.CustomRecap:

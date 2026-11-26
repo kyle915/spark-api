@@ -94,6 +94,17 @@ def run_finalize_recap(recap_id: int) -> bool:
                 )
                 errors.append(f"link:{exc}")
 
+        try:
+            from recaps.store_signals import extract_and_save_recap_store_signals
+
+            extract_and_save_recap_store_signals(int(recap_id))
+        except Exception:  # noqa: BLE001 — advisory signal pass never fails finalize
+            logger.warning(
+                "checkin recap: store signal extract skipped id=%s",
+                recap_id,
+                exc_info=True,
+            )
+
         if errors:
             logger.error(
                 "%s recap_id=%s steps=%s",

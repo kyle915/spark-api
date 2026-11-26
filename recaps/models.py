@@ -609,6 +609,10 @@ class CustomRecap(models.Model):
     # Nullable so a revision that predates the column can still insert
     # recaps while a deploy rolls over.
     submit_checks = models.JSONField(blank=True, null=True, default=dict)
+    # Structured field intelligence extracted on submit (stockout_risk,
+    # reorder_opportunity, manager_contact, competitor_promo). Nullable so
+    # rolling deploys before/during migration remain safe.
+    store_signals = models.JSONField(blank=True, null=True, default=None)
 
     tenant = models.ForeignKey(
         Tenant, on_delete=models.RESTRICT, null=False, related_name="custom_recap"

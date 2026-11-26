@@ -647,6 +647,35 @@ def _to_type(draft: Draft) -> RequestIntakeDraft:
 
 
 @strawberry.type
+class BulkSchedulePreviewRow:
+    row_key: str
+    store_key: str
+    store_name: str
+    store_number: str
+    address: str
+    city: str
+    state: str
+    lat: float | None
+    lng: float | None
+    date: str
+    weekday_label: str
+    start_time: str
+    end_time: str
+    notes: str
+
+
+@strawberry.type
+class BulkSchedulePromptResult:
+    ok: bool
+    message: str
+    summary: str
+    truncated: bool
+    time_defaulted: bool
+    products: list[RequestIntakeProduct]
+    rows: list[BulkSchedulePreviewRow]
+
+
+@strawberry.type
 class RequestIntakeMutations:
     @strawberry.mutation(permission_classes=[IsClientOrSparkAdmin])
     async def parse_request_details(
@@ -672,4 +701,55 @@ class RequestIntakeMutations:
             )
         return RequestIntakeResult(
             ok=ok, message=message, truncated=truncated, drafts=[_to_type(d) for d in drafts]
+        )
+
+    @strawberry.mutation(permission_classes=[IsClientOrSparkAdmin])
+    async def parse_bulk_schedule_prompt(
+        self, info: strawberry.Info, tenant_id: strawberry.ID, prompt: str
+    ) -> BulkSchedulePromptResult:
+        """Turn a plain-English scheduling prompt into matched store + date preview rows.
+        Available to Ignite staff/RMMs and members of the target brand workspace."""
+        from events.bulk_schedule_prompt import parse_bulk_schedule_prompt as _run_bulk
+
+        user = info.context.request.user
+        is_admin, allowed_ids = await _accessible_tenants(user)
+        try:
+            resolved = resolve_id_to_int(tenant_id)
+        except Exception as exc:  # noqa: BLE001
+            raise GraphQLError("Invalid tenant id.") from exc
+
+        if not is_admin:
+            allowed_set = set(allowed_ids or [])
+            if resolved not in allowed_set:
+                raise GraphQLError("Not authorized for this workspace.")
+
+        try:
+            (
+                ok,
+                message,
+                summary,
+                truncated,
+                time_defaulted,
+                products,
+                rows,
+            ) = await sync_to_async(_run_bulk)(resolved, prompt)
+        except Exception:  # noqa: BLE001
+            logger.exception("bulk schedule prompt failed tenant=%s", resolved)
+            return BulkSchedulePromptResult(
+                ok=False,
+                message=UNAVAILABLE_MESSAGE,
+                summary="",
+                truncated=False,
+                time_defaulted=False,
+                products=[],
+                rows=[],
+            )
+        return BulkSchedulePromptResult(
+            ok=ok,
+            message=message,
+            summary=summary,
+            truncated=truncated,
+            time_defaulted=time_defaulted,
+            products=[RequestIntakeProduct(uuid=u, name=n) for u, n in products],
+            rows=[BulkSchedulePreviewRow(**r) for r in rows],
         )

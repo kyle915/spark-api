@@ -56,6 +56,7 @@ from timeclock.schema import ClockLinkMutations, ClockLinkQueries
 from recaps.checkin_issue_schema import CheckinIssueQueries
 from ambassadors.product_qa_schema import BaProductQaMutations, BaProductQaQueries
 from recaps.shelf_schema import ShelfCheckMutations, ShelfCheckQueries
+from recaps.store_signals_schema import StoreSignalQueries
 from recaps.client_deck_schema import (
     BestPhotoMutations,
     BestPhotoQueries,
@@ -88,6 +89,7 @@ QueryClients = merge_types(
         CheckinIssueQueries,
         BaProductQaQueries,
         ShelfCheckQueries,
+        StoreSignalQueries,
         DashboardExplainQueries,
         BestPhotoQueries,
         ClientRecapDraftQueries,
