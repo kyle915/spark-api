@@ -836,9 +836,9 @@ def _parse_row(
         local_start_dt = datetime.datetime.combine(event_date, start_clock)
         local_end_dt = datetime.datetime.combine(event_date, end_clock)
 
-        date = _local_datetime_to_utc(local_date_dt, timezone_obj.offset)
-        start_time = _local_datetime_to_utc(local_start_dt, timezone_obj.offset)
-        end_time = _local_datetime_to_utc(local_end_dt, timezone_obj.offset)
+        date = _local_datetime_to_utc(local_date_dt, timezone_obj.offset, timezone_obj=timezone_obj)
+        start_time = _local_datetime_to_utc(local_start_dt, timezone_obj.offset, timezone_obj=timezone_obj)
+        end_time = _local_datetime_to_utc(local_end_dt, timezone_obj.offset, timezone_obj=timezone_obj)
 
     if request_type_id and not RequestType.objects.filter(id=request_type_id, tenant_id=tenant_id).exists():
         errors.append(
@@ -1195,7 +1195,14 @@ def _normalize_offset_minutes(offset_value: int | None) -> int:
 def _local_datetime_to_utc(
     local_dt: datetime.datetime,
     timezone_offset_value: int | None,
+    timezone_obj: TimeZone | None = None,
 ) -> datetime.datetime:
+    """Convert a naive venue wall-clock datetime to UTC, DST-aware when possible."""
+    from utils.tz import resolve_zoneinfo
+
+    zi = resolve_zoneinfo(timezone_obj) if timezone_obj is not None else None
+    if zi is not None:
+        return local_dt.replace(tzinfo=zi).astimezone(datetime.timezone.utc)
     offset_minutes = _normalize_offset_minutes(timezone_offset_value)
     utc_dt = local_dt - datetime.timedelta(minutes=offset_minutes)
     return utc_dt.replace(tzinfo=datetime.timezone.utc)
