@@ -32,6 +32,29 @@ from utils.graphql.permissions import StrictIsAuthenticated
 logger = logging.getLogger(__name__)
 
 
+@strawberry.type
+class ChatAiDraftReply:
+    ok: bool
+    reason: Optional[str] = None
+    draft: str = ""
+    confidence: str = "medium"
+    sources: list[str] = strawberry.field(default_factory=list)
+    missing_info: str = ""
+
+
+@strawberry.type
+class ChatTeachSparkPreview:
+    ok: bool
+    reason: Optional[str] = None
+    title: str = ""
+    body: str = ""
+    category: str = "ba_ops"
+    audience: str = "admin"
+    tags: list[str] = strawberry.field(default_factory=list)
+    route_path: str = "/chat"
+    route_label: str = "Open Chat"
+
+
 def _resolve_uuid_to_int(uuid_str: str, model_cls) -> Optional[int]:
     row = model_cls.objects.filter(uuid=uuid_str).only("id").first()
     return row.id if row else None
@@ -406,3 +429,111 @@ class ChatMutations:
             thread_id=thread.id,
             by_ambassador=is_ba,
         )
+
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def draft_chat_reply_with_ai(
+        self,
+        info: strawberry.Info,
+        thread_uuid: strawberry.ID,
+        instruction: Optional[str] = None,
+    ) -> ChatAiDraftReply:
+        """Admin-only: draft a grounded reply for a BA chat thread using OpenAI,
+        shift context, brand product knowledge, and Spark Help SOPs."""
+        user, _amb, _is_ba, is_admin, _ = await services.resolve_caller_context(info)
+        if user is None:
+            return ChatAiDraftReply(ok=False, reason="Authentication required.")
+        if not is_admin:
+            return ChatAiDraftReply(
+                ok=False,
+                reason="Only Ignite admins can draft AI chat replies.",
+            )
+
+        @sync_to_async(thread_sensitive=True)
+        def _run() -> ChatAiDraftReply:
+            from chats.ai_assist import draft_chat_reply
+
+            thread = (
+                models.ChatThread.objects.select_related("tenant", "job", "ambassador")
+                .filter(uuid=str(thread_uuid))
+                .first()
+            )
+            if thread is None:
+                return ChatAiDraftReply(ok=False, reason="Thread not found.")
+            res = draft_chat_reply(thread, user=user, instruction=instruction)
+            return ChatAiDraftReply(
+                ok=bool(res.get("ok")),
+                reason=res.get("reason"),
+                draft=str(res.get("draft") or ""),
+                confidence=str(res.get("confidence") or "medium"),
+                sources=list(res.get("sources") or []),
+                missing_info=str(res.get("missing_info") or ""),
+            )
+
+        try:
+            return await _run()
+        except Exception:  # noqa: BLE001
+            logger.exception("draftChatReplyWithAi failed")
+            return ChatAiDraftReply(
+                ok=False, reason="Couldn't draft a reply right now."
+            )
+
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def distill_chat_to_help_knowledge(
+        self,
+        info: strawberry.Info,
+        thread_uuid: strawberry.ID,
+        message_uuid: strawberry.ID,
+    ) -> ChatTeachSparkPreview:
+        """Admin-only: distill an admin's chat reply into a PII-scrubbed Spark
+        Help Knowledge preview before saving. Brand clients and BAs are denied."""
+        user, _amb, _is_ba, is_admin, _ = await services.resolve_caller_context(info)
+        if user is None:
+            return ChatTeachSparkPreview(ok=False, reason="Authentication required.")
+        if not is_admin:
+            return ChatTeachSparkPreview(
+                ok=False,
+                reason="Only Ignite admins can teach Spark Knowledge.",
+            )
+
+        @sync_to_async(thread_sensitive=True)
+        def _run() -> ChatTeachSparkPreview:
+            from chats.ai_assist import distill_chat_to_knowledge
+
+            thread = (
+                models.ChatThread.objects.select_related("tenant")
+                .filter(uuid=str(thread_uuid))
+                .first()
+            )
+            if thread is None:
+                return ChatTeachSparkPreview(ok=False, reason="Thread not found.")
+            msg = (
+                models.ChatMessage.objects.filter(
+                    thread_id=thread.id, uuid=str(message_uuid)
+                ).first()
+            )
+            if msg is None:
+                return ChatTeachSparkPreview(ok=False, reason="Message not found.")
+            res = distill_chat_to_knowledge(thread, msg, user=user)
+            if not res.get("ok"):
+                return ChatTeachSparkPreview(
+                    ok=False, reason=str(res.get("reason") or "Could not distill message.")
+                )
+            return ChatTeachSparkPreview(
+                ok=True,
+                reason=None,
+                title=str(res.get("title") or ""),
+                body=str(res.get("body") or ""),
+                category=str(res.get("category") or "ba_ops"),
+                audience=str(res.get("audience") or "admin"),
+                tags=list(res.get("tags") or []),
+                route_path=str(res.get("route_path") or "/chat"),
+                route_label=str(res.get("route_label") or "Open Chat"),
+            )
+
+        try:
+            return await _run()
+        except Exception:  # noqa: BLE001
+            logger.exception("distillChatToHelpKnowledge failed")
+            return ChatTeachSparkPreview(
+                ok=False, reason="Couldn't distill that message right now."
+            )

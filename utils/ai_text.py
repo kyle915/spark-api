@@ -37,6 +37,8 @@ from typing import Callable, TypeVar
 from django.conf import settings
 
 OPENAI_CHAT_COMPLETIONS_URL = "https://api.openai.com/v1/chat/completions"
+OPENAI_EMBEDDINGS_URL = "https://api.openai.com/v1/embeddings"
+DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
 
 # Generous enough for the model to "think" + return 2–3 short paragraphs,
 # tight enough that a hung upstream can't wedge the request loop.
@@ -925,3 +927,91 @@ def _http_error_reason(status_code: int, raw_body: str) -> str:
     if message:
         return f"AI service error (HTTP {status_code}): {message}"
     return f"AI service error (HTTP {status_code})."
+
+
+def _embedding_model() -> str:
+    return (
+        getattr(settings, "OPENAI_EMBEDDING_MODEL", "") or ""
+    ).strip() or DEFAULT_EMBEDDING_MODEL
+
+
+def embed_texts(
+    texts: list[str],
+    *,
+    model: str | None = None,
+    timeout: float = 15.0,
+) -> tuple[list[list[float]], str]:
+    """Generate OpenAI semantic embeddings for ``texts`` (``text-embedding-3-small``).
+
+    Returns ``(vectors, model_name)`` in the exact input order. Raises
+    :class:`AiUnavailable` when ``OPENAI_API_KEY`` is unset or the request fails.
+    """
+    cleaned = [" ".join((t or "").split())[:6000] for t in texts]
+    if not cleaned:
+        return [], (model or _embedding_model())
+    headers = _auth_headers()
+    chosen_model = (model or _embedding_model()).strip() or DEFAULT_EMBEDDING_MODEL
+    payload = {
+        "model": chosen_model,
+        "input": cleaned,
+    }
+    body = _post_json(
+        OPENAI_EMBEDDINGS_URL,
+        payload,
+        headers,
+        timeout=timeout,
+    )
+    if not isinstance(body, dict):
+        raise AiUnavailable("AI embeddings service returned an unexpected response.")
+    if body.get("error"):
+        err = body["error"]
+        msg = err.get("message") if isinstance(err, dict) else str(err)
+        raise AiUnavailable(f"AI embeddings error: {msg or 'unknown error'}")
+    rows = body.get("data")
+    if not isinstance(rows, list) or len(rows) != len(cleaned):
+        raise AiUnavailable("AI embeddings response size mismatch.")
+    ordered = sorted(rows, key=lambda r: int(r.get("index", 0)))
+    vectors: list[list[float]] = []
+    for row in ordered:
+        emb = row.get("embedding")
+        if not isinstance(emb, list) or not emb:
+            raise AiUnavailable("AI embeddings response missing vector.")
+        vectors.append([float(v) for v in emb])
+    return vectors, str(body.get("model") or chosen_model)
+
+
+def embed_text(
+    text: str,
+    *,
+    model: str | None = None,
+    timeout: float = 12.0,
+) -> tuple[list[float] | None, str]:
+    """Best-effort single-text embedding; returns ``(None, model)`` on any error."""
+    cleaned = " ".join((text or "").split())
+    if not cleaned:
+        return None, (model or _embedding_model())
+    try:
+        vectors, used_model = embed_texts([cleaned], model=model, timeout=timeout)
+        return (vectors[0] if vectors else None), used_model
+    except AiUnavailable:
+        return None, (model or _embedding_model())
+
+
+def cosine_similarity(a: list[float] | None, b: list[float] | None) -> float:
+    """Cosine similarity in ``[-1.0, 1.0]`` for two equal-length float vectors."""
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    import math
+
+    dot = 0.0
+    norm_a = 0.0
+    norm_b = 0.0
+    for x, y in zip(a, b):
+        fx = float(x)
+        fy = float(y)
+        dot += fx * fy
+        norm_a += fx * fx
+        norm_b += fy * fy
+    if norm_a <= 0.0 or norm_b <= 0.0:
+        return 0.0
+    return dot / (math.sqrt(norm_a) * math.sqrt(norm_b))
