@@ -1,0 +1,38 @@
+{
+  "tenant_name": "American Ice",
+  "event_type": "Retail Sampling",
+  "request_type": "Retail Sampling",
+  "scheduling_status": "Scheduled",
+  "fuzzy_dedup": true,
+  "link_walkin_events": true,
+  "rows": [
+    {
+      "name": "American Ice - Circle K Queen Creek (40900 N. Ironwood Dr.)",
+      "date": "12/01/2026",
+      "start_time": "15:00",
+      "end_time": "18:00",
+      "address": "40900 N. Ironwood Dr., Queen Creek, AZ 85140",
+      "store_number": "",
+      "retailer_name": "Circle K",
+      "city": "Queen Creek",
+      "state": "AZ",
+      "store_manager_phone": "",
+      "notes": "Circle K Interception Station: ask 21+ and scan ID first. $1 tin coupon + 4-for-$6. Swag after checkout with email sign-up.",
+      "timezone_code": "MST"
+    },
+    {
+      "name": "American Ice - Circle K Phoenix (3502 W. Anthem Way)",
+      "date": "12/01/2026",
+      "start_time": "15:00",
+      "end_time": "18:00",
+      "address": "3502 W. Anthem Way, Phoenix, AZ 85086",
+      "store_number": "",
+      "retailer_name": "Circle K",
+      "city": "Phoenix",
+      "state": "AZ",
+      "store_manager_phone": "",
+      "notes": "Circle K Interception Station: ask 21+ and scan ID first. $1 tin coupon + 4-for-$6. Swag after checkout with email sign-up.",
+      "timezone_code": "MST"
+    }
+  ]
+}
