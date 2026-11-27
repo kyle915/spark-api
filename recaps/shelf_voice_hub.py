@@ -111,7 +111,7 @@ def _extract_event_geo(
     header: dict[str, Any],
     aliases: dict[str, str],
 ) -> tuple[str, str, str, str]:
-    from events.geo import parse_address_geo
+    from events.market import parse_address_geo
     from events.retailer_aliases import resolve_store_name
 
     req = getattr(ev, "request", None) if ev else None
@@ -181,7 +181,7 @@ def build_shelf_voice_hub(
         written_in,
     )
     from recaps.feedback_themes import _short_quote, gather_comments
-    from recaps.models import CustomRecap, CustomRecapFile
+    from recaps.models import CustomRecap, CustomRecapFile, Recap
     from recaps.photo_gallery import _image_url
     from recaps.shelf_check import (
         NO,
@@ -192,7 +192,7 @@ def build_shelf_voice_hub(
         retail_recap_q,
         visit_answer,
     )
-    from recaps.store_profile import store_header, tenant_places
+    from recaps.store_places import store_header, tenant_places
     from recaps.store_signals import normalize_store_signals
     from recaps.tenant_overview import (
         _approved_only,
@@ -201,11 +201,23 @@ def build_shelf_voice_hub(
     )
     from tenants.models import TenantCommentInsight
 
-    eff_end = end or timezone.now().date()
-    eff_start = start or (eff_end - timedelta(days=89))
-    window_days = max(1, (eff_end - eff_start).days + 1)
-    prior_end = eff_start - timedelta(days=1)
-    prior_start = prior_end - timedelta(days=window_days - 1)
+    is_all_time = start is None and end is None
+    if is_all_time:
+        eff_start: date | None = None
+        eff_end: date | None = None
+        today = timezone.now().date()
+        trend_cur_start = today - timedelta(days=89)
+        trend_cur_end = today
+        prior_end = trend_cur_start - timedelta(days=1)
+        prior_start = prior_end - timedelta(days=89)
+    else:
+        eff_end = end or timezone.now().date()
+        eff_start = start or (eff_end - timedelta(days=89))
+        window_days = max(1, (eff_end - eff_start).days + 1)
+        trend_cur_start = eff_start
+        trend_cur_end = eff_end
+        prior_end = eff_start - timedelta(days=1)
+        prior_start = prior_end - timedelta(days=window_days - 1)
 
     window = _inclusive_dates_to_window(eff_start, eff_end)
     recaps = list(
@@ -238,14 +250,23 @@ def build_shelf_voice_hub(
     event_store_map = places.for_event_ids(event_ids) if event_ids else {}
 
     recap_meta: dict[int, dict[str, Any]] = {}
+    legacy_meta: dict[int, dict[str, Any]] = {}
+    header_by_skey: dict[str, dict[str, Any]] = {}
     competitor_promos: list[dict[str, Any]] = []
     stockout_by_store: dict[str, str] = {}
     promo_by_store: dict[str, str] = {}
 
+    def _cached_header(skey: str | None) -> dict[str, Any]:
+        if not skey:
+            return {}
+        if skey not in header_by_skey:
+            header_by_skey[skey] = store_header(tenant_id, places, skey)
+        return header_by_skey[skey]
+
     for rec in recaps:
         ev = getattr(rec, "event", None)
         skey = event_store_map.get(int(rec.event_id)) if rec.event_id else None
-        header = store_header(tenant_id, places, skey) if skey else {}
+        header = _cached_header(skey)
         store_name, market, state_code, _addr = _extract_event_geo(
             ev, rec, header=header, aliases=aliases
         )
@@ -291,6 +312,7 @@ def build_shelf_voice_hub(
     recap_ids = list(recap_meta.keys())
     by_recap_answers: dict[int, list[dict[str, Any] | None]] = {}
     shelf_photos_out: list[dict[str, Any]] = []
+    pending_shelf_photos: list[dict[str, Any]] = []
     all_facings: list[int] = []
     all_prices: list[float] = []
 
@@ -318,6 +340,29 @@ def build_shelf_voice_hub(
             )
             by_recap_answers.setdefault(rf.custom_recap_id, []).append(ans)
             if ans is None:
+                if len(pending_shelf_photos) < MAX_PHOTOS:
+                    url = _image_url(rf)
+                    if url:
+                        pending_shelf_photos.append(
+                            {
+                                "file_id": str(rf.id),
+                                "photo_url": url,
+                                "bucket_name": (
+                                    getattr(rf.file_recap_category, "name", None) or "Shelf"
+                                ),
+                                "store_key": meta["store_key"],
+                                "store_name": meta["store_name"],
+                                "market": meta["market"],
+                                "state_code": meta["state_code"],
+                                "event_date": meta["event_date"],
+                                "recap_uuid": meta["recap_uuid"],
+                                "product_on_shelf": "pending",
+                                "facings": None,
+                                "price_tag_visible": "unclear",
+                                "price": None,
+                                "out_of_stock_gap": "unclear",
+                            }
+                        )
                 continue
 
             facings = ans.get("facings")
@@ -359,6 +404,11 @@ def build_shelf_voice_hub(
                         "out_of_stock_gap": ans["out_of_stock_gap"],
                     }
                 )
+
+    if len(shelf_photos_out) < MAX_PHOTOS and pending_shelf_photos:
+        shelf_photos_out.extend(
+            pending_shelf_photos[: MAX_PHOTOS - len(shelf_photos_out)]
+        )
 
     median_price_float = median(all_prices) if all_prices else None
     median_price_str = (
@@ -557,11 +607,18 @@ def build_shelf_voice_hub(
 
         if known_brands:
             cur_comments, _ = gather_comments(tenant_id, eff_start, eff_end)
+            if is_all_time:
+                trend_cur_comments, _ = gather_comments(
+                    tenant_id, trend_cur_start, trend_cur_end
+                )
+            else:
+                trend_cur_comments = cur_comments
             prior_comments, _ = gather_comments(tenant_id, prior_start, prior_end)
 
-            # Resolve market/state for any CustomRecap comment keys not already in recap_meta
+            # Resolve market/state for any CustomRecap or legacy Recap keys not in recap_meta
             extra_cids: set[int] = set()
-            for c in cur_comments + prior_comments:
+            extra_lids: set[int] = set()
+            for c in cur_comments + trend_cur_comments + prior_comments:
                 if c.recap.startswith("C"):
                     try:
                         cid = int(c.recap[1:])
@@ -569,6 +626,13 @@ def build_shelf_voice_hub(
                         continue
                     if cid not in recap_meta:
                         extra_cids.add(cid)
+                elif c.recap.startswith("L"):
+                    try:
+                        lid = int(c.recap[1:])
+                    except ValueError:
+                        continue
+                    if lid not in legacy_meta:
+                        extra_lids.add(lid)
 
             if extra_cids:
                 extra_recs = list(
@@ -591,11 +655,46 @@ def build_shelf_voice_hub(
                 for rec in extra_recs:
                     ev = getattr(rec, "event", None)
                     skey = extra_smap.get(int(rec.event_id)) if rec.event_id else None
-                    header = store_header(tenant_id, places, skey) if skey else {}
+                    header = _cached_header(skey)
                     sn, mk, sc, _ = _extract_event_geo(
                         ev, rec, header=header, aliases=aliases
                     )
                     recap_meta[rec.id] = {
+                        "recap_uuid": str(rec.uuid),
+                        "store_key": skey or "",
+                        "norm_key": skey or f"{sn.casefold()}|{sc}",
+                        "store_name": sn,
+                        "market": mk,
+                        "state_code": sc,
+                        "event_date": _event_day_iso(ev, rec),
+                    }
+
+            if extra_lids:
+                extra_legacy = list(
+                    Recap.objects.filter(
+                        event__tenant_id=tenant_id, id__in=extra_lids
+                    ).select_related(
+                        "event",
+                        "event__retailer",
+                        "event__request",
+                        "event__request__retailer",
+                        "event__location",
+                        "event__location__state",
+                        "event__state",
+                        "retailer",
+                        "state",
+                    )
+                )
+                leg_eids = {int(r.event_id) for r in extra_legacy if r.event_id}
+                leg_smap = places.for_event_ids(leg_eids) if leg_eids else {}
+                for rec in extra_legacy:
+                    ev = getattr(rec, "event", None)
+                    skey = leg_smap.get(int(rec.event_id)) if rec.event_id else None
+                    header = _cached_header(skey)
+                    sn, mk, sc, _ = _extract_event_geo(
+                        ev, rec, header=header, aliases=aliases
+                    )
+                    legacy_meta[rec.id] = {
                         "recap_uuid": str(rec.uuid),
                         "store_key": skey or "",
                         "norm_key": skey or f"{sn.casefold()}|{sc}",
@@ -616,6 +715,11 @@ def build_shelf_voice_hub(
                     if c.recap.startswith("C"):
                         try:
                             meta = recap_meta.get(int(c.recap[1:]))
+                        except ValueError:
+                            meta = None
+                    elif c.recap.startswith("L"):
+                        try:
+                            meta = legacy_meta.get(int(c.recap[1:]))
                         except ValueError:
                             meta = None
                     market_label = (
@@ -649,17 +753,31 @@ def build_shelf_voice_hub(
                 return counts
 
             cur_counts = _tally_by_market(cur_comments)
+            trend_cur_counts = (
+                _tally_by_market(trend_cur_comments) if is_all_time else cur_counts
+            )
             prior_counts = _tally_by_market(prior_comments)
 
             for mkey, cur in cur_counts.items():
                 prior_n = prior_counts.get(mkey, {}).get("mention_count", 0)
-                cur_n = cur["mention_count"]
+                if is_all_time:
+                    recent_n = trend_cur_counts.get(mkey, {}).get("mention_count", 0)
+                    delta = recent_n - prior_n
+                    trend = (
+                        classify_mention_trend(recent_n, prior_n)
+                        if (recent_n > 0 or prior_n > 0)
+                        else "steady"
+                    )
+                else:
+                    cur_n = cur["mention_count"]
+                    delta = cur_n - prior_n
+                    trend = classify_mention_trend(cur_n, prior_n)
                 competitor_markets_out.append(
                     {
                         **cur,
                         "prior_mention_count": prior_n,
-                        "delta": cur_n - prior_n,
-                        "trend": classify_mention_trend(cur_n, prior_n),
+                        "delta": delta,
+                        "trend": trend,
                     }
                 )
 
@@ -677,13 +795,14 @@ def build_shelf_voice_hub(
     has_any = bool(
         audited_visits > 0
         or unread_visits > 0
+        or shelf_photos_out
         or competitor_markets_out
         or competitor_promos
     )
     return {
         "status": "ready" if has_any else "none",
-        "start_date": eff_start.isoformat(),
-        "end_date": eff_end.isoformat(),
+        "start_date": eff_start.isoformat() if eff_start else "",
+        "end_date": eff_end.isoformat() if eff_end else "",
         "audited_visits": audited_visits,
         "unread_visits": unread_visits,
         "on_shelf_count": on_shelf_count,
