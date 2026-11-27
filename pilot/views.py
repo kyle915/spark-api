@@ -615,12 +615,128 @@ def public_pos_feed_drop_view(request: HttpRequest, token: str) -> JsonResponse:
     )
 
 
+def _resolve_authenticated_request_user(request: HttpRequest):
+    """Return the authenticated user from gqlauth JWT middleware or Django auth."""
+    try:
+        from gqlauth.core.middlewares import USER_OR_ERROR_KEY, get_user_or_error
+
+        uoe = getattr(request, USER_OR_ERROR_KEY, None)
+        if uoe is None:
+            uoe = get_user_or_error(request)
+        jwt_user = getattr(uoe, "user", None)
+        if jwt_user is not None and getattr(jwt_user, "is_authenticated", False):
+            return jwt_user
+    except Exception:  # noqa: BLE001
+        pass
+
+    req_user = getattr(request, "user", None)
+    if req_user is not None and getattr(req_user, "is_authenticated", False):
+        return req_user
+    return None
+
+
+def _is_sandbox_admin_user(user) -> bool:
+    """Authoritative Ignite-admin check matching Spark GraphQL permissions."""
+    from django.contrib.auth import get_user_model
+    from utils.graphql.permissions import (
+        UntrustedIgniteEmail,
+        _demote_if_excluded,
+        _is_admin_access,
+        ignite_domain_account_trusted,
+        is_ignite_domain_email,
+    )
+
+    if not user or not getattr(user, "is_authenticated", False):
+        return False
+
+    db_user = None
+    pk = getattr(user, "pk", None)
+    req_email = (getattr(user, "email", "") or "").strip()
+    try:
+        User = get_user_model()
+        if pk is not None:
+            db_user = User.objects.select_related("role").filter(pk=pk).first()
+        if db_user is None and req_email:
+            db_user = (
+                User.objects.select_related("role")
+                .filter(email__iexact=req_email)
+                .first()
+            )
+    except Exception:  # noqa: BLE001
+        db_user = None
+
+    if db_user is not None:
+        if not db_user.is_active:
+            return False
+        role_slug = (
+            (getattr(db_user.role, "slug", "") or "").lower()
+            if db_user.role
+            else None
+        )
+        email = (db_user.email or "").lower()
+        if is_ignite_domain_email(email):
+            from gqlauth.models import UserStatus
+
+            verified = UserStatus.objects.filter(
+                user_id=db_user.pk, verified=True
+            ).exists()
+            if not ignite_domain_account_trusted(
+                role_slug=role_slug,
+                is_active=db_user.is_active,
+                verified=verified,
+            ):
+                email = UntrustedIgniteEmail(email)
+        role_slug, is_staff, is_super, email = _demote_if_excluded(
+            role_slug,
+            bool(db_user.is_staff),
+            bool(db_user.is_superuser),
+            email,
+        )
+        return _is_admin_access(role_slug, is_staff, is_super, email)
+
+    # Fallback when no DB row exists (e.g. unit-test SimpleNamespace user):
+    # never grant domain-only access without DB verification.
+    if getattr(user, "is_active", True) is False:
+        return False
+    raw_role = getattr(user, "role", None)
+    role_slug = (getattr(raw_role, "slug", None) or "").lower() or None
+    email = req_email.lower()
+    if is_ignite_domain_email(email):
+        email = UntrustedIgniteEmail(email)
+    role_slug, is_staff, is_super, email = _demote_if_excluded(
+        role_slug,
+        bool(getattr(user, "is_staff", False)),
+        bool(getattr(user, "is_superuser", False)),
+        email,
+    )
+    return _is_admin_access(role_slug, is_staff, is_super, email)
+
+
 def public_sandbox_brand_view(request: HttpRequest) -> JsonResponse:
-    """GET `/api/public/sandbox-brand` — read-only fictional Sample Brand Sandbox."""
+    """GET `/api/public/sandbox-brand` — admin-only fictional Sample Brand Sandbox."""
     if request.method != "GET":
         return JsonResponse({"error": "method_not_allowed"}, status=405)
+
+    user = _resolve_authenticated_request_user(request)
+    if user is None:
+        return JsonResponse(
+            {
+                "error": "authentication_required",
+                "message": "Ignite admin authentication is required to preview the sandbox.",
+            },
+            status=401,
+        )
+    if not _is_sandbox_admin_user(user):
+        return JsonResponse(
+            {
+                "error": "forbidden",
+                "message": "Sample Brand Sandbox is currently restricted to Ignite admins.",
+            },
+            status=403,
+        )
+
     from pilot.sandbox import build_sandbox_sample_brand
 
     resp = JsonResponse(build_sandbox_sample_brand())
-    resp["Cache-Control"] = "public, max-age=300"
+    resp["Cache-Control"] = "private, no-store"
     return resp

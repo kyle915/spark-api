@@ -117,8 +117,13 @@ def test_webhook_url_ssrf_guard_and_hmac_signing():
 
 
 def test_sandbox_brand_payload_and_model_sql_compilation():
+    import json
+
+    from django.test import RequestFactory
+    from pilot.views import public_sandbox_brand_view
+
     payload = build_sandbox_sample_brand(today=date(2026, 11, 27))
-    assert payload["brand"]["name"] == "Solstice Botanical Sparkling"
+    assert payload["brand"]["name"] == "Meadowlark Botanicals"
     assert payload["kpis"]["activations"] >= 30
     assert len(payload["stores"]) >= 8
     assert len(payload["shelfPhotos"]) >= 6
@@ -128,6 +133,65 @@ def test_sandbox_brand_payload_and_model_sql_compilation():
         p["photoUrl"].startswith("data:image/svg+xml")
         for p in payload["shelfPhotos"]
     )
+
+    # Confirm zero real brands, real retailers, or real street addresses appear.
+    serialized = json.dumps(payload).lower()
+    for forbidden in (
+        "whole foods",
+        "h-e-b",
+        "erewhon",
+        "sprouts",
+        "central market",
+        "poppi",
+        "olipop",
+        "liquid death",
+        "spindrift",
+        "ghia",
+        "lamar blvd",
+        "wilshire blvd",
+        "bedford ave",
+        "kingsbury st",
+        "sepulveda blvd",
+        "colfax ave",
+        "park ln",
+        "lovers ln",
+        "alabama st",
+    ):
+        assert forbidden not in serialized, f"Real entity leaked in sandbox: {forbidden}"
+
+    # Verify admin-only access on /api/public/sandbox-brand.
+    rf = RequestFactory()
+    anon_req = rf.get("/api/public/sandbox-brand")
+    anon_resp = public_sandbox_brand_view(anon_req)
+    assert anon_resp.status_code == 401
+
+    client_req = rf.get("/api/public/sandbox-brand")
+    client_req.user = SimpleNamespace(
+        pk=None,
+        is_authenticated=True,
+        is_active=True,
+        is_staff=False,
+        is_superuser=False,
+        email="founder@brand.example",
+        role=SimpleNamespace(slug="client"),
+    )
+    client_resp = public_sandbox_brand_view(client_req)
+    assert client_resp.status_code == 403
+
+    admin_req = rf.get("/api/public/sandbox-brand")
+    admin_req.user = SimpleNamespace(
+        pk=None,
+        is_authenticated=True,
+        is_active=True,
+        is_staff=True,
+        is_superuser=False,
+        email="ops@igniteproductions.co",
+        role=SimpleNamespace(slug="spark-admin"),
+    )
+    admin_resp = public_sandbox_brand_view(admin_req)
+    assert admin_resp.status_code == 200
+    assert admin_resp["Cache-Control"] == "private, no-store"
+    assert json.loads(admin_resp.content)["brand"]["name"] == "Meadowlark Botanicals"
 
     # Compile ORM queries for all 3 new models to verify zero FieldError issues.
     for qs in (

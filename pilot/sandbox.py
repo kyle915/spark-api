@@ -1,10 +1,10 @@
-"""Interactive Self-Serve Sandbox ("Explore Sample Brand") read-only payload.
+"""Admin-only Sample Brand Sandbox read-only payload.
 
-Serves a rich, completely self-contained fictional CPG beverage brand workspace
-("Solstice Botanical Sparkling") over ``GET /api/public/sandbox-brand`` so
-prospective founders can explore Program Reports, StoreSheet, Shelf & Voice,
-Photo Wall, Buyer QBR Decks (with live .pptx export), Saved Views, and Ask Spark
-with zero login friction and zero risk to live tenant data.
+Serves a completely fictional, self-contained CPG beverage brand workspace
+("Meadowlark Botanicals") with made-up retailer banners, store names,
+addresses, and competitor brands over ``GET /api/public/sandbox-brand``
+(restricted to authenticated Ignite admins for internal preview until a
+future public launch).
 """
 
 from __future__ import annotations
@@ -43,7 +43,7 @@ def _svg_data_uri(
                 f'<rect x="{x}" y="112" width="54" height="134" rx="10" fill="{accent}" opacity="0.92"/>'
                 f'<rect x="{x + 6}" y="122" width="42" height="10" rx="3" fill="#ffffff" opacity="0.35"/>'
                 f'<text x="{x + 27}" y="176" text-anchor="middle" '
-                f'font-family="system-ui,sans-serif" font-size="10" font-weight="700" fill="#ffffff">SOLSTICE</text>'
+                f'font-family="system-ui,sans-serif" font-size="8.5" font-weight="700" fill="#ffffff">MEADOWLARK</text>'
                 f'<text x="{x + 27}" y="192" text-anchor="middle" '
                 f'font-family="system-ui,sans-serif" font-size="8.5" fill="#f6f6f2" opacity="0.9">12oz</text>'
             )
@@ -69,14 +69,18 @@ def _svg_data_uri(
         f'{"".join(can_elems)}'
         f'{tag_elem}'
         f'<text x="48" y="276" font-family="system-ui,sans-serif" font-size="12" fill="#5b6052">{subtitle}</text>'
-        f'<text x="48" y="314" font-family="ui-monospace,monospace" font-size="10" fill="#7c8270">SPARK VERIFIED FIELD PROOF · SAMPLE BRAND SANDBOX</text>'
+        f'<text x="48" y="314" font-family="ui-monospace,monospace" font-size="10" fill="#7c8270">SPARK VERIFIED FIELD PROOF · ADMIN SANDBOX PREVIEW</text>'
         f"</svg>"
     )
     return "data:image/svg+xml;charset=utf-8," + quote(svg)
 
 
 def build_sandbox_sample_brand(*, today: date | None = None) -> dict[str, Any]:
-    """Return the complete, deterministic read-only Sample Brand Sandbox payload."""
+    """Return the complete, deterministic read-only Sample Brand Sandbox payload.
+
+    Every brand, competitor, retailer banner, store name, and street address
+    is 100% fictional.
+    """
     ref = today or date.today()
     start_90 = ref - timedelta(days=89)
 
@@ -85,12 +89,12 @@ def build_sandbox_sample_brand(*, today: date | None = None) -> dict[str, Any]:
 
     stores: list[dict[str, Any]] = [
         {
-            "storeKey": "sandbox:wfm-austin-lamar",
-            "storeName": "Whole Foods Market — Lamar Flagship",
-            "retailerBanner": "Whole Foods Market",
+            "storeKey": "sandbox:greenway-austin-barton",
+            "storeName": "Greenway Market — Barton Creek #104",
+            "retailerBanner": "Greenway Market",
             "market": "Austin, TX",
             "stateCode": "TX",
-            "address": "525 N Lamar Blvd, Austin, TX 78703",
+            "address": "410 Meadowbrook Pkwy, Austin, TX 78704",
             "visits": 6,
             "consumersSampled": 612,
             "unitsSold": 224,
@@ -106,21 +110,21 @@ def build_sandbox_sample_brand(*, today: date | None = None) -> dict[str, Any]:
             "demoCost": 1350.0,
             "costPerSample": 2.21,
             "stockoutSignal": "",
-            "competitorPromo": "Olipop endcap BOGO on aisle 4",
+            "competitorPromo": "Bramble Pop endcap BOGO on aisle 4",
             "latestDate": _d(3),
             "topSku": "Yuzu Ginger 12oz",
             "quotes": [
-                "Shoppers kept comparing the yuzu finish to Spindrift — 4-packs moved fastest after tasting.",
-                "Buyer walked by at 2pm and asked to add Blood Orange Hibiscus to the cold grab-and-go set.",
+                "Shoppers kept comparing the yuzu finish to CitrusCloud — 4-packs moved fastest after tasting.",
+                "Category buyer walked by at 2pm and asked to add Blood Orange Hibiscus to the cold grab-and-go set.",
             ],
         },
         {
-            "storeKey": "sandbox:heb-houston-montrose",
-            "storeName": "H-E-B #725 — Montrose",
-            "retailerBanner": "H-E-B",
+            "storeKey": "sandbox:sunbelt-houston-oakridge",
+            "storeName": "Sunbelt Grocers #218 — Oakridge",
+            "retailerBanner": "Sunbelt Grocers",
             "market": "Houston, TX",
             "stateCode": "TX",
-            "address": "1701 W Alabama St, Houston, TX 77098",
+            "address": "1840 Cypress Ridge Rd, Houston, TX 77007",
             "visits": 5,
             "consumersSampled": 528,
             "unitsSold": 176,
@@ -136,7 +140,7 @@ def build_sandbox_sample_brand(*, today: date | None = None) -> dict[str, Any]:
             "demoCost": 1125.0,
             "costPerSample": 2.13,
             "stockoutSignal": "Yuzu Ginger depleted by 4pm Saturday — backstock restocked Sunday morning.",
-            "competitorPromo": "Poppi 2/$4 TPR running all month",
+            "competitorPromo": "Zestify Soda 2/$4 TPR running all month",
             "latestDate": _d(5),
             "topSku": "Yuzu Ginger 12oz",
             "quotes": [
@@ -144,12 +148,12 @@ def build_sandbox_sample_brand(*, today: date | None = None) -> dict[str, Any]:
             ],
         },
         {
-            "storeKey": "sandbox:wfm-dallas-parklane",
-            "storeName": "Whole Foods Market — Park Lane",
-            "retailerBanner": "Whole Foods Market",
+            "storeKey": "sandbox:greenway-dallas-northgate",
+            "storeName": "Greenway Market — Northgate #119",
+            "retailerBanner": "Greenway Market",
             "market": "Dallas, TX",
             "stateCode": "TX",
-            "address": "8190 Park Ln, Dallas, TX 75231",
+            "address": "7220 Briarwood Ln, Dallas, TX 75214",
             "visits": 4,
             "consumersSampled": 390,
             "unitsSold": 118,
@@ -165,7 +169,7 @@ def build_sandbox_sample_brand(*, today: date | None = None) -> dict[str, Any]:
             "demoCost": 900.0,
             "costPerSample": 2.31,
             "stockoutSignal": "Blood Orange Hibiscus missing from cold box; shelf tag also missing on ambient aisle.",
-            "competitorPromo": "Liquid Death sparkling tea display at front entrance",
+            "competitorPromo": "PeakWave Tea sparkling display at front entrance",
             "latestDate": _d(6),
             "topSku": "Blood Orange Hibiscus 12oz",
             "quotes": [
@@ -173,12 +177,12 @@ def build_sandbox_sample_brand(*, today: date | None = None) -> dict[str, Any]:
             ],
         },
         {
-            "storeKey": "sandbox:erewhon-santa-monica",
-            "storeName": "Erewhon — Santa Monica",
-            "retailerBanner": "Erewhon",
+            "storeKey": "sandbox:alder-la-westside",
+            "storeName": "Alder & Pine Provisions — Westside",
+            "retailerBanner": "Alder & Pine Provisions",
             "market": "Los Angeles, CA",
             "stateCode": "CA",
-            "address": "2800 Wilshire Blvd, Santa Monica, CA 90403",
+            "address": "2450 Oceanview Terrace, Los Angeles, CA 90401",
             "visits": 5,
             "consumersSampled": 445,
             "unitsSold": 168,
@@ -199,16 +203,16 @@ def build_sandbox_sample_brand(*, today: date | None = None) -> dict[str, Any]:
             "topSku": "Meyer Lemon Rosemary 12oz",
             "quotes": [
                 "Meyer Lemon Rosemary resonated strongly with afternoon fitness shoppers.",
-                "Multiple repeat buyers noted they saw Solstice on Instagram and bought 6 singles.",
+                "Multiple repeat buyers noted they spotted Meadowlark online and grabbed 6 singles.",
             ],
         },
         {
-            "storeKey": "sandbox:sprouts-denver-colfax",
-            "storeName": "Sprouts Farmers Market — Colfax",
-            "retailerBanner": "Sprouts",
+            "storeKey": "sandbox:harvest-denver-parkview",
+            "storeName": "Harvest Table Co-op — Parkview",
+            "retailerBanner": "Harvest Table Co-op",
             "market": "Denver, CO",
             "stateCode": "CO",
-            "address": "3625 E Colfax Ave, Denver, CO 80206",
+            "address": "3110 Highline Ave, Denver, CO 80209",
             "visits": 4,
             "consumersSampled": 356,
             "unitsSold": 98,
@@ -224,7 +228,7 @@ def build_sandbox_sample_brand(*, today: date | None = None) -> dict[str, Any]:
             "demoCost": 880.0,
             "costPerSample": 2.47,
             "stockoutSignal": "",
-            "competitorPromo": "Spindrift 8-pack featured in weekly circular",
+            "competitorPromo": "CitrusCloud 8-pack featured in weekly circular",
             "latestDate": _d(8),
             "topSku": "Yuzu Ginger 12oz",
             "quotes": [
@@ -232,12 +236,12 @@ def build_sandbox_sample_brand(*, today: date | None = None) -> dict[str, Any]:
             ],
         },
         {
-            "storeKey": "sandbox:wfm-brooklyn-williamsburg",
-            "storeName": "Whole Foods Market — Williamsburg",
-            "retailerBanner": "Whole Foods Market",
+            "storeKey": "sandbox:greenway-nyc-riverfront",
+            "storeName": "Greenway Market — Riverfront #302",
+            "retailerBanner": "Greenway Market",
             "market": "New York, NY",
             "stateCode": "NY",
-            "address": "238 Bedford Ave, Brooklyn, NY 11249",
+            "address": "290 Harborview Way, New York, NY 10013",
             "visits": 5,
             "consumersSampled": 498,
             "unitsSold": 154,
@@ -253,7 +257,7 @@ def build_sandbox_sample_brand(*, today: date | None = None) -> dict[str, Any]:
             "demoCost": 1320.0,
             "costPerSample": 2.65,
             "stockoutSignal": "",
-            "competitorPromo": "Olipop sampling team scheduled next weekend",
+            "competitorPromo": "Bramble Pop sampling team scheduled next weekend",
             "latestDate": _d(2),
             "topSku": "Blood Orange Hibiscus 12oz",
             "quotes": [
@@ -261,12 +265,12 @@ def build_sandbox_sample_brand(*, today: date | None = None) -> dict[str, Any]:
             ],
         },
         {
-            "storeKey": "sandbox:central-market-dallas",
-            "storeName": "Central Market — Lovers Lane",
-            "retailerBanner": "Central Market",
+            "storeKey": "sandbox:copperleaf-dallas-lakewood",
+            "storeName": "Copperleaf Grocer — Lakewood",
+            "retailerBanner": "Copperleaf Grocer",
             "market": "Dallas, TX",
             "stateCode": "TX",
-            "address": "5750 E Lovers Ln, Dallas, TX 75206",
+            "address": "5400 Cedar Crest Blvd, Dallas, TX 75206",
             "visits": 4,
             "consumersSampled": 364,
             "unitsSold": 112,
@@ -290,12 +294,12 @@ def build_sandbox_sample_brand(*, today: date | None = None) -> dict[str, Any]:
             ],
         },
         {
-            "storeKey": "sandbox:wfm-chicago-lincolnpark",
-            "storeName": "Whole Foods Market — Lincoln Park",
-            "retailerBanner": "Whole Foods Market",
+            "storeKey": "sandbox:greenway-chicago-lakeshore",
+            "storeName": "Greenway Market — Lakeshore #208",
+            "retailerBanner": "Greenway Market",
             "market": "Chicago, IL",
             "stateCode": "IL",
-            "address": "1550 N Kingsbury St, Chicago, IL 60642",
+            "address": "1620 Northwind Ave, Chicago, IL 60614",
             "visits": 5,
             "consumersSampled": 382,
             "unitsSold": 88,
@@ -311,7 +315,7 @@ def build_sandbox_sample_brand(*, today: date | None = None) -> dict[str, Any]:
             "demoCost": 1100.0,
             "costPerSample": 2.88,
             "stockoutSignal": "Endcap slot down to 2 facings; missing promo tag.",
-            "competitorPromo": "Poppi 4-pack $7.99 feature at front checkout",
+            "competitorPromo": "Zestify Soda 4-pack $7.99 feature at front checkout",
             "latestDate": _d(9),
             "topSku": "Yuzu Ginger 12oz",
             "quotes": [
@@ -319,12 +323,12 @@ def build_sandbox_sample_brand(*, today: date | None = None) -> dict[str, Any]:
             ],
         },
         {
-            "storeKey": "sandbox:sprouts-la-culver",
-            "storeName": "Sprouts Farmers Market — Culver City",
-            "retailerBanner": "Sprouts",
+            "storeKey": "sandbox:harvest-la-palms",
+            "storeName": "Harvest Table Co-op — Palms",
+            "retailerBanner": "Harvest Table Co-op",
             "market": "Los Angeles, CA",
             "stateCode": "CA",
-            "address": "5660 Sepulveda Blvd, Culver City, CA 90230",
+            "address": "5180 Sunnyside Blvd, Los Angeles, CA 90034",
             "visits": 4,
             "consumersSampled": 265,
             "unitsSold": 58,
@@ -340,7 +344,7 @@ def build_sandbox_sample_brand(*, today: date | None = None) -> dict[str, Any]:
             "demoCost": 880.0,
             "costPerSample": 3.32,
             "stockoutSignal": "Only 1 warm can left on shelf during Saturday demo.",
-            "competitorPromo": "Spindrift lime demo same day",
+            "competitorPromo": "CitrusCloud lime demo same day",
             "latestDate": _d(14),
             "topSku": "Blood Orange Hibiscus 12oz",
             "quotes": [
@@ -352,8 +356,8 @@ def build_sandbox_sample_brand(*, today: date | None = None) -> dict[str, Any]:
     shelf_photos = [
         {
             "fileId": "sb-p1",
-            "storeKey": "sandbox:wfm-austin-lamar",
-            "storeName": "Whole Foods Market — Lamar Flagship",
+            "storeKey": "sandbox:greenway-austin-barton",
+            "storeName": "Greenway Market — Barton Creek #104",
             "market": "Austin, TX",
             "stateCode": "TX",
             "eventDate": _d(3),
@@ -364,7 +368,7 @@ def build_sandbox_sample_brand(*, today: date | None = None) -> dict[str, Any]:
             "price": "2.49",
             "outOfStockGap": "no",
             "photoUrl": _svg_data_uri(
-                title="Whole Foods Lamar · Cold Box",
+                title="Greenway Barton Creek · Cold Box",
                 subtitle="6 front facings · clean eye-level block · $2.49 verified",
                 badge="ON SHELF · 6 FACINGS",
                 accent="#3b6e4c",
@@ -375,8 +379,8 @@ def build_sandbox_sample_brand(*, today: date | None = None) -> dict[str, Any]:
         },
         {
             "fileId": "sb-p2",
-            "storeKey": "sandbox:wfm-dallas-parklane",
-            "storeName": "Whole Foods Market — Park Lane",
+            "storeKey": "sandbox:greenway-dallas-northgate",
+            "storeName": "Greenway Market — Northgate #119",
             "market": "Dallas, TX",
             "stateCode": "TX",
             "eventDate": _d(6),
@@ -387,7 +391,7 @@ def build_sandbox_sample_brand(*, today: date | None = None) -> dict[str, Any]:
             "price": "2.89",
             "outOfStockGap": "yes",
             "photoUrl": _svg_data_uri(
-                title="Whole Foods Park Lane · Shelf Gap",
+                title="Greenway Northgate · Shelf Gap",
                 subtitle="OOS gap detected · missing shelf tag · +16% price drift",
                 badge="OOS GAP · MISSING TAG",
                 accent="#c2410c",
@@ -399,8 +403,8 @@ def build_sandbox_sample_brand(*, today: date | None = None) -> dict[str, Any]:
         },
         {
             "fileId": "sb-p3",
-            "storeKey": "sandbox:heb-houston-montrose",
-            "storeName": "H-E-B #725 — Montrose",
+            "storeKey": "sandbox:sunbelt-houston-oakridge",
+            "storeName": "Sunbelt Grocers #218 — Oakridge",
             "market": "Houston, TX",
             "stateCode": "TX",
             "eventDate": _d(42),
@@ -411,7 +415,7 @@ def build_sandbox_sample_brand(*, today: date | None = None) -> dict[str, Any]:
             "price": "2.79",
             "outOfStockGap": "yes",
             "photoUrl": _svg_data_uri(
-                title="H-E-B #725 Montrose · Earlier Visit",
+                title="Sunbelt #218 Oakridge · Earlier Visit",
                 subtitle="2 facings with 1 OOS slot before distributor restock",
                 badge="BEFORE · 2 FACINGS",
                 accent="#8b5e34",
@@ -423,8 +427,8 @@ def build_sandbox_sample_brand(*, today: date | None = None) -> dict[str, Any]:
         },
         {
             "fileId": "sb-p4",
-            "storeKey": "sandbox:heb-houston-montrose",
-            "storeName": "H-E-B #725 — Montrose",
+            "storeKey": "sandbox:sunbelt-houston-oakridge",
+            "storeName": "Sunbelt Grocers #218 — Oakridge",
             "market": "Houston, TX",
             "stateCode": "TX",
             "eventDate": _d(5),
@@ -435,7 +439,7 @@ def build_sandbox_sample_brand(*, today: date | None = None) -> dict[str, Any]:
             "price": "2.79",
             "outOfStockGap": "no",
             "photoUrl": _svg_data_uri(
-                title="H-E-B #725 Montrose · Latest Visit",
+                title="Sunbelt #218 Oakridge · Latest Visit",
                 subtitle="Expanded to 4 facings post-restock · +31.2% POS lift",
                 badge="AFTER · 4 FACINGS",
                 accent="#2d6a4f",
@@ -446,8 +450,8 @@ def build_sandbox_sample_brand(*, today: date | None = None) -> dict[str, Any]:
         },
         {
             "fileId": "sb-p5",
-            "storeKey": "sandbox:erewhon-santa-monica",
-            "storeName": "Erewhon — Santa Monica",
+            "storeKey": "sandbox:alder-la-westside",
+            "storeName": "Alder & Pine Provisions — Westside",
             "market": "Los Angeles, CA",
             "stateCode": "CA",
             "eventDate": _d(4),
@@ -458,7 +462,7 @@ def build_sandbox_sample_brand(*, today: date | None = None) -> dict[str, Any]:
             "price": "2.99",
             "outOfStockGap": "no",
             "photoUrl": _svg_data_uri(
-                title="Erewhon Santa Monica · Chilled Set",
+                title="Alder & Pine Westside · Chilled Set",
                 subtitle="5 facings · 37.8% demo conversion · $2.99 premium retail",
                 badge="TOP DOOR · 37.8% CONV",
                 accent="#1d4e89",
@@ -469,8 +473,8 @@ def build_sandbox_sample_brand(*, today: date | None = None) -> dict[str, Any]:
         },
         {
             "fileId": "sb-p6",
-            "storeKey": "sandbox:sprouts-denver-colfax",
-            "storeName": "Sprouts Farmers Market — Colfax",
+            "storeKey": "sandbox:harvest-denver-parkview",
+            "storeName": "Harvest Table Co-op — Parkview",
             "market": "Denver, CO",
             "stateCode": "CO",
             "eventDate": _d(8),
@@ -481,7 +485,7 @@ def build_sandbox_sample_brand(*, today: date | None = None) -> dict[str, Any]:
             "price": "2.49",
             "outOfStockGap": "no",
             "photoUrl": _svg_data_uri(
-                title="Sprouts Colfax · Missing Tag Flag",
+                title="Harvest Table Parkview · Missing Tag Flag",
                 subtitle="2 facings on shelf · price tag missing on lower tier",
                 badge="MISSING TAG · 2 FACINGS",
                 accent="#b45309",
@@ -492,8 +496,8 @@ def build_sandbox_sample_brand(*, today: date | None = None) -> dict[str, Any]:
         },
         {
             "fileId": "sb-p7",
-            "storeKey": "sandbox:wfm-austin-lamar",
-            "storeName": "Whole Foods Market — Lamar Flagship",
+            "storeKey": "sandbox:greenway-austin-barton",
+            "storeName": "Greenway Market — Barton Creek #104",
             "market": "Austin, TX",
             "stateCode": "TX",
             "eventDate": _d(54),
@@ -504,7 +508,7 @@ def build_sandbox_sample_brand(*, today: date | None = None) -> dict[str, Any]:
             "price": "2.49",
             "outOfStockGap": "no",
             "photoUrl": _svg_data_uri(
-                title="Whole Foods Lamar · Initial Audit",
+                title="Greenway Barton Creek · Initial Audit",
                 subtitle="Started with 3 facings before Q4 velocity pitch",
                 badge="BEFORE · 3 FACINGS",
                 accent="#5c7a67",
@@ -515,8 +519,8 @@ def build_sandbox_sample_brand(*, today: date | None = None) -> dict[str, Any]:
         },
         {
             "fileId": "sb-p8",
-            "storeKey": "sandbox:wfm-brooklyn-williamsburg",
-            "storeName": "Whole Foods Market — Williamsburg",
+            "storeKey": "sandbox:greenway-nyc-riverfront",
+            "storeName": "Greenway Market — Riverfront #302",
             "market": "New York, NY",
             "stateCode": "NY",
             "eventDate": _d(2),
@@ -527,7 +531,7 @@ def build_sandbox_sample_brand(*, today: date | None = None) -> dict[str, Any]:
             "price": "2.59",
             "outOfStockGap": "no",
             "photoUrl": _svg_data_uri(
-                title="Whole Foods Williamsburg · Endcap",
+                title="Greenway Riverfront · Endcap",
                 subtitle="5 facings · Blood Orange Hibiscus lead SKU",
                 badge="ON SHELF · 5 FACINGS",
                 accent="#9d174d",
@@ -540,8 +544,8 @@ def build_sandbox_sample_brand(*, today: date | None = None) -> dict[str, Any]:
 
     before_after_pairs = [
         {
-            "storeKey": "sandbox:wfm-austin-lamar",
-            "storeName": "Whole Foods Market — Lamar Flagship",
+            "storeKey": "sandbox:greenway-austin-barton",
+            "storeName": "Greenway Market — Barton Creek #104",
             "market": "Austin, TX",
             "stateCode": "TX",
             "photoCount": 2,
@@ -549,8 +553,8 @@ def build_sandbox_sample_brand(*, today: date | None = None) -> dict[str, Any]:
             "afterPhoto": shelf_photos[0],
         },
         {
-            "storeKey": "sandbox:heb-houston-montrose",
-            "storeName": "H-E-B #725 — Montrose",
+            "storeKey": "sandbox:sunbelt-houston-oakridge",
+            "storeName": "Sunbelt Grocers #218 — Oakridge",
             "market": "Houston, TX",
             "stateCode": "TX",
             "photoCount": 2,
@@ -563,71 +567,71 @@ def build_sandbox_sample_brand(*, today: date | None = None) -> dict[str, Any]:
         {
             "market": "Houston, TX",
             "stateCode": "TX",
-            "competitorBrand": "Poppi",
+            "competitorBrand": "Zestify Soda",
             "mentionCount": 9,
             "priorMentionCount": 4,
             "delta": 5,
             "trend": "rising",
-            "sampleQuote": "Several H-E-B shoppers noted Poppi was 2/$4 nearby, but preferred Solstice's zero-stevia citrus finish.",
-            "sampleStoreKey": "sandbox:heb-houston-montrose",
-            "sampleStoreName": "H-E-B #725 — Montrose",
+            "sampleQuote": "Several Sunbelt shoppers noted Zestify Soda was 2/$4 nearby, but preferred Meadowlark's zero-stevia citrus finish.",
+            "sampleStoreKey": "sandbox:sunbelt-houston-oakridge",
+            "sampleStoreName": "Sunbelt Grocers #218 — Oakridge",
         },
         {
             "market": "Austin, TX",
             "stateCode": "TX",
-            "competitorBrand": "Olipop",
+            "competitorBrand": "Bramble Pop",
             "mentionCount": 7,
             "priorMentionCount": 5,
             "delta": 2,
             "trend": "rising",
-            "sampleQuote": "Shoppers compared fiber claims to Olipop endcap; Yuzu Ginger won taste tests 3-to-1.",
-            "sampleStoreKey": "sandbox:wfm-austin-lamar",
-            "sampleStoreName": "Whole Foods Market — Lamar Flagship",
+            "sampleQuote": "Shoppers compared fiber claims to the Bramble Pop endcap; Yuzu Ginger won taste tests 3-to-1.",
+            "sampleStoreKey": "sandbox:greenway-austin-barton",
+            "sampleStoreName": "Greenway Market — Barton Creek #104",
         },
         {
             "market": "Dallas, TX",
             "stateCode": "TX",
-            "competitorBrand": "Liquid Death",
+            "competitorBrand": "PeakWave Tea",
             "mentionCount": 5,
             "priorMentionCount": 0,
             "delta": 5,
             "trend": "new",
-            "sampleQuote": "New sparkling tea display at entrance drew curiosity; shoppers asked how Solstice compares on calories.",
-            "sampleStoreKey": "sandbox:wfm-dallas-parklane",
-            "sampleStoreName": "Whole Foods Market — Park Lane",
+            "sampleQuote": "New PeakWave Tea display at entrance drew curiosity; shoppers asked how Meadowlark compares on calories.",
+            "sampleStoreKey": "sandbox:greenway-dallas-northgate",
+            "sampleStoreName": "Greenway Market — Northgate #119",
         },
         {
             "market": "Denver, CO",
             "stateCode": "CO",
-            "competitorBrand": "Spindrift",
+            "competitorBrand": "CitrusCloud",
             "mentionCount": 6,
             "priorMentionCount": 6,
             "delta": 0,
             "trend": "steady",
-            "sampleQuote": "Loyal Spindrift drinkers loved the botanical complexity of Meyer Lemon Rosemary.",
-            "sampleStoreKey": "sandbox:sprouts-denver-colfax",
-            "sampleStoreName": "Sprouts Farmers Market — Colfax",
+            "sampleQuote": "Loyal CitrusCloud drinkers loved the botanical complexity of Meyer Lemon Rosemary.",
+            "sampleStoreKey": "sandbox:harvest-denver-parkview",
+            "sampleStoreName": "Harvest Table Co-op — Parkview",
         },
         {
             "market": "Los Angeles, CA",
             "stateCode": "CA",
-            "competitorBrand": "Ghia",
+            "competitorBrand": "Verbena Zero",
             "mentionCount": 3,
             "priorMentionCount": 5,
             "delta": -2,
             "trend": "cooling",
-            "sampleQuote": "Erewhon guests called Blood Orange Hibiscus an everyday $2.99 alternative to Ghia.",
-            "sampleStoreKey": "sandbox:erewhon-santa-monica",
-            "sampleStoreName": "Erewhon — Santa Monica",
+            "sampleQuote": "Alder & Pine guests called Blood Orange Hibiscus an everyday $2.99 alternative to Verbena Zero.",
+            "sampleStoreKey": "sandbox:alder-la-westside",
+            "sampleStoreName": "Alder & Pine Provisions — Westside",
         },
     ]
 
     competitor_summary = [
-        {"brand": "Poppi", "prefersOurs": 7, "onlyMentioned": 5, "prefersTheirs": 2},
-        {"brand": "Olipop", "prefersOurs": 6, "onlyMentioned": 4, "prefersTheirs": 1},
-        {"brand": "Spindrift", "prefersOurs": 5, "onlyMentioned": 4, "prefersTheirs": 1},
-        {"brand": "Liquid Death", "prefersOurs": 3, "onlyMentioned": 2, "prefersTheirs": 0},
-        {"brand": "Ghia", "prefersOurs": 2, "onlyMentioned": 1, "prefersTheirs": 0},
+        {"brand": "Zestify Soda", "prefersOurs": 7, "onlyMentioned": 5, "prefersTheirs": 2},
+        {"brand": "Bramble Pop", "prefersOurs": 6, "onlyMentioned": 4, "prefersTheirs": 1},
+        {"brand": "CitrusCloud", "prefersOurs": 5, "onlyMentioned": 4, "prefersTheirs": 1},
+        {"brand": "PeakWave Tea", "prefersOurs": 3, "onlyMentioned": 2, "prefersTheirs": 0},
+        {"brand": "Verbena Zero", "prefersOurs": 2, "onlyMentioned": 1, "prefersTheirs": 0},
     ]
 
     footprint = [
@@ -640,11 +644,11 @@ def build_sandbox_sample_brand(*, today: date | None = None) -> dict[str, Any]:
 
     saved_views = [
         {
-            "id": "sv-tx-wfm",
-            "name": "Texas Whole Foods · Last 90d",
-            "retailerFilter": "Whole Foods Market",
+            "id": "sv-tx-greenway",
+            "name": "Texas Greenway · Last 90d",
+            "retailerFilter": "Greenway Market",
             "marketFilter": "TX",
-            "schedule": "Fridays · CSV + Summary → regional-tx@solsticebev.example",
+            "schedule": "Fridays · CSV + Summary → regional-tx@meadowlarkbev.example",
         },
         {
             "id": "sv-oos-alerts",
@@ -652,21 +656,21 @@ def build_sandbox_sample_brand(*, today: date | None = None) -> dict[str, Any]:
             "retailerFilter": "",
             "marketFilter": "",
             "storeFilter": "attention",
-            "schedule": "Mondays · Ops digest → field-ops@solsticebev.example",
+            "schedule": "Mondays · Ops digest → field-ops@meadowlarkbev.example",
         },
         {
             "id": "sv-ca-premium",
-            "name": "SoCal Natural Doors",
+            "name": "West Coast Natural Doors",
             "retailerFilter": "",
             "marketFilter": "CA",
-            "schedule": "Bi-weekly Fridays → west-broker@solsticebev.example",
+            "schedule": "Bi-weekly Fridays → west-broker@meadowlarkbev.example",
         },
     ]
 
     return {
         "brand": {
-            "name": "Solstice Botanical Sparkling",
-            "tagline": "Botanical Sparkling Water · Zero Stevia · 12oz Cans",
+            "name": "Meadowlark Botanicals",
+            "tagline": "Botanical Sparkling Tonic · Zero Stevia · 12oz Cans",
             "category": "Better-for-You Beverage",
             "targetMsrp": "2.49",
             "skus": [
