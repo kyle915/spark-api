@@ -129,6 +129,44 @@ def test_empty_window():
     assert out["by_weekday"] == [] and out["top_stores"] == []
 
 
+def test_resolve_efficiency_store_cleans_walkin_titles():
+    from types import SimpleNamespace
+    from recaps.field_efficiency import _resolve_efficiency_store
+
+    parenthetical = SimpleNamespace(
+        retailer=None,
+        store_number=None,
+        event=SimpleNamespace(
+            retailer=None,
+            request=None,
+            name="10/30/2026 - Symmes Road, Fairfield, OH 45014 (Jungle Jim's) · Retail Sampling",
+            address="Symmes Road, Fairfield, OH 45014",
+            event_type=SimpleNamespace(name="Retail Sampling"),
+        ),
+    )
+    assert _resolve_efficiency_store(parenthetical, {}) == "Jungle Jim's"
+
+    bare_address = SimpleNamespace(
+        retailer=None,
+        store_number=None,
+        event=SimpleNamespace(
+            retailer=None,
+            request=None,
+            name="10/30/2026 - Symmes Road, Fairfield, OH 45014 · Retail Sampling",
+            address="Symmes Road, Fairfield, OH 45014",
+            event_type=SimpleNamespace(name="Retail Sampling"),
+        ),
+    )
+    assert _resolve_efficiency_store(bare_address, {}) == "Symmes Road, Fairfield, OH 45014"
+
+    numbered_recap = SimpleNamespace(
+        retailer=SimpleNamespace(name="H-E-B"),
+        store_number="614",
+        event=bare_address.event,
+    )
+    assert _resolve_efficiency_store(numbered_recap, {}) == "H-E-B #614"
+
+
 def test_cost_per_output_is_none_without_output():
     assert _per(100.0, 0) is None
     assert _per(100.0, 40) == 2.5
@@ -290,6 +328,33 @@ class TestInsightsBatchSchema(AmbassadorsGraphQLTestCase):
             self._recap(day=5, sampled="400", sold="40")
             self._recap(day=6, sampled="100", sold="5")
             self._recap(day=7, approved=False, sampled="999", sold="99")
+            # Walk-in events on different days at the same store or street
+            # address roll up cleanly without raw "MM/DD/YYYY - " prefixes.
+            when8 = timezone.make_aware(datetime(2026, 10, 8, 18))
+            ev8 = event_models.Event.objects.create(
+                name="10/8/2026 - 5858 Dixie Hwy, Fairfield, OH 45014 (Jungle Jim's) · Retail Sampling",
+                tenant=self.tenant,
+                address="5858 Dixie Hwy, Fairfield, OH 45014",
+                date=when8,
+                event_type=self.et,
+                created_by=self.sys,
+                updated_by=self.sys,
+            )
+            r8 = recap_models.CustomRecap.objects.create(
+                name="r8",
+                approved=True,
+                submitted_at=when8,
+                event=ev8,
+                tenant=self.tenant,
+                custom_recap_template=self.template,
+                created_by=self.sys,
+            )
+            recap_models.CustomFieldValue.objects.create(
+                custom_recap=r8, custom_field=self.sampled, value="200", created_by=self.sys
+            )
+            recap_models.CustomFieldValue.objects.create(
+                custom_recap=r8, custom_field=self.sold, value="60", created_by=self.sys
+            )
             return self._client_user()
 
         me = await sync_to_async(_seed)()
@@ -298,13 +363,15 @@ class TestInsightsBatchSchema(AmbassadorsGraphQLTestCase):
         )
         assert res.errors is None, res.errors
         eff = res.data["tenantFieldEfficiency"]
-        assert eff["total"]["recaps"] == 2
-        assert eff["total"]["sampled"] == 500
-        assert eff["total"]["sold"] == 45
+        assert eff["total"]["recaps"] == 3
+        assert eff["total"]["sampled"] == 700
+        assert eff["total"]["sold"] == 105
         # Nobody clocked in, so there is no per-hour rate to show.
         assert eff["total"]["samplesPerHour"] is None
-        assert eff["recapsWithoutHours"] == 2
-        assert eff["topStores"][0]["sold"] == 40
+        assert eff["recapsWithoutHours"] == 3
+        assert eff["topStores"][0]["label"] == "Jungle Jim's"
+        assert eff["topStores"][0]["sold"] == 60
+        assert eff["topStores"][1]["sold"] == 40
 
 
 ISSUE_M = """

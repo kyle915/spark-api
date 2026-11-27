@@ -257,6 +257,62 @@ def _with_headline(tenant_id: int, start: date | None, end: date | None, summary
     return summary
 
 
+def _resolve_efficiency_store(recap, aliases: dict[str, str]) -> str:
+    """Resolve a recap's display store in the same order as consumer_breakdown,
+    falling back to a clean walk-in place/address without leading dates."""
+    from events.retailer_aliases import resolve_store_name
+    from recaps.consumer_breakdown import (
+        KIND_VENUE,
+        _PROGRAM_SEP,
+        _WALKIN_DATE,
+        _numbered,
+        place_from_walkin_title,
+    )
+
+    event = recap.event
+    req = getattr(event, "request", None) if event is not None else None
+    recap_retailer = _numbered(
+        getattr(getattr(recap, "retailer", None), "name", None),
+        getattr(recap, "store_number", None),
+    )
+    for candidate in (
+        recap_retailer,
+        getattr(getattr(event, "retailer", None), "name", None) if event is not None else None,
+        getattr(getattr(req, "retailer", None), "name", None) if req is not None else None,
+        getattr(req, "retailer_name", None) if req is not None else None,
+    ):
+        cleaned = (candidate or "").strip()
+        if cleaned:
+            return resolve_store_name(cleaned, aliases) if aliases else cleaned
+
+    if event is None:
+        return ""
+    raw_name = (getattr(event, "name", None) or "").strip()
+    if not raw_name:
+        return ""
+    if not _WALKIN_DATE.match(raw_name):
+        return raw_name
+
+    event_type_name = getattr(getattr(event, "event_type", None), "name", None)
+    label, kind = place_from_walkin_title(
+        raw_name, getattr(event, "address", None), event_type_name
+    )
+    if label:
+        if kind == KIND_VENUE:
+            return label
+        return resolve_store_name(label, aliases) if aliases else label
+
+    # Bare street-address walk-in: strip "M/D/YYYY - " and trailing " · <program>".
+    stripped = _WALKIN_DATE.sub("", raw_name).strip()
+    while _PROGRAM_SEP in stripped:
+        cut = stripped.rfind(_PROGRAM_SEP)
+        tail = stripped[cut + len(_PROGRAM_SEP) :]
+        if tail.count("(") != tail.count(")"):
+            break
+        stripped = stripped[:cut].rstrip()
+    return stripped or raw_name
+
+
 def tenant_field_efficiency(tenant_id: int, start: date | None, end: date | None) -> dict:
     from events.pnl import event_pnl_rows
     from utils.tz import iana_for_us_state, resolve_zoneinfo, _try_zone
@@ -269,7 +325,16 @@ def tenant_field_efficiency(tenant_id: int, start: date | None, end: date | None
         ),
         "event__",
         window,
-    ).select_related("event", "event__timezone", "event__retailer", "event__state")
+    ).select_related(
+        "retailer",
+        "event",
+        "event__timezone",
+        "event__retailer",
+        "event__state",
+        "event__event_type",
+        "event__request",
+        "event__request__retailer",
+    )
     recaps = list(recaps)
     if not recaps:
         return _with_headline(tenant_id, start, end, summarize_efficiency([]))
@@ -301,7 +366,7 @@ def tenant_field_efficiency(tenant_id: int, start: date | None, end: date | None
             hours_by_event[row["event_id"]] = float(row.get("hours") or 0)
 
     # Accepted store-name aliases ("HEB" shown as "H-E-B"); usually empty.
-    from events.retailer_aliases import accepted_alias_map, resolve_store_name
+    from events.retailer_aliases import accepted_alias_map
 
     aliases = accepted_alias_map(tenant_id)
 
@@ -319,7 +384,6 @@ def tenant_field_efficiency(tenant_id: int, start: date | None, end: date | None
         sold = _sold_units_from_fields(fields) or 0
         event = r.event
         when = None
-        store = ""
         hours = 0.0
         if event is not None:
             when = getattr(event, "start_time", None) or getattr(event, "date", None)
@@ -333,14 +397,9 @@ def tenant_field_efficiency(tenant_id: int, start: date | None, end: date | None
                     when = when.astimezone(zone)
                 except (ValueError, OverflowError):
                     pass
-            retailer_name = getattr(getattr(event, "retailer", None), "name", None)
-            store = (
-                resolve_store_name(retailer_name, aliases)
-                if retailer_name
-                else (getattr(event, "name", None) or "")
-            )
             share = per_event.get(event.id, 1) or 1
             hours = hours_by_event.get(event.id, 0.0) / share
+        store = _resolve_efficiency_store(r, aliases)
         rows.append(
             {
                 "sampled": int(sampled),
