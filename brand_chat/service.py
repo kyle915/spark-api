@@ -419,8 +419,10 @@ def ask(user, tenant, question: str, conversation=None, *, current_path: str | N
 
     from . import tools as chat_tools
     from .help_knowledge import (
+        RESTRICTED_INTERNAL_REFUSAL,
         _MIN_CONFIDENT_SCORE,
         is_ignite_admin_user,
+        is_restricted_internal_topic,
         normalize_route,
         record_help_gap,
         search_help_knowledge,
@@ -432,6 +434,12 @@ def ask(user, tenant, question: str, conversation=None, *, current_path: str | N
     caller_is_admin = is_ignite_admin_user(user)
     convo_id = _new_conversation_id(conversation)
     turn = BrandChatTurn(tenant=tenant, user=user, conversation=convo_id, question=question)
+
+    if is_restricted_internal_topic(question):
+        turn.status = BrandChatTurn.STATUS_ANSWERED
+        turn.answer = RESTRICTED_INTERNAL_REFUSAL
+        turn.save()
+        return turn
 
     refused = check_limits(user.pk, tenant.id)
     if refused:
@@ -451,6 +459,24 @@ def ask(user, tenant, question: str, conversation=None, *, current_path: str | N
     def run_tool(name: str, args: dict) -> tuple[str, bool]:
         if name == "search_spark_help":
             q_arg = str((args or {}).get("query") or question).strip() or question
+            if is_restricted_internal_topic(q_arg) or is_restricted_internal_topic(question):
+                payload = {
+                    "restricted": True,
+                    "matches": [],
+                    "note": RESTRICTED_INTERNAL_REFUSAL,
+                }
+                text = json.dumps(payload, default=str, ensure_ascii=False)
+                runs.append(
+                    {
+                        "name": name,
+                        "args": {"query": q_arg},
+                        "payload": payload,
+                        "text": text,
+                        "ok": True,
+                        "rows": 0,
+                    }
+                )
+                return text, True
             hits, mode = search_help_knowledge(
                 q_arg,
                 is_admin=caller_is_admin,

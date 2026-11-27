@@ -4,12 +4,15 @@ Powers route-aware Spark Help inside Ask Spark (for both brand clients and
 Ignite admins), AI reply drafting inside `/chat`, and the Admin-only Knowledge
 Base & Unanswered Questions (Knowledge Gaps) console.
 
-Strict Client vs. Admin boundary:
-- ``audience="admin"`` docs and articles are NEVER returned when
-  ``is_admin=False``.
-- Clients may NEVER create, edit, delete, or submit knowledge articles.
-- Only Ignite admins (DB-backed ``is_staff``, ``is_superuser``, ``spark-admin``,
-  or verified ``@igniteproductions.co``) can write knowledge or inspect gaps.
+Strict Security & Policy Boundaries:
+- Spark Help answers **Spark software/product usage only**. It MUST NEVER
+  discuss, disclose, or store **internal Ignite financials** (Ignite P&L,
+  margins, markup, pricing agreements, BA pay rates, payroll, Wingspan
+  payouts, contractor reimbursements, internal billing/accounting) or
+  **internal Ignite processes** (internal ops SOPs, internal staffing/hiring
+  playbooks, internal QA/escalation rules, internal cron/infra secrets).
+- ``audience="admin"`` UI guides are NEVER returned when ``is_admin=False``.
+- Brand clients may NEVER create, edit, delete, or submit knowledge articles.
 """
 
 from __future__ import annotations
@@ -36,6 +39,67 @@ _MIN_CONFIDENT_SCORE = 0.30
 
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 _PHONE_RE = re.compile(r"(?:\+?1[-.\s]?)?(?:\(\d{3}\)|\d{3})[-.\s]?\d{3}[-.\s]?\d{4}")
+
+RESTRICTED_INTERNAL_REFUSAL = (
+    "Spark Help doesn't cover internal Ignite financials or internal Ignite processes. "
+    "I can help with Spark product features and how to use your workspace, or you can "
+    "reach out to your Ignite contact directly."
+)
+
+# Hard regex patterns blocking internal Ignite financials & internal Ignite processes
+# across ALL callers (clients AND admins) in Help Chat and Knowledge authoring.
+# Carefully scoped so brand-facing workspace features like "/demo-costs" or
+# "Budget Pacing" remain unaffected.
+_RESTRICTED_INTERNAL_PATTERNS: tuple[re.Pattern[str], ...] = (
+    # Internal Ignite financials, margins, P&L, payroll, Wingspan, BA pay
+    re.compile(
+        r"\b(?:wingspan|payroll|timesheet|timesheets|w-?9|1099|p&l|p\s*&\s*l|profit\s+and\s+loss|"
+        r"profit\s+margin|gross\s+margin|net\s+margin|markup|mark-up|commission\s+split|"
+        r"contractor\s+pay|contractor\s+payout|ba\s+pay|ba\s+rate|ba\s+rates|ambassador\s+pay|"
+        r"ambassador\s+rate|hourly\s+pay|hourly\s+wage|pay\s+rate|payout\s+schedule|"
+        r"reimbursement\s+policy|expense\s+reimbursement|direct\s+deposit)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bignite(?:'s|s)?\s+(?:internal\s+)?(?:financial|financials|finance|revenue|profit|"
+        r"margin|margins|pricing|rates|billing|accounting|invoice|invoices|costs|cost\s+structure|"
+        r"payroll|budget|fees|fee\s+structure|bank|stripe|payout|payouts)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\binternal\s+(?:ignite\s+)?(?:financial|financials|finance|billing|accounting|pricing|"
+        r"margin|margins|payroll|payout|payouts|p&l|revenue|costs)\b",
+        re.IGNORECASE,
+    ),
+    # Internal Ignite processes, SOPs, staffing/hiring/vetting playbooks, cron/infra secrets
+    re.compile(
+        r"\b(?:x-cron-secret|cloud\s+scheduler|internal/cron|send-saved-view-digests|"
+        r"connecteam\s+import|internal\s+sop|internal\s+sops|internal\s+playbook|"
+        r"internal\s+escalation|internal\s+qa\s+process)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bignite(?:'s|s)?\s+(?:internal\s+)?(?:process|processes|sop|sops|playbook|playbooks|"
+        r"workflow|workflows|procedure|procedures|operations|ops\s+process|staffing\s+process|"
+        r"hiring|recruiting|vetting|onboarding\s+process|approval\s+process|qa\s+process|"
+        r"escalation|policy|policies)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\binternal\s+(?:ignite\s+)?(?:process|processes|workflow|workflows|procedure|procedures|"
+        r"operations|ops|staffing|hiring|recruiting|vetting|escalation|policy|policies)\b",
+        re.IGNORECASE,
+    ),
+)
+
+
+def is_restricted_internal_topic(text: str | None) -> bool:
+    """Return True if ``text`` asks about or describes internal Ignite financials
+    or internal Ignite processes (strictly off-limits for Spark Help)."""
+    cleaned = " ".join((text or "").split())
+    if not cleaned:
+        return False
+    return any(pat.search(cleaned) for pat in _RESTRICTED_INTERNAL_PATTERNS)
 
 _STOP_WORDS = set(
     """a an and are as at be but by can do does for from has have how i if in is it its
@@ -231,97 +295,64 @@ BUILTIN_HELP_DOCS: tuple[dict[str, Any], ...] = (
     },
     {
         "id": "builtin:help-support",
-        "title": "Contacting Ignite Support & Help Center",
+        "title": "Contacting Support & Using the Help Center",
         "category": "getting_started",
         "audience": "all",
         "route_path": "/help",
         "route_label": "Open Help & Support",
         "tags": ["support", "ticket", "contact", "bug", "email", "help"],
         "body": (
-            "Open Help & Support (/help) to submit a support ticket directly to the Ignite team, browse "
-            "FAQs, or reach staffing@igniteproductions.co (scheduling and recaps) and "
-            "finance@igniteproductions.co (billing and invoices)."
+            "Open Help & Support (/help) to submit a support ticket directly to the team or browse "
+            "product FAQs and setup walkthroughs."
         ),
     },
-    # --- Ignite Admins ONLY ("admin") — NEVER surfaced to brand clients! ---
+    # --- Ignite Admins ONLY ("admin") — pure Spark UI how-to (NEVER internal financials or processes!) ---
     {
         "id": "builtin:admin-ba-invites",
-        "title": "Inviting Brand Ambassadors & Managing Shift Rosters (Admin)",
-        "category": "ba_ops",
+        "title": "Using the Invite BA Button & Shift Roster Panel (Admin UI)",
+        "category": "field_ui",
         "audience": "admin",
         "route_path": "/requests/list",
         "route_label": "Open Master Tracker",
-        "tags": ["invite ba", "ambassador", "roster", "staffing", "shift", "accepted", "pending", "talent", "push"],
+        "tags": ["invite ba", "roster", "shift", "accepted", "pending", "talent", "push"],
         "body": (
-            "To invite a Brand Ambassador to a shift, open the request in Master Tracker (/requests/list) "
-            "and click INVITE BA. Selecting a BA sends a 'New shift offered' push notification to their "
-            "mobile Shifts tab where they can Accept or Decline. Track commitments in the ROSTER panel "
-            "(Accepted vs Pending) and cancel or swap BAs directly from the panel."
+            "In Master Tracker (/requests/list), open a request and click INVITE BA to send a shift "
+            "invitation notification to a Brand Ambassador's mobile Shifts tab. Use the ROSTER panel on "
+            "the request page to view Accepted vs Pending statuses or update shift assignments."
         ),
     },
     {
         "id": "builtin:admin-recap-due",
-        "title": "Recap Due Queue, Flag Review & Missing Recaps (Admin)",
-        "category": "ba_ops",
+        "title": "Using the Missing Recaps & Recap Flag Views (Admin UI)",
+        "category": "field_ui",
         "audience": "admin",
         "route_path": "/recaps/missing",
         "route_label": "Open Missing Recaps",
-        "tags": ["recap due", "missing recap", "flags", "qa", "review", "admin edit", "connecteam"],
+        "tags": ["recap due", "missing recap", "flags", "review", "admin edit"],
         "body": (
-            "The Recap Due badge counts completed shifts whose end time has passed without a submitted "
-            "recap. Open Missing Recaps (/recaps/missing) to follow up with BAs or dismiss invalid shifts. "
-            "Inside any recap, Ignite admins can inspect automated QA flags (geo, photo, duplicate, or "
-            "metric warnings), edit numbers directly, review expense receipts, and approve or reject."
-        ),
-    },
-    {
-        "id": "builtin:admin-payroll-wingspan",
-        "title": "BA Timesheets, Payroll Hours & Wingspan Payments (Admin)",
-        "category": "ba_ops",
-        "audience": "admin",
-        "route_path": "/payroll",
-        "route_label": "Open Payroll",
-        "tags": ["payroll", "timesheet", "hours", "wingspan", "payments", "pay", "ba pay", "clock in", "reimbursement"],
-        "body": (
-            "Ignite admins manage ambassador shift hours and clock-in records under Payroll · Hours "
-            "(/payroll) and disburse contractor payouts/reimbursements through Payments · Wingspan "
-            "(/payments). Always verify approved recap + receipt evidence before releasing payouts. "
-            "BA labor rates and Wingspan payout details are strictly internal and never exposed to clients."
-        ),
-    },
-    {
-        "id": "builtin:admin-cron-digests",
-        "title": "Cloud Scheduler Cron Setup for Digests & Jobs (Admin)",
-        "category": "integrations",
-        "audience": "admin",
-        "route_path": "/setup-guide#saved-views",
-        "route_label": "View Cron Setup",
-        "tags": ["cron", "cloud scheduler", "x-cron-secret", "send-saved-view-digests", "internal", "ops"],
-        "body": (
-            "Automated Saved View Friday digests run via a daily Cloud Scheduler HTTP POST to "
-            "/internal/cron/send-saved-view-digests authenticated with the X-Cron-Secret header. "
-            "One-click 'Send now' works immediately without cron setup."
+            "The Recap Due badge counts completed shifts whose end time has passed without a filed "
+            "recap. Open Missing Recaps (/recaps/missing) to inspect overdue shifts, or open any recap "
+            "to inspect automated photo/location/metric advisories, edit fields, and approve."
         ),
     },
     {
         "id": "builtin:admin-chat-inbox",
-        "title": "Spark Chat Inbox, BA DMs, Broadcasts & AI Reply Drafting (Admin)",
-        "category": "ba_ops",
+        "title": "Using the Spark Chat Inbox & AI Reply Drafts (Admin UI)",
+        "category": "field_ui",
         "audience": "admin",
         "route_path": "/chat",
         "route_label": "Open Chat Inbox",
-        "tags": ["chat", "dm", "broadcast", "ambassador message", "draft reply", "teach spark", "inbox"],
+        "tags": ["chat", "dm", "broadcast", "draft reply", "teach spark", "inbox"],
         "body": (
-            "Use Chat (/chat) for two-way messaging with Brand Ambassadors across general DMs and per-job "
-            "threads (every reply sends a mobile push). Click 'Draft AI reply' in any thread composer to "
-            "draft a response grounded in shift details, brand product knowledge, and Spark SOPs — always "
-            "review before sending. Click 'Teach Spark' on any strong admin reply to distill a PII-scrubbed "
-            "entry into the Spark Help Knowledge Base (/help-knowledge)."
+            "Use Chat (/chat) for two-way messaging across general DMs and per-job threads. Click "
+            "'Draft AI' in the composer to generate an editable reply grounded in shift details, brand "
+            "product info, and Spark Help docs (always review before sending). Click 'Teach Spark' on "
+            "a product-help reply to save a clean, PII-scrubbed article to /help-knowledge."
         ),
     },
     {
         "id": "builtin:admin-sandbox",
-        "title": "Admin-Only Sample Brand Sandbox Preview (Admin)",
+        "title": "Admin-Only Sample Brand Sandbox Preview (Admin UI)",
         "category": "getting_started",
         "audience": "admin",
         "route_path": "/sandbox",
@@ -586,6 +617,10 @@ def _load_candidates(*, is_admin: bool, tenant_id: int | None) -> list[dict[str,
         else:
             qs = qs.filter(tenant_id__isnull=True)
         for art in qs.order_by("-updated_at")[:250]:
+            # Defense-in-depth: never surface any article discussing internal Ignite
+            # financials or internal Ignite processes even if manually inserted in DB.
+            if is_restricted_internal_topic(f"{art.title} {art.body}"):
+                continue
             docs.append(
                 {
                     "id": f"article:{art.uuid}",
@@ -622,6 +657,9 @@ def search_help_knowledge(
     Returns ``(hits, mode)`` where ``mode`` is ``"hybrid"`` or ``"bm25"``.
     """
     from utils.ai_text import cosine_similarity
+
+    if is_restricted_internal_topic(question):
+        return [], "blocked"
 
     candidates = _load_candidates(is_admin=is_admin, tenant_id=tenant_id)
     if not candidates:
@@ -760,7 +798,7 @@ def record_help_gap(
     from .models import SparkHelpGap
 
     cleaned = scrub_gap_question(question)
-    if len(cleaned) < 4:
+    if len(cleaned) < 4 or is_restricted_internal_topic(cleaned):
         return None
     norm_key = normalize_gap_key(cleaned)
     caller_role = SparkHelpGap.ROLE_ADMIN if is_admin else SparkHelpGap.ROLE_CLIENT
@@ -840,6 +878,20 @@ def answer_spark_help_question(
             "is_admin_scope": is_admin,
         }
 
+    # Hard policy guardrail: Spark Help NEVER discusses internal Ignite financials
+    # or internal Ignite processes for ANY role (client or admin).
+    if is_restricted_internal_topic(clean_q):
+        return {
+            "ok": True,
+            "reason": None,
+            "answer": RESTRICTED_INTERNAL_REFUSAL,
+            "confidence": "high",
+            "matched_via": "policy",
+            "sources": [],
+            "gap_logged": False,
+            "is_admin_scope": is_admin,
+        }
+
     hits, mode = search_help_knowledge(
         clean_q,
         is_admin=is_admin,
@@ -898,20 +950,25 @@ def answer_spark_help_question(
         )
 
     role_rule = (
-        "The reader is an Ignite Admin; you may cite both client and admin-only ops SOPs from the provided docs."
+        "The reader is an Ignite Admin; you may cite Spark workspace UI docs (including admin UI screens) from the provided docs."
         if is_admin
-        else "The reader is a Brand Client. NEVER mention internal Ignite admin tools, BA pay, Wingspan, Cloud Scheduler cron secrets, or admin-only features."
+        else "The reader is a Brand Client. Only cite brand-visible Spark workspace features."
     )
     system = (
         "You are Spark's built-in product help assistant. Answer the user's question using ONLY "
         "the provided Spark Help documents.\n"
         f"{role_rule}\n"
-        "Rules:\n"
-        "1. Keep the answer concise, practical, and scannable (2-5 short sentences or '-' bullets).\n"
-        "2. Do NOT invent features, buttons, or URLs that are not in the provided documents.\n"
-        "3. If the provided documents do not actually answer the question, set gap_detected=true, "
+        "Non-negotiable rules:\n"
+        "1. NEVER discuss, explain, speculate on, or disclose internal Ignite financials (Ignite P&L, "
+        "margins, markup, internal pricing, BA payroll/pay rates, Wingspan payouts, contractor "
+        "reimbursements, or internal billing/accounting) OR internal Ignite processes (internal ops SOPs, "
+        "internal staffing/hiring/vetting playbooks, internal QA/escalation procedures, or internal "
+        "infrastructure/cron secrets). If asked about any of these, politely decline and set gap_detected=false.\n"
+        "2. Keep the answer concise, practical, and scannable (2-5 short sentences or '-' bullets).\n"
+        "3. Do NOT invent features, buttons, or URLs that are not in the provided documents.\n"
+        "4. If the provided documents do not answer a valid Spark product question, set gap_detected=true, "
         "confidence='low', and state plainly what is missing.\n"
-        "4. Return strict JSON matching the schema."
+        "5. Return strict JSON matching the schema."
     )
     user_prompt = (
         f"Current page: {normalize_route(current_path) or 'unknown'}\n"
@@ -1012,6 +1069,13 @@ def upsert_help_article(
     clean_body = (body or "").strip()[:8000]
     if not clean_title or not clean_body:
         raise ValueError("Title and body are required.")
+    if is_restricted_internal_topic(
+        f"{clean_title} {clean_body} {' '.join(str(t) for t in (tags or []))}"
+    ):
+        raise ValueError(
+            "Spark Help Knowledge cannot store internal Ignite financials (payroll, Wingspan, margins, P&L) "
+            "or internal Ignite processes. Keep articles focused on Spark product usage."
+        )
 
     valid_audiences = {c[0] for c in SparkHelpArticle.AUDIENCE_CHOICES}
     clean_audience = audience if audience in valid_audiences else SparkHelpArticle.AUDIENCE_ALL

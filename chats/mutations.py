@@ -48,7 +48,7 @@ class ChatTeachSparkPreview:
     reason: Optional[str] = None
     title: str = ""
     body: str = ""
-    category: str = "ba_ops"
+    category: str = "field_ui"
     audience: str = "admin"
     tags: list[str] = strawberry.field(default_factory=list)
     route_path: str = "/chat"
@@ -523,7 +523,7 @@ class ChatMutations:
                 reason=None,
                 title=str(res.get("title") or ""),
                 body=str(res.get("body") or ""),
-                category=str(res.get("category") or "ba_ops"),
+                category=str(res.get("category") or "field_ui"),
                 audience=str(res.get("audience") or "admin"),
                 tags=list(res.get("tags") or []),
                 route_path=str(res.get("route_path") or "/chat"),

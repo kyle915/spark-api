@@ -11,10 +11,14 @@ import pytest
 
 from brand_chat.help_knowledge import (
     BUILTIN_HELP_DOCS,
+    RESTRICTED_INTERNAL_REFUSAL,
+    answer_spark_help_question,
     is_ignite_admin_user,
+    is_restricted_internal_topic,
     normalize_gap_key,
     scrub_gap_question,
     search_help_knowledge,
+    upsert_help_article,
 )
 from brand_chat.models import SparkHelpArticle, SparkHelpGap
 from brand_chat.schema import (
@@ -56,19 +60,19 @@ def _admin_user():
 
 
 def test_audience_isolation_and_route_aware_boost():
-    # Admin searching internal payroll / Wingspan gets the admin SOP.
+    # Admin searching admin-only Spark UI screens (Sandbox / Missing Recaps) gets admin docs.
     admin_hits, _ = search_help_knowledge(
-        "How do Wingspan payments and BA payroll hours work?",
+        "How do I preview the admin sample brand sandbox?",
         is_admin=True,
         use_embeddings=False,
     )
     assert admin_hits
     assert any(h.audience == "admin" for h in admin_hits)
-    assert any("/payroll" in h.route_path for h in admin_hits)
+    assert any("/sandbox" in h.route_path for h in admin_hits)
 
-    # Brand client searching the exact same internal terms NEVER gets admin docs!
+    # Brand client searching the exact same admin-only UI screen NEVER gets admin docs!
     client_hits, _ = search_help_knowledge(
-        "How do Wingspan payments and BA payroll hours work?",
+        "How do I preview the admin sample brand sandbox?",
         is_admin=False,
         use_embeddings=False,
     )
@@ -83,6 +87,55 @@ def test_audience_isolation_and_route_aware_boost():
     )
     assert route_hits
     assert route_hits[0].route_path == "/demo-costs"
+
+
+def test_blocks_internal_ignite_financials_and_processes_for_everyone():
+    restricted_prompts = (
+        "How do Wingspan payments and BA payroll hours work?",
+        "What is Ignite's profit margin and P&L breakdown?",
+        "What is Ignite's internal billing markup and fee structure?",
+        "How do Cloud Scheduler X-Cron-Secret jobs run internally?",
+        "Walk me through Ignite's internal staffing process and hiring policy.",
+        "What are BA hourly pay rates and contractor reimbursement policies?",
+    )
+    for prompt in restricted_prompts:
+        assert is_restricted_internal_topic(prompt) is True
+        for is_adm in (False, True):
+            hits, mode = search_help_knowledge(prompt, is_admin=is_adm, use_embeddings=False)
+            assert hits == []
+            assert mode == "blocked"
+
+            res = answer_spark_help_question(prompt, is_admin=is_adm, log_gaps=True)
+            assert res["ok"] is True
+            assert res["answer"] == RESTRICTED_INTERNAL_REFUSAL
+            assert res["matched_via"] == "policy"
+            assert res["sources"] == []
+            assert res["gap_logged"] is False
+
+    # Confirm normal brand workspace product questions are NOT falsely blocked!
+    for safe_prompt in (
+        "How do I use the Demo Costs page?",
+        "How does Budget Pacing calculate projected spend?",
+        "How do I upload Retailer POS CSVs for velocity lift?",
+        "How do I export a Buyer QBR PowerPoint deck?",
+        "How do I configure outbound webhooks for Zapier?",
+    ):
+        assert is_restricted_internal_topic(safe_prompt) is False
+
+    # Confirm no built-in doc leaks internal Ignite financials/processes
+    for doc in BUILTIN_HELP_DOCS:
+        assert not is_restricted_internal_topic(f"{doc['title']} {doc['body']}"), (
+            f"Built-in doc trips internal policy filter: {doc['id']}"
+        )
+
+    # Confirm even admins cannot save an article about internal Ignite financials/processes
+    with pytest.raises(ValueError, match="internal Ignite financials"):
+        upsert_help_article(
+            user=_admin_user(),
+            title="Ignite P&L and BA Payroll Rates",
+            body="Wingspan payout schedule and Ignite profit margin details.",
+            audience="admin",
+        )
 
 
 def test_openai_embeddings_and_hybrid_semantic_retrieval(settings):
