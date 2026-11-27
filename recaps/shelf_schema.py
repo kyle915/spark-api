@@ -153,6 +153,113 @@ class ShelfSummary:
     not_found_more: int
 
 
+@strawberry.type
+class ShelfVoiceStoreRow:
+    store_key: str
+    store_name: str
+    market: str
+    state_code: str
+    visit_count: int
+    latest_date: str
+    latest_recap_uuid: str
+    latest_status: str
+    on_shelf_visits: int
+    not_found_visits: int
+    osa_rate_pct: float | None
+    missing_tag_visits: int
+    oos_gap_visits: int
+    latest_facings: int | None
+    avg_facings: float | None
+    latest_price: str | None
+    price_drift_pct: float | None
+    stockout_signal: str
+    competitor_promo: str
+    has_before_after: bool
+
+
+@strawberry.type
+class ShelfVoicePhoto:
+    file_id: str
+    photo_url: str
+    bucket_name: str
+    store_key: str
+    store_name: str
+    market: str
+    state_code: str
+    event_date: str
+    recap_uuid: str
+    product_on_shelf: str
+    facings: int | None
+    price_tag_visible: str
+    price: str | None
+    out_of_stock_gap: str
+
+
+@strawberry.type
+class ShelfVoiceBeforeAfterPair:
+    store_key: str
+    store_name: str
+    market: str
+    state_code: str
+    photo_count: int
+    before_photo: ShelfVoicePhoto
+    after_photo: ShelfVoicePhoto
+
+
+@strawberry.type
+class ShelfVoiceCompetitorMarket:
+    market: str
+    state_code: str
+    competitor_brand: str
+    mention_count: int
+    prior_mention_count: int
+    delta: int
+    trend: str
+    sample_quote: str
+    sample_store_key: str
+    sample_store_name: str
+    sample_recap_uuid: str
+
+
+@strawberry.type
+class ShelfVoiceCompetitorPromo:
+    store_key: str
+    store_name: str
+    market: str
+    state_code: str
+    event_date: str
+    recap_uuid: str
+    competitor_brand: str
+    detail: str
+
+
+@strawberry.type
+class ShelfVoiceHub:
+    status: str
+    start_date: str
+    end_date: str
+    audited_visits: int
+    unread_visits: int
+    on_shelf_count: int
+    not_found_count: int
+    unclear_count: int
+    osa_rate_pct: float | None
+    price_tag_visible_count: int
+    missing_tag_count: int
+    price_tag_rate_pct: float | None
+    oos_gaps_count: int
+    avg_facings: float | None
+    median_price: str | None
+    min_price: str | None
+    max_price: str | None
+    priced_visits_count: int
+    stores: list[ShelfVoiceStoreRow]
+    shelf_photos: list[ShelfVoicePhoto]
+    before_after_pairs: list[ShelfVoiceBeforeAfterPair]
+    competitor_markets: list[ShelfVoiceCompetitorMarket]
+    competitor_promos: list[ShelfVoiceCompetitorPromo]
+
+
 def _answers_type(answers: dict) -> ShelfAnswers:
     price = answers.get("price")
     return ShelfAnswers(
@@ -257,6 +364,53 @@ def _empty_summary(status: str) -> ShelfSummary:
     )
 
 
+def _empty_hub(status: str) -> ShelfVoiceHub:
+    return ShelfVoiceHub(
+        status=status,
+        start_date="",
+        end_date="",
+        audited_visits=0,
+        unread_visits=0,
+        on_shelf_count=0,
+        not_found_count=0,
+        unclear_count=0,
+        osa_rate_pct=None,
+        price_tag_visible_count=0,
+        missing_tag_count=0,
+        price_tag_rate_pct=None,
+        oos_gaps_count=0,
+        avg_facings=None,
+        median_price=None,
+        min_price=None,
+        max_price=None,
+        priced_visits_count=0,
+        stores=[],
+        shelf_photos=[],
+        before_after_pairs=[],
+        competitor_markets=[],
+        competitor_promos=[],
+    )
+
+
+def _hub_photo_type(row: dict) -> ShelfVoicePhoto:
+    return ShelfVoicePhoto(
+        file_id=str(row["file_id"]),
+        photo_url=str(row["photo_url"]),
+        bucket_name=str(row.get("bucket_name") or "Shelf"),
+        store_key=str(row.get("store_key") or ""),
+        store_name=str(row.get("store_name") or "Store"),
+        market=str(row.get("market") or ""),
+        state_code=str(row.get("state_code") or ""),
+        event_date=str(row.get("event_date") or ""),
+        recap_uuid=str(row.get("recap_uuid") or ""),
+        product_on_shelf=str(row.get("product_on_shelf") or "unclear"),
+        facings=row.get("facings"),
+        price_tag_visible=str(row.get("price_tag_visible") or "unclear"),
+        price=row.get("price"),
+        out_of_stock_gap=str(row.get("out_of_stock_gap") or "unclear"),
+    )
+
+
 @strawberry.type
 class ShelfCheckQueries:
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
@@ -321,6 +475,86 @@ class ShelfCheckQueries:
         except Exception:  # noqa: BLE001
             logger.exception("shelfSummary failed tenant=%s", target)
             return _empty_summary("unavailable")
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def shelf_voice_hub(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> ShelfVoiceHub:
+        """Shelf Compliance, Pricing & Competitor Voice Hub for one brand and window.
+
+        Strictly tenant-scoped (staff for any brand; brand users only their own).
+        Reads stored shelf readings, shelf photos, store signals, and competitor
+        mentions without invoking any LLM or exposing staff notes / BA PII.
+        """
+        try:
+            target = resolve_id_to_int(str(tenant_id).strip())
+        except Exception:  # noqa: BLE001
+            return _empty_hub("unavailable")
+        is_admin, allowed = await _accessible_tenants(info.context.request.user)
+        if not is_admin and target not in (allowed or set()):
+            return _empty_hub("unavailable")
+
+        def _build() -> ShelfVoiceHub:
+            from recaps.shelf_voice_hub import build_shelf_voice_hub
+
+            data = build_shelf_voice_hub(
+                target, _parse_date(start_date), _parse_date(end_date)
+            )
+            return ShelfVoiceHub(
+                status=data["status"],
+                start_date=data["start_date"],
+                end_date=data["end_date"],
+                audited_visits=data["audited_visits"],
+                unread_visits=data["unread_visits"],
+                on_shelf_count=data["on_shelf_count"],
+                not_found_count=data["not_found_count"],
+                unclear_count=data["unclear_count"],
+                osa_rate_pct=data["osa_rate_pct"],
+                price_tag_visible_count=data["price_tag_visible_count"],
+                missing_tag_count=data["missing_tag_count"],
+                price_tag_rate_pct=data["price_tag_rate_pct"],
+                oos_gaps_count=data["oos_gaps_count"],
+                avg_facings=data["avg_facings"],
+                median_price=data["median_price"],
+                min_price=data["min_price"],
+                max_price=data["max_price"],
+                priced_visits_count=data["priced_visits_count"],
+                stores=[
+                    ShelfVoiceStoreRow(**row)
+                    for row in data["stores"]
+                ],
+                shelf_photos=[_hub_photo_type(row) for row in data["shelf_photos"]],
+                before_after_pairs=[
+                    ShelfVoiceBeforeAfterPair(
+                        store_key=p["store_key"],
+                        store_name=p["store_name"],
+                        market=p["market"],
+                        state_code=p["state_code"],
+                        photo_count=p["photo_count"],
+                        before_photo=_hub_photo_type(p["before_photo"]),
+                        after_photo=_hub_photo_type(p["after_photo"]),
+                    )
+                    for p in data["before_after_pairs"]
+                ],
+                competitor_markets=[
+                    ShelfVoiceCompetitorMarket(**row)
+                    for row in data["competitor_markets"]
+                ],
+                competitor_promos=[
+                    ShelfVoiceCompetitorPromo(**row)
+                    for row in data["competitor_promos"]
+                ],
+            )
+
+        try:
+            return await sync_to_async(_build, thread_sensitive=True)()
+        except Exception:  # noqa: BLE001
+            logger.exception("shelfVoiceHub failed tenant=%s", target)
+            return _empty_hub("unavailable")
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def store_prep_kit(
