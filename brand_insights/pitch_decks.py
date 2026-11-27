@@ -32,6 +32,14 @@ from django.utils import timezone
 from brand_insights.deck_captions import enrich_deck_photos, overlay_snapshot_captions
 from brand_insights.models import BuyerPitchDeck
 from brand_insights.photo_wall import resolve_deck_photos
+from brand_insights.pitch_qbr_data import (
+    build_pitch_footprint,
+    build_pitch_pos_halo,
+    build_pitch_shelf_compliance,
+    build_pitch_shopper_voice,
+    scoped_canonical_visits,
+    synthesize_fallback_footprint,
+)
 from pilot.actions import build_weekly_buyer_store_report
 from pilot.costs import quantize_money
 from pilot.permissions import ResolvedWorkspaceAccess, log_workspace_audit
@@ -320,6 +328,42 @@ def _build_deck_snapshot(
         kpis["costPerUnitBasis"] = cost_per_unit_basis
         kpis["costPerSample"] = cost_per_sample
 
+    # QBR / Line-Review enrichments: state footprint, 2–4w post-demo POS halo,
+    # OSA / shelf compliance, and PII-scrubbed shopper voice.
+    scoped_visits = scoped_canonical_visits(
+        access.tenant,
+        period_start=eff_start,
+        period_end=eff_end,
+        retailer_filter=retailer_filter,
+        market_filter=market_filter,
+        provider_uuid=provider_uuid,
+    )
+    adj_by_store = {
+        r["store_key"]: int(r["adjusted_register_units"])
+        for r in rows
+        if r.get("adjusted_register_units") is not None
+    }
+    footprint = build_pitch_footprint(scoped_visits, adj_units_by_store=adj_by_store)
+    pos_halo = build_pitch_pos_halo(
+        access.tenant,
+        visits=scoped_visits,
+        period_start=eff_start,
+        period_end=eff_end,
+        scoped=scoped,
+    )
+    shelf_compliance = build_pitch_shelf_compliance(
+        access.tenant.id,
+        period_start=eff_start,
+        period_end=eff_end,
+        retailer_filter=retailer_filter,
+        market_filter=market_filter,
+    )
+    shopper_voice = build_pitch_shopper_voice(
+        access.tenant.id,
+        period_start=eff_start,
+        period_end=eff_end,
+    )
+
     snapshot = {
         "brand": _tenant_brand_snapshot(access.tenant),
         "periodStart": eff_start.isoformat(),
@@ -330,6 +374,10 @@ def _build_deck_snapshot(
         "kpis": kpis,
         "retailerBreakdown": retailer_breakdown,
         "topStoreWins": top_store_wins,
+        "footprint": footprint,
+        "posHalo": pos_halo,
+        "shelfCompliance": shelf_compliance,
+        "shopperVoice": shopper_voice,
         "photos": photos,
     }
     return eff_start, eff_end, snapshot
@@ -385,6 +433,42 @@ def create_buyer_pitch_deck(
         access.tenant.id,
         requested_photo_ids=pinned_photo_ids,
     )
+    # When using default pinned photos for a retailer/market-scoped QBR deck,
+    # float matching retailer/market photos to the front so the buyer sees
+    # their own doors first.
+    if pinned_photo_ids is None and photos and (clean_retailer or clean_market):
+        rf_low = clean_retailer.lower()
+        mf_low = clean_market.lower()
+
+        def _photo_scope_rank(p: dict[str, Any]) -> int:
+            ret_match = bool(
+                rf_low
+                and (
+                    rf_low in str(p.get("retailer") or "").lower()
+                    or rf_low in str(p.get("store") or "").lower()
+                )
+            )
+            mkt_match = bool(
+                mf_low
+                and (
+                    mf_low in str(p.get("market") or "").lower()
+                    or mf_low in str(p.get("state") or "").lower()
+                )
+            )
+            if ret_match and mkt_match:
+                return 0
+            if ret_match:
+                return 1
+            if mkt_match:
+                return 2
+            return 3
+
+        paired = sorted(
+            zip(validated_photo_ids, photos),
+            key=lambda pair: _photo_scope_rank(pair[1]),
+        )
+        validated_photo_ids = [pid for pid, _ in paired]
+        photos = [p for _, p in paired]
 
     eff_start, eff_end, snapshot = _build_deck_snapshot(
         access,
@@ -547,6 +631,48 @@ def _sanitize_public_deck_payload(deck: BuyerPitchDeck) -> dict[str, Any]:
     brand = dict(snap.get("brand") or {})
     brand.setdefault("name", deck.tenant.name)
     sell_story = (snap.get("sellStory") or "").strip() or (deck.intro_note or "")
+    footprint = snap.get("footprint")
+    if not isinstance(footprint, dict):
+        footprint = synthesize_fallback_footprint(top_store_wins)
+    pos_halo = snap.get("posHalo")
+    if not isinstance(pos_halo, dict):
+        pos_halo = {
+            "available": False,
+            "note": "Connect retailer POS feeds spanning demo and post-demo weeks to measure 2–4 week velocity halo.",
+            "baselineAvgUnits": None,
+            "demoWeekLiftPct": None,
+            "postDemoHaloPct": None,
+            "matchedStores": 0,
+            "weeks": [],
+        }
+    shelf_compliance = snap.get("shelfCompliance")
+    if not isinstance(shelf_compliance, dict):
+        shelf_compliance = {
+            "available": False,
+            "auditedVisits": 0,
+            "unreadVisits": 0,
+            "onShelfCount": 0,
+            "notFoundCount": 0,
+            "unclearCount": 0,
+            "osaRatePct": None,
+            "priceTagVisibleCount": 0,
+            "priceTagRatePct": None,
+            "avgFacings": None,
+            "medianPrice": None,
+            "oosGapsFlagged": 0,
+            "scopedToFilter": False,
+        }
+    shopper_voice = snap.get("shopperVoice")
+    if not isinstance(shopper_voice, dict):
+        shopper_voice = {
+            "available": False,
+            "source": "none",
+            "commentCount": 0,
+            "recapCount": 0,
+            "highlights": [],
+            "themes": [],
+            "quotes": [],
+        }
 
     return {
         "title": deck.title,
@@ -568,6 +694,10 @@ def _sanitize_public_deck_payload(deck: BuyerPitchDeck) -> dict[str, Any]:
         "kpis": kpis,
         "retailerBreakdown": retailer_breakdown,
         "topStoreWins": top_store_wins,
+        "footprint": footprint,
+        "posHalo": pos_halo,
+        "shelfCompliance": shelf_compliance,
+        "shopperVoice": shopper_voice,
         "photos": photos,
     }
 
