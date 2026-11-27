@@ -2290,6 +2290,205 @@ class PilotQueries:
 
         return await sync_to_async(_run, thread_sensitive=True)()
 
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def saved_report_views(
+        self,
+        info: strawberry.Info,
+        surface: str | None = None,
+        tenant_id: strawberry.ID | None = None,
+    ) -> list[SavedReportViewItem]:
+        def _run():
+            from pilot.saved_views import (
+                DAY_LABELS,
+                describe_saved_view_filters,
+                list_saved_report_views,
+            )
+
+            access = _access_for_info(info, tenant_id=tenant_id)
+            rows = list_saved_report_views(access, surface=surface)
+            return [
+                SavedReportViewItem(
+                    uuid=str(v.uuid),
+                    name=v.name,
+                    surface=v.surface,
+                    filters_json=json.dumps(v.filters or {}),
+                    filter_summary=describe_saved_view_filters(v.filters or {}),
+                    schedule_enabled=bool(v.schedule_enabled),
+                    schedule_cadence=v.schedule_cadence,
+                    schedule_day_of_week=int(v.schedule_day_of_week),
+                    schedule_day_label=DAY_LABELS[int(v.schedule_day_of_week) % 7],
+                    export_format=v.export_format,
+                    recipient_emails=v.recipient_emails or "",
+                    last_sent_at=v.last_sent_at.isoformat() if v.last_sent_at else None,
+                    last_send_status=v.last_send_status or "",
+                    last_send_error=v.last_send_error or "",
+                    created_at=v.created_at.isoformat(),
+                )
+                for v in rows
+            ]
+
+        return await sync_to_async(_run, thread_sensitive=True)()
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def workspace_webhooks(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID | None = None,
+    ) -> WebhooksWorkspaceView:
+        def _run():
+            from pilot.webhooks import (
+                SUPPORTED_WEBHOOK_EVENTS,
+                list_webhook_endpoints,
+                mask_webhook_secret,
+            )
+
+            access = _access_for_info(info, tenant_id=tenant_id)
+            can_manage = bool(access.is_brand_admin or access.can_manage_pos)
+            endpoints = list_webhook_endpoints(access)
+            out_eps: list[WebhookEndpointItem] = []
+            for ep in endpoints:
+                deliveries = list(ep.deliveries.all()[:10])
+                out_eps.append(
+                    WebhookEndpointItem(
+                        uuid=str(ep.uuid),
+                        name=ep.name,
+                        url=ep.url,
+                        description=ep.description or "",
+                        events=list(ep.events or []),
+                        signing_secret_preview=mask_webhook_secret(ep.signing_secret),
+                        is_active=bool(ep.is_active),
+                        consecutive_failures=int(ep.consecutive_failures or 0),
+                        last_delivery_at=(
+                            ep.last_delivery_at.isoformat()
+                            if ep.last_delivery_at
+                            else None
+                        ),
+                        last_status_code=ep.last_status_code,
+                        created_at=ep.created_at.isoformat(),
+                        recent_deliveries=[
+                            WebhookDeliveryItem(
+                                uuid=str(d.uuid),
+                                event_type=d.event_type,
+                                event_id=d.event_id,
+                                status=d.status,
+                                http_status=d.http_status,
+                                duration_ms=d.duration_ms,
+                                response_excerpt=d.response_excerpt or "",
+                                error_message=d.error_message or "",
+                                created_at=d.created_at.isoformat(),
+                            )
+                            for d in deliveries
+                        ],
+                    )
+                )
+            return WebhooksWorkspaceView(
+                tenant_name=access.tenant.name or "",
+                can_manage=can_manage,
+                supported_events=[
+                    WebhookCatalogEventItem(**item) for item in SUPPORTED_WEBHOOK_EVENTS
+                ],
+                endpoints=out_eps,
+            )
+
+        return await sync_to_async(_run, thread_sensitive=True)()
+
+
+@strawberry.type
+class SavedReportViewItem:
+    uuid: str
+    name: str
+    surface: str
+    filters_json: str
+    filter_summary: str
+    schedule_enabled: bool
+    schedule_cadence: str
+    schedule_day_of_week: int
+    schedule_day_label: str
+    export_format: str
+    recipient_emails: str
+    last_sent_at: str | None
+    last_send_status: str
+    last_send_error: str
+    created_at: str
+
+
+@strawberry.type
+class SavedReportViewOutcome:
+    ok: bool
+    error: str | None = None
+    view: SavedReportViewItem | None = None
+
+
+@strawberry.type
+class SavedReportViewSendOutcome:
+    ok: bool
+    status: str
+    recipients: list[str]
+    row_count: int = 0
+    period_label: str = ""
+    error: str | None = None
+
+
+@strawberry.type
+class WebhookCatalogEventItem:
+    event: str
+    label: str
+    description: str
+
+
+@strawberry.type
+class WebhookDeliveryItem:
+    uuid: str
+    event_type: str
+    event_id: str
+    status: str
+    http_status: int | None
+    duration_ms: int | None
+    response_excerpt: str
+    error_message: str
+    created_at: str
+
+
+@strawberry.type
+class WebhookEndpointItem:
+    uuid: str
+    name: str
+    url: str
+    description: str
+    events: list[str]
+    signing_secret_preview: str
+    is_active: bool
+    consecutive_failures: int
+    last_delivery_at: str | None
+    last_status_code: int | None
+    created_at: str
+    recent_deliveries: list[WebhookDeliveryItem]
+
+
+@strawberry.type
+class WebhooksWorkspaceView:
+    tenant_name: str
+    can_manage: bool
+    supported_events: list[WebhookCatalogEventItem]
+    endpoints: list[WebhookEndpointItem]
+
+
+@strawberry.type
+class WebhookEndpointMutationOutcome:
+    ok: bool
+    error: str | None = None
+    endpoint_uuid: str | None = None
+    signing_secret: str | None = None
+
+
+@strawberry.type
+class WebhookTestOutcome:
+    ok: bool
+    status: str
+    http_status: int | None = None
+    duration_ms: int | None = None
+    error: str | None = None
+
 
 @strawberry.type
 class PilotMutations:
@@ -3754,5 +3953,280 @@ class PilotMutations:
                 )
             except Exception as exc:  # noqa: BLE001
                 return BillingTestCheckOutcome(ok=False, error=str(exc))
+
+        return await sync_to_async(_run, thread_sensitive=True)()
+
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def upsert_saved_report_view(
+        self,
+        info: strawberry.Info,
+        name: str,
+        surface: str = "buyer_report",
+        filters_json: str = "{}",
+        schedule_enabled: bool = False,
+        schedule_cadence: str = "weekly",
+        schedule_day_of_week: int = 4,
+        export_format: str = "csv",
+        recipient_emails: str = "",
+        view_uuid: str | None = None,
+        tenant_id: strawberry.ID | None = None,
+    ) -> SavedReportViewOutcome:
+        def _run():
+            try:
+                from pilot.saved_views import (
+                    DAY_LABELS,
+                    describe_saved_view_filters,
+                    upsert_saved_report_view,
+                )
+
+                access = _access_for_info(info, tenant_id=tenant_id)
+                parsed_filters = json.loads(filters_json or "{}")
+                if not isinstance(parsed_filters, dict):
+                    parsed_filters = {}
+                v = upsert_saved_report_view(
+                    access,
+                    view_uuid=view_uuid,
+                    name=name,
+                    surface=surface,
+                    filters=parsed_filters,
+                    schedule_enabled=schedule_enabled,
+                    schedule_cadence=schedule_cadence,
+                    schedule_day_of_week=schedule_day_of_week,
+                    export_format=export_format,
+                    recipient_emails=recipient_emails,
+                )
+                return SavedReportViewOutcome(
+                    ok=True,
+                    view=SavedReportViewItem(
+                        uuid=str(v.uuid),
+                        name=v.name,
+                        surface=v.surface,
+                        filters_json=json.dumps(v.filters or {}),
+                        filter_summary=describe_saved_view_filters(v.filters or {}),
+                        schedule_enabled=bool(v.schedule_enabled),
+                        schedule_cadence=v.schedule_cadence,
+                        schedule_day_of_week=int(v.schedule_day_of_week),
+                        schedule_day_label=DAY_LABELS[int(v.schedule_day_of_week) % 7],
+                        export_format=v.export_format,
+                        recipient_emails=v.recipient_emails or "",
+                        last_sent_at=(
+                            v.last_sent_at.isoformat() if v.last_sent_at else None
+                        ),
+                        last_send_status=v.last_send_status or "",
+                        last_send_error=v.last_send_error or "",
+                        created_at=v.created_at.isoformat(),
+                    ),
+                )
+            except Exception as exc:  # noqa: BLE001
+                return SavedReportViewOutcome(ok=False, error=str(exc))
+
+        return await sync_to_async(_run, thread_sensitive=True)()
+
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def delete_saved_report_view(
+        self,
+        info: strawberry.Info,
+        view_uuid: str,
+        tenant_id: strawberry.ID | None = None,
+    ) -> PilotMutationOutcome:
+        def _run():
+            try:
+                from pilot.saved_views import delete_saved_report_view
+
+                access = _access_for_info(info, tenant_id=tenant_id)
+                ok = delete_saved_report_view(access, view_uuid=view_uuid)
+                return PilotMutationOutcome(
+                    ok=ok,
+                    target_uuid=view_uuid,
+                    error=None if ok else "Saved view not found.",
+                )
+            except Exception as exc:  # noqa: BLE001
+                return PilotMutationOutcome(ok=False, error=str(exc))
+
+        return await sync_to_async(_run, thread_sensitive=True)()
+
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def send_saved_report_view_now(
+        self,
+        info: strawberry.Info,
+        view_uuid: str,
+        test_email: str | None = None,
+        tenant_id: strawberry.ID | None = None,
+    ) -> SavedReportViewSendOutcome:
+        def _run():
+            try:
+                from pilot.models import SavedReportView
+                from pilot.saved_views import send_saved_report_view_digest
+
+                access = _access_for_info(info, tenant_id=tenant_id)
+                view = SavedReportView.objects.select_related("tenant").filter(
+                    tenant=access.tenant, uuid=view_uuid
+                ).first()
+                if view is None:
+                    return SavedReportViewSendOutcome(
+                        ok=False,
+                        status="not_found",
+                        recipients=[],
+                        error="Saved view not found.",
+                    )
+                override = (test_email or "").strip()
+                if not override and not (view.recipient_emails or "").strip():
+                    override = (getattr(access.user, "email", "") or "").strip()
+                res = send_saved_report_view_digest(
+                    view, force=True, override_email=override
+                )
+                return SavedReportViewSendOutcome(
+                    ok=res.get("status") == "sent",
+                    status=str(res.get("status") or "failed"),
+                    recipients=list(res.get("recipients") or []),
+                    row_count=int(res.get("row_count") or 0),
+                    period_label=str(res.get("period_label") or ""),
+                    error=(
+                        None
+                        if res.get("status") == "sent"
+                        else f"Digest status: {res.get('status')}"
+                    ),
+                )
+            except Exception as exc:  # noqa: BLE001
+                return SavedReportViewSendOutcome(
+                    ok=False, status="error", recipients=[], error=str(exc)
+                )
+
+        return await sync_to_async(_run, thread_sensitive=True)()
+
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def create_webhook_endpoint(
+        self,
+        info: strawberry.Info,
+        name: str,
+        url: str,
+        events: list[str],
+        description: str = "",
+        tenant_id: strawberry.ID | None = None,
+    ) -> WebhookEndpointMutationOutcome:
+        def _run():
+            try:
+                from pilot.webhooks import create_webhook_endpoint
+
+                access = _access_for_info(info, tenant_id=tenant_id)
+                ep, secret = create_webhook_endpoint(
+                    access,
+                    name=name,
+                    url=url,
+                    events=events,
+                    description=description,
+                )
+                return WebhookEndpointMutationOutcome(
+                    ok=True, endpoint_uuid=str(ep.uuid), signing_secret=secret
+                )
+            except Exception as exc:  # noqa: BLE001
+                return WebhookEndpointMutationOutcome(ok=False, error=str(exc))
+
+        return await sync_to_async(_run, thread_sensitive=True)()
+
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def update_webhook_endpoint(
+        self,
+        info: strawberry.Info,
+        endpoint_uuid: str,
+        name: str | None = None,
+        url: str | None = None,
+        events: list[str] | None = None,
+        description: str | None = None,
+        is_active: bool | None = None,
+        tenant_id: strawberry.ID | None = None,
+    ) -> WebhookEndpointMutationOutcome:
+        def _run():
+            try:
+                from pilot.webhooks import update_webhook_endpoint
+
+                access = _access_for_info(info, tenant_id=tenant_id)
+                ep = update_webhook_endpoint(
+                    access,
+                    endpoint_uuid=endpoint_uuid,
+                    name=name,
+                    url=url,
+                    events=events,
+                    description=description,
+                    is_active=is_active,
+                )
+                return WebhookEndpointMutationOutcome(
+                    ok=True, endpoint_uuid=str(ep.uuid)
+                )
+            except Exception as exc:  # noqa: BLE001
+                return WebhookEndpointMutationOutcome(ok=False, error=str(exc))
+
+        return await sync_to_async(_run, thread_sensitive=True)()
+
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def rotate_webhook_secret(
+        self,
+        info: strawberry.Info,
+        endpoint_uuid: str,
+        tenant_id: strawberry.ID | None = None,
+    ) -> WebhookEndpointMutationOutcome:
+        def _run():
+            try:
+                from pilot.webhooks import rotate_webhook_secret
+
+                access = _access_for_info(info, tenant_id=tenant_id)
+                ep, new_secret = rotate_webhook_secret(
+                    access, endpoint_uuid=endpoint_uuid
+                )
+                return WebhookEndpointMutationOutcome(
+                    ok=True, endpoint_uuid=str(ep.uuid), signing_secret=new_secret
+                )
+            except Exception as exc:  # noqa: BLE001
+                return WebhookEndpointMutationOutcome(ok=False, error=str(exc))
+
+        return await sync_to_async(_run, thread_sensitive=True)()
+
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def delete_webhook_endpoint(
+        self,
+        info: strawberry.Info,
+        endpoint_uuid: str,
+        tenant_id: strawberry.ID | None = None,
+    ) -> PilotMutationOutcome:
+        def _run():
+            try:
+                from pilot.webhooks import delete_webhook_endpoint
+
+                access = _access_for_info(info, tenant_id=tenant_id)
+                ok = delete_webhook_endpoint(access, endpoint_uuid=endpoint_uuid)
+                return PilotMutationOutcome(
+                    ok=ok,
+                    target_uuid=endpoint_uuid,
+                    error=None if ok else "Webhook endpoint not found.",
+                )
+            except Exception as exc:  # noqa: BLE001
+                return PilotMutationOutcome(ok=False, error=str(exc))
+
+        return await sync_to_async(_run, thread_sensitive=True)()
+
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def send_test_webhook(
+        self,
+        info: strawberry.Info,
+        endpoint_uuid: str,
+        tenant_id: strawberry.ID | None = None,
+    ) -> WebhookTestOutcome:
+        def _run():
+            try:
+                from pilot.webhooks import send_test_webhook
+
+                access = _access_for_info(info, tenant_id=tenant_id)
+                d = send_test_webhook(access, endpoint_uuid=endpoint_uuid)
+                return WebhookTestOutcome(
+                    ok=d.status == "delivered",
+                    status=d.status,
+                    http_status=d.http_status,
+                    duration_ms=d.duration_ms,
+                    error=d.error_message or None,
+                )
+            except Exception as exc:  # noqa: BLE001
+                return WebhookTestOutcome(
+                    ok=False, status="failed", error=str(exc)
+                )
 
         return await sync_to_async(_run, thread_sensitive=True)()

@@ -2413,3 +2413,188 @@ class PosFeedDrop(models.Model):
             )
         ]
 
+
+class SavedReportView(models.Model):
+    """Named regional/retailer report slice with optional scheduled digest email."""
+
+    SURFACE_BUYER_REPORT = "buyer_report"
+    SURFACE_PROGRAM_REPORT = "program_report"
+    SURFACE_SHELF_VOICE = "shelf_voice"
+    SURFACE_RETAILER_POS = "retailer_pos"
+    SURFACE_CHOICES = [
+        (SURFACE_BUYER_REPORT, "Buyer Report"),
+        (SURFACE_PROGRAM_REPORT, "Program Report"),
+        (SURFACE_SHELF_VOICE, "Shelf & Voice"),
+        (SURFACE_RETAILER_POS, "Retailer POS"),
+    ]
+
+    CADENCE_WEEKLY = "weekly"
+    CADENCE_BIWEEKLY = "biweekly"
+    CADENCE_MONTHLY = "monthly"
+    CADENCE_CHOICES = [
+        (CADENCE_WEEKLY, "Weekly"),
+        (CADENCE_BIWEEKLY, "Bi-weekly"),
+        (CADENCE_MONTHLY, "Monthly"),
+    ]
+
+    FORMAT_CSV = "csv"
+    FORMAT_SUMMARY = "summary"
+    FORMAT_CHOICES = [
+        (FORMAT_CSV, "Summary + CSV"),
+        (FORMAT_SUMMARY, "Summary Only"),
+    ]
+
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    tenant = models.ForeignKey(
+        "tenants.Tenant",
+        on_delete=models.CASCADE,
+        related_name="saved_report_views",
+    )
+    name = models.CharField(max_length=120)
+    surface = models.CharField(
+        max_length=32,
+        choices=SURFACE_CHOICES,
+        default=SURFACE_BUYER_REPORT,
+        db_index=True,
+    )
+    filters = models.JSONField(default=dict, blank=True)
+    schedule_enabled = models.BooleanField(default=False, db_index=True)
+    schedule_cadence = models.CharField(
+        max_length=16, choices=CADENCE_CHOICES, default=CADENCE_WEEKLY
+    )
+    # 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri (default), 5=Sat, 6=Sun
+    schedule_day_of_week = models.PositiveSmallIntegerField(default=4)
+    export_format = models.CharField(
+        max_length=16, choices=FORMAT_CHOICES, default=FORMAT_CSV
+    )
+    recipient_emails = models.TextField(blank=True, default="")
+    last_sent_at = models.DateTimeField(null=True, blank=True)
+    last_send_status = models.CharField(max_length=32, blank=True, default="")
+    last_send_error = models.CharField(max_length=240, blank=True, default="")
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="saved_report_views_created",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name", "id"]
+        indexes = [
+            models.Index(
+                fields=["tenant", "surface"],
+                name="pilot_savedview_ten_surf_idx",
+            ),
+            models.Index(
+                fields=["schedule_enabled", "schedule_day_of_week"],
+                name="pilot_savedview_sched_day_idx",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"SavedReportView({self.tenant_id}, {self.name!r})"
+
+
+class WebhookEndpoint(models.Model):
+    """Tenant-scoped outbound HTTPS webhook subscription (HMAC-SHA256 signed)."""
+
+    EVENT_RECAP_APPROVED = "recap.approved"
+    EVENT_REQUEST_CREATED = "request.created"
+    EVENT_SHELF_OOS_DETECTED = "shelf.oos_detected"
+    SUPPORTED_EVENTS = (
+        EVENT_RECAP_APPROVED,
+        EVENT_REQUEST_CREATED,
+        EVENT_SHELF_OOS_DETECTED,
+    )
+
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    tenant = models.ForeignKey(
+        "tenants.Tenant",
+        on_delete=models.CASCADE,
+        related_name="webhook_endpoints",
+    )
+    name = models.CharField(max_length=120)
+    url = models.URLField(max_length=500)
+    description = models.CharField(max_length=240, blank=True, default="")
+    events = models.JSONField(default=list, blank=True)
+    signing_secret = models.CharField(max_length=96)
+    is_active = models.BooleanField(default=True, db_index=True)
+    consecutive_failures = models.PositiveSmallIntegerField(default=0)
+    last_delivery_at = models.DateTimeField(null=True, blank=True)
+    last_status_code = models.PositiveSmallIntegerField(null=True, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="webhook_endpoints_created",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(
+                fields=["tenant", "is_active"],
+                name="pilot_webhook_ten_act_idx",
+            )
+        ]
+
+    def __str__(self) -> str:
+        return f"WebhookEndpoint({self.tenant_id}, {self.name!r})"
+
+
+class WebhookDelivery(models.Model):
+    """Delivery audit log row for an outbound webhook attempt."""
+
+    STATUS_DELIVERED = "delivered"
+    STATUS_FAILED = "failed"
+    STATUS_CHOICES = [
+        (STATUS_DELIVERED, "Delivered"),
+        (STATUS_FAILED, "Failed"),
+    ]
+
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    endpoint = models.ForeignKey(
+        WebhookEndpoint,
+        on_delete=models.CASCADE,
+        related_name="deliveries",
+    )
+    tenant = models.ForeignKey(
+        "tenants.Tenant",
+        on_delete=models.CASCADE,
+        related_name="webhook_deliveries",
+    )
+    event_type = models.CharField(max_length=48, db_index=True)
+    event_id = models.CharField(max_length=64, db_index=True)
+    payload = models.JSONField(default=dict, blank=True)
+    status = models.CharField(
+        max_length=16, choices=STATUS_CHOICES, default=STATUS_FAILED, db_index=True
+    )
+    http_status = models.PositiveSmallIntegerField(null=True, blank=True)
+    duration_ms = models.PositiveIntegerField(null=True, blank=True)
+    response_excerpt = models.CharField(max_length=300, blank=True, default="")
+    error_message = models.CharField(max_length=300, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True, editable=False, db_index=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(
+                fields=["endpoint", "created_at"],
+                name="pilot_whdeliv_ep_cr_idx",
+            ),
+            models.Index(
+                fields=["tenant", "created_at"],
+                name="pilot_whdeliv_ten_cr_idx",
+            ),
+        ]
+
+

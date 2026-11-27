@@ -2952,6 +2952,47 @@ class PublicRequestMutations:
             await _notify_requestor_for_request_created(
                 request_with_relations, location, delay_seconds=2
             )
+            try:
+                from pilot.webhooks import dispatch_webhook_event
+
+                await sync_to_async(dispatch_webhook_event, thread_sensitive=True)(
+                    tenant_id=request_with_relations.tenant_id,
+                    event_type="request.created",
+                    data={
+                        "requestUuid": str(request_with_relations.uuid),
+                        "storeName": (
+                            getattr(
+                                getattr(request_with_relations, "retailer", None),
+                                "name",
+                                None,
+                            )
+                            or getattr(request_with_relations, "retailer_name", None)
+                            or request_with_relations.name
+                            or ""
+                        ),
+                        "address": request_with_relations.address or "",
+                        "date": (
+                            request_with_relations.date.date().isoformat()
+                            if hasattr(request_with_relations.date, "date")
+                            else (
+                                request_with_relations.date.isoformat()
+                                if request_with_relations.date
+                                else ""
+                            )
+                        ),
+                        "status": (
+                            getattr(
+                                getattr(request_with_relations, "status", None),
+                                "name",
+                                "",
+                            )
+                            or ""
+                        ),
+                    },
+                )
+            except Exception:  # noqa: BLE001
+                pass
+
             return build_mutation_response(
                 types.RequestDetailResponse,
                 success=True,
@@ -4323,6 +4364,47 @@ class RequestMutations:
                     )
                 except Exception:
                     pass
+
+            try:
+                from pilot.webhooks import dispatch_webhook_event
+
+                await sync_to_async(dispatch_webhook_event, thread_sensitive=True)(
+                    tenant_id=request_with_relations.tenant_id,
+                    event_type="request.created",
+                    data={
+                        "requestUuid": str(request_with_relations.uuid),
+                        "storeName": (
+                            getattr(
+                                getattr(request_with_relations, "retailer", None),
+                                "name",
+                                None,
+                            )
+                            or getattr(request_with_relations, "retailer_name", None)
+                            or request_with_relations.name
+                            or ""
+                        ),
+                        "address": request_with_relations.address or "",
+                        "date": (
+                            request_with_relations.date.date().isoformat()
+                            if hasattr(request_with_relations.date, "date")
+                            else (
+                                request_with_relations.date.isoformat()
+                                if request_with_relations.date
+                                else ""
+                            )
+                        ),
+                        "status": (
+                            getattr(
+                                getattr(request_with_relations, "status", None),
+                                "name",
+                                "",
+                            )
+                            or ""
+                        ),
+                    },
+                )
+            except Exception:  # noqa: BLE001
+                pass
 
             return build_mutation_response(
                 types.RequestDetailResponse,

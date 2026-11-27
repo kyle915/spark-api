@@ -171,7 +171,62 @@ class ProcessPosFeedDropsView(View):
         return JsonResponse({"ok": True, "endpoint": "process-pos-feed-drops"})
 
 
+@method_decorator(csrf_exempt, name="dispatch")
+class SendSavedViewDigestsView(View):
+    """POST `/internal/cron/send-saved-view-digests`."""
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+
+        dry_run = (request.GET.get("dry_run") or request.POST.get("dry_run") or "").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        force = (request.GET.get("force") or request.POST.get("force") or "").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        tenant = request.GET.get("tenant") or request.POST.get("tenant")
+        view_uuid = (request.GET.get("view_uuid") or request.POST.get("view_uuid") or "").strip()
+
+        cmd_args: list[str] = []
+        if dry_run:
+            cmd_args.append("--dry-run")
+        if force:
+            cmd_args.append("--force")
+        if tenant:
+            try:
+                int(tenant)
+            except ValueError:
+                return JsonResponse({"ok": False, "error": "tenant must be an integer"}, status=400)
+            cmd_args.extend(["--tenant", str(tenant)])
+        if view_uuid:
+            cmd_args.extend(["--view-uuid", view_uuid])
+
+        out = io.StringIO()
+        try:
+            call_command("send_saved_view_digests", *cmd_args, stdout=out)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Saved view digests cron failed")
+            return JsonResponse(
+                {"ok": False, "error": "command-failed", "detail": str(exc), "log": out.getvalue()},
+                status=500,
+            )
+        return JsonResponse({"ok": True, "dry_run": dry_run, "force": force, "log": out.getvalue()})
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        deny = _check_secret(request)
+        if deny is not None:
+            return deny
+        return JsonResponse({"ok": True, "endpoint": "send-saved-view-digests"})
+
+
 PILOT_CRON_VIEWS = {
     "send-weekly-buyer-digest": SendWeeklyBuyerDigestView,
     "process-pos-feed-drops": ProcessPosFeedDropsView,
+    "send-saved-view-digests": SendSavedViewDigestsView,
 }

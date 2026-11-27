@@ -334,6 +334,34 @@ def _read_files(files, *, limit: int, max_seconds: float) -> dict:
             custom_recap_file=recap_file,
             defaults={"status": status, "attempts": attempts, **answer},
         )
+        if status == "read" and (
+            answer.get("product_on_shelf") == NO
+            or answer.get("out_of_stock_gap") == YES
+        ):
+            try:
+                from pilot.webhooks import dispatch_webhook_event
+
+                dispatch_webhook_event(
+                    tenant_id=getattr(recap, "tenant_id", None),
+                    event_type="shelf.oos_detected",
+                    data={
+                        "fileId": str(recap_file.id),
+                        "recapUuid": str(getattr(recap, "uuid", "")),
+                        "storeName": _store_name(getattr(recap, "event", None)),
+                        "eventDate": _event_day(getattr(recap, "event", None)),
+                        "productOnShelf": answer.get("product_on_shelf"),
+                        "outOfStockGap": answer.get("out_of_stock_gap"),
+                        "priceTagVisible": answer.get("price_tag_visible"),
+                        "price": (
+                            f"{answer['price']:.2f}"
+                            if answer.get("price") is not None
+                            else None
+                        ),
+                        "facings": answer.get("facings"),
+                    },
+                )
+            except Exception:  # noqa: BLE001
+                logger.debug("shelf.oos_detected webhook skipped file=%s", recap_file.id)
         counts[status] += 1
         consecutive_failures = consecutive_failures + 1 if status == "failed" else 0
     return {**counts, "ai_unavailable": False, "stopped": stopped}
@@ -423,6 +451,29 @@ def save_correction(
             "corrected_by": user if getattr(user, "pk", None) else None,
         },
     )
+    if product_on_shelf == NO or out_of_stock_gap == YES:
+        try:
+            from pilot.webhooks import dispatch_webhook_event
+
+            recap = getattr(recap_file, "custom_recap", None)
+            dispatch_webhook_event(
+                tenant_id=getattr(recap, "tenant_id", None),
+                event_type="shelf.oos_detected",
+                data={
+                    "fileId": str(recap_file.id),
+                    "recapUuid": str(getattr(recap, "uuid", "")),
+                    "storeName": _store_name(getattr(recap, "event", None)),
+                    "eventDate": _event_day(getattr(recap, "event", None)),
+                    "productOnShelf": product_on_shelf,
+                    "outOfStockGap": out_of_stock_gap,
+                    "priceTagVisible": price_tag_visible,
+                    "price": f"{amount:.2f}" if amount is not None else None,
+                    "facings": row.facings,
+                    "source": "staff_correction",
+                },
+            )
+        except Exception:  # noqa: BLE001
+            logger.debug("shelf.oos_detected webhook skipped correction file=%s", recap_file.id)
     return row
 
 

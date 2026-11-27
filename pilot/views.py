@@ -613,3 +613,14 @@ def public_pos_feed_drop_view(request: HttpRequest, token: str) -> JsonResponse:
             ),
         }
     )
+
+
+def public_sandbox_brand_view(request: HttpRequest) -> JsonResponse:
+    """GET `/api/public/sandbox-brand` — read-only fictional Sample Brand Sandbox."""
+    if request.method != "GET":
+        return JsonResponse({"error": "method_not_allowed"}, status=405)
+    from pilot.sandbox import build_sandbox_sample_brand
+
+    resp = JsonResponse(build_sandbox_sample_brand())
+    resp["Cache-Control"] = "public, max-age=300"
+    return resp

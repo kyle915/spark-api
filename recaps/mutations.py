@@ -3886,6 +3886,34 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
                     "recap-approved notification failed for recap=%s", recap.id
                 )
             await _notify_recap_approved_to_ambassador_by_push(recap)
+            try:
+                from pilot.webhooks import dispatch_webhook_event
+
+                ev = getattr(recap, "event", None)
+                await sync_to_async(dispatch_webhook_event, thread_sensitive=True)(
+                    tenant_id=getattr(ev, "tenant_id", None),
+                    event_type="recap.approved",
+                    data={
+                        "recapUuid": str(recap.uuid),
+                        "kind": "legacy",
+                        "storeName": (
+                            getattr(getattr(recap, "retailer", None), "name", None)
+                            or getattr(ev, "name", None)
+                            or recap.name
+                            or ""
+                        ),
+                        "eventDate": (
+                            ev.date.date().isoformat()
+                            if getattr(ev, "date", None)
+                            else ""
+                        ),
+                        "approvedAt": (
+                            recap.approved_at.isoformat() if recap.approved_at else ""
+                        ),
+                    },
+                )
+            except Exception:  # noqa: BLE001
+                logger.debug("recap.approved webhook skipped recap=%s", recap.id)
 
         return recap
 
@@ -3998,6 +4026,38 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
                 logger.exception(
                     "recap-approved notification failed for custom_recap=%s",
                     custom_recap.id,
+                )
+            try:
+                from pilot.webhooks import dispatch_webhook_event
+
+                ev = getattr(custom_recap, "event", None)
+                await sync_to_async(dispatch_webhook_event, thread_sensitive=True)(
+                    tenant_id=custom_recap.tenant_id,
+                    event_type="recap.approved",
+                    data={
+                        "recapUuid": str(custom_recap.uuid),
+                        "kind": "custom",
+                        "storeName": (
+                            getattr(getattr(custom_recap, "retailer", None), "name", None)
+                            or getattr(ev, "name", None)
+                            or custom_recap.name
+                            or ""
+                        ),
+                        "eventDate": (
+                            ev.date.date().isoformat()
+                            if getattr(ev, "date", None)
+                            else ""
+                        ),
+                        "approvedAt": (
+                            custom_recap.approved_at.isoformat()
+                            if custom_recap.approved_at
+                            else ""
+                        ),
+                    },
+                )
+            except Exception:  # noqa: BLE001
+                logger.debug(
+                    "recap.approved webhook skipped custom_recap=%s", custom_recap.id
                 )
             # Each brand slice mails its OWN brand's recipients (its event
             # and tenant), never the host brand's.
