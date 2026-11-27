@@ -309,25 +309,6 @@ def build_sources(runs: list[dict], used_names: list[str]) -> list[dict]:
                 "link_label": tool.link_label,
             }
             continue
-        if tool.name == "search_spark_help":
-            matches = payload.get("matches") if isinstance(payload.get("matches"), list) else []
-            added_any = False
-            for idx, m in enumerate(matches[:3]):
-                if not isinstance(m, dict):
-                    continue
-                route = str(m.get("route_path") or "").strip() or "/setup-guide"
-                title = str(m.get("title") or "Spark Help").strip()
-                rlabel = str(m.get("route_label") or "Open in Spark").strip()
-                out[f"search_spark_help:{idx}:{route}"] = {
-                    "tool": f"search_spark_help:{idx}",
-                    "label": rlabel,
-                    "detail": title,
-                    "link": route,
-                    "link_label": rlabel,
-                }
-                added_any = True
-            if added_any:
-                continue
         span = _span(run["args"], payload)
         held = out.setdefault(
             tool.name,
@@ -420,12 +401,9 @@ def ask(user, tenant, question: str, conversation=None, *, current_path: str | N
     from . import tools as chat_tools
     from .help_knowledge import (
         RESTRICTED_INTERNAL_REFUSAL,
-        _MIN_CONFIDENT_SCORE,
         is_ignite_admin_user,
         is_restricted_internal_topic,
         normalize_route,
-        record_help_gap,
-        search_help_knowledge,
     )
     from .models import BrandChatTurn
 
@@ -457,79 +435,6 @@ def ask(user, tenant, question: str, conversation=None, *, current_path: str | N
     earlier = grounding_history(earlier, today)
 
     def run_tool(name: str, args: dict) -> tuple[str, bool]:
-        if name == "search_spark_help":
-            q_arg = str((args or {}).get("query") or question).strip() or question
-            if is_restricted_internal_topic(q_arg) or is_restricted_internal_topic(question):
-                payload = {
-                    "restricted": True,
-                    "matches": [],
-                    "note": RESTRICTED_INTERNAL_REFUSAL,
-                }
-                text = json.dumps(payload, default=str, ensure_ascii=False)
-                runs.append(
-                    {
-                        "name": name,
-                        "args": {"query": q_arg},
-                        "payload": payload,
-                        "text": text,
-                        "ok": True,
-                        "rows": 0,
-                    }
-                )
-                return text, True
-            hits, mode = search_help_knowledge(
-                q_arg,
-                is_admin=caller_is_admin,
-                tenant_id=tenant.id,
-                current_path=clean_path,
-                top_k=4,
-            )
-            top_score = hits[0].score if hits else 0.0
-            if not hits or top_score < _MIN_CONFIDENT_SCORE:
-                record_help_gap(
-                    question,
-                    is_admin=caller_is_admin,
-                    route_path=clean_path,
-                    source_surface="ask_spark",
-                    reason="no_match" if not hits else "low_confidence",
-                    tenant_id=tenant.id,
-                    user=user,
-                )
-            payload = {
-                "matched_via": mode,
-                "audience_scope": "admin" if caller_is_admin else "client",
-                "current_page": clean_path or None,
-                "matches": [
-                    {
-                        "title": h.title,
-                        "category": h.category,
-                        "route_path": h.route_path,
-                        "route_label": h.route_label,
-                        "score": h.score,
-                        "content": h.body,
-                    }
-                    for h in hits
-                ],
-                "note": (
-                    "No strong Spark Help article matched this question; tell the reader plainly "
-                    "and point them to /help if needed."
-                    if (not hits or top_score < _MIN_CONFIDENT_SCORE)
-                    else "Answer strictly from these Spark Help documents."
-                ),
-            }
-            text = json.dumps(payload, default=str, ensure_ascii=False)
-            runs.append(
-                {
-                    "name": name,
-                    "args": {"query": q_arg},
-                    "payload": payload,
-                    "text": text,
-                    "ok": True,
-                    "rows": len(hits),
-                }
-            )
-            return text, True
-
         aligned = align_tool_args(args, question, today)
         if aligned.refuse:
             payload, rows, ok = {"error": aligned.note}, 0, False

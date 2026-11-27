@@ -794,29 +794,6 @@ CHAT_TOOLS: dict[str, ChatTool] = {
             "/account-map",
             "Open Wave Planner",
         ),
-        ChatTool(
-            "search_spark_help",
-            "Spark Help Guide",
-            "Search Spark's product documentation, Setup Guide, and admin-curated "
-            "FAQs to answer how-to questions about using Spark (e.g. setting up "
-            "Demo Costs, uploading Retailer POS CSVs, Shelf & Voice MSRP drift, "
-            "Buyer QBR PowerPoint export, Saved Views & Friday Digests, Webhooks, "
-            "Spark MCP for Claude/ChatGPT, or how the user's current page works). "
-            "Strictly audience-scoped so brand clients only see client-safe docs.",
-            {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "Short description of what the user wants help with in Spark.",
-                    },
-                },
-                "required": ["query"],
-            },
-            lambda ctx, args: ({"matches": [], "matched_via": "bm25"}, 0),
-            "/setup-guide",
-            "Open Setup Guide",
-        ),
     ]
 }
 
