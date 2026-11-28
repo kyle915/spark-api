@@ -949,6 +949,30 @@ class TestSummaryAndThemes(AmbassadorsGraphQLTestCase):
         # Reading never calls the model.
         assert self.post.call_count == calls
 
+        # Archive list endpoint enforces the exact same reviewed-only visibility.
+        archive_q = """
+        query Archive($tenantId: ID!, $limit: Int) {
+          tenantWeeklySummaries(tenantId: $tenantId, limit: $limit) {
+            weekStart
+            weekEnd
+            text
+            isDraft
+          }
+        }
+        """
+        assert (
+            await self._run(archive_q, {"tenantId": str(self.tenant.id), "limit": 8}, self.client_user)
+        )["tenantWeeklySummaries"] == []
+        staff_archive = (
+            await self._run(archive_q, {"tenantId": str(self.tenant.id), "limit": 8}, self.admin)
+        )["tenantWeeklySummaries"]
+        assert len(staff_archive) == 1 and staff_archive[0]["isDraft"] is True
+        await self._run(REVIEWED, {"id": summary_id, "reviewed": True}, self.admin)
+        client_archive = (
+            await self._run(archive_q, {"tenantId": str(self.tenant.id), "limit": 8}, self.client_user)
+        )["tenantWeeklySummaries"]
+        assert len(client_archive) == 1 and client_archive[0]["isDraft"] is False
+
     # ── monthly client email draft ────────────────────────────────────
 
     @pytest.mark.asyncio

@@ -675,6 +675,18 @@ def latest_summary(tenant_id: int, *, include_drafts: bool):
     return rows.order_by("-week_start").first()
 
 
+def recent_summaries(tenant_id: int, *, include_drafts: bool, limit: int = 12) -> list:
+    """Newest stored weekly summaries for a brand: reviewed ones only unless
+    ``include_drafts`` (Ignite staff)."""
+    from tenants.models import TenantWeeklySummary as Row
+
+    cap = max(1, min(int(limit or 12), 26))
+    rows = Row.objects.filter(tenant_id=tenant_id, period=PERIOD_WEEK)
+    if not include_drafts:
+        rows = rows.filter(status=Row.STATUS_REVIEWED)
+    return list(rows.order_by("-week_start")[:cap])
+
+
 def _fail(reason: str) -> WeeklyClientSummaryResult:
     return WeeklyClientSummaryResult(ok=False, reason=reason, summary=None)
 
@@ -740,6 +752,44 @@ class WeeklySummaryQueries:
             is_draft=row.status != "reviewed",
             reviewed_at=row.reviewed_at.isoformat() if row.reviewed_at else None,
         )
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def tenant_weekly_summaries(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID,
+        limit: int = 12,
+    ) -> list[TenantWeeklySummary]:
+        """Recent weekly summaries (newest first) for archive stepping on the
+        dashboard. Brand users only ever receive reviewed rows for their own
+        tenant; Ignite staff also receive drafts."""
+        from recaps.report_types import _CampaignReportService
+
+        service = _CampaignReportService()
+        try:
+            target = await service.resolve_target_tenant_id(info, tenant_id)
+            staff = await service.is_staff_caller(info)
+        except Exception:  # noqa: BLE001
+            return []
+        if target is None:
+            return []
+        try:
+            rows = await sync_to_async(recent_summaries, thread_sensitive=True)(
+                target, include_drafts=staff, limit=limit
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("tenantWeeklySummaries failed tenant=%s", target)
+            return []
+        return [
+            TenantWeeklySummary(
+                week_start=r.week_start.isoformat(),
+                week_end=r.week_end.isoformat(),
+                text=r.edited_body.strip() or r.body,
+                is_draft=r.status != "reviewed",
+                reviewed_at=r.reviewed_at.isoformat() if r.reviewed_at else None,
+            )
+            for r in rows
+        ]
 
     @strawberry.field(permission_classes=[StrictIsAuthenticated])
     async def weekly_client_summaries(
