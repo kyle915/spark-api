@@ -1802,7 +1802,7 @@ class RequestQueries:
             tenant_uuid=tenant_uuid,
         )
 
-        queryset = service.get_ordered_queryset(tenant_id=resolved_tenant_id, q=q)
+        queryset = service.get_filtered_queryset(tenant_id=resolved_tenant_id, q=q)
         queryset = await _apply_rmm_assigned_filter(queryset, filters)
         queryset = _apply_request_list_filters(queryset, filters)
 
@@ -1863,7 +1863,7 @@ class RequestQueries:
             tenant_id=tenant_id,
             tenant_uuid=tenant_uuid,
         )
-        queryset = service.get_ordered_queryset(tenant_id=resolved_tenant_id, q=q)
+        queryset = service.get_filtered_queryset(tenant_id=resolved_tenant_id, q=q)
         queryset = await _apply_rmm_assigned_filter(queryset, filters)
         if filters and filters.rmm_asigned:
             queryset = queryset.distinct()

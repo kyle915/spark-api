@@ -503,19 +503,34 @@ def compute_tracker_status_counts(
     status chip filter — chips need every bucket. `market_qs` defaults to
     `qs` and should omit `state_code` so the Market dropdown stays full.
     """
-    total = qs.count()
-    rows = qs.values("status__slug").annotate(c=Count("pk"))
-    buckets = [
-        TrackerStatusBucketData(
-            slug=((row["status__slug"] or "unknown").strip().lower() or "unknown"),
-            count=int(row["c"] or 0),
+    # Clear any inherited ORDER BY before GROUP BY / DISTINCT: Django adds
+    # order_by columns to SQL GROUP BY, which would otherwise split each
+    # status into one count=1 bucket per request row.
+    base_qs = qs.order_by()
+    total = base_qs.count()
+    rows = (
+        base_qs.values("status__slug", "status__name")
+        .annotate(c=Count("pk", distinct=True))
+        .order_by()
+    )
+    merged: dict[str, int] = {}
+    for row in rows:
+        count = int(row["c"] or 0)
+        if count <= 0:
+            continue
+        slug = (
+            (row["status__slug"] or row["status__name"] or "unknown").strip().lower()
+            or "unknown"
         )
-        for row in rows
-        if int(row["c"] or 0) > 0
+        merged[slug] = merged.get(slug, 0) + count
+
+    buckets = [
+        TrackerStatusBucketData(slug=slug, count=count)
+        for slug, count in merged.items()
     ]
     buckets.sort(key=lambda b: (-b.count, b.slug))
 
-    source = market_qs if market_qs is not None else qs
+    source = (market_qs if market_qs is not None else qs).order_by()
     raw_codes = (
         source.annotate(
             market_code=Coalesce(

@@ -297,3 +297,54 @@ class TestRequestTrackerFilters(EventsGraphQLTestCase):
         assert by_slug.get("pending", 0) >= 1
         assert by_slug.get("done", 0) >= 1
         assert data["total"] == sum(by_slug.values())
+
+    @pytest.mark.asyncio
+    async def test_tracker_status_counts_merges_multiple_rows_per_status(self):
+        """Multiple requests sharing the same status must collapse into ONE bucket
+        per slug — never split into count=1 rows by queryset ORDER BY."""
+
+        def _seed_many():
+            rt = self.pending_req.request_type
+            approved = self.create_request_status(
+                name="Approved", tenant=self.tenant, slug="approved"
+            )
+            for idx in range(4):
+                em.Request.objects.create(
+                    name=f"Approved store {idx}",
+                    address=f"{100 + idx} Market St, Austin, TX 78701",
+                    request_type=rt,
+                    tenant=self.tenant,
+                    status=approved,
+                    scheduling_status="already_scheduled",
+                    date=self.today + timedelta(days=idx + 1),
+                    created_by=self.sys,
+                )
+            for idx in range(2):
+                em.Request.objects.create(
+                    name=f"Extra pending {idx}",
+                    address=f"{200 + idx} Pine St, Dallas, TX 75201",
+                    request_type=rt,
+                    tenant=self.tenant,
+                    status=self.pending_status,
+                    scheduling_status="needs_scheduling",
+                    date=self.today + timedelta(days=idx + 10),
+                    created_by=self.sys,
+                )
+
+        await sync_to_async(_seed_many)()
+
+        res = await self._execute_mutation(
+            TRACKER_COUNTS_Q,
+            {"filters": {"tenantId": str(self.tenant.id)}},
+            user=self.admin,
+        )
+        assert res.errors is None, res.errors
+        data = res.data["trackerStatusCounts"]
+        slugs = [b["slug"] for b in data["buckets"]]
+        # Strictly one bucket per unique slug (no ORDER BY fan-out).
+        assert len(slugs) == len(set(slugs)), f"Duplicate status buckets: {data['buckets']}"
+        by_slug = {b["slug"]: b["count"] for b in data["buckets"]}
+        assert by_slug["approved"] == 4
+        assert by_slug["pending"] == 3  # 1 from fixture + 2 added
+        assert by_slug["done"] == 1
+        assert data["total"] == 8 == sum(by_slug.values())
