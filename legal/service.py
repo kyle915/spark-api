@@ -225,7 +225,13 @@ def needs_acceptance(user_id: int) -> bool:
     except Exception:  # noqa: BLE001 - cache trouble never blocks
         pass
     signals = _user_signals(user_id)
-    if not signals or not is_gated(*signals):
+    if not signals:
+        return False
+    if not is_gated(*signals):
+        try:
+            cache.set(key, 1, _CACHE_TTL_SECONDS)
+        except Exception:  # noqa: BLE001
+            pass
         return False
     if len(_current_rows(user_id)) >= len(versions.DOCUMENT_KEYS):
         try:

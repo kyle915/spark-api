@@ -851,6 +851,9 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
                         file_recap_category=heic_rf.file_recap_category,
                         created_by=self.user,
                     )
+                from utils.thumb_views import schedule_photo_thumbs
+
+                schedule_photo_thumbs([str(rf.file) for rf in recap_files])
 
                 # Create related objects
                 if self._has_any_consumer_engagements(self.input.consumer_engagements):
@@ -1781,6 +1784,10 @@ class RecapMutationService(RecapExportMixin, SparkGraphQLMixin):
                         # plain <img> (displayUrl rewrites .heic→.jpg).
                         if heic_conversion.is_heic_blob(blob_name):
                             heic_conversion.schedule_jpg_sibling_blob(blob_name)
+                        else:
+                            from utils.thumb_views import schedule_photo_thumbs
+
+                            schedule_photo_thumbs([blob_name])
                 if caller_ambassador is not None:
                     _assert_ba_recap_has_receipt(custom_recap, event)
                 return custom_recap

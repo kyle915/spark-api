@@ -190,6 +190,100 @@ def resolve_thumb_blob(blob: str, width: int):
         return blob
 
 
+def materialize_thumbs_from_bytes(
+    blob: str,
+    data: bytes,
+    widths: tuple[int, ...] = ALLOWED_WIDTHS,
+) -> list[str]:
+    """Decode ``data`` once and upload resized JPEG thumbs for all ``widths``.
+
+    Used both by background upload pre-warming and single-width thumb creation
+    so both ``w400`` and ``w800`` exist in GCS before any gallery opens.
+    Returns the list of generated thumb blob keys. Never raises.
+    """
+    if not blob or not data or len(data) > _MAX_ORIGINAL_BYTES:
+        return []
+    if _is_non_image_blob(blob, data):
+        return []
+    try:
+        from PIL import Image, ImageOps
+
+        img = Image.open(io.BytesIO(data))
+        img.load()
+        img = ImageOps.exif_transpose(img) or img
+        if img.mode not in ("RGB", "L"):
+            img = img.convert("RGB")
+
+        written: list[str] = []
+        for width in widths:
+            if img.width <= width:
+                continue
+            thumb_blob = _thumb_blob_name(blob, width)
+            ratio = width / float(img.width)
+            resized = img.resize((width, max(1, int(img.height * ratio))))
+            out = io.BytesIO()
+            resized.save(out, format="JPEG", quality=_JPEG_QUALITY, optimize=True)
+            upload_bytes(thumb_blob, out.getvalue(), content_type="image/jpeg")
+            written.append(thumb_blob)
+        return written
+    except Exception:  # noqa: BLE001
+        logger.warning("Pre-generating thumbs failed for blob=%r", blob, exc_info=True)
+        return []
+
+
+def ensure_photo_thumbs(
+    blob: str,
+    widths: tuple[int, ...] = ALLOWED_WIDTHS,
+) -> list[str]:
+    """Ensure ``thumbs/w{w}/{blob}.jpg`` exist in GCS for a renderable image blob."""
+    clean = (blob or "").split("?", 1)[0].lstrip("/")
+    if not clean or clean.startswith("thumbs/") or is_heic_blob(clean) or _is_non_image_blob(clean):
+        return []
+    try:
+        missing = [w for w in widths if not blob_exists(_thumb_blob_name(clean, w))]
+        if not missing:
+            return []
+        data = download_blob_bytes(clean)
+        if not data:
+            return []
+        return materialize_thumbs_from_bytes(clean, data, tuple(missing))
+    except Exception:  # noqa: BLE001
+        logger.warning("ensure_photo_thumbs failed for blob=%r", clean, exc_info=True)
+        return []
+
+
+def schedule_photo_thumbs(blobs: list[str] | tuple[str, ...]) -> None:
+    """Pre-warm w400 + w800 GCS thumbnails after DB commit in production.
+
+    Pure GCS + Pillow work (no ORM touches), so a background daemon thread is
+    completely thread-safe and keeps recap submit latency at 0ms. Skips when no
+    GCS bucket is configured or under pytest so unit tests never spawn threads.
+    """
+    import sys
+    import threading
+    from django.conf import settings
+    from django.db import transaction
+
+    if not getattr(settings, "GS_BUCKET_NAME", "") or "pytest" in sys.modules:
+        return
+    candidates = [
+        (b or "").split("?", 1)[0].lstrip("/")
+        for b in blobs
+        if b and not is_heic_blob(b) and not _is_non_image_blob(b)
+    ]
+    if not candidates:
+        return
+
+    def _run() -> None:
+        def _worker() -> None:
+            for item in dict.fromkeys(candidates):
+                ensure_photo_thumbs(item)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    transaction.on_commit(_run)
+
+
 def parse_width(raw) -> int:
     try:
         width = int(raw or 400)

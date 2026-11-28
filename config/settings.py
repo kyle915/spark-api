@@ -141,6 +141,7 @@ STRAWBERRY_DJANGO = {
 
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
+    "django.middleware.gzip.GZipMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -795,6 +796,11 @@ ABUSE_PAGE_CAP_EXEMPT_FIELDS = env.list("ABUSE_PAGE_CAP_EXEMPT_FIELDS", default=
 ABUSE_GQL_MAX_DEPTH = env.int("ABUSE_GQL_MAX_DEPTH", default=12)
 ABUSE_GQL_MAX_ALIASES = env.int("ABUSE_GQL_MAX_ALIASES", default=20)
 ABUSE_GQL_MAX_TOKENS = env.int("ABUSE_GQL_MAX_TOKENS", default=4000)
+# Coalesce per-request UsageBucket upserts in memory and flush periodically so
+# concurrent dashboard GraphQL reads do not contend on Postgres row locks.
+ABUSE_USAGE_FLUSH_INTERVAL_SECONDS = env.float(
+    "ABUSE_USAGE_FLUSH_INTERVAL_SECONDS", default=15.0
+)
 # Daily detector report recipients (Ignite team only — never brands).
 ABUSE_ALERT_EMAILS = env.list("ABUSE_ALERT_EMAILS", default=BACKEND_ERROR_ALERT_EMAILS)
 

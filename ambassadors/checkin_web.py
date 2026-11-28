@@ -2039,6 +2039,10 @@ def submit_checkin_recap(
                 # uploads). Never convert inline — 8 iPhone HEICs on LTE
                 # would block File recap for the whole request.
                 heic_conversion.schedule_jpg_sibling_blob(blob_name)
+            else:
+                from utils.thumb_views import schedule_photo_thumbs
+
+                schedule_photo_thumbs([blob_name])
 
         # A recap with no photo on it is not a filed shift, it's an empty row in
         # the client's report. The page has always refused to submit one; this

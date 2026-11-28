@@ -23,4 +23,6 @@ def _legal_gate_off_by_default(settings):
     to check which suites the gate touches (BA check-in, MCP, cron: none)."""
     if os.environ.get("LEGAL_ACCEPTANCE_ENFORCED", "").lower() != "true":
         settings.LEGAL_ACCEPTANCE_ENFORCED = False
+    if "ABUSE_USAGE_FLUSH_INTERVAL_SECONDS" not in os.environ:
+        settings.ABUSE_USAGE_FLUSH_INTERVAL_SECONDS = 0.0
     yield
