@@ -107,6 +107,16 @@ class TestCronEndpoint:
         assert Client().post(self.URL).status_code == 401
         assert Client().post(self.URL, HTTP_X_CRON_SECRET="nope").status_code == 401
 
+    def test_cron_post_is_csrf_exempt(self, settings):
+        # The real GitHub Actions cron sends no CSRF token. Django's test Client
+        # skips CSRF by default, which hid a 403 on every production run.
+        settings.INTERNAL_CRON_SECRET = "s3cret"
+        with mock.patch.object(detection, "detect", return_value=[]), \
+                mock.patch.object(detection, "prune_counters", return_value=0):
+            resp = Client(enforce_csrf_checks=True).post(
+                self.URL + "?dry_run=true", HTTP_X_CRON_SECRET="s3cret")
+        assert resp.status_code == 200
+
     def test_dry_run_never_emails(self, settings):
         settings.INTERNAL_CRON_SECRET = "s3cret"
         fake = detection.Finding("user", 1, "x@brand.test", 1, ["page_walking"], {})
