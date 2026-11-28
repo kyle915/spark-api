@@ -101,8 +101,9 @@ jobs:
       # revision at 0%.
       #
       # --min-instances 1 keeps one warm container so the first
-      # morning click is not a scale-from-zero stall. --quiet skips
-      # the "deploy to <env>?" interactive prompt.
+      # morning click is not a scale-from-zero stall. --cpu-boost
+      # allocates extra startup CPU for faster scale-out boot.
+      # --quiet skips the "deploy to <env>?" interactive prompt.
       # --revision-suffix forces a unique revision so a prior
       # failed/cancelled create cannot block the next deploy.
       - name: Deploy to Cloud Run
@@ -114,6 +115,7 @@ jobs:
             --region "$GCP_REGION" \
             --project "$GCP_PROJECT_ID" \
             --min-instances 1 \
+            --cpu-boost \
             --revision-suffix="gha${RUN_ID}" \
             --quiet
 
