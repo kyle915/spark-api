@@ -334,34 +334,54 @@ def _read_files(files, *, limit: int, max_seconds: float) -> dict:
             custom_recap_file=recap_file,
             defaults={"status": status, "attempts": attempts, **answer},
         )
-        if status == "read" and (
-            answer.get("product_on_shelf") == NO
-            or answer.get("out_of_stock_gap") == YES
-        ):
-            try:
-                from pilot.webhooks import dispatch_webhook_event
+        if status == "read":
+            ev = getattr(recap, "event", None)
+            store_nm = _store_name(ev)
+            ev_day = _event_day(ev)
+            if (
+                answer.get("product_on_shelf") == NO
+                or answer.get("out_of_stock_gap") == YES
+            ):
+                try:
+                    from pilot.webhooks import dispatch_webhook_event
 
-                dispatch_webhook_event(
+                    dispatch_webhook_event(
+                        tenant_id=getattr(recap, "tenant_id", None),
+                        event_type="shelf.oos_detected",
+                        data={
+                            "fileId": str(recap_file.id),
+                            "recapUuid": str(getattr(recap, "uuid", "")),
+                            "storeName": store_nm,
+                            "eventDate": ev_day,
+                            "productOnShelf": answer.get("product_on_shelf"),
+                            "outOfStockGap": answer.get("out_of_stock_gap"),
+                            "priceTagVisible": answer.get("price_tag_visible"),
+                            "price": (
+                                f"{answer['price']:.2f}"
+                                if answer.get("price") is not None
+                                else None
+                            ),
+                            "facings": answer.get("facings"),
+                        },
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.debug("shelf.oos_detected webhook skipped file=%s", recap_file.id)
+            try:
+                from pilot.regional_alerts import dispatch_regional_shelf_alerts
+
+                dispatch_regional_shelf_alerts(
                     tenant_id=getattr(recap, "tenant_id", None),
-                    event_type="shelf.oos_detected",
-                    data={
-                        "fileId": str(recap_file.id),
-                        "recapUuid": str(getattr(recap, "uuid", "")),
-                        "storeName": _store_name(getattr(recap, "event", None)),
-                        "eventDate": _event_day(getattr(recap, "event", None)),
-                        "productOnShelf": answer.get("product_on_shelf"),
-                        "outOfStockGap": answer.get("out_of_stock_gap"),
-                        "priceTagVisible": answer.get("price_tag_visible"),
-                        "price": (
-                            f"{answer['price']:.2f}"
-                            if answer.get("price") is not None
-                            else None
-                        ),
-                        "facings": answer.get("facings"),
-                    },
+                    store_name=store_nm,
+                    state_code=_event_state_code(ev),
+                    event_date=ev_day,
+                    product_on_shelf=answer.get("product_on_shelf"),
+                    out_of_stock_gap=answer.get("out_of_stock_gap"),
+                    price_tag_visible=answer.get("price_tag_visible"),
+                    observed_price=answer.get("price"),
+                    photo_url=str(getattr(recap_file, "url", "") or ""),
                 )
             except Exception:  # noqa: BLE001
-                logger.debug("shelf.oos_detected webhook skipped file=%s", recap_file.id)
+                logger.debug("regional shelf alert skipped file=%s", recap_file.id)
         counts[status] += 1
         consecutive_failures = consecutive_failures + 1 if status == "failed" else 0
     return {**counts, "ai_unavailable": False, "stopped": stopped}
@@ -451,19 +471,22 @@ def save_correction(
             "corrected_by": user if getattr(user, "pk", None) else None,
         },
     )
+    recap = getattr(recap_file, "custom_recap", None)
+    ev = getattr(recap, "event", None)
+    store_nm = _store_name(ev)
+    ev_day = _event_day(ev)
     if product_on_shelf == NO or out_of_stock_gap == YES:
         try:
             from pilot.webhooks import dispatch_webhook_event
 
-            recap = getattr(recap_file, "custom_recap", None)
             dispatch_webhook_event(
                 tenant_id=getattr(recap, "tenant_id", None),
                 event_type="shelf.oos_detected",
                 data={
                     "fileId": str(recap_file.id),
                     "recapUuid": str(getattr(recap, "uuid", "")),
-                    "storeName": _store_name(getattr(recap, "event", None)),
-                    "eventDate": _event_day(getattr(recap, "event", None)),
+                    "storeName": store_nm,
+                    "eventDate": ev_day,
                     "productOnShelf": product_on_shelf,
                     "outOfStockGap": out_of_stock_gap,
                     "priceTagVisible": price_tag_visible,
@@ -474,6 +497,22 @@ def save_correction(
             )
         except Exception:  # noqa: BLE001
             logger.debug("shelf.oos_detected webhook skipped correction file=%s", recap_file.id)
+    try:
+        from pilot.regional_alerts import dispatch_regional_shelf_alerts
+
+        dispatch_regional_shelf_alerts(
+            tenant_id=getattr(recap, "tenant_id", None),
+            store_name=store_nm,
+            state_code=_event_state_code(ev),
+            event_date=ev_day,
+            product_on_shelf=product_on_shelf,
+            out_of_stock_gap=out_of_stock_gap,
+            price_tag_visible=price_tag_visible,
+            observed_price=amount if price_tag_visible == YES else None,
+            photo_url=str(getattr(recap_file, "url", "") or ""),
+        )
+    except Exception:  # noqa: BLE001
+        logger.debug("regional shelf alert skipped correction file=%s", recap_file.id)
     return row
 
 
@@ -563,6 +602,34 @@ def _event_day(event) -> str:
                 return value.date().isoformat() if hasattr(value, "date") else value.isoformat()
             except Exception:  # noqa: BLE001
                 continue
+    return ""
+
+
+def _event_state_code(event) -> str:
+    if event is None:
+        return ""
+    loc = getattr(event, "location", None)
+    for code in (
+        getattr(getattr(event, "state", None), "code", None),
+        getattr(getattr(loc, "state", None), "code", None) if loc else None,
+    ):
+        if code and str(code).strip():
+            return str(code).strip().upper()
+    req = getattr(event, "request", None)
+    address = (
+        getattr(event, "address", None)
+        or (getattr(req, "address", None) if req else None)
+        or ""
+    ).strip()
+    if address:
+        try:
+            from events.market import parse_address_geo
+
+            geo = parse_address_geo(address)
+            if geo and geo.state_code:
+                return str(geo.state_code).strip().upper()
+        except Exception:  # noqa: BLE001
+            pass
     return ""
 
 

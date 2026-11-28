@@ -2598,3 +2598,171 @@ class WebhookDelivery(models.Model):
         ]
 
 
+class ExecutiveSnapshotConfig(models.Model):
+    """Per-brand configuration for the automated 1st-of-the-month Executive Snapshot.
+
+    Opt-in OFF by default so no stakeholder receives an automated monthly brief
+    until a brand admin toggles it on.
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    tenant = models.OneToOneField(
+        "tenants.Tenant",
+        on_delete=models.CASCADE,
+        related_name="executive_snapshot_config",
+    )
+    enabled = models.BooleanField(default=False, db_index=True)
+    recipient_emails = models.TextField(blank=True, default="")
+    target_msrp = models.DecimalField(
+        max_digits=8, decimal_places=2, null=True, blank=True
+    )
+    include_photos = models.BooleanField(default=True)
+    last_sent_at = models.DateTimeField(null=True, blank=True)
+    last_sent_month = models.CharField(max_length=7, blank=True, default="")
+    last_send_status = models.CharField(max_length=32, blank=True, default="")
+    last_send_error = models.CharField(max_length=240, blank=True, default="")
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="executive_snapshot_configs_updated",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["tenant_id"]
+
+    def __str__(self) -> str:
+        return f"ExecutiveSnapshotConfig(tenant={self.tenant_id}, enabled={self.enabled})"
+
+
+class RegionalAlertSubscription(models.Model):
+    """Territory-scoped instant alert rule for brand regional managers.
+
+    Matches audited shelf events by optional state codes and/or retail chain
+    substrings, firing email and/or HMAC-signed HTTPS webhook notifications on
+    out-of-stock gaps, MSRP price drift, or missing price tags.
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    tenant = models.ForeignKey(
+        "tenants.Tenant",
+        on_delete=models.CASCADE,
+        related_name="regional_alert_subscriptions",
+    )
+    name = models.CharField(max_length=120)
+    is_active = models.BooleanField(default=True, db_index=True)
+    states = models.JSONField(default=list, blank=True)
+    chains = models.JSONField(default=list, blank=True)
+    alert_oos = models.BooleanField(default=True)
+    alert_price_drift = models.BooleanField(default=True)
+    alert_missing_tag = models.BooleanField(default=True)
+    target_msrp = models.DecimalField(
+        max_digits=8, decimal_places=2, null=True, blank=True
+    )
+    drift_threshold_pct = models.DecimalField(
+        max_digits=5, decimal_places=1, default=Decimal("5.0")
+    )
+    notify_email = models.BooleanField(default=True)
+    recipient_emails = models.TextField(blank=True, default="")
+    notify_webhook = models.BooleanField(default=False)
+    webhook_url = models.URLField(max_length=500, blank=True, default="")
+    webhook_secret = models.CharField(max_length=96, blank=True, default="")
+    last_triggered_at = models.DateTimeField(null=True, blank=True)
+    trigger_count = models.PositiveIntegerField(default=0)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="regional_alert_subscriptions_created",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(
+                fields=["tenant", "is_active"],
+                name="pilot_regalert_ten_act_idx",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"RegionalAlertSubscription({self.tenant_id}, {self.name!r})"
+
+
+class RegionalAlertDelivery(models.Model):
+    """Audit log entry for a regional shelf alert delivery (email or webhook)."""
+
+    TRIGGER_OOS = "oos"
+    TRIGGER_PRICE_DRIFT = "price_drift"
+    TRIGGER_MISSING_TAG = "missing_tag"
+    TRIGGER_TEST = "test"
+    TRIGGER_CHOICES = [
+        (TRIGGER_OOS, "Out of Stock"),
+        (TRIGGER_PRICE_DRIFT, "MSRP Price Drift"),
+        (TRIGGER_MISSING_TAG, "Missing Price Tag"),
+        (TRIGGER_TEST, "Test Alert"),
+    ]
+
+    CHANNEL_EMAIL = "email"
+    CHANNEL_WEBHOOK = "webhook"
+    CHANNEL_CHOICES = [
+        (CHANNEL_EMAIL, "Email"),
+        (CHANNEL_WEBHOOK, "Webhook"),
+    ]
+
+    STATUS_SENT = "sent"
+    STATUS_FAILED = "failed"
+    STATUS_CHOICES = [
+        (STATUS_SENT, "Sent"),
+        (STATUS_FAILED, "Failed"),
+    ]
+
+    id = models.BigAutoField(primary_key=True)
+    uuid = models.UUIDField(default=uuid7, unique=True, editable=False)
+    subscription = models.ForeignKey(
+        RegionalAlertSubscription,
+        on_delete=models.CASCADE,
+        related_name="deliveries",
+    )
+    tenant = models.ForeignKey(
+        "tenants.Tenant",
+        on_delete=models.CASCADE,
+        related_name="regional_alert_deliveries",
+    )
+    trigger_kind = models.CharField(
+        max_length=24, choices=TRIGGER_CHOICES, db_index=True
+    )
+    channel = models.CharField(
+        max_length=16, choices=CHANNEL_CHOICES, default=CHANNEL_EMAIL
+    )
+    store_name = models.CharField(max_length=160, blank=True, default="")
+    state_code = models.CharField(max_length=12, blank=True, default="")
+    summary = models.CharField(max_length=320, blank=True, default="")
+    status = models.CharField(
+        max_length=16, choices=STATUS_CHOICES, default=STATUS_FAILED, db_index=True
+    )
+    error_message = models.CharField(max_length=300, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True, editable=False, db_index=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(
+                fields=["subscription", "created_at"],
+                name="pilot_regdeliv_sub_cr_idx",
+            ),
+            models.Index(
+                fields=["tenant", "created_at"],
+                name="pilot_regdeliv_ten_cr_idx",
+            ),
+        ]
+
+
+

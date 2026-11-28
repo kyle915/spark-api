@@ -2392,6 +2392,196 @@ class PilotQueries:
 
         return await sync_to_async(_run, thread_sensitive=True)()
 
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def executive_snapshot(
+        self,
+        info: strawberry.Info,
+        year: int | None = None,
+        month: int | None = None,
+        tenant_id: strawberry.ID | None = None,
+    ) -> ExecutiveSnapshotView:
+        def _run():
+            from pilot.executive_snapshot import (
+                build_executive_snapshot_data,
+                get_or_create_executive_snapshot_config,
+                resolve_snapshot_recipients,
+            )
+
+            access = _access_for_info(info, tenant_id=tenant_id)
+            cfg = get_or_create_executive_snapshot_config(access.tenant)
+            data = build_executive_snapshot_data(
+                access.tenant,
+                year=year,
+                month=month,
+                target_msrp=cfg.target_msrp,
+                include_photos=cfg.include_photos,
+                allow_ai_themes=False,
+            )
+            effective_recipients = resolve_snapshot_recipients(access.tenant, cfg)
+            can_manage = bool(
+                access.is_brand_admin or access.is_ignite_admin or access.can_manage_pos
+            )
+            shelf = data["shelf"]
+            return ExecutiveSnapshotView(
+                tenant_name=data["tenant_name"],
+                can_manage=can_manage,
+                year=int(data["year"]),
+                month=int(data["month"]),
+                month_key=data["month_key"],
+                month_label=data["month_label"],
+                prior_month_label=data["prior_month_label"],
+                has_activity=bool(data["has_activity"]),
+                config=ExecutiveSnapshotConfigItem(
+                    enabled=bool(cfg.enabled),
+                    recipient_emails=cfg.recipient_emails or "",
+                    effective_recipients=effective_recipients,
+                    target_msrp=(
+                        f"{cfg.target_msrp:.2f}" if cfg.target_msrp is not None else None
+                    ),
+                    include_photos=bool(cfg.include_photos),
+                    last_sent_at=(
+                        cfg.last_sent_at.isoformat() if cfg.last_sent_at else None
+                    ),
+                    last_sent_month=cfg.last_sent_month or "",
+                    last_send_status=cfg.last_send_status or "",
+                    last_send_error=cfg.last_send_error or "",
+                ),
+                kpis=[
+                    ExecutiveSnapshotKpiItem(
+                        key=str(k["key"]),
+                        label=str(k["label"]),
+                        formatted_value=str(k["formatted_value"]),
+                        delta_label=str(k["delta_label"]),
+                        direction=str(k["direction"]),
+                    )
+                    for k in data["kpis"]
+                ],
+                top_doors=[
+                    ExecutiveSnapshotDoorItem(
+                        store_name=str(d["store_name"]),
+                        market=str(d["market"]),
+                        state_code=str(d["state_code"]),
+                        recaps=int(d["recaps"]),
+                        consumers_sampled=int(d["consumers_sampled"]),
+                        units_sold=int(d["units_sold"]),
+                        conversion_label=str(d["conversion_label"]),
+                    )
+                    for d in data["top_doors"]
+                ],
+                shelf=ExecutiveSnapshotShelfSummary(
+                    audited_visits=int(shelf.get("audited_visits") or 0),
+                    osa_rate_pct=shelf.get("osa_rate_pct"),
+                    price_tag_rate_pct=shelf.get("price_tag_rate_pct"),
+                    oos_gaps_count=int(shelf.get("oos_gaps_count") or 0),
+                    missing_tag_count=int(shelf.get("missing_tag_count") or 0),
+                    median_price=shelf.get("median_price"),
+                    target_msrp=shelf.get("target_msrp"),
+                    callouts=[
+                        ExecutiveSnapshotShelfCallout(
+                            store_name=str(c["store_name"]),
+                            market=str(c["market"]),
+                            severity=str(c["severity"]),
+                            detail=str(c["detail"]),
+                        )
+                        for c in shelf.get("callouts") or []
+                    ],
+                ),
+                themes=[
+                    ExecutiveSnapshotThemeItem(
+                        title=str(t["title"]),
+                        mentions=int(t.get("mentions") or 0),
+                        sentiment=str(t.get("sentiment") or "neutral"),
+                        summary=str(t.get("summary") or ""),
+                    )
+                    for t in data["themes"]
+                ],
+                photos=[
+                    ExecutiveSnapshotPhotoItem(
+                        id=str(p["id"]),
+                        url=str(p["url"]),
+                        store=str(p["store"]),
+                        state=str(p["state"]),
+                        event_date=str(p["event_date"]),
+                        category=str(p["category"]),
+                        caption=str(p["caption"]),
+                    )
+                    for p in data["photos"]
+                ],
+            )
+
+        return await sync_to_async(_run, thread_sensitive=True)()
+
+    @strawberry.field(permission_classes=[StrictIsAuthenticated])
+    async def regional_alert_subscriptions(
+        self,
+        info: strawberry.Info,
+        tenant_id: strawberry.ID | None = None,
+    ) -> RegionalAlertsWorkspaceView:
+        def _run():
+            from pilot.regional_alerts import (
+                list_regional_alert_subscriptions,
+                mask_alert_webhook_secret,
+            )
+
+            access = _access_for_info(info, tenant_id=tenant_id)
+            subs = list_regional_alert_subscriptions(access)
+            items: list[RegionalAlertSubscriptionItem] = []
+            for sub in subs:
+                deliveries = list(sub.deliveries.all()[:8])
+                items.append(
+                    RegionalAlertSubscriptionItem(
+                        uuid=str(sub.uuid),
+                        name=sub.name,
+                        is_active=bool(sub.is_active),
+                        states=list(sub.states or []),
+                        chains=list(sub.chains or []),
+                        alert_oos=bool(sub.alert_oos),
+                        alert_price_drift=bool(sub.alert_price_drift),
+                        alert_missing_tag=bool(sub.alert_missing_tag),
+                        target_msrp=(
+                            f"{sub.target_msrp:.2f}"
+                            if sub.target_msrp is not None
+                            else None
+                        ),
+                        drift_threshold_pct=f"{sub.drift_threshold_pct:.1f}",
+                        notify_email=bool(sub.notify_email),
+                        recipient_emails=sub.recipient_emails or "",
+                        notify_webhook=bool(sub.notify_webhook),
+                        webhook_url=sub.webhook_url or "",
+                        webhook_secret_preview=mask_alert_webhook_secret(
+                            sub.webhook_secret
+                        ),
+                        last_triggered_at=(
+                            sub.last_triggered_at.isoformat()
+                            if sub.last_triggered_at
+                            else None
+                        ),
+                        trigger_count=int(sub.trigger_count or 0),
+                        created_at=sub.created_at.isoformat(),
+                        recent_deliveries=[
+                            RegionalAlertDeliveryItem(
+                                uuid=str(d.uuid),
+                                trigger_kind=d.trigger_kind,
+                                channel=d.channel,
+                                store_name=d.store_name or "",
+                                state_code=d.state_code or "",
+                                summary=d.summary or "",
+                                status=d.status,
+                                error_message=d.error_message or "",
+                                created_at=d.created_at.isoformat(),
+                            )
+                            for d in deliveries
+                        ],
+                    )
+                )
+            return RegionalAlertsWorkspaceView(
+                tenant_name=access.tenant.name or "",
+                default_email=(getattr(access.user, "email", "") or "").strip(),
+                subscriptions=items,
+            )
+
+        return await sync_to_async(_run, thread_sensitive=True)()
+
 
 @strawberry.type
 class SavedReportViewItem:
@@ -2487,6 +2677,184 @@ class WebhookTestOutcome:
     status: str
     http_status: int | None = None
     duration_ms: int | None = None
+    error: str | None = None
+
+
+@strawberry.type
+class ExecutiveSnapshotConfigItem:
+    enabled: bool
+    recipient_emails: str
+    effective_recipients: list[str]
+    target_msrp: str | None
+    include_photos: bool
+    last_sent_at: str | None
+    last_sent_month: str
+    last_send_status: str
+    last_send_error: str
+
+
+@strawberry.type
+class ExecutiveSnapshotKpiItem:
+    key: str
+    label: str
+    formatted_value: str
+    delta_label: str
+    direction: str
+
+
+@strawberry.type
+class ExecutiveSnapshotDoorItem:
+    store_name: str
+    market: str
+    state_code: str
+    recaps: int
+    consumers_sampled: int
+    units_sold: int
+    conversion_label: str
+
+
+@strawberry.type
+class ExecutiveSnapshotShelfCallout:
+    store_name: str
+    market: str
+    severity: str
+    detail: str
+
+
+@strawberry.type
+class ExecutiveSnapshotShelfSummary:
+    audited_visits: int
+    osa_rate_pct: float | None
+    price_tag_rate_pct: float | None
+    oos_gaps_count: int
+    missing_tag_count: int
+    median_price: str | None
+    target_msrp: str | None
+    callouts: list[ExecutiveSnapshotShelfCallout]
+
+
+@strawberry.type
+class ExecutiveSnapshotThemeItem:
+    title: str
+    mentions: int
+    sentiment: str
+    summary: str
+
+
+@strawberry.type
+class ExecutiveSnapshotPhotoItem:
+    id: str
+    url: str
+    store: str
+    state: str
+    event_date: str
+    category: str
+    caption: str
+
+
+@strawberry.type
+class ExecutiveSnapshotView:
+    tenant_name: str
+    can_manage: bool
+    year: int
+    month: int
+    month_key: str
+    month_label: str
+    prior_month_label: str
+    has_activity: bool
+    config: ExecutiveSnapshotConfigItem
+    kpis: list[ExecutiveSnapshotKpiItem]
+    top_doors: list[ExecutiveSnapshotDoorItem]
+    shelf: ExecutiveSnapshotShelfSummary
+    themes: list[ExecutiveSnapshotThemeItem]
+    photos: list[ExecutiveSnapshotPhotoItem]
+
+
+@strawberry.type
+class ExecutiveSnapshotConfigOutcome:
+    ok: bool
+    error: str | None = None
+    enabled: bool = False
+    recipient_emails: str = ""
+    target_msrp: str | None = None
+    include_photos: bool = True
+
+
+@strawberry.type
+class ExecutiveSnapshotSendOutcome:
+    ok: bool
+    status: str
+    recipients: list[str]
+    month_label: str = ""
+    pdf_attached: bool = False
+    error: str | None = None
+
+
+@strawberry.type
+class ExecutiveSnapshotPdfOutcome:
+    ok: bool
+    filename: str = ""
+    month_label: str = ""
+    pdf_base64: str = ""
+    error: str | None = None
+
+
+@strawberry.type
+class RegionalAlertDeliveryItem:
+    uuid: str
+    trigger_kind: str
+    channel: str
+    store_name: str
+    state_code: str
+    summary: str
+    status: str
+    error_message: str
+    created_at: str
+
+
+@strawberry.type
+class RegionalAlertSubscriptionItem:
+    uuid: str
+    name: str
+    is_active: bool
+    states: list[str]
+    chains: list[str]
+    alert_oos: bool
+    alert_price_drift: bool
+    alert_missing_tag: bool
+    target_msrp: str | None
+    drift_threshold_pct: str
+    notify_email: bool
+    recipient_emails: str
+    notify_webhook: bool
+    webhook_url: str
+    webhook_secret_preview: str
+    last_triggered_at: str | None
+    trigger_count: int
+    created_at: str
+    recent_deliveries: list[RegionalAlertDeliveryItem]
+
+
+@strawberry.type
+class RegionalAlertsWorkspaceView:
+    tenant_name: str
+    default_email: str
+    subscriptions: list[RegionalAlertSubscriptionItem]
+
+
+@strawberry.type
+class RegionalAlertMutationOutcome:
+    ok: bool
+    error: str | None = None
+    subscription_uuid: str | None = None
+
+
+@strawberry.type
+class RegionalAlertTestOutcome:
+    ok: bool
+    sent_count: int = 0
+    failed_count: int = 0
+    channels: list[str] = strawberry.field(default_factory=list)
     error: str | None = None
 
 
@@ -4228,5 +4596,221 @@ class PilotMutations:
                 return WebhookTestOutcome(
                     ok=False, status="failed", error=str(exc)
                 )
+
+        return await sync_to_async(_run, thread_sensitive=True)()
+
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def update_executive_snapshot_config(
+        self,
+        info: strawberry.Info,
+        enabled: bool | None = None,
+        recipient_emails: str | None = None,
+        target_msrp: str | None = None,
+        include_photos: bool | None = None,
+        tenant_id: strawberry.ID | None = None,
+    ) -> ExecutiveSnapshotConfigOutcome:
+        def _run():
+            try:
+                from pilot.executive_snapshot import update_executive_snapshot_config
+
+                access = _access_for_info(info, tenant_id=tenant_id)
+                cfg = update_executive_snapshot_config(
+                    access,
+                    enabled=enabled,
+                    recipient_emails=recipient_emails,
+                    target_msrp=target_msrp,
+                    include_photos=include_photos,
+                )
+                return ExecutiveSnapshotConfigOutcome(
+                    ok=True,
+                    enabled=bool(cfg.enabled),
+                    recipient_emails=cfg.recipient_emails or "",
+                    target_msrp=(
+                        f"{cfg.target_msrp:.2f}" if cfg.target_msrp is not None else None
+                    ),
+                    include_photos=bool(cfg.include_photos),
+                )
+            except Exception as exc:  # noqa: BLE001
+                return ExecutiveSnapshotConfigOutcome(ok=False, error=str(exc))
+
+        return await sync_to_async(_run, thread_sensitive=True)()
+
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def send_executive_snapshot_now(
+        self,
+        info: strawberry.Info,
+        test_email: str | None = None,
+        year: int | None = None,
+        month: int | None = None,
+        tenant_id: strawberry.ID | None = None,
+    ) -> ExecutiveSnapshotSendOutcome:
+        def _run():
+            try:
+                from pilot.executive_snapshot import (
+                    get_or_create_executive_snapshot_config,
+                    send_executive_snapshot_email,
+                )
+
+                access = _access_for_info(info, tenant_id=tenant_id)
+                override = (test_email or "").strip()
+                cfg = get_or_create_executive_snapshot_config(access.tenant)
+                if not override and not (cfg.recipient_emails or "").strip():
+                    override = (getattr(access.user, "email", "") or "").strip()
+                res = send_executive_snapshot_email(
+                    access.tenant,
+                    year=year,
+                    month=month,
+                    override_email=override,
+                    force=True,
+                )
+                return ExecutiveSnapshotSendOutcome(
+                    ok=res.get("status") == "sent",
+                    status=str(res.get("status") or "failed"),
+                    recipients=list(res.get("recipients") or []),
+                    month_label=str(res.get("month_label") or ""),
+                    pdf_attached=bool(res.get("pdf_attached")),
+                    error=(
+                        None
+                        if res.get("status") == "sent"
+                        else f"Snapshot send status: {res.get('status')}"
+                    ),
+                )
+            except Exception as exc:  # noqa: BLE001
+                return ExecutiveSnapshotSendOutcome(
+                    ok=False, status="error", recipients=[], error=str(exc)
+                )
+
+        return await sync_to_async(_run, thread_sensitive=True)()
+
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def export_executive_snapshot_pdf(
+        self,
+        info: strawberry.Info,
+        year: int | None = None,
+        month: int | None = None,
+        tenant_id: strawberry.ID | None = None,
+    ) -> ExecutiveSnapshotPdfOutcome:
+        def _run():
+            try:
+                from pilot.executive_snapshot import export_executive_snapshot_pdf_b64
+
+                access = _access_for_info(info, tenant_id=tenant_id)
+                out = export_executive_snapshot_pdf_b64(
+                    access.tenant, year=year, month=month
+                )
+                return ExecutiveSnapshotPdfOutcome(
+                    ok=True,
+                    filename=out["filename"],
+                    month_label=out["month_label"],
+                    pdf_base64=out["pdf_base64"],
+                )
+            except Exception as exc:  # noqa: BLE001
+                return ExecutiveSnapshotPdfOutcome(ok=False, error=str(exc))
+
+        return await sync_to_async(_run, thread_sensitive=True)()
+
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def upsert_regional_alert_subscription(
+        self,
+        info: strawberry.Info,
+        name: str,
+        subscription_uuid: str | None = None,
+        states: list[str] | None = None,
+        chains: list[str] | None = None,
+        alert_oos: bool = True,
+        alert_price_drift: bool = True,
+        alert_missing_tag: bool = True,
+        target_msrp: str | None = None,
+        drift_threshold_pct: str | None = "5.0",
+        notify_email: bool = True,
+        recipient_emails: str = "",
+        notify_webhook: bool = False,
+        webhook_url: str = "",
+        is_active: bool = True,
+        tenant_id: strawberry.ID | None = None,
+    ) -> RegionalAlertMutationOutcome:
+        def _run():
+            try:
+                from pilot.regional_alerts import upsert_regional_alert_subscription
+
+                access = _access_for_info(info, tenant_id=tenant_id)
+                sub = upsert_regional_alert_subscription(
+                    access,
+                    subscription_uuid=subscription_uuid,
+                    name=name,
+                    states=states,
+                    chains=chains,
+                    alert_oos=alert_oos,
+                    alert_price_drift=alert_price_drift,
+                    alert_missing_tag=alert_missing_tag,
+                    target_msrp=target_msrp,
+                    drift_threshold_pct=drift_threshold_pct,
+                    notify_email=notify_email,
+                    recipient_emails=recipient_emails,
+                    notify_webhook=notify_webhook,
+                    webhook_url=webhook_url,
+                    is_active=is_active,
+                )
+                return RegionalAlertMutationOutcome(
+                    ok=True, subscription_uuid=str(sub.uuid)
+                )
+            except Exception as exc:  # noqa: BLE001
+                return RegionalAlertMutationOutcome(ok=False, error=str(exc))
+
+        return await sync_to_async(_run, thread_sensitive=True)()
+
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def delete_regional_alert_subscription(
+        self,
+        info: strawberry.Info,
+        subscription_uuid: str,
+        tenant_id: strawberry.ID | None = None,
+    ) -> PilotMutationOutcome:
+        def _run():
+            try:
+                from pilot.regional_alerts import delete_regional_alert_subscription
+
+                access = _access_for_info(info, tenant_id=tenant_id)
+                ok = delete_regional_alert_subscription(
+                    access, subscription_uuid=subscription_uuid
+                )
+                return PilotMutationOutcome(
+                    ok=ok,
+                    target_uuid=subscription_uuid,
+                    error=None if ok else "Regional alert rule not found.",
+                )
+            except Exception as exc:  # noqa: BLE001
+                return PilotMutationOutcome(ok=False, error=str(exc))
+
+        return await sync_to_async(_run, thread_sensitive=True)()
+
+    @strawberry.mutation(permission_classes=[StrictIsAuthenticated])
+    async def send_test_regional_alert(
+        self,
+        info: strawberry.Info,
+        subscription_uuid: str,
+        tenant_id: strawberry.ID | None = None,
+    ) -> RegionalAlertTestOutcome:
+        def _run():
+            try:
+                from pilot.regional_alerts import send_test_regional_alert
+
+                access = _access_for_info(info, tenant_id=tenant_id)
+                deliveries = send_test_regional_alert(
+                    access, subscription_uuid=subscription_uuid
+                )
+                sent_count = sum(1 for d in deliveries if d.status == "sent")
+                failed_count = sum(1 for d in deliveries if d.status != "sent")
+                channels = [d.channel for d in deliveries]
+                errors = [d.error_message for d in deliveries if d.error_message]
+                return RegionalAlertTestOutcome(
+                    ok=sent_count > 0 and failed_count == 0,
+                    sent_count=sent_count,
+                    failed_count=failed_count,
+                    channels=channels,
+                    error="; ".join(errors) if errors else None,
+                )
+            except Exception as exc:  # noqa: BLE001
+                return RegionalAlertTestOutcome(ok=False, error=str(exc))
 
         return await sync_to_async(_run, thread_sensitive=True)()
