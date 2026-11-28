@@ -25,20 +25,18 @@ concurrency:
 
 jobs:
   shard:
-    name: pytest (${{ matrix.shard }}/6)
+    name: pytest (${{ matrix.shard }}/10)
     # Product suite lives on develop. main's pytest is stale; skip it on
     # PRs that target main so workflow-only / cherry-pick PRs stay green.
     if: github.event_name == 'push' || github.base_ref == 'develop' || startsWith(github.base_ref, 'cursor/')
     runs-on: ubuntu-latest
-    # The whole suite took 50-65 minutes in one job, which made every ship
-    # wait an hour. It is split by test file into six jobs that run at the
-    # same time, each with its own Postgres, so a run takes about as long
-    # as its slowest sixth.
+    # Split across 10 shards weighted by file line count (snake-dealt largest
+    # first) so heavy E2E/seed test suites never cluster onto one slow shard.
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     services:
       postgres:
         image: postgres:16
@@ -73,14 +71,51 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked
       - name: Pick this job's test files
-        # Every sixth test file, in sorted order, from the same folders
-        # pytest.ini lists under testpaths. Round-robin keeps the big apps
-        # (recaps, events, ambassadors) spread across all six jobs.
+        # Distribute test files across 10 shards weighted by line count
+        # (largest files snake-dealt first) so no single shard collects all the
+        # slow E2E/seeding suites.
         run: |
-          git ls-files tenants/tests events/tests jobs/tests ambassadors/tests recaps/tests chats/tests pilot/tests brand_insights/tests staffing/tests \
-            | grep -E '(^|/)(test_[^/]*|[^/]*_tests|tests)\.py$' \
-            | sort \
-            | awk -v n=6 -v k=${{ matrix.shard }} 'NR % n == k % n' > shard-files.txt
+          python3 - <<'PY' ${{ matrix.shard }} 10 > shard-files.txt
+          import subprocess, sys
+
+          shard_idx = int(sys.argv[1]) - 1
+          num_shards = int(sys.argv[2])
+          paths = subprocess.check_output(
+              [
+                  "git",
+                  "ls-files",
+                  "tenants/tests",
+                  "events/tests",
+                  "jobs/tests",
+                  "ambassadors/tests",
+                  "recaps/tests",
+                  "chats/tests",
+                  "pilot/tests",
+                  "brand_insights/tests",
+                  "staffing/tests",
+              ],
+              text=True,
+          ).splitlines()
+          import re
+
+          pattern = re.compile(r"(^|/)(test_[^/]*|[^/]*_tests|tests)\.py$")
+          files = sorted(p for p in paths if pattern.search(p))
+          weighted = []
+          for p in files:
+              with open(p, "rb") as fh:
+                  lines = sum(1 for _ in fh)
+              weighted.append((lines, p))
+          # Largest files first, greedy bin-packing onto the lightest shard
+          weighted.sort(key=lambda item: (-item[0], item[1]))
+          bins = [[] for _ in range(num_shards)]
+          loads = [0] * num_shards
+          for lines, p in weighted:
+              target = min(range(num_shards), key=lambda i: (loads[i], i))
+              bins[target].append(p)
+              loads[target] += lines
+          for p in sorted(bins[shard_idx]):
+              print(p)
+          PY
           echo "$(wc -l < shard-files.txt) test files in this job"
           test -s shard-files.txt
       - name: Run test suite
@@ -93,7 +128,7 @@ jobs:
     needs: shard
     runs-on: ubuntu-latest
     steps:
-      - name: All six jobs passed
+      - name: All ten shard jobs passed
         run: |
           echo "shard result: ${{ needs.shard.result }}"
           test "${{ needs.shard.result }}" = "success"
